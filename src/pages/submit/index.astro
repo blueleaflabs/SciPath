@@ -1,0 +1,116 @@
+---
+import Base from '../../layouts/Base.astro';
+import PageHead from '../../components/PageHead.astro';
+import { org } from '../../config/orgs';
+
+const pages = [
+  {
+    href: '/submit/checklist/',
+    title: 'Pre-submission checklist',
+    note: 'The human-readable mirror of the automated checks. If it is on this list, the system checks it.',
+  },
+  {
+    href: '/submit/review-process/',
+    title: 'How review works',
+    note: 'Every state, what it means, how long it takes, who decides, and how to withdraw.',
+  },
+  {
+    href: '/submit/authorship/',
+    title: 'Authorship',
+    note: 'Who counts as an author, how order is decided, and what the contributions statement has to say.',
+  },
+  {
+    href: '/submit/ethics/',
+    title: 'Ethics and eligibility',
+    note: 'Human participants, animals, hazardous materials, AI disclosure, and work presented somewhere else first.',
+  },
+];
+---
+
+<Base
+  title="Publish your work"
+  description="What gets published, who may submit, what happens after you submit, and how long it takes."
+>
+  <PageHead
+    eyebrow="Publication"
+    title="Publish your work"
+    lede="Publication is the last stage of a project, not a separate thing you apply to. When the work is finished, you submit it, a named person reviews it, and what comes out is a permanent record with its own URL."
+  />
+
+  <div class="wrap">
+    <section class="sec" style="padding-top:0">
+      <div class="sec-h"><b>What this is</b><span>Stated plainly</span></div>
+      <p class="prose">
+        {
+          org.editorialReview
+            ? 'Submissions are read by named reviewers with faculty oversight. That is editorial review, not double blind peer review, and we say so on every record we publish. Blinding at this scale would be theater, and signed review is both the honest option and the better teacher.'
+            : 'Work is published once the competition season is over, without an editorial review stage.'
+        }
+      </p>
+      <p class="prose" style="margin-top:14px">
+        What you get is a permanent, indexed, citable record: its own URL that never
+        changes, a stable identifier, a formatted citation, and metadata that lets search
+        engines and scholarly indexes find it. That is worth linking from an application
+        years later, and it does not require anyone to claim it is something it is not.
+      </p>
+    </section>
+
+    <section class="sec">
+      <div class="sec-h"><b>What happens when you submit</b><span>Seven steps</span></div>
+      <ol class="steps">
+        <li><b>Structural checks run first.</b> Anything a machine can check is checked before a person is involved. Failures are shown against the section that failed, so you fix them instead of hearing about them a week later.</li>
+        <li><b>Every co-author has to have accepted.</b> A submission listing someone who has not accepted cannot proceed.</li>
+        <li><b>The record is created</b> and you get a tracking link that works without logging in.</li>
+        <li><b>All co-authors are emailed</b> the tracking link and the expected timeline.</li>
+        <li><b>An editor screens it</b> for scope, ethics flags, and prior publication.</li>
+        <li><b>One or two reviewers are assigned</b>, each with a due date.</li>
+        <li><b>You get one consolidated list</b> of what to change, not raw reviewer output. Two reviewers who contradict each other are the editor's problem to resolve, not yours.</li>
+      </ol>
+      <p class="t-sm" style="margin-top:16px">
+        There are at most two revision rounds. After the second, the editor accepts or
+        declines. Without a cap, submissions live forever and the queue becomes a
+        graveyard. You can withdraw at any point before publication.
+      </p>
+    </section>
+
+    <section class="sec">
+      <div class="sec-h"><b>Before you submit</b><span>Four pages</span></div>
+      <ul class="linklist">
+        {
+          pages.map((p) => (
+            <li>
+              <a href={p.href}>{p.title}</a>
+              <p>{p.note}</p>
+            </li>
+          ))
+        }
+      </ul>
+    </section>
+
+    <section class="sec">
+      <div class="note">
+        <h4>Submitting needs an account. Reading never does.</h4>
+        <p>
+          The submission form lives on the working surface, where your project already is.
+          Everything on this half of the site stays open to anyone.
+        </p>
+      </div>
+    </section>
+  </div>
+</Base>
+
+<style>
+  .steps {
+    max-width: var(--measure-text);
+    padding-left: 1.3em;
+    font-size: 1rem;
+    line-height: 1.6;
+  }
+  .steps li {
+    margin-top: 0.8em;
+  }
+  .steps b {
+    font-family: var(--face-ui);
+    font-weight: 650;
+  }
+</style>

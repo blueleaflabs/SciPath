@@ -1,0 +1,58 @@
+---
+import { org } from '../config/orgs';
+import { siteUrl } from '../config/site';
+import { themeFonts } from '../config/fonts';
+import Masthead from '../components/Masthead.astro';
+import Footer from '../components/Footer.astro';
+import '../styles/tokens.css';
+import '../styles/base.css';
+import '../styles/ui.css';
+
+interface Props {
+  title: string;
+  description?: string;
+  /** Kept out of search results. Used by anything holding a bearer token. */
+  noindex?: boolean;
+}
+
+const { title, description, noindex = false } = Astro.props;
+
+const pageTitle = `${title} · ${org.name}`;
+const canonical = new URL(Astro.url.pathname, siteUrl).href;
+const fontHref = themeFonts[org.theme];
+---
+
+<!doctype html>
+<html lang="en" data-theme={org.theme}>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{pageTitle}</title>
+    {description && <meta name="description" content={description} />}
+    <link rel="canonical" href={canonical} />
+    {noindex && <meta name="robots" content="noindex, nofollow" />}
+
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content={org.name} />
+    <meta property="og:title" content={title} />
+    {description && <meta property="og:description" content={description} />}
+    <meta property="og:url" content={canonical} />
+    <meta name="twitter:card" content="summary" />
+
+    <link rel="alternate" type="application/rss+xml" title={org.name} href="/feed.xml" />
+
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href={fontHref} rel="stylesheet" />
+
+    <slot name="head" />
+  </head>
+  <body>
+    <a class="skip" href="#main">Skip to content</a>
+    <Masthead />
+    <main id="main">
+      <slot />
+    </main>
+    <Footer />
+  </body>
+</html>

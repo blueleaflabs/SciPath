@@ -1,0 +1,86 @@
+---
+import Base from '../../layouts/Base.astro';
+import PageHead from '../../components/PageHead.astro';
+import { org } from '../../config/orgs';
+
+const [local, domain] = org.contactEmail.split('@');
+const display = `${local} [at] ${domain.replace(/\./g, ' [dot] ')}`;
+---
+
+<Base
+  title="Takedown"
+  description="How a current or former author asks for work or an author page to be removed. No account, no reason required."
+>
+  <PageHead
+    eyebrow="Policies"
+    title="Takedown"
+    lede="You do not need an account to use this, you do not need to still be at the school, and you do not have to explain why."
+  />
+
+  <div class="wrap">
+    <div class="card pad" style="max-width:74ch">
+      <p class="t-lbl">Write to</p>
+      <p class="addr">{display}</p>
+      <p class="t-sm" style="margin-top:12px">
+        Include the record identifier or the address of the page, and enough for us to tell
+        that the request is yours. If you no longer have a school address, say so and we
+        will verify another way rather than turning you away.
+      </p>
+    </div>
+
+    <div class="prose" style="margin-top:32px">
+      <h2>What we will do</h2>
+      <ul>
+        <li>
+          <b>Your author page.</b> Archived on your say-so alone. It stops being reachable
+          and your name appears as plain text on anything you co-wrote. Reversible for
+          thirty days if you change your mind.
+        </li>
+        <li>
+          <b>Your name on a record you co-wrote.</b> Removed at your request, with your
+          co-authors told.
+        </li>
+        <li>
+          <b>A record with a single author.</b> Withdrawn on request.
+        </li>
+        <li>
+          <b>A record with co-authors.</b> This one is not ours to grant alone, because it
+          is their work too. We contact every co-author, and the advisor decides. We will
+          tell you what is happening at each step rather than leaving you waiting.
+        </li>
+      </ul>
+
+      <h2>How removal works</h2>
+      <p>
+        A removed page returns a clear "gone" response rather than redirecting somewhere
+        else, so search engines drop it instead of quietly relabeling it. We cannot remove
+        copies already made by other people or by archiving services, and we will not
+        pretend otherwise.
+      </p>
+
+      <h2>Work published before this site existed</h2>
+      <p>
+        If your work was published somewhere older and moved here, this route covers it, and
+        it covers it whether or not anyone asked you at the time. Republishing older work at
+        an address that search engines actually index is a real change, and the request to
+        undo it is honored without argument.
+      </p>
+
+      <h2>How long it takes</h2>
+      <p>
+        Anything within our sole control is done within a few days. Anything needing
+        co-authors or the advisor takes longer, and we will say where it stands rather than
+        going quiet.
+      </p>
+    </div>
+  </div>
+</Base>
+
+<style>
+  .addr {
+    font-family: var(--face-num);
+    font-size: 1.05rem;
+    margin: 8px 0 0;
+    word-break: break-word;
+  }
+</style>

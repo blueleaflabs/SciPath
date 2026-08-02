@@ -1,0 +1,51 @@
+---
+import { disciplineLabel } from '../config/site';
+import type { CollectionEntry } from 'astro:content';
+
+interface Props {
+  article: CollectionEntry<'articles'>;
+}
+
+const { article } = Astro.props;
+const d = article.data;
+const year = d.publishedOn.getUTCFullYear();
+const href = `/articles/${year}/${d.slug}/`;
+
+/* Every listing carries its full abstract at reading size. No truncation,
+   no "read more". A visitor is reading science within three seconds, and
+   the page makes no claim about quality it cannot support. */
+const awards = d.entries.flatMap((e) => e.awards);
+const seq = d.recordId.split('-').pop();
+---
+
+<article class="record s-pub">
+  <div class="record-top">
+    <div class="record-no">
+      {seq}<small>Record</small>
+    </div>
+    <div class="record-main">
+      <h3><a href={href}>{d.title}</a></h3>
+      <p class="by">
+        {
+          d.authors.map((a, i) => (
+            <>
+              {i > 0 && ', '}
+              {a.authorSlug ? <a href={`/authors/${a.authorSlug}/`}>{a.displayName}</a> : a.displayName}
+            </>
+          ))
+        }
+      </p>
+    </div>
+    <span class="chip pub"><span class="dot"></span>Published</span>
+  </div>
+  <div class="record-body">
+    <p class="abs">{d.abstract}</p>
+    <div class="foot">
+      <span class="chip">{disciplineLabel(d.discipline)}</span>
+      <span class="chip">{d.publishedOn.getUTCFullYear()}</span>
+      {awards.map((a) => <span class="chip comp award">{a}</span>)}
+      {d.status === 'retracted' && <span class="chip alert"><span class="dot"></span>Retracted</span>}
+      {d.corrections.length > 0 && <span class="chip ready">Corrected</span>}
+    </div>
+  </div>
+</article>

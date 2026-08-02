@@ -1,0 +1,39 @@
+---
+import Base from '../../layouts/Base.astro';
+import PageHead from '../../components/PageHead.astro';
+import RecordCard from '../../components/RecordCard.astro';
+import { disciplineLabel } from '../../config/site';
+import { getCollection } from 'astro:content';
+import type { GetStaticPaths } from 'astro';
+
+export const getStaticPaths: GetStaticPaths = async () => {
+  const articles = (await getCollection('articles')).filter((a) => a.data.status !== 'archived');
+  const slugs = [...new Set(articles.map((a) => a.data.discipline))];
+  return slugs.map((slug) => ({
+    params: { slug },
+    props: {
+      articles: articles
+        .filter((a) => a.data.discipline === slug)
+        .sort((a, b) => b.data.publishedOn.valueOf() - a.data.publishedOn.valueOf()),
+    },
+  }));
+};
+
+const { slug } = Astro.params;
+const { articles } = Astro.props;
+const label = disciplineLabel(slug!);
+---
+
+<Base title={label} description={`Published records in ${label}.`}>
+  <PageHead
+    eyebrow="Topic"
+    title={label}
+    lede={`${articles.length} ${articles.length === 1 ? 'record' : 'records'}.`}
+  />
+  <div class="wrap">
+    <div class="stack">
+      {articles.map((a) => <RecordCard article={a} />)}
+      <p><a href="/topics/">All topics</a></p>
+    </div>
+  </div>
+</Base>

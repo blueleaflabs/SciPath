@@ -1,0 +1,284 @@
+---
+import Base from '../../../layouts/Base.astro';
+import { getCollection, render } from 'astro:content';
+import { org } from '../../../config/orgs';
+import { siteUrl, disciplineLabel } from '../../../config/site';
+import type { GetStaticPaths } from 'astro';
+
+export const getStaticPaths: GetStaticPaths = async () => {
+  const articles = (await getCollection('articles')).filter((a) => a.data.status !== 'archived');
+  return articles.map((article) => ({
+    params: {
+      year: String(article.data.publishedOn.getUTCFullYear()),
+      slug: article.data.slug,
+    },
+    props: { article },
+  }));
+};
+
+const { article } = Astro.props;
+const d = article.data;
+const { Content } = await render(article);
+
+const year = d.publishedOn.getUTCFullYear();
+const url = new URL(`/articles/${year}/${d.slug}/`, siteUrl).href;
+const published = d.publishedOn.toISOString().slice(0, 10);
+
+const bylineText = d.authors.map((a) => a.displayName).join(', ');
+
+/* Citation, formatted once and used in both the visible block and the copy
+   button, so the two can never drift apart. */
+const citationNames = d.authors
+  .map((a) => {
+    const parts = a.displayName.trim().split(/\s+/);
+    const last = parts.pop() ?? a.displayName;
+    const initials = parts.map((p) => `${p[0]}.`).join(' ');
+    return initials ? `${last}, ${initials}` : last;
+  })
+  .join(', & ');
+
+const citation = `${citationNames} (${year}). ${d.title}. ${org.name}, ${d.recordId}. ${url}`;
+
+const bibtexKey = `${d.recordId.toLowerCase()}`;
+const bibtex = `@article{${bibtexKey},
+  title   = {${d.title}},
+  author  = {${d.authors.map((a) => a.displayName).join(' and ')}},
+  year    = {${year}},
+  journal = {${org.name}},
+  note    = {${d.recordId}},
+  url     = {${url}}
+}`;
+
+const jsonLd = {
+  '@context': 'https://schema.org',
+  '@type': 'ScholarlyArticle',
+  headline: d.title,
+  name: d.title,
+  abstract: d.abstract,
+  datePublished: published,
+  identifier: d.recordId,
+  url,
+  license: d.license,
+  isPartOf: { '@type': 'Periodical', name: org.name },
+  author: d.authors.map((a) => ({
+    '@type': 'Person',
+    name: a.displayName,
+    ...(a.authorSlug ? { url: new URL(`/authors/${a.authorSlug}/`, siteUrl).href } : {}),
+  })),
+};
+---
+
+<Base title={d.title} description={d.abstract.slice(0, 300)}>
+  <Fragment slot="head">
+    {/* Highwire tags. These are what Google Scholar reads. */}
+    <meta name="citation_title" content={d.title} />
+    {d.authors.map((a) => <meta name="citation_author" content={a.displayName} />)}
+    <meta name="citation_publication_date" content={published.replace(/-/g, '/')} />
+    <meta name="citation_journal_title" content={org.name} />
+    <meta name="citation_abstract_html_url" content={url} />
+    {d.pdf && <meta name="citation_pdf_url" content={new URL(d.pdf, siteUrl).href} />}
+    {d.keywords.length > 0 && <meta name="citation_keywords" content={d.keywords.join('; ')} />}
+    <script type="application/ld+json" set:html={JSON.stringify(jsonLd)} />
+  </Fragment>
+
+  <div class="wrap">
+    <article
+      data-pagefind-body
+      data-pagefind-filter={`discipline:${disciplineLabel(d.discipline)}, year:${year}`}
+    >
+      <!-- The cover block. Set like the front sheet of a bound report. -->
+      <header class="cover">
+        <p class="t-lbl">{d.status === 'retracted' ? 'Retracted record' : 'Published record'}</p>
+        <h1 class="t-h1" data-pagefind-meta="title">{d.title}</h1>
+        <p class="byline">
+          {
+            d.authors.map((a, i) => (
+              <>
+                {i > 0 && ' · '}
+                <span class={a.affiliationVerified ? 'verified' : undefined}>
+                  {a.authorSlug ? (
+                    <a href={`/authors/${a.authorSlug}/`}>{a.displayName}</a>
+                  ) : (
+                    a.displayName
+                  )}
+                  {a.school && <span class="t-sm">{` ${a.school}`}</span>}
+                </span>
+              </>
+            ))
+          }
+        </p>
+      </header>
+
+      {
+        d.status === 'retracted' && (
+          <div class="note stop" style="margin-bottom:24px">
+            <h4>Retracted{d.retractedOn && ` on ${d.retractedOn.toISOString().slice(0, 10)}`}</h4>
+            <p>
+              {d.retractionReason ??
+                'This record has been retracted. It stays reachable so that anyone holding a copy can see its status.'}
+            </p>
+          </div>
+        )
+      }
+
+      {
+        d.corrections.map((c) => (
+          <div class="note" style="margin-bottom:16px">
+            <h4>Correction · {c.issuedOn.toISOString().slice(0, 10)}</h4>
+            <p>{c.description}</p>
+          </div>
+        ))
+      }
+
+      <table class="tbl glance">
+        <tbody>
+          <tr><th scope="row">Record</th><td class="n">{d.recordId}</td></tr>
+          <tr><th scope="row">Published</th><td class="n">{published}</td></tr>
+          <tr><th scope="row">Discipline</th><td><a href={`/topics/${d.discipline}/`}>{disciplineLabel(d.discipline)}</a></td></tr>
+          {
+            d.entries.map((e) => (
+              <tr>
+                <th scope="row">Presented at</th>
+                <td>
+                  {e.program} {e.season}
+                  {e.category && ` · ${e.category}`}
+                  {e.placement && ` · ${e.placement}`}
+                  {e.awards.length > 0 && ` · ${e.awards.join(', ')}`}
+                  {e.advancedTo && ` · advanced to ${e.advancedTo}`}
+                </td>
+              </tr>
+            ))
+          }
+          {d.priorVenue && <tr><th scope="row">Prior venue</th><td>{d.priorVenue}</td></tr>}
+          <tr>
+            <th scope="row">Review</th>
+            <td>{org.editorialReview ? 'Editorial review by named reviewers with faculty oversight' : 'Published without editorial review'}</td>
+          </tr>
+          <tr><th scope="row">License</th><td>{d.license} · authors keep copyright</td></tr>
+        </tbody>
+      </table>
+
+      <section class="sec" aria-labelledby="abs">
+        <div class="sec-h"><b id="abs">Abstract</b><span>{d.keywords.join(' · ')}</span></div>
+        <p class="prose">{d.abstract}</p>
+      </section>
+
+      <div class="row" style="margin-top:24px">
+        {d.pdf && <a class="btn btn-2" href={d.pdf}>PDF</a>}
+        {d.dataLinks.map((l) => <a class="btn btn-q" href={l.url}>{l.label}</a>)}
+      </div>
+
+      <section class="sec prose">
+        <Content />
+      </section>
+
+      {
+        d.contributions && (
+          <section class="sec" aria-labelledby="contrib">
+            <div class="sec-h"><b id="contrib">Contributions</b><span>Who did what</span></div>
+            <p class="prose">{d.contributions}</p>
+          </section>
+        )
+      }
+
+      {
+        d.references.length > 0 && (
+          <section class="sec" aria-labelledby="refs">
+            <div class="sec-h"><b id="refs">References</b><span>{d.references.length}</span></div>
+            <ol class="refs">
+              {d.references.map((r) => (
+                <li>{r}</li>
+              ))}
+            </ol>
+          </section>
+        )
+      }
+
+      <section class="sec" aria-labelledby="cite" data-pagefind-ignore>
+        <div class="sec-h"><b id="cite">Cite this record</b><span>{d.recordId}</span></div>
+        <div class="card pad">
+          <p class="cite-text" id="citation-text">{citation}</p>
+          <div class="row" style="margin-top:14px">
+            <button class="btn btn-2" type="button" data-copy="citation-text">Copy citation</button>
+            <button class="btn btn-q" type="button" data-copy="bibtex-text">Copy BibTeX</button>
+          </div>
+          <pre id="bibtex-text" hidden>{bibtex}</pre>
+        </div>
+      </section>
+    </article>
+  </div>
+</Base>
+
+<script>
+  document.querySelectorAll('[data-copy]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      const target = document.getElementById(button.getAttribute('data-copy') ?? '');
+      if (!target) return;
+      try {
+        await navigator.clipboard.writeText(target.textContent?.trim() ?? '');
+        const original = button.textContent;
+        button.textContent = 'Copied';
+        setTimeout(() => (button.textContent = original), 2000);
+      } catch {
+        const range = document.createRange();
+        range.selectNodeContents(target);
+        window.getSelection()?.removeAllRanges();
+        window.getSelection()?.addRange(range);
+      }
+    });
+  });
+</script>
+
+<style>
+  .cover {
+    border-top: 4px solid var(--brand);
+    border-bottom: 1px solid var(--rule);
+    padding: 34px 0 26px;
+    margin-bottom: 26px;
+  }
+  .cover .t-lbl {
+    margin-bottom: 12px;
+  }
+  .cover .t-h1 {
+    max-width: 30ch;
+  }
+  .byline {
+    font-family: var(--face-ui);
+    font-size: 1rem;
+    color: var(--ink-2);
+    margin: 16px 0 0;
+  }
+  .glance th {
+    text-align: left;
+    font-family: var(--face-ui);
+    font-weight: 600;
+    font-size: 0.78rem;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: var(--ink-2);
+    padding: 12px;
+    border-bottom: 1px solid var(--rule-fine);
+    width: 34%;
+    vertical-align: top;
+  }
+  .refs {
+    max-width: var(--measure-text);
+    font-size: 0.95rem;
+    line-height: 1.55;
+    padding-left: 1.3em;
+  }
+  .refs li + li {
+    margin-top: 0.6em;
+  }
+  .cite-text {
+    margin: 0;
+    font-size: 0.98rem;
+    line-height: 1.6;
+    max-width: var(--measure-text);
+  }
+  pre {
+    font-family: var(--face-num);
+    font-size: 0.84rem;
+    overflow-x: auto;
+  }
+</style>

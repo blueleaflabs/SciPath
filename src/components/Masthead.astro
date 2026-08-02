@@ -1,0 +1,43 @@
+---
+import { org } from '../config/orgs';
+import { platform } from '../config/site';
+
+const nav = [
+  { href: '/articles/', label: 'Showcase' },
+  { href: '/guides/', label: 'Guides' },
+  { href: '/deadlines/', label: 'Deadlines' },
+  { href: '/mistakes/', label: 'Mistakes' },
+  { href: '/submit/', label: 'Publish' },
+  { href: '/search/', label: 'Search' },
+];
+
+const here = Astro.url.pathname;
+const isCurrent = (href: string) => here === href || (href !== '/' && here.startsWith(href));
+---
+
+<header class="mast">
+  <div class="wrap">
+    <div class="mast-in">
+      <a class="lockup" href="/">
+        <span class="badge" aria-hidden="true">{org.mark}</span>
+        <span class="names">
+          <span class="org">{org.name}</span>
+          {!org.isPlatform && <span class="plat">{platform.lockupSuffix}</span>}
+        </span>
+      </a>
+      <nav aria-label="Main">
+        <ul class="mnav">
+          {
+            nav.map((item) => (
+              <li>
+                <a href={item.href} aria-current={isCurrent(item.href) ? 'page' : undefined}>
+                  {item.label}
+                </a>
+              </li>
+            ))
+          }
+        </ul>
+      </nav>
+    </div>
+  </div>
+</header>

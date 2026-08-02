@@ -1,0 +1,116 @@
+---
+import Base from '../../layouts/Base.astro';
+import PageHead from '../../components/PageHead.astro';
+import { org } from '../../config/orgs';
+
+const stored = [
+  ['Name', 'The name you choose to be published under, and the name you sign in with.'],
+  ['Email address', 'To sign you in and to send you the messages listed below. Never shown publicly.'],
+  ['School', 'What is shown on your published work. Marked unverified until a teacher confirms it.'],
+  ['Graduation year', 'So the system knows when you have left, rather than guessing from silence.'],
+  ['Teacher sponsor email', 'One message asking them to confirm your school. Nothing else, ever.'],
+  ['Guardian name and email', 'One message asking permission, plus reminders if there is no answer.'],
+  ['Your project work', 'Whatever you write into the system: notes, drafts, answers, links.'],
+];
+
+const notStored = [
+  'Date of birth',
+  'Home address',
+  'Phone number',
+  'Grades or test scores',
+  'Race, ethnicity, or any demographic data',
+  'Anything from your school records',
+  'The contents of documents you link to',
+];
+---
+
+<Base
+  title="What we store"
+  description="The complete list of what this service collects about a student, and what it does not."
+>
+  <PageHead
+    eyebrow="Privacy"
+    title="What we store"
+    lede="The whole list is on this page. It is short because the shortest way to protect data is to never hold it."
+  />
+
+  <div class="wrap">
+    <div class="note">
+      <h4>Reading this site stores nothing about you at all</h4>
+      <p>
+        The published records, the guides, the deadline calendars, and the mistakes list
+        need no account. Search runs in your browser against static files, so no search you
+        type here is sent anywhere or logged by anyone.
+      </p>
+    </div>
+
+    <section class="sec">
+      <div class="sec-h"><b>What an account stores</b><span>Seven things</span></div>
+      <table class="tbl">
+        <thead>
+          <tr><th scope="col">Item</th><th scope="col">Why</th></tr>
+        </thead>
+        <tbody>
+          {stored.map(([item, why]) => <tr><td><b>{item}</b></td><td>{why}</td></tr>)}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="sec">
+      <div class="sec-h"><b>What is never collected</b><span>Not optional, not stored</span></div>
+      <ul class="prose">
+        {notStored.map((item) => <li>{item}</li>)}
+      </ul>
+      <p class="prose" style="margin-top:14px">
+        We do not read documents a student links to. We store the address and display where
+        it points, and nothing fetches or opens it. We do not train models on student work,
+        we do not sell data, we do not show advertising, and we do not build a profile of
+        anyone for any purpose beyond running this service.
+      </p>
+    </section>
+
+    <section class="sec">
+      <div class="sec-h"><b>Permission</b><span>Before anything is published</span></div>
+      <p class="prose">
+        Accounts are for students aged 13 and over. At signup a student names a parent or
+        guardian, who receives one message asking them to confirm. The student can work
+        immediately and for fourteen days while that is outstanding, but
+        <b>nothing is published before a guardian has confirmed</b>. After fourteen days
+        without an answer the work is paused and kept safe; it returns the moment permission
+        arrives. An account still unconfirmed after sixty days is deleted.
+      </p>
+      <p class="prose" style="margin-top:14px">
+        A teacher sponsor separately confirms the school. Until they do, the affiliation
+        shows as unverified on anything published.
+      </p>
+    </section>
+
+    <section class="sec">
+      <div class="sec-h"><b>Who sees what</b><span>Inside the system</span></div>
+      <ul class="prose">
+        <li>Your project work: you, your co-authors, any mentor assigned to it, and the officers and advisor who run the program.</li>
+        <li>Your email address: officers and the advisor. It is never rendered on a public page, in any form.</li>
+        <li>Feedback from a mentor: attached to the project and visible to officers and the advisor. There is no private messaging between an adult and a student here.</li>
+      </ul>
+    </section>
+
+    <section class="sec">
+      <div class="sec-h"><b>Deleting your account</b><span>Always available</span></div>
+      <p class="prose">
+        From your settings, at any time, without giving a reason. Published records are
+        handled separately, because they carry co-authors: see
+        <a href="/policies/takedown/">takedown</a>.
+      </p>
+    </section>
+
+    <div class="note warn" style="margin-top:28px">
+      <h4>This page describes how the software is built. The full legal policy is in review.</h4>
+      <p>
+        The privacy policy and terms of service are with counsel and will be published here
+        before any student outside a pilot uses the working surface. If something on this
+        page and something in those documents ever disagree, tell {org.name} and we will fix
+        the discrepancy rather than argue it.
+      </p>
+    </div>
+  </div>
+</Base>

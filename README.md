@@ -1,180 +1,134 @@
 # SciPath
 
-Software for planning, running, and publishing high school science fair projects.
+Free, open source software for planning, running, and publishing student
+science fair projects. One project moves through five stages, from the day it
+is registered to the day it is published, and publication is the last of those
+stages rather than a separate product.
 
-One project lifecycle: **register → work → get fair ready → compete → publish.** Publication is the last stage, not a separate product.
-
-Two surfaces:
-
-- **Public.** Published records, guides, deadline calendars, and a searchable archive. No account required, ever. Entirely static.
-- **Working.** Authenticated. Projects in progress, field notes, competition milestones, form date checks, submission and review.
-
-Built and maintained by [Blue Leaf Labs](https://blueleaflabs.org), a registered 501(c)(3) nonprofit. Open source so any school or fair organization can run its own copy.
+Licensed under the MIT license. Any organization may run its own copy, hold its
+own students' data, and keep operating whether or not anyone else does.
 
 ---
 
-## Why it exists
+## The four things that bite an inheriting maintainer first
 
-A student at a well-resourced school has a parent who knows what ISEF Form 1B is, a teacher with time, and a family friend with a lab. A student without that misses the pre-experimentation signature deadline and is disqualified before running a single experiment.
+Read these before changing anything. Each one is cheap now and expensive later.
 
-The failures that disqualify students are procedural, not intellectual. Software that surfaces a deadline and checks a date ordering is a real intervention, and it costs nothing to deliver at scale.
+**1. A prerendered route must never import `lib/supabase`.** The public
+surface builds from files in this repository and nothing else, and it has to
+keep serving with the database gone. `npm run test:static` proves it and CI
+runs it on every push. If you need data in a public page, put the data in the
+repository.
+
+**2. Token names are semantic, never descriptive.** Everything visual lives in
+`src/styles/tokens.css` under names like `--brand`, `--surface`, `--stage-work`,
+`--face-ed`. A token named `--purple` means one theme is hardcoded and every
+other theme is already broken. No component contains a hex literal.
+`npm run test:contrast` checks every shipped theme against the WCAG AA floor.
+
+**3. Nothing organization-specific belongs in a component.** The name of a
+school, a district, a fair, or the operator comes from the organization record
+in `src/config/orgs.ts` or from `src/config/site.ts`. Running this for a second
+organization is a config edit, not a search and replace.
+
+**4. `org_id` goes on every table from the first migration, with row level
+security scoped by it.** The software is multi-tenant structurally and operated
+single-tenant at first. Retrofitting tenancy touches everything; adding it now
+costs a column.
 
 ---
 
 ## Stack
 
-| Layer | Choice |
+| Piece | What |
 |---|---|
-| Framework | Astro 5, Cloudflare adapter |
-| Hosting | Cloudflare Pages |
-| Database and auth | Supabase (Postgres, Google OAuth, row-level security) |
-| Search | Pagefind, built at deploy time |
-| Scheduled jobs | Cloudflare Worker with a cron trigger |
+| Astro 5 | One project, one repository, one deployment |
+| Cloudflare Pages | Static hosting, previews on every branch |
+| Supabase | Postgres, auth, and row level security, for the working surface only |
+| Pagefind | Search, indexed at build, served as static files. No search service, ever |
+| GitHub Actions | CI, free on public repositories |
 
-Everything runs inside a free tier. Domain registration is the only recurring cost.
-
----
+The public surface is prerendered. The working surface lives under `app/` and
+is separated by Astro's per-route prerender flag, not by a second application.
+A monorepo was considered and rejected.
 
 ## Layout
 
 ```
 src/
-├── styles/tokens.css     ALL color and type values
-├── config/site.ts        ALL organization-specific values
-├── components/           shared by public and app routes
-├── content/              articles, guides, question bank
-├── lib/supabase.ts       NEVER imported by a prerendered route
-└── pages/
-    ├── articles/  authors/  topics/  guides/   prerendered
-    ├── search.astro                            prerendered
-    └── app/                                    SSR, authenticated
-public/pdf/               article PDFs, committed
-supabase/migrations/      schema, versioned, committed
-tests/                    automated tests, committed
+  styles/tokens.css     every color and type value, all themes
+  config/site.ts        platform values and the discipline taxonomy
+  config/orgs.ts        the organization record, selected by PUBLIC_ORG
+  config/fonts.ts       per-theme font loading
+  content.config.ts     schemas for published records and guides
+  content/              records and guides, as files
+  components/           shared by public and app routes
+  lib/                  helpers. lib/supabase.ts is off limits to public routes
+  pages/                public routes now, app/ later
+tests/                  the two rules above, as scripts
 ```
 
-Astro's per-route prerender flag does the separation. Public routes ship as static files served from the CDN; `app/` routes run in a Worker. One build, one deployment.
-
----
-
-## Rules that must not be broken
-
-These are load-bearing. Breaking any of them is expensive to undo.
-
-**1. A prerendered route never imports `lib/supabase`.**
-The public archive builds from files in this repository and nothing else. `npm run build` must succeed with the Supabase environment variables entirely absent. CI proves this on every push. If the database is down, paused, or gone, the archive keeps serving.
-
-**2. Token names are semantic, never descriptive.**
-`--brand`, `--surface`, `--rule`, `--stage-work`, `--face-ed`. A token named `--purple` means one theme is hardcoded and the others are silently broken. All values live in `src/styles/tokens.css`. No hex literal appears in any component.
-
-**3. `org_id` on every table, from the first migration.**
-Row-level security is scoped by it. The software is multi-tenant structurally even while one organization uses it. Retrofitting this is brutal.
-
-**4. No organization-specific strings in components.**
-Everything comes from the org record. No component contains "Monta Vista", "FUHSD", "Synopsys", or "Blue Leaf Labs".
-
-**5. Google OAuth scopes are `openid`, `email`, `profile`. Nothing else, ever.**
-No Drive, no Classroom, no Gmail. The software is technically incapable of reading a student's files, and that is a promise made to parents and districts.
-
-**6. Nothing publishes before guardian consent is confirmed.**
-The grace period covers working, never publishing.
-
-**7. Schema lives in migration files.**
-Applied through the Supabase CLI, never clicked in the dashboard. This is the difference between a system a successor can rebuild and one they cannot.
-
----
-
-## Data handling
-
-Read this before touching the signup flow or anything under `app/`.
-
-**We collect:** name, email, school, expected graduation year, teacher sponsor email, parent or guardian name and email, and the project work a student chooses to enter.
-
-**We do not collect:** date of birth, home address, phone number, government identifiers, grades, transcripts, test scores, or any demographic information.
-
-**We never:** sell data, show advertising, build profiles for anything other than running the service, read linked documents programmatically, or train models on student work.
-
-Nobody under 13 may hold an account. Accounts held by anyone under 18 require a parent or guardian to confirm by email, with a 14-day grace period, paused at 15 days, deleted at 60.
-
-Email addresses are never rendered publicly, including on author pages.
-
----
-
-## Running it locally
+## Running it
 
 ```bash
 npm install
-cp .env.example .env          # fill in values
-npm run dev
+npm run dev              # local
+npm run build            # astro build, then the Pagefind index
+npm test                 # contrast floor and archive independence
+PUBLIC_ORG=example npm run dev   # render a second organization
 ```
 
-For the authenticated routes you also need a Supabase project and a Google OAuth client of type **Web application**. See `docs/setup.md`.
+Node 22. Cloudflare Pages build command is `npm run build`, output directory
+`dist`, with `NODE_VERSION` set to 22.
 
-```bash
-npm run build                 # full build
-npm run build:static          # public routes only, no env vars needed
-npm run test
-```
+## Data handling
 
-### Local files that are not committed
+This service holds student data, most of it about minors, and the position is
+architectural rather than documentary.
 
-| Directory | Contents |
-|---|---|
-| `local-data/` | Dumps, sample exports, anything with real names in it |
-| `prd/` | Working specification, design brief, policy drafts |
+Collected: name, email, school, graduation year, teacher sponsor email,
+guardian name and email, and the project work a student enters. Nothing else.
+No date of birth, no address, no phone number, no grades, no demographics.
 
-`prd/` is deliberately kept out of this public repository. It contains unreviewed legal drafts and notes about identifiable students. See "Where the specification lives" below.
+- Accounts start at age 13. There is no account below it.
+- A guardian confirms permission at signup. Nothing publishes before they do.
+- A teacher sponsor confirms the school. Until then, affiliation shows as
+  unverified on published work.
+- Email addresses are never rendered publicly, including on author pages.
+  Contact routes through the organization.
+- We never read documents a student links to, and never train models on
+  student work.
+- Deletion is available from settings, always, with no reason required.
+- Sign-in requests three scopes: `openid`, `email`, `profile`. Nothing else,
+  ever.
 
-`.dev.vars` holds Wrangler's local secrets, including the Supabase `service_role` key, which bypasses row-level security entirely. It is gitignored. Never commit it.
+## What is not in this repository
 
----
+`prd/` and `local-data/` are gitignored, and that is a disclosure requirement
+rather than a preference. The repository is public; the specification and
+policy drafts are unreviewed, and the migration inventory names identifiable
+students. **The specification lives outside this repository**, which is why
+this README carries as much as it does.
 
-## Where the specification lives
-
-The full design brief is **not in this repository**, for the reasons above. It covers the data model, the competition and milestone system, the review workflow, the theming system, and the compliance position, and it records why each decision was made rather than just what was decided.
-
-Ask the maintainer for it. If you have inherited this project and cannot reach anyone, the schema in `supabase/migrations/` and this README are the authoritative description of how the system actually works.
-
----
-
-## Themes
-
-The platform ships a default theme with **no brand color**. Color is functional and stage-coded: five lifecycle stages, five muted tones, appearing only in stage indicators and status marks. Everything else is achromatic.
-
-That is deliberate. An organization's identity appears in exactly one place, the lockup in the masthead, and a school logo in any color has to sit there without clashing.
-
-Additional themes are token sets plus a short list of structural variants. The active theme is a field on the organization record. Every shipped theme is contrast-checked in CI.
-
----
+`.dev.vars` is also ignored. It holds the Supabase `service_role` key, which
+bypasses row level security entirely, and it is not covered by any standard
+Node gitignore template.
 
 ## Succession
 
-This project was started by Rohan Agarwal and is currently maintained under the Blue Leaf Labs GitHub organization.
+This repository currently sits under the Blue Leaf Labs GitHub organization,
+which holds it on behalf of the program using it. It is open source from the
+first commit specifically so that this is a short conversation rather than a
+long one.
 
-**If a school or fair organization wants to take ownership**, the repository can be transferred between GitHub organizations while preserving history, issues, and URL redirects. The license below permits a fork at any time with no permission needed.
+If the program or its school wants ownership, GitHub transfers a repository
+between organizations while preserving history and issues and redirecting the
+old URL, and Cloudflare Pages reconnects to the moved repository. Neither is a
+rebuild.
 
-**If you are inheriting this**, the things that will bite you first:
+If nobody is maintaining this: the published archive is static files in
+`src/content/` and `public/`, and it will keep serving from any host that can
+serve a directory, with no database and no build step required to read it.
+That property is deliberate and should survive every future decision.
 
-1. Schema changes go in migration files, never the dashboard.
-2. The daily cron job is also what keeps the Supabase project from pausing over the summer. If it stops, the database eventually sleeps, and July and September are exactly when it must not.
-3. Someone has to re-verify competition deadline templates every year. A stale deadline is worse than no deadline, because a student trusted it.
-4. Every June: flip graduated students to alumni, freeze their projects, publish anything sitting accepted.
-
-Maintainer contact: see the organization page.
-
----
-
-## Contributing
-
-Issues and pull requests are welcome. Two things to know:
-
-- Automated tests live in `tests/`. `local-data/` is scratch and is not committed.
-- CI runs a build with the Supabase environment variables removed. If your change makes a public route depend on the database, that build fails, and it is meant to.
-
----
-
-## License
-
-[MIT](./LICENSE) — or Apache-2.0, decide before the first commit and do not leave it unset.
-
-Published student work is licensed separately, CC BY 4.0 by default, and authors retain copyright.
+Contact for the repository is in `src/config/site.ts`.

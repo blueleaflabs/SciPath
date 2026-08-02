@@ -1,0 +1,131 @@
+/* ═══════════════════════════════════════════════════════════════
+   TOKENS
+
+   Every color and type value in the product lives here. No hex
+   literal appears in any component, ever.
+
+   Token names are SEMANTIC, never descriptive. A token named
+   --purple means one theme is hardcoded and every other theme is
+   already broken. Name the job, not the color.
+
+   Themes are selected by the data-theme attribute on <html>, set
+   from the organization record at render time, never a build
+   constant. Adding a theme means adding one block here and one
+   font row in src/config/fonts.ts. Nothing else.
+
+   LEGIBILITY FLOOR, verified by tests/contrast.mjs in CI:
+   every text and surface pair clears WCAG AA 4.5:1.
+   ═══════════════════════════════════════════════════════════════ */
+
+:root {
+  /* Spacing module. Shared by every theme. */
+  --u: 8px;
+  --measure-text: 66ch;
+  --measure-lede: 74ch;
+  --shell: 1080px;
+  --shell-pad: 20px;
+}
+
+/* ───────────────────────────────────────────────────────────────
+   ENTRY — the platform default
+
+   No brand hue, deliberately. Color is functional and stage-coded:
+   the five lifecycle stages own one muted tone each and appear
+   only in stage indicators and status marks. Everything else is
+   achromatic warm neutral, so a school logo in any color sits in
+   the lockup without clashing, and the most saturated thing on
+   any screen tells the reader where a project stands.
+   ─────────────────────────────────────────────────────────────── */
+[data-theme='entry'] {
+  --paper: #edece8;
+  --card: #ffffff;
+  --sunk: #f5f4f1;
+
+  --ink: #1b1a17;
+  --ink-2: #4a4841;
+  --ink-3: #6e6b62;
+
+  --rule: #cfcdc5;
+  --rule-fine: #e2e0da;
+
+  /* No brand hue. The org lockup carries identity; the theme does not. */
+  --brand: var(--ink);
+  --brand-deep: var(--ink);
+  --brand-contrast: var(--card);
+  --brand-mark: var(--ink);
+
+  --stage-draft: #6e6b62;
+  --stage-work: #2b5b7a;
+  --stage-ready: #8a5a12;
+  --stage-comp: #1e6249;
+  --stage-pub: #5a3a78;
+
+  --alert: #a32c1e;
+  --alert-bg: #f7e8e5;
+  --ok-bg: #e4efea;
+  --ready-bg: #f6eede;
+
+  --focus: var(--stage-work);
+
+  --masthead-bg: var(--ink);
+  --masthead-ink: #edece8;
+  --masthead-ink-2: #b8b5ad;
+  --masthead-rule: var(--ink);
+
+  --face-ed: 'Literata', Georgia, serif;
+  --face-ui: 'Schibsted Grotesk', system-ui, sans-serif;
+  --face-num: 'Spline Sans Mono', ui-monospace, monospace;
+
+  --radius: 0;
+}
+
+/* ───────────────────────────────────────────────────────────────
+   PROCEEDINGS — an organization theme
+
+   Spot inks over a paper ground, two families with a typewriter
+   for every identifier. One rule keeps a school's colors reading
+   as institutional rather than as spirit wear: --brand-mark is
+   never a fill behind text. Hairlines, borders, and small marks
+   only.
+   ─────────────────────────────────────────────────────────────── */
+[data-theme='proceedings'] {
+  --paper: #faf9fb;
+  --card: #ffffff;
+  --sunk: #f1ecf7;
+
+  --ink: #171122;
+  --ink-2: #453a51;
+  --ink-3: #5e5369;
+
+  --rule: #cbc4d3;
+  --rule-fine: #e8e4ec;
+
+  --brand: #4a2a72;
+  --brand-deep: #2c1849;
+  --brand-contrast: #ffffff;
+  --brand-mark: #b08a2e;
+
+  --stage-draft: #5e5369;
+  --stage-work: #2e4e85;
+  --stage-ready: #8a4b0a;
+  --stage-comp: #1f6a46;
+  --stage-pub: #4a2a72;
+
+  --alert: #a81e2d;
+  --alert-bg: #f8e7e9;
+  --ok-bg: #e6f0ea;
+  --ready-bg: #f6ebdd;
+
+  --focus: var(--brand-mark);
+
+  --masthead-bg: var(--brand-deep);
+  --masthead-ink: #ede6f5;
+  --masthead-ink-2: #c3b3d6;
+  --masthead-rule: var(--brand-mark);
+
+  --face-ed: 'Spectral', Georgia, serif;
+  --face-ui: 'Spectral', Georgia, serif;
+  --face-num: 'Courier Prime', ui-monospace, monospace;
+
+  --radius: 0;
+}

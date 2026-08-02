@@ -1,82 +1,51 @@
-# ── Dependencies ────────────────────────────────────────
+# Dependencies and build output
 node_modules/
-.pnp/
-.pnp.*
-.yarn/*
-!.yarn/patches
-!.yarn/releases
-!.yarn/plugins
-!.yarn/versions
-
-# ── Build output ────────────────────────────────────────
 dist/
 .astro/
 .output/
-.cache/
+.vercel/
+.netlify/
 
-# Pagefind writes its index into dist/ at build, so it is
-# already covered. If the config ever changes, add it here.
+# Cloudflare and Wrangler
+.wrangler/
+# Holds the Supabase service_role key, which bypasses row level security.
+# This is the most likely accidental commit in this project and it is not
+# covered by any standard Node template.
+.dev.vars
+.dev.vars.*
 
-# ── Secrets ─────────────────────────────────────────────
-# Nothing below this line may ever be committed.
+# Environment
 .env
 .env.*
 !.env.example
 
-# Wrangler local secrets. This is the one people forget,
-# and it holds the Supabase service_role key.
-.dev.vars
-.dev.vars.*
+# The specification, the policy drafts, and the migration inventory.
+# This repository is public. The policy drafts are unreviewed, and the
+# migration inventory names identifiable students alongside flags recording
+# human subjects work. Publishing either would be a real disclosure.
+prd/
 
-# ── Cloudflare ──────────────────────────────────────────
-.wrangler/
-wrangler.toml.bak
+# Dumps, sample exports, and any working file with real names in it.
+# Named this rather than test/ so the test namespace stays clean: ignoring
+# a directory called test silently breaks CI the day someone adds a spec.
+local-data/
 
-# ── Supabase ────────────────────────────────────────────
-# NOTE: supabase/migrations/, supabase/seed.sql, and
-# supabase/config.toml MUST be committed. Schema lives in
-# migration files, never in the dashboard. See brief 12.4.
-supabase/.temp/
-supabase/.branches/
-
-# ── Editors and OS ──────────────────────────────────────
+# Editor and OS
 .DS_Store
 Thumbs.db
 .idea/
-*.swp
-*.swo
 .vscode/*
 !.vscode/extensions.json
-!.vscode/settings.json
 
-# ── Logs and diagnostics ────────────────────────────────
+# Logs
 *.log
 npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-pnpm-debug.log*
 build.log
-coverage/
 
-# ── Design docs, never pushed ───────────────────────────
-# Working specification, briefs, policy drafts, and the
-# migration inventory. Kept out of a PUBLIC repo because
-# they contain unreviewed legal drafts and notes about
-# identifiable students. See brief 12.5a.
-/prd/
-
-# ── Local data and scratch, never pushed ────────────────
-# Dumps, sample exports, anything with real names in it,
-# and general working scratch. Deliberately NOT called
-# "test", so that automated tests keep a clean namespace.
-/local-data/
-/tmp/
-*.local
-
-# ── Deliberately NOT ignored ────────────────────────────
-# /tests/ — automated tests and their fixtures. Committed,
-#   because CI has to be able to run them.
-# public/pdf/*.pdf  — article PDFs are the archive and are
-#   committed. Do not add a blanket *.pdf rule.
-# supabase/migrations/ — see above.
-# src/content/ — article markdown is the product.
+# Deliberately committed, stated so a blanket ignore never eats them:
+#   supabase/migrations/   the schema, which is the system of record
+#   supabase/config.toml
+#   supabase/seed.sql
+#   public/pdf/            the archive itself
+#   src/content/           published records and guides
+#   tests/                 automated tests and fixtures

@@ -1,0 +1,42 @@
+---
+import Base from '../layouts/Base.astro';
+---
+
+<Base title="Page not found" noindex>
+  <div class="wrap">
+    <div class="lost">
+      <p class="t-lbl">404</p>
+      <h1 class="t-big">That page is not here</h1>
+      <p class="lede">
+        Either the address is wrong, or it pointed at something that has moved. Records
+        published here keep their address permanently, so a broken link is usually a link
+        from somewhere older.
+      </p>
+
+      <form class="sbar" action="/search/" method="get" role="search" style="margin-top:26px; max-width:520px">
+        <label class="skip" for="q">Search records</label>
+        <input class="in" type="search" id="q" name="q" placeholder="Try a title or an author" />
+        <button class="btn" type="submit">Search</button>
+      </form>
+
+      <div class="row" style="margin-top:20px">
+        <a class="btn btn-2" href="/articles/">All records</a>
+        <a class="btn btn-q" href="/guides/">Guides</a>
+        <a class="btn btn-q" href="/">Home</a>
+      </div>
+    </div>
+  </div>
+</Base>
+
+<style>
+  .lost {
+    padding: 72px 0 60px;
+    max-width: 74ch;
+  }
+  .lost .t-lbl {
+    margin-bottom: 14px;
+  }
+  .lost .lede {
+    margin-top: 18px;
+  }
+</style>

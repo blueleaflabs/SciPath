@@ -1,0 +1,605 @@
+# SciPath — Quality Checklist and Mistakes Seed Content
+# version: 0.1  ·  2026-07-31
+#
+# Two collections: prompts (asked of the student, answered in writing) and
+# mistakes (told to the student, no response required).
+#
+# This is CONTENT, not code. Mentors and officers extend it through the CMS.
+# The best additions come from mentors in March, right after judging, while
+# they still remember what went wrong.
+#
+# FIELDS
+#   id       stable slug, never reused
+#   stage    which lifecycle stage this surfaces in
+#   track    all | experimental | engineering
+#   rubric   thought | creativity | independent | thoroughness | (blank)
+#   prompt   the question, phrased so it cannot be answered "yes"
+#
+# RULES FOR ADDING PROMPTS
+#   1. A prompt that can be answered "yes" is a checkbox in disguise. Rewrite it.
+#      Bad:  "Have you considered confounding factors?"
+#      Good: "Name three confounding factors and what you did about each."
+#   2. Ask for something specific and countable. Three factors, one paper, one number.
+#   3. If the answer would be useful in the final article, the prompt is a good one.
+#   4. Keep each stage to roughly 6-8 prompts. Forty prompts get ignored.
+
+stages:
+  - id: question
+    label: Forming the question
+  - id: literature
+    label: Prior art
+  - id: design
+    label: Design and methodology
+  - id: ethics
+    label: Ethics, safety, and forms
+  - id: collection
+    label: Data collection
+  - id: analysis
+    label: Analysis and interpretation
+  - id: communication
+    label: Abstract, figures, and board
+  - id: judging
+    label: Judging preparation
+
+# ---------------------------------------------------------------------------
+prompts:
+
+  # -- Forming the question -------------------------------------------------
+  - id: q-one-sentence
+    stage: question
+    track: experimental
+    rubric: thought
+    prompt: >-
+      State your question in one sentence, naming the independent variable, the
+      dependent variable, and the population or system it applies to.
+
+  - id: q-design-goal
+    stage: question
+    track: engineering
+    rubric: thought
+    prompt: >-
+      State your design goal as a measurable specification with a target number.
+      "Better" and "more efficient" are not specifications.
+
+  - id: q-expected-mechanism
+    stage: question
+    track: all
+    rubric: thought
+    prompt: >-
+      What do you expect to find, and through what mechanism? Give the causal
+      story, not just the direction of the effect.
+
+  - id: q-falsification
+    stage: question
+    track: all
+    rubric: thought
+    prompt: >-
+      What specific result would tell you that you were wrong?
+
+  - id: q-who-cares
+    stage: question
+    track: all
+    rubric: creativity
+    prompt: >-
+      Who is worse off if this question stays unanswered? Name a specific person,
+      group, or system. "Society" is not an answer.
+
+  - id: q-feasibility
+    stage: question
+    track: all
+    rubric: thoroughness
+    prompt: >-
+      What can you actually measure with the time, budget, and equipment you have?
+      If the question needs something you cannot get, say what you will do instead.
+
+  - id: q-why-not-done
+    stage: question
+    track: all
+    rubric: creativity
+    prompt: >-
+      Why has nobody done this already? Pick one and defend it: nobody thought it
+      mattered, it was too expensive, the tools are new, or it has been done and
+      you have not found it yet.
+
+  - id: q-origin
+    stage: question
+    track: all
+    rubric: independent
+    prompt: >-
+      Where did this idea come from? If someone suggested it, say who and what
+      exactly they suggested. Judges ask this directly and it is scored.
+
+  # -- Prior art ------------------------------------------------------------
+  - id: l-three-papers
+    stage: literature
+    track: all
+    rubric: thoroughness
+    prompt: >-
+      Name the three most relevant papers. For each: what they did, what they
+      found, and what they left open.
+
+  - id: l-closest-work
+    stage: literature
+    track: all
+    rubric: creativity
+    prompt: >-
+      What is the single closest prior work to yours? In one sentence, what does
+      yours do that it does not?
+
+  - id: l-field-terminology
+    stage: literature
+    track: all
+    rubric: thoroughness
+    prompt: >-
+      What term does this field actually use for your phenomenon? List the search
+      terms you used and the ones you found only after reading a paper.
+
+  - id: l-standard-measure
+    stage: literature
+    track: experimental
+    rubric: thought
+    prompt: >-
+      How does this field normally measure your dependent variable, and where did
+      you learn that? If you are measuring it differently, justify the change.
+
+  - id: l-baseline
+    stage: literature
+    track: engineering
+    rubric: thought
+    prompt: >-
+      What existing design are you improving on, and how does it currently perform
+      on your metric? Cite the source of that number.
+
+  - id: l-assumption-provenance
+    stage: literature
+    track: all
+    rubric: independent
+    prompt: >-
+      Which of your assumptions came from a paper, and which did you invent?
+      Label each one.
+
+  - id: l-contradiction
+    stage: literature
+    track: all
+    rubric: thoroughness
+    prompt: >-
+      What did you read that contradicted what you expected, or that disagreed
+      with another source? How did you resolve it?
+
+  # -- Design and methodology ----------------------------------------------
+  - id: d-levels
+    stage: design
+    track: experimental
+    rubric: thought
+    prompt: >-
+      What is your independent variable, what levels or range will you test, and
+      why those specifically?
+
+  - id: d-controlled-variables
+    stage: design
+    track: experimental
+    rubric: thoroughness
+    prompt: >-
+      List every variable you are holding constant and the physical means by which
+      you are holding it constant.
+
+  - id: d-confounders
+    stage: design
+    track: experimental
+    rubric: thought
+    prompt: >-
+      Name three confounding factors and what you are doing about each. For any you
+      cannot control, state how you will measure or bound its effect.
+
+  - id: d-control-condition
+    stage: design
+    track: experimental
+    rubric: thought
+    prompt: >-
+      What is your control condition, and why is it the right comparison? Does it
+      differ from your treatment in exactly one way?
+
+  - id: d-unit-of-analysis
+    stage: design
+    track: experimental
+    rubric: thought
+    prompt: >-
+      What is your unit of analysis, and what is your n? Measuring 100 leaves from
+      3 plants is n=3, not n=100. Say which yours is.
+
+  - id: d-replicates
+    stage: design
+    track: experimental
+    rubric: thoroughness
+    prompt: >-
+      How many trials or replicates, and how did you arrive at that number?
+      "It is what fit in the afternoon" is an honest answer, but say so.
+
+  - id: d-outlier-rule
+    stage: design
+    track: experimental
+    rubric: thought
+    prompt: >-
+      What will you do with outliers? Write the rule down now, before you have seen
+      any data. Decided afterwards, it is not a rule, it is a preference.
+
+  - id: d-protocol
+    stage: design
+    track: all
+    rubric: thoroughness
+    prompt: >-
+      Write your protocol in enough detail that another student could run it
+      without asking you a single question.
+
+  - id: d-constraints
+    stage: design
+    track: engineering
+    rubric: thought
+    prompt: >-
+      List your constraints (cost, size, power, mass, time, materials) and where
+      each one came from.
+
+  - id: d-alternatives
+    stage: design
+    track: engineering
+    rubric: creativity
+    prompt: >-
+      What alternative designs did you consider, and on what grounds did you reject
+      each one?
+
+  - id: d-test-plan
+    stage: design
+    track: engineering
+    rubric: thought
+    prompt: >-
+      How will you test whether the design meets the specification? Apply the same
+      rigor you would to an experiment.
+
+  # -- Ethics, safety, forms ------------------------------------------------
+  - id: e-categories
+    stage: ethics
+    track: all
+    rubric: thoroughness
+    prompt: >-
+      Answer each explicitly, yes or no: human participants, vertebrate animals,
+      potentially hazardous biological agents, hazardous chemicals, activities,
+      or devices. A survey counts as human participants research.
+
+  - id: e-date-ordering
+    stage: ethics
+    track: all
+    rubric: thoroughness
+    prompt: >-
+      What date did your Adult Sponsor sign Form 1, and what start date is on
+      Form 1A? Confirm the first is before the second. This cannot be fixed later.
+
+  - id: e-consent
+    stage: ethics
+    track: all
+    rubric: thoroughness
+    prompt: >-
+      If you have human participants: what is your consent process, and how are you
+      protecting their data?
+
+  - id: e-location
+    stage: ethics
+    track: all
+    rubric: thoroughness
+    prompt: >-
+      Where is the work physically happening? If it is a university or company lab,
+      check whether that triggers Regulated Research Institution requirements.
+
+  - id: e-continuation
+    stage: ethics
+    track: all
+    rubric: independent
+    prompt: >-
+      If this continues previous work: what did you do before, and what specifically
+      is new this year? Be precise, this is both a form question and a judging one.
+
+  - id: e-contributions
+    stage: ethics
+    track: all
+    rubric: independent
+    prompt: >-
+      List everyone who touched this project and exactly what they did. Include
+      mentors, lab staff, parents, and teammates. Understating this is an integrity
+      problem; judges are experienced at detecting it.
+
+  # -- Data collection ------------------------------------------------------
+  - id: c-raw-data
+    stage: collection
+    track: all
+    rubric: thoroughness
+    prompt: >-
+      Are you recording raw measurements or only summaries? If only summaries, stop
+      and fix that now. Variance and errors cannot be recovered from an average.
+
+  - id: c-backup
+    stage: collection
+    track: all
+    rubric: thoroughness
+    prompt: >-
+      Where does your raw data live, and where is the second copy?
+
+  - id: c-calibration
+    stage: collection
+    track: all
+    rubric: thoroughness
+    prompt: >-
+      What is your calibration procedure, how often do you repeat it, and where is
+      it logged?
+
+  - id: c-uncertainty
+    stage: collection
+    track: all
+    rubric: thought
+    prompt: >-
+      What is the uncertainty on a single measurement, and how do you know? Repeat
+      one measurement ten times if you do not.
+
+  - id: c-anomalies
+    stage: collection
+    track: all
+    rubric: thoroughness
+    prompt: >-
+      What has gone wrong during collection so far, and did you record it at the
+      time it happened rather than afterwards?
+
+  - id: c-drift
+    stage: collection
+    track: all
+    rubric: thought
+    prompt: >-
+      Have your conditions or your procedure changed since you started? If your
+      conditions run on different days, how are you preventing day effects from
+      being confused with treatment effects?
+
+  # -- Analysis -------------------------------------------------------------
+  - id: a-plain-result
+    stage: analysis
+    track: all
+    rubric: thought
+    prompt: >-
+      In one sentence, what does your data show? Description only, no interpretation.
+
+  - id: a-test-choice
+    stage: analysis
+    track: experimental
+    rubric: thought
+    prompt: >-
+      What statistical test did you use, and why is it appropriate for this data
+      type, distribution, and design? You will be asked this.
+
+  - id: a-effect-size
+    stage: analysis
+    track: all
+    rubric: thought
+    prompt: >-
+      How large is the effect, in the units of the thing you measured? Significance
+      alone says nothing about magnitude.
+
+  - id: a-alternative-explanation
+    stage: analysis
+    track: all
+    rubric: thought
+    prompt: >-
+      What is the most likely alternative explanation for your result, and what in
+      your data argues against it?
+
+  - id: a-supported-vs-speculation
+    stage: analysis
+    track: all
+    rubric: thought
+    prompt: >-
+      Split your conclusions into two lists: what your data supports, and what you
+      believe but have not shown. Label the second list as speculation in your writeup.
+
+  - id: a-spec-met
+    stage: analysis
+    track: engineering
+    rubric: thought
+    prompt: >-
+      Did the design meet the specification you set? Give the number, not a verdict.
+      If it did not, that is a result, not a failure.
+
+  - id: a-null-result
+    stage: analysis
+    track: all
+    rubric: creativity
+    prompt: >-
+      If your result was null or negative, what does that rule out? A well-designed
+      study with a null result is a real contribution. Do not hide it.
+
+  - id: a-uncertainty-vs-effect
+    stage: analysis
+    track: all
+    rubric: thought
+    prompt: >-
+      How large is your uncertainty compared to your effect? If they are comparable,
+      say so plainly.
+
+  # -- Communication --------------------------------------------------------
+  - id: m-one-sentence-finding
+    stage: communication
+    track: all
+    rubric: thoroughness
+    prompt: >-
+      State your finding in one sentence a smart person outside your field would
+      understand. No jargon.
+
+  - id: m-abstract-parts
+    stage: communication
+    track: all
+    rubric: thoroughness
+    prompt: >-
+      Does your abstract contain purpose, method, result, and conclusion, and does
+      it fit the word limit? Check the current rules book for the limit.
+
+  - id: m-key-figure
+    stage: communication
+    track: all
+    rubric: thoroughness
+    prompt: >-
+      Which single figure carries your result? Cover the caption and hand it to
+      someone. Can they tell you what it shows?
+
+  - id: m-axes
+    stage: communication
+    track: all
+    rubric: thoroughness
+    prompt: >-
+      Are all axes labeled with units, and is uncertainty shown? Say what your
+      error bars represent.
+
+  - id: m-cut
+    stage: communication
+    track: all
+    rubric: thoroughness
+    prompt: >-
+      What is on your board that a judge does not need? Name three things and
+      remove them.
+
+  - id: m-readable
+    stage: communication
+    track: all
+    rubric: thoroughness
+    prompt: >-
+      Stand three feet from your board. What can you not read? Fix that.
+
+  # -- Judging --------------------------------------------------------------
+  - id: j-sixty-seconds
+    stage: judging
+    track: all
+    rubric: thoroughness
+    prompt: >-
+      Write your 60-second version, then your 5-minute version. Judges have limited
+      time and will interrupt.
+
+  - id: j-what-i-did
+    stage: judging
+    track: all
+    rubric: independent
+    prompt: >-
+      What did you personally do, versus your mentor or teammates? Rehearse this
+      answer out loud. It is worth 10 points and it is asked directly.
+
+  - id: j-weakest-part
+    stage: judging
+    track: all
+    rubric: thought
+    prompt: >-
+      What is the weakest part of your project? Judges respect knowing your own
+      limitations far more than they respect a confident overclaim.
+
+  - id: j-six-more-months
+    stage: judging
+    track: all
+    rubric: creativity
+    prompt: >-
+      With another six months, what would you do next, and why that rather than
+      something else?
+
+  - id: j-start-over
+    stage: judging
+    track: all
+    rubric: thought
+    prompt: >-
+      What would you do differently if you started again? Name one methodological
+      change, not just "start earlier."
+
+  - id: j-dreaded-question
+    stage: judging
+    track: all
+    rubric: thought
+    prompt: >-
+      What question do you hope they do not ask? Write the answer to that one first.
+
+  - id: j-stats-in-plain-words
+    stage: judging
+    track: experimental
+    rubric: thought
+    prompt: >-
+      Explain your statistical result without using the word "significant."
+
+# ---------------------------------------------------------------------------
+mistakes:
+
+  - stage: question
+    items:
+      - Picking a topic ("solar energy") instead of a question. A topic cannot be answered.
+      - A question so broad that a funded lab would need five years for it.
+      - A question already answered on the first page of Google Scholar.
+      - Choosing based on the equipment available, then reverse-engineering a justification.
+      - Confusing a demonstration ("build a solar oven") with an investigation ("does reflector geometry change peak temperature").
+      - Beginning experimentation before the required forms are signed. This is unrecoverable and ends the entry.
+
+  - stage: literature
+    items:
+      - Citing only sources that agree with you.
+      - Citing news articles and blog summaries instead of the underlying paper.
+      - Searching only the everyday term for the phenomenon and missing the field's actual vocabulary.
+      - Reading abstracts only. The methods section is where the useful detail lives.
+      - A literature review that is a stack of summaries with no argument about what is missing.
+      - Not recording search terms and dates, so the search cannot be reproduced or updated.
+
+  - stage: design
+    items:
+      - Changing two things at once, so no result can be attributed.
+      - No control, or a control that differs from the treatment in more than one way.
+      - Pseudo-replication. Repeated measurements on one subject are not independent samples.
+      - Deciding the outlier rule after seeing the data.
+      - Choosing sample size by convenience and then not disclosing it.
+      - Measuring what is easy instead of what the question requires.
+      - No blinding when the measurement involves human judgment.
+      - Engineering only, claiming improvement with no baseline measurement to improve on.
+      - Engineering only, a single iteration. The rubric rewards iteration explicitly.
+
+  - stage: ethics
+    items:
+      - Assuming a survey does not count as human participants research. It does.
+      - Missing that work in a university or company lab triggers additional requirements.
+      - Understating a mentor's contribution. Experienced judges detect this and it is an integrity issue, not a presentation one.
+      - Overstating your own role in work that was substantially directed by someone else.
+      - Forgetting the twelve-month research window.
+      - Treating forms as paperwork to be done later. The dates are the point, not the signatures.
+
+  - stage: collection
+    items:
+      - Recording only averages, making variance and error unrecoverable.
+      - A single copy of the raw data.
+      - Not logging anomalies at the time, then finding an unexplained pattern months later.
+      - Letting the protocol drift over weeks without recording when it changed.
+      - Running different conditions on different days without randomizing or blocking.
+      - No record of instrument settings, so a measurement cannot be repeated.
+
+  - stage: analysis
+    items:
+      - Claiming causation from correlation.
+      - Running tests until one comes out significant.
+      - Reporting a p-value with no effect size and no n.
+      - Extrapolating beyond the range actually tested.
+      - Treating a null result as a failed project and burying it.
+      - Fitting a trendline to five points and reporting R-squared to four decimals.
+      - A conclusion that restates the hypothesis instead of reporting what happened.
+      - Excluding data points because they are inconvenient rather than by a pre-stated rule.
+
+  - stage: communication
+    items:
+      - An abstract that says what you did but never says what you found.
+      - Figures with unlabeled axes or missing units.
+      - A board dense with text that nobody will stand and read.
+      - Burying the result underneath the procedure.
+      - Jargon used without definition.
+      - Decorative chart styling, 3D pie charts, gradients behind data.
+      - Font sizes chosen at a desk rather than tested from three feet away.
+
+  - stage: judging
+    items:
+      - Memorizing a script and being unable to answer anything off it.
+      - Claiming more certainty than the data supports.
+      - Being defensive about limitations rather than owning them.
+      - Being unable to explain your own analysis method in your own words.
+      - Not knowing what your error bars represent.
+      - Answering a question you were not asked because it is the one you rehearsed.
+      - Talking for four minutes without pausing for the judge to redirect.

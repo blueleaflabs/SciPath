@@ -1,0 +1,93 @@
+---
+import Base from '../../layouts/Base.astro';
+import { getAuthorPages, monogram } from '../../lib/authors';
+import { org } from '../../config/orgs';
+import { siteUrl } from '../../config/site';
+import type { GetStaticPaths } from 'astro';
+
+export const getStaticPaths: GetStaticPaths = async () => {
+  const authors = await getAuthorPages();
+  return authors.map((author) => ({ params: { slug: author.slug }, props: { author } }));
+};
+
+const { author } = Astro.props;
+
+const jsonLd = {
+  '@context': 'https://schema.org',
+  '@type': 'Person',
+  name: author.displayName,
+  url: new URL(`/authors/${author.slug}/`, siteUrl).href,
+  ...(author.school ? { affiliation: { '@type': 'Organization', name: author.school } } : {}),
+};
+
+const years = author.articles.map((a) => a.data.publishedOn.getUTCFullYear());
+const span = years.length
+  ? years[0] === years[years.length - 1]
+    ? `${years[0]}`
+    : `${Math.min(...years)} to ${Math.max(...years)}`
+  : '';
+---
+
+<Base title={author.displayName} description={`Published work by ${author.displayName}.`}>
+  <Fragment slot="head">
+    <script type="application/ld+json" set:html={JSON.stringify(jsonLd)} />
+  </Fragment>
+
+  <div class="wrap" style="padding-top:40px">
+    <div class="card pad">
+      <div class="prof">
+        <div class="mono-av" aria-hidden="true">{monogram(author.displayName)}</div>
+        <div>
+          <h1 class="t-h1">{author.displayName}</h1>
+          <p class="t-sm" style="margin-top:6px">
+            <span class={author.affiliationVerified ? 'verified' : 'unverified'}>
+              {author.school ?? 'Affiliation not recorded'}
+              {author.gradYear ? ` · Class of ${author.gradYear}` : ''}
+            </span>
+          </p>
+          <div class="row" style="margin-top:13px">
+            <span class="chip solid">
+              {author.articles.length} {author.articles.length === 1 ? 'record' : 'records'}
+            </span>
+            {span && <span class="chip">{span}</span>}
+          </div>
+          <div class="row" style="margin-top:11px">
+            <a class="btn btn-2" href="/contact/">Contact through {org.name}</a>
+          </div>
+        </div>
+      </div>
+
+      <p class="t-lbl" style="margin:28px 0 0">Published work</p>
+      <ul class="bib">
+        {
+          author.articles.map((a) => {
+            const year = a.data.publishedOn.getUTCFullYear();
+            const others = a.data.authors
+              .filter((x) => x.displayName !== author.displayName)
+              .map((x) => x.displayName);
+            return (
+              <li>
+                <span class="y">
+                  {year} · {a.data.recordId}
+                </span>
+                <div>
+                  <a href={`/articles/${year}/${a.data.slug}/`}>{a.data.title}</a>
+                  {others.length > 0 && (
+                    <p class="t-sm" style="margin-top:4px">
+                      with {others.join(', ')}
+                    </p>
+                  )}
+                </div>
+              </li>
+            );
+          })
+        }
+      </ul>
+    </div>
+
+    <p class="t-sm" style="margin-top:18px; max-width:74ch">
+      No email address appears on this page. Writing to {org.name} reaches the author, and
+      whether to reply is theirs to decide.
+    </p>
+  </div>
+</Base>

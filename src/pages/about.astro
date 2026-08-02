@@ -1,0 +1,77 @@
+---
+import Base from '../layouts/Base.astro';
+import PageHead from '../components/PageHead.astro';
+import { org } from '../config/orgs';
+import { platform } from '../config/site';
+---
+
+<Base
+  title="About"
+  description={`What ${org.name} is, how it works, and what the software behind it does.`}
+>
+  <PageHead
+    eyebrow="About"
+    title={org.isPlatform ? platform.name : org.name}
+    lede={org.showcaseNote}
+  />
+
+  <div class="wrap">
+    <div class="prose">
+      <h2>What this is</h2>
+      <p>
+        A place to plan a science fair project, keep a record of the work while you do it,
+        and publish the result somewhere permanent when you are finished. One project moves
+        through five stages, from the day it is registered to the day it is published, and
+        publication is the last of those stages rather than a separate thing to apply to.
+      </p>
+
+      <h2>What it is not</h2>
+      <p>
+        It is not a peer reviewed journal. Review here is editorial, performed by named
+        reviewers with faculty oversight, and every published record says so. Claiming more
+        than that would be the fastest way to lose the trust of exactly the reader this is
+        built for.
+      </p>
+      <p>
+        It is not a ranking or grading system. Nothing computes a readiness score, nothing
+        ranks one project against another, and reviewer scales are never averaged into a
+        number. A number would become the thing students optimize and the thing a
+        disappointed student argues with, and it would be a worse decision aid than the
+        facts it replaced.
+      </p>
+      <p>
+        It is not an advertising business. There are no ads, no data sale, no profiling, and
+        no third party analytics following you between sites.
+      </p>
+
+      <h2>Why the public half is open</h2>
+      <p>
+        A student at a well resourced school has a parent who knows what the forms are, a
+        teacher with time, and often a family friend with a lab. A student without any of
+        that misses a signature deadline and is disqualified before running a single
+        experiment. That failure is procedural, not intellectual, and software can catch it.
+      </p>
+      <p>
+        So the guides, the deadline calendars, the record of what commonly goes wrong, and
+        every published record are open to anyone with no account and nothing stored. A
+        student whose district will never sign a data agreement still gets all of it on day
+        one.
+      </p>
+
+      <h2>The software</h2>
+      <p>
+        {platform.name} is free and open source. Any organization can run its own copy, hold
+        its own students' data, and keep operating whether or not we do.
+        <a href={platform.repoUrl}>The source is public</a>, licensed from the first commit.
+      </p>
+      <p>
+        {org.isPlatform ? platform.operatorCredit : `${org.name} runs on ${platform.name}.`}
+      </p>
+    </div>
+
+    <div class="row" style="margin-top:32px">
+      <a class="btn btn-2" href="/policies/">Policies</a>
+      <a class="btn btn-q" href="/contact/">Contact</a>
+    </div>
+  </div>
+</Base>

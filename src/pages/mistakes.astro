@@ -1,0 +1,84 @@
+---
+import Base from '../layouts/Base.astro';
+import PageHead from '../components/PageHead.astro';
+import { questionBank, stageLabel } from '../lib/questionBank';
+
+const bank = questionBank();
+const groups = bank.mistakes;
+const total = groups.reduce((n, g) => n + g.items.length, 0);
+---
+
+<Base
+  title="Common mistakes"
+  description="What goes wrong in student research projects, collected by stage. Open to anyone, no account."
+>
+  <PageHead
+    eyebrow="Institutional memory"
+    title="Common mistakes"
+    lede="Collected from mentors and judges after each season, organized by the stage where the mistake is still cheap to fix. Reading this needs no account, and none of it is specific to any one school."
+  >
+    <div class="row" style="margin-top:18px">
+      <span class="chip solid">{total} entries</span>
+      <span class="chip">{groups.length} stages</span>
+    </div>
+  </PageHead>
+
+  <div class="wrap" data-pagefind-body>
+    <nav class="jump" aria-label="Stages">
+      {groups.map((g) => <a class="chip" href={`#${g.stage}`}>{stageLabel(g.stage)}</a>)}
+    </nav>
+
+    <div class="stack" style="margin-top:26px">
+      {
+        groups.map((g, i) => (
+          <section id={g.stage} class="card pad">
+            <div class="sec-h" style="margin-top:0">
+              <b>
+                {String(i + 1).padStart(2, '0')} · {stageLabel(g.stage)}
+              </b>
+              <span>{g.items.length}</span>
+            </div>
+            <ul class="mistakes">
+              {g.items.map((item) => (
+                <li>{item}</li>
+              ))}
+            </ul>
+          </section>
+        ))
+      }
+    </div>
+
+    <div class="note" style="margin-top:28px">
+      <h4>Where this comes from</h4>
+      <p>
+        Every entry was written down by someone who watched it happen. The list grows each
+        March, right after judging, which is the only time anyone remembers this clearly.
+      </p>
+    </div>
+  </div>
+</Base>
+
+<style>
+  .jump {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .jump a {
+    text-decoration: none;
+  }
+  .jump a:hover {
+    border-color: var(--ink);
+    color: var(--ink);
+  }
+  .mistakes {
+    margin: 0;
+    padding-left: 1.2em;
+    max-width: var(--measure-text);
+  }
+  .mistakes li {
+    font-size: 1rem;
+    line-height: 1.55;
+    margin-top: 0.7em;
+  }
+</style>

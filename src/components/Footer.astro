@@ -1,0 +1,75 @@
+---
+import { org } from '../config/orgs';
+import { platform } from '../config/site';
+
+const columns = [
+  {
+    label: 'Read',
+    links: [
+      { href: '/articles/', label: 'Showcase' },
+      { href: '/authors/', label: 'Authors' },
+      { href: '/topics/', label: 'Topics' },
+      { href: '/search/', label: 'Search' },
+    ],
+  },
+  {
+    label: 'Use it',
+    links: [
+      { href: '/guides/', label: 'Guides' },
+      { href: '/deadlines/', label: 'Deadlines' },
+      { href: '/mistakes/', label: 'Common mistakes' },
+      { href: '/submit/', label: 'Publish your work' },
+    ],
+  },
+  {
+    label: 'Trust',
+    links: [
+      { href: '/policies/privacy/', label: 'What we store' },
+      { href: '/policies/editorial/', label: 'Editorial policy' },
+      { href: '/policies/takedown/', label: 'Takedown' },
+      { href: '/policies/accessibility/', label: 'Accessibility' },
+    ],
+  },
+  {
+    label: 'Build',
+    links: [
+      { href: platform.repoUrl, label: 'Source code' },
+      { href: '/about/', label: 'About' },
+      { href: '/contact/', label: 'Contact' },
+    ],
+  },
+];
+---
+
+<footer class="ft">
+  <div class="wrap">
+    <div class="ft-c">
+      <div>
+        <p class="t-mark">{platform.name}</p>
+        <p class="t-sm" style="color:var(--masthead-ink); margin-top:10px; max-width:32ch">
+          {platform.tagline}
+        </p>
+      </div>
+      {
+        columns.map((col) => (
+          <div>
+            <p class="t-lbl">{col.label}</p>
+            <ul>
+              {col.links.map((l) => (
+                <li>
+                  <a href={l.href}>{l.label}</a>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ))
+      }
+    </div>
+    <p class="ft-base">
+      Reading anything on this site requires no account, and nothing is stored about you when
+      you do. We do not sell student data, show advertising, or build profiles. Published
+      records carry the license stated on the record; authors keep copyright.<br />
+      {org.isPlatform ? platform.operatorCredit : `${org.name} runs on ${platform.name}, free and open source software.`}
+    </p>
+  </div>
+</footer>
