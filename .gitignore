@@ -1,3 +1,7 @@
+# Custom
+supabase/seed/local/
+.dev.vars
+
 # Dependencies and build output
 node_modules/
 dist/
