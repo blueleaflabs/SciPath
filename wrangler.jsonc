@@ -1,0 +1,19 @@
+{
+  // Cloudflare bindings. Read by the Astro adapter's platform proxy in dev,
+  // so the same code path runs locally and in production: a dev path that
+  // differs from production is where the surprises live.
+  "name": "scipath",
+  "compatibility_date": "2026-05-01",
+  "compatibility_flags": ["nodejs_compat"],
+
+  "r2_buckets": [
+    {
+      // Notebook photographs and signed forms. Private: no public URL, no
+      // custom domain. Every read goes through /app/media/, which checks
+      // project membership first.
+      "binding": "NOTEBOOK",
+      "bucket_name": "scipath-notebook",
+      "preview_bucket_name": "scipath-notebook-preview"
+    }
+  ]
+}

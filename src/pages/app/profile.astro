@@ -1,0 +1,196 @@
+---
+export const prerender = false;
+
+import Base from '../../layouts/Base.astro';
+import AppShell from '../../components/AppShell.astro';
+import { activeOrg } from '../../lib/tenant';
+import { serverClient } from '../../lib/supabase';
+
+const { session, account, roles } = Astro.locals;
+const org = activeOrg(Astro);
+
+if (!session) return Astro.redirect('/app/');
+if (!account) return Astro.redirect('/app/welcome/');
+
+const supabase = serverClient(
+  Astro.request,
+  Astro.cookies,
+  (Astro.locals as any).runtime?.env
+);
+
+let saved = false;
+let error: string | null = null;
+
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData();
+  const gradYear = String(form.get('grad_year') ?? '');
+
+  const { error: updateError } = await supabase
+    .from('users')
+    .update({
+      display_name: String(form.get('display_name') ?? '').trim(),
+      grad_year: gradYear ? Number(gradYear) : null,
+      orcid: String(form.get('orcid') ?? '').trim() || null,
+      outbound_url: String(form.get('outbound_url') ?? '').trim() || null,
+      photo_consent: form.get('photo_consent') === 'on',
+    })
+    .eq('id', account.id);
+
+  if (updateError) error = updateError.message;
+  else saved = true;
+}
+
+/* Re-read so the form shows what is actually stored, not what was posted. */
+const { data: current } = await supabase
+  .from('users')
+  .select('display_name, grad_year, orcid, outbound_url, photo_consent, author_slug, affiliation_state, consent_state, population, status')
+  .eq('id', account.id)
+  .single();
+
+const me = current ?? account;
+
+const { data: guardian } = await supabase
+  .from('guardian_consents')
+  .select('guardian_name, guardian_email, confirmed_at, requested_at')
+  .eq('user_id', account.id)
+  .is('revoked_at', null)
+  .order('requested_at', { ascending: false })
+  .limit(1)
+  .maybeSingle();
+
+/* Who is attached to the projects this person authors. The mentor is the
+   sponsor, so this is also the answer to "has anyone signed off on me". */
+const { data: myProjects } = await supabase
+  .from('project_authors')
+  .select('project_id')
+  .eq('user_id', account.id)
+  .eq('role', 'author');
+
+const projectIds = (myProjects ?? []).map((r: any) => r.project_id);
+
+const { data: overseers } = projectIds.length
+  ? await supabase
+      .from('project_authors')
+      .select('role, projects(title), users(display_name)')
+      .in('project_id', projectIds)
+      .in('role', ['mentor', 'officer'])
+  : { data: [] as any[] };
+
+const mentors = (overseers ?? []).filter((o: any) => o.role === 'mentor');
+
+const year = new Date().getFullYear();
+const gradYears = [year, year + 1, year + 2, year + 3, year + 4];
+
+const affiliationLabel: Record<string, string> = {
+  domain_verified: `Verified by your ${org.name} account`,
+  mentor_verified: 'Verified by your club mentor',
+  unverified: 'Waiting on a club mentor',
+  lapsed: 'Lapsed. Sign in with your school account to renew',
+};
+
+const consentLabel: Record<string, string> = {
+  not_required: 'Not required. You told us you are 18 or older',
+  active: 'Confirmed',
+  pending: 'Waiting on your parent or guardian',
+  paused: 'Paused until confirmed',
+  closed: 'Closed',
+};
+---
+
+<Base title="Profile" noindex={true}>
+  <div class="wrap">
+    <AppShell org={org} account={account} roles={roles} here="/app/profile/" />
+
+    <section class="hero" style="padding-top:0">
+      <p class="t-lbl">Profile</p>
+      <h1 class="t-big">{me.display_name}</h1>
+      <p class="lede">
+        What appears on a byline, and who has confirmed you. Everything here is
+        yours to edit except the confirmations.
+      </p>
+    </section>
+
+    {saved && <p class="note" role="status">Saved.</p>}
+    {error && <p class="note" role="alert">{error}</p>}
+
+    <section class="sec">
+      <div class="sec-h"><b>Your details</b><span>Editable</span></div>
+      <form method="POST" class="stack">
+        <label>
+          <span>Name, as it should appear on a byline</span>
+          <input name="display_name" required value={me.display_name} autocomplete="name" />
+        </label>
+
+        <label>
+          <span>Graduation year</span>
+          <select name="grad_year">
+            <option value="">Not a student</option>
+            {gradYears.map((y) => (
+              <option value={y} selected={me.grad_year === y}>{y}</option>
+            ))}
+          </select>
+        </label>
+
+        <label>
+          <span>ORCID</span>
+          <input name="orcid" value={me.orcid ?? ''} placeholder="0000-0000-0000-0000" />
+          <small>Optional. A permanent identifier that follows you to university.</small>
+        </label>
+
+        <label>
+          <span>A link of your own</span>
+          <input name="outbound_url" type="url" value={me.outbound_url ?? ''} placeholder="https://" />
+          <small>Optional. Shown on your author page once you have published.</small>
+        </label>
+
+        <label class="check">
+          <input type="checkbox" name="photo_consent" checked={me.photo_consent} />
+          <span>Show my photo on my author page</span>
+        </label>
+
+
+
+        <button type="submit">Save</button>
+      </form>
+    </section>
+
+    <section class="sec">
+      <div class="sec-h"><b>Confirmations</b><span>Not editable here</span></div>
+      <dl class="record">
+        <dt>School affiliation</dt>
+        <dd>{affiliationLabel[me.affiliation_state] ?? me.affiliation_state}</dd>
+
+        <dt>Parent or guardian</dt>
+        <dd>
+          {consentLabel[me.consent_state] ?? me.consent_state}
+          {guardian && me.consent_state !== 'not_required' && (
+            <> · {guardian.guardian_email}</>
+          )}
+        </dd>
+
+        <dt>Club mentor</dt>
+        <dd>
+          {mentors.length
+            ? mentors.map((m: any) => `${m.users?.display_name} · ${m.projects?.title}`).join(', ')
+            : 'None attached yet. A club officer or the mentor attaches one to your project.'}
+        </dd>
+
+        <dt>Author page</dt>
+        <dd>{me.author_slug ? <a href={`/authors/${me.author_slug}/`}>View</a> : 'Created when you first publish'}</dd>
+      </dl>
+    </section>
+  </div>
+</Base>
+
+<style>
+  .hero { padding: 44px 0 28px; max-width: 74ch; }
+  .hero .t-lbl { margin-bottom: 14px; }
+  form.stack { max-width: 52ch; }
+  form label { display: block; margin-bottom: 18px; }
+  form label > span { display: block; margin-bottom: 6px; font-family: var(--face-ui); font-size: 0.86rem; }
+  form small { display: block; margin-top: 5px; color: var(--ink-3); font-size: 0.82rem; }
+  form input[type='text'], form input, form select { width: 100%; padding: 9px 11px; border: 1px solid var(--rule); background: var(--card); color: var(--ink); font: inherit; }
+  form label.check { display: flex; gap: 9px; align-items: center; }
+  form label.check input { width: auto; }
+  form button { padding: 10px 18px; border: 1px solid var(--ink); background: var(--ink); color: var(--paper); font-family: var(--face-ui); cursor: pointer; }
+</style>

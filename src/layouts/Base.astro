@@ -1,5 +1,5 @@
 ---
-import { org } from '../config/orgs';
+import { activeOrg } from '../lib/tenant';
 import { siteUrl } from '../config/site';
 import { themeFonts } from '../config/fonts';
 import Masthead from '../components/Masthead.astro';
@@ -17,13 +17,16 @@ interface Props {
 
 const { title, description, noindex = false } = Astro.props;
 
+/* Hostname on an on-demand route, PUBLIC_ORG on a prerendered one. */
+const org = activeOrg(Astro);
+
 const pageTitle = `${title} · ${org.name}`;
 const canonical = new URL(Astro.url.pathname, siteUrl).href;
 const fontHref = themeFonts[org.theme];
 ---
 
 <!doctype html>
-<html lang="en" data-theme={org.theme}>
+<html lang="en" data-theme={org.theme} data-school={org.id}>
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -49,10 +52,10 @@ const fontHref = themeFonts[org.theme];
   </head>
   <body>
     <a class="skip" href="#main">Skip to content</a>
-    <Masthead />
+    <Masthead org={org} />
     <main id="main">
       <slot />
     </main>
-    <Footer />
+    <Footer org={org} />
   </body>
 </html>

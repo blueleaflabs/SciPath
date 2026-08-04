@@ -1,6 +1,14 @@
 ---
-import { org } from '../config/orgs';
+import type { Org } from '../config/orgs';
+import { activeOrg } from '../lib/tenant';
 import { platform } from '../config/site';
+
+interface Props {
+  /** Passed down by the layout, which resolved it from the hostname. */
+  org?: Org;
+}
+
+const org = Astro.props.org ?? activeOrg(Astro);
 
 const nav = [
   { href: '/articles/', label: 'Showcase' },
@@ -11,6 +19,12 @@ const nav = [
   { href: '/search/', label: 'Search' },
 ];
 
+/* The working surface, reachable from every page. On a prerendered page
+   there is no session to read, so the label is the invitation rather than the
+   state: /app/ shows a sign-in prompt or the overview, whichever is true. */
+const signedIn = Boolean((Astro.locals as any)?.session);
+const workbench = { href: '/app/', label: signedIn ? 'Workbench' : 'Sign in' };
+
 const here = Astro.url.pathname;
 const isCurrent = (href: string) => here === href || (href !== '/' && here.startsWith(href));
 ---
@@ -19,7 +33,7 @@ const isCurrent = (href: string) => here === href || (href !== '/' && here.start
   <div class="wrap">
     <div class="mast-in">
       <a class="lockup" href="/">
-        <span class="badge" aria-hidden="true">{org.mark}</span>
+        <span class="badge" data-len={String(org.mark.length)} aria-hidden="true">{org.mark}</span>
         <span class="names">
           <span class="org">{org.name}</span>
           {!org.isPlatform && <span class="plat">{platform.lockupSuffix}</span>}
@@ -36,8 +50,21 @@ const isCurrent = (href: string) => here === href || (href !== '/' && here.start
               </li>
             ))
           }
+          <li class="mnav-cta">
+            <a href={workbench.href} aria-current={here.startsWith('/app/') ? 'page' : undefined}>
+              {workbench.label}
+            </a>
+          </li>
         </ul>
       </nav>
     </div>
   </div>
 </header>
+
+<style>
+  .mnav-cta a {
+    box-shadow: inset 0 0 0 1px currentColor;
+    padding: 5px 12px;
+    border-radius: var(--radius);
+  }
+</style>

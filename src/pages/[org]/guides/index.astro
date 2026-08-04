@@ -1,0 +1,65 @@
+---
+import { orgPaths } from '../../../lib/tenant-paths';
+export const getStaticPaths = orgPaths;
+
+import Base from '../../../layouts/Base.astro';
+import PageHead from '../../../components/PageHead.astro';
+import Empty from '../../../components/Empty.astro';
+import { getCollection } from 'astro:content';
+
+const guides = (await getCollection('guides')).sort((a, b) => a.data.order - b.data.order);
+
+const stageLabels: Record<string, string> = {
+  question: 'Forming the question',
+  literature: 'Prior art',
+  design: 'Design and methodology',
+  ethics: 'Ethics, safety, and forms',
+  collection: 'Data collection',
+  analysis: 'Analysis and interpretation',
+  communication: 'Abstract, figures, and board',
+  judging: 'Judging preparation',
+};
+---
+
+<Base
+  title="Guides"
+  description="Written guidance for planning, running, writing up, and presenting a project."
+>
+  <PageHead
+    eyebrow="Learning content"
+    title="Guides"
+    lede="How to choose a question, design a test that answers it, write the paper, and stand at the board. Read in order, or jump to the stage you are stuck on."
+  />
+
+  <div class="wrap">
+    {
+      guides.length ? (
+        <ul class="linklist">
+          {guides.map((g) => (
+            <li>
+              <a href={`/guides/${g.id}/`}>{g.data.title}</a>
+              <p>
+                {g.data.stage ? `${stageLabels[g.data.stage]} · ` : ''}
+                {g.data.summary}
+              </p>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <Empty
+          title="No guides published yet"
+          body="Guides attach to the stage of work they support rather than sitting in a library, so each one surfaces at the point where it is actually needed."
+        />
+      )
+    }
+
+    <div class="note" style="margin-top:28px">
+      <h4>Two things worth reading before anything else</h4>
+      <p>
+        <a href="/mistakes/">The mistakes other students have already made</a>, which is where
+        institutional memory accumulates, and <a href="/deadlines/">the deadline calendar</a>,
+        because the failures that disqualify projects are procedural rather than intellectual.
+      </p>
+    </div>
+  </div>
+</Base>

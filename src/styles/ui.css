@@ -117,8 +117,12 @@
 }
 
 .lockup .badge {
-  width: 36px;
+  /* min-width rather than width. A mark can be two, three, or four
+     characters, and a fixed square clips the four character case. */
+  min-width: 36px;
+  padding-inline: 5px;
   height: 36px;
+  box-sizing: border-box;
   background: var(--masthead-ink);
   color: var(--masthead-bg);
   flex: none;
@@ -129,6 +133,12 @@
   font-weight: 800;
   font-size: 0.9rem;
   letter-spacing: -0.03em;
+}
+
+/* Four characters need to step down a size to keep the block square-ish. */
+.lockup .badge[data-len='4'] {
+  font-size: 0.76rem;
+  letter-spacing: -0.04em;
 }
 
 .lockup .names {
@@ -175,6 +185,11 @@
 }
 
 /* ── THE RECORD, SIGNATURE COMPONENT ───────────────────────── */
+.card > .record,
+.card .record {
+  padding: 14px 16px;
+}
+
 .record {
   background: var(--card);
   border: 1px solid var(--rule);
@@ -265,7 +280,12 @@
 
 /* Structural variant: proceedings hangs the number in the margin
    and drops the stage rule, the way a contents page would. */
-[data-theme='proceedings'] .record {
+[data-theme='proceedings'] .card > .record,
+.card .record {
+  padding: 14px 16px;
+}
+
+.record {
   border-left-width: 1px;
   border-left-color: var(--rule);
   border-top: 3px solid var(--brand);
@@ -451,6 +471,25 @@
   border-color: var(--ink-2);
   color: var(--card);
   text-decoration: none;
+}
+
+/* An anchor styled as a button was taking the link color from a later rule
+   and rendering dark text on a dark fill. Anchors need the explicit states. */
+a.btn,
+a.btn:link,
+a.btn:visited,
+a.btn:hover,
+a.btn:focus {
+  color: var(--card);
+}
+
+a.btn-2,
+a.btn-2:link,
+a.btn-2:visited,
+a.btn-q,
+a.btn-q:link,
+a.btn-q:visited {
+  color: var(--ink);
 }
 
 .btn-2 {

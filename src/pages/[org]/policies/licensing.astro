@@ -1,0 +1,60 @@
+---
+import { orgPaths } from '../../../lib/tenant-paths';
+export const getStaticPaths = orgPaths;
+
+import Base from '../../../layouts/Base.astro';
+import PageHead from '../../../components/PageHead.astro';
+import { platform } from '../../../config/site';
+---
+
+<Base
+  title="Licensing and author rights"
+  description="What authors keep, what readers may do, and what the license on a record means."
+>
+  <PageHead
+    eyebrow="Policies"
+    title="Licensing and author rights"
+    lede="Authors keep copyright in their work. Publishing here grants permission to publish, not ownership."
+  />
+
+  <div class="wrap">
+    <div class="prose">
+      <h2>What the author keeps</h2>
+      <p>
+        Copyright, in full. Publishing here grants a non exclusive right to publish and to
+        keep the record available permanently. You can submit the same work elsewhere,
+        subject to whatever that venue requires, and you can post it yourself anywhere you
+        like.
+      </p>
+
+      <h2>What a reader may do</h2>
+      <p>
+        Each record states its own license. The default is Creative Commons Attribution 4.0,
+        which lets anyone share and adapt the work, including commercially, as long as they
+        credit the authors and say whether they changed anything. An author who needs
+        different terms can say so before publication.
+      </p>
+
+      <h2>Figures and material from elsewhere</h2>
+      <p>
+        A license an author grants covers their own work. Anything reproduced from another
+        source keeps that source's terms and is credited in the caption.
+      </p>
+
+      <h2>Permanence</h2>
+      <p>
+        Every record has an address that does not change and an identifier that is never
+        reused, so a citation made today still resolves years from now. Fixing a typo in a
+        title does not move the address. If a record is withdrawn, the page says so rather
+        than disappearing.
+      </p>
+
+      <h2>The software</h2>
+      <p>
+        {platform.name} itself is separate from any of this. It is released under the
+        {' '}{platform.license} license and none of its terms touch what an author owns.
+        <a href={platform.repoUrl}>The source is public.</a>
+      </p>
+    </div>
+  </div>
+</Base>

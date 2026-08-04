@@ -1,0 +1,411 @@
+---
+export const prerender = false;
+
+import Base from '../../layouts/Base.astro';
+import AppShell from '../../components/AppShell.astro';
+import { activeOrg } from '../../lib/tenant';
+import { serverClient } from '../../lib/supabase';
+import { standing, roleLabel } from '../../lib/roles';
+import { checkDateOrder, worstFinding } from '../../lib/dateOrder';
+
+const { configured, session, account, roles } = Astro.locals;
+const org = activeOrg(Astro);
+const error = Astro.url.searchParams.get('error');
+
+if (configured && session && !account) return Astro.redirect('/app/welcome/');
+
+const me = standing(roles);
+const today = new Date().toISOString().slice(0, 10);
+
+const supabase = account
+  ? serverClient(Astro.request, Astro.cookies, (Astro.locals as any).runtime?.env)
+  : null;
+
+let error2: string | null = null;
+
+let cleared: number | null = null;
+
+/* Attaching someone to a project. Either club role may do it. */
+if (Astro.request.method === 'POST' && supabase && me.runsTheClub) {
+  const form = await Astro.request.formData();
+
+  if (String(form.get('action')) === 'detach') {
+    const { error: e } = await supabase.rpc('detach_from_project', {
+      p_project_id: String(form.get('project_id') ?? ''),
+      p_user_id: String(form.get('user_id') ?? ''),
+    });
+    if (e) error2 = e.message;
+  } else {
+    const { data, error: e } = await supabase.rpc('attach_to_project', {
+      p_project_id: String(form.get('project_id') ?? ''),
+      p_user_id: String(form.get('user_id') ?? ''),
+      p_role: String(form.get('role') ?? 'mentor'),
+      p_dated: String(form.get('dated') ?? '') || null,
+    });
+    if (e) error2 = e.message;
+    else cleared = data ?? 0;
+  }
+}
+
+/* --- What a student sees: their own entries -------------------------- */
+let myEntries: any[] = [];
+
+/* --- What everyone else sees: the projects they are responsible for --- */
+let watched: any[] = [];
+let staffPeople: any[] = [];
+
+if (supabase && account) {
+  if (!me.runsTheClub) {
+    const { data } = await supabase
+      .from('entries')
+      .select('id, status, placement, programs(name, season_year, fair_date), projects(title, stage)')
+      .order('entered_at', { ascending: false });
+    myEntries = data ?? [];
+  }
+
+  if (me.runsTheClub) {
+    /* Row level security decides the scope: an officer, editor, or advisor
+       reads every project at the school, and a mentor reads only the ones
+       they are attached to. The query is the same either way, which is the
+       point of putting the rule in the database. */
+    const { data: projects } = await supabase
+      .from('projects')
+      .select('id, title, stage, started_on, project_authors(role, users(id, display_name, grad_year))')
+      .is('archived_at', null)
+      .order('created_at', { ascending: false });
+
+    const ids = (projects ?? []).map((p: any) => p.id);
+
+    const { data: entries } = ids.length
+      ? await supabase
+          .from('entries')
+          .select('id, project_id, status, programs(name, season_year, fair_date)')
+          .in('project_id', ids)
+      : { data: [] as any[] };
+
+    const entryIds = (entries ?? []).map((e: any) => e.id);
+
+    const { data: milestones } = entryIds.length
+      ? await supabase
+          .from('entry_milestones')
+          .select('id, entry_id, name, due_on, required, blocks_experimentation, completed_on')
+          .in('entry_id', entryIds)
+      : { data: [] as any[] };
+
+    watched = (projects ?? []).map((p: any) => {
+      const entry = (entries ?? []).find((e: any) => e.project_id === p.id);
+      const mine = (milestones ?? []).filter((m: any) => m.entry_id === entry?.id);
+
+      const findings = checkDateOrder({
+        startedOn: p.started_on,
+        today,
+        obligations: mine.map((m: any) => ({
+          id: m.id,
+          name: m.name,
+          dueOn: m.due_on,
+          completedOn: m.completed_on,
+          blocksExperimentation: m.blocks_experimentation,
+          required: m.required,
+        })),
+      });
+
+      return {
+        ...p,
+        entry,
+        authors: (p.project_authors ?? []).filter((a: any) => a.role === 'author'),
+        mentors: (p.project_authors ?? []).filter((a: any) => a.role === 'mentor'),
+        officers: (p.project_authors ?? []).filter((a: any) => a.role === 'officer'),
+        done: mine.filter((m: any) => m.completed_on).length,
+        total: mine.length,
+        worst: worstFinding(findings),
+      };
+    });
+
+    const { data: rows } = await supabase
+      .from('user_roles')
+      .select('user_id, role, users(id, display_name)')
+      .is('revoked_at', null)
+      .in('role', ['mentor', 'officer']);
+
+    const seen = new Set<string>();
+    staffPeople = (rows ?? []).filter((r: any) => {
+      if (!r.users?.id || seen.has(r.users.id)) return false;
+      seen.add(r.users.id);
+      return true;
+    });
+  }
+}
+
+const fmt = (d: string | null) =>
+  d ? new Date(d + 'T00:00:00').toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' }) : 'To be announced';
+
+const stageLabel: Record<string, string> = {
+  registered: 'Registered',
+  in_progress: 'In progress',
+  fair_ready: 'Fair ready',
+  competed: 'Competed',
+  published: 'Published',
+};
+
+const flagged = watched.filter((w) => w.worst?.severity === 'disqualifying').length;
+const planned = watched.filter((w) => w.worst?.severity === 'planned').length;
+---
+
+<Base title="Overview" noindex={true}>
+  <div class="wrap">
+    {!configured && (
+      <p class="note">
+        This deployment has no database configured. Everything published stays
+        available; only the working surface is unavailable.
+      </p>
+    )}
+
+    {error === 'cancelled' && (
+      <p class="note" role="status">
+        Sign in was cancelled, or the sign-in link expired. Nothing happened.
+        Start again when you are ready.
+      </p>
+    )}
+    {error === 'password' && (
+      <p class="note" role="alert">That email and password did not match.</p>
+    )}
+    {error === 'oauth' && <p class="note" role="alert">Sign in could not start. Try again.</p>}
+    {error === 'exchange' && <p class="note" role="alert">Sign in did not complete. Try again.</p>}
+    {error2 && <p class="note" role="alert">{error2}</p>}
+    {cleared !== null && (
+      <p class="note" role="status">
+        Attached. {cleared} approval obligation{cleared === 1 ? '' : 's'} cleared.
+      </p>
+    )}
+
+    {configured && !session && (
+      <section class="hero">
+        <p class="t-lbl">{org.name}</p>
+        <h1 class="t-big">Sign in to work on a project</h1>
+        <p class="lede">
+          Use your school Google account. Reading anything published here never
+          needs an account.
+        </p>
+        <div class="row" style="margin-top:24px">
+          <a class="btn" href="/auth/signin/">Sign in with Google</a>
+        </div>
+
+        <div class="fixture">
+          <p class="t-lbl">Or with an email and password</p>
+          <form method="POST" action="/auth/password/" class="fixrow">
+            <input name="email" type="email" required placeholder="Email" />
+            <input name="password" type="password" required placeholder="Password" />
+            <button type="submit">Sign in</button>
+          </form>
+        </div>
+      </section>
+    )}
+
+    {account && (
+      <>
+        <AppShell org={org} account={account} roles={roles} here="/app/" />
+
+        <section class="hero" style="padding-top:0">
+          <p class="t-lbl">
+            {me.names.length ? me.names.map((n) => roleLabel[n]).join(' · ') : org.name}
+          </p>
+          <h1 class="t-big">{account.display_name}</h1>
+          <p class="lede">
+            {me.runsTheClub
+              ? watched.length
+                ? `${watched.length} project${watched.length === 1 ? '' : 's'} in your care.`
+                : me.isMentor && !me.isOfficer
+                  ? 'No projects are assigned to you yet. An officer or your advisor attaches you to one.'
+                  : 'No projects have been registered at this school yet.'
+              : me.isStudent
+                ? 'Register a project against a fair and the deadlines follow automatically.'
+                : 'You are signed in. A student role is granted by an officer or your advisor.'}
+          </p>
+
+          {me.runsTheClub && watched.length > 0 && (
+            <div class="countdown">
+              <div><b>{watched.length}</b><span>projects</span></div>
+              <div><b>{flagged}</b><span>{flagged === 1 ? 'disqualifying' : 'disqualifying'}</span></div>
+              <div><b>{planned}</b><span>need attention</span></div>
+            </div>
+          )}
+        </section>
+
+        {/* ---------------- OVERSIGHT ---------------- */}
+        {me.runsTheClub && (
+          <section class="sec">
+            <div class="sec-h">
+              <b>{me.isOfficer ? 'Every project' : 'Projects you mentor'}</b>
+              <span>{watched.length}</span>
+            </div>
+
+            {watched.length > 0 ? (
+              <table class="tbl">
+                <thead>
+                  <tr>
+                    <th scope="col">Project</th>
+                    <th scope="col">Students</th>
+                    <th scope="col">Fair</th>
+                    <th scope="col">Stage</th>
+                    <th scope="col">Obligations</th>
+                    <th scope="col">Standing</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {watched.map((w) => (
+                    <tr class={w.worst?.severity === 'disqualifying' ? 'row-bad' : w.worst?.severity === 'planned' ? 'row-warn' : ''}>
+                      <td>
+                        <a href={`/app/project/${w.id}/`}>{w.title}</a>
+                        {w.entry && (
+                          <span class="sub"><a href={`/app/entry/${w.entry.id}/`}>deadlines</a></span>
+                        )}
+                        {(w.mentors.length > 0 || w.officers.length > 0) && (
+                          <span class="sub">
+                            {w.mentors.length > 0 && `mentor: ${w.mentors.map((m: any) => m.users?.display_name).join(', ')}`}
+                            {w.mentors.length > 0 && w.officers.length > 0 && ' · '}
+                            {w.officers.length > 0 && `officer: ${w.officers.map((m: any) => m.users?.display_name).join(', ')}`}
+                          </span>
+                        )}
+                      </td>
+                      <td>
+                        {w.authors.map((a: any) => a.users?.display_name).join(', ') || '—'}
+                      </td>
+                      <td>
+                        {w.entry?.programs
+                          ? `${w.entry.programs.name} ${w.entry.programs.season_year}`
+                          : 'Not entered'}
+                      </td>
+                      <td>{stageLabel[w.stage] ?? w.stage}</td>
+                      <td>{w.total ? `${w.done} of ${w.total}` : '—'}</td>
+                      <td>
+                        {w.worst
+                          ? <span class={w.worst.severity === 'disqualifying' ? 'sev bad' : 'sev warn'}>{w.worst.name}</span>
+                          : 'In order'}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            ) : (
+              <div class="note">
+                <h4>{me.isMentor && !me.isOfficer ? 'Nothing assigned yet' : 'No projects yet'}</h4>
+                <p>
+                  {me.isMentor && !me.isOfficer
+                    ? 'A mentor sees the projects they are attached to, and nothing else. An officer or your advisor makes that attachment.'
+                    : 'Projects appear here as students register them.'}
+                </p>
+
+              </div>
+            )}
+          </section>
+        )}
+
+        {/* ---------------- ATTACH A MENTOR ---------------- */}
+        {me.runsTheClub && watched.length > 0 && staffPeople.length > 0 && (
+          <section class="sec">
+            <div class="sec-h"><b>Attach someone to a project</b><span>Officers and mentors</span></div>
+            <form method="POST" class="assign">
+              <label>
+                <span>Project</span>
+                <select name="project_id" required>
+                  {watched.map((w) => <option value={w.id}>{w.title}</option>)}
+                </select>
+              </label>
+              <label>
+                <span>Person</span>
+                <select name="user_id" required>
+                  {staffPeople.map((p: any) => (
+                    <option value={p.users.id}>
+                      {p.users.display_name} · {roleLabel[p.role as keyof typeof roleLabel]}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                <span>As</span>
+                <select name="role" required>
+                  <option value="mentor">Club mentor</option>
+                  <option value="officer">Club officer</option>
+                </select>
+              </label>
+              <label>
+                <span>Dated</span>
+                <input type="date" name="dated" />
+              </label>
+              <button type="submit">Attach</button>
+            </form>
+            <p class="t-sm" style="margin-top:10px">
+              The mentor is the sponsor. Attaching one signs off the project,
+              verifies the students' affiliation, and clears every approval
+              obligation waiting on it. A mentor comments and flags; they never
+              edit the work, because independent work is what judges probe.
+            </p>
+          </section>
+        )}
+
+        {/* ---------------- STUDENT ---------------- */}
+        {!me.runsTheClub && (
+          <>
+            <section class="sec">
+              <div class="sec-h">
+                <b>This season</b>
+                <span>{myEntries.length ? `${myEntries.length} entered` : 'nothing entered'}</span>
+              </div>
+              {myEntries.length ? (
+                <ul class="linklist">
+                  {myEntries.map((e) => (
+                    <li>
+                      <a href={`/app/entry/${e.id}/`}>{e.projects?.title}</a>
+                      <span class="t-sm"> · {e.programs?.name} {e.programs?.season_year} · judging {fmt(e.programs?.fair_date)}</span>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <div class="note">
+                  <h4>No fair entered</h4>
+                  <p>
+                    Entering a fair pulls in every deadline for it, in order, and
+                    checks the ones that have to happen before you start experimenting.
+                  </p>
+                  <p style="margin-top:12px">
+                    <a class="btn btn-2" href="/app/fairs/">See open fairs</a>
+                  </p>
+                </div>
+              )}
+            </section>
+
+            <section class="sec">
+              <div class="sec-h"><b>Past fairs</b><span>nothing yet</span></div>
+              <p class="t-sm">Fairs you have competed in appear here with what you placed.</p>
+            </section>
+          </>
+        )}
+      </>
+    )}
+  </div>
+</Base>
+
+<style>
+  .hero { padding: 44px 0 28px; max-width: 74ch; }
+  .hero .t-lbl { margin-bottom: 14px; }
+  .fixture { margin-top: 34px; padding: 18px 20px; border: 1px dashed var(--rule); max-width: 52ch; }
+  .fixture .t-lbl { margin-bottom: 8px; }
+  .fixrow { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+  .fixrow input { flex: 1 1 14ch; padding: 8px 10px; border: 1px solid var(--rule); background: var(--card); color: var(--ink); font: inherit; font-size: 0.88rem; }
+  .fixrow button { padding: 8px 14px; border: 1px solid var(--ink); background: var(--ink); color: var(--paper); font-family: var(--face-ui); font-size: 0.84rem; cursor: pointer; }
+  .countdown { display: flex; flex-wrap: wrap; margin-top: 26px; border-top: 1px solid var(--rule); border-bottom: 1px solid var(--rule); }
+  .countdown > div { padding: 14px 22px 14px 0; margin-right: 22px; border-right: 1px solid var(--rule-fine); }
+  .countdown > div:last-child { border-right: 0; margin-right: 0; }
+  .countdown b { display: block; font-size: 1.05rem; line-height: 1.2; }
+  .countdown span { display: block; margin-top: 3px; font-family: var(--face-ui); font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--ink-3); }
+  .sub { display: block; margin-top: 3px; font-family: var(--face-ui); font-size: 0.76rem; color: var(--ink-3); }
+  .sev { font-family: var(--face-ui); font-size: 0.8rem; }
+  .sev.bad { color: var(--alert); font-weight: 600; }
+  .row-bad td { background: var(--alert-bg); }
+  .row-warn td { background: var(--ready-bg); }
+  .assign { display: flex; flex-wrap: wrap; gap: 14px; align-items: flex-end; }
+  .assign label { display: block; }
+  .assign label > span { display: block; margin-bottom: 5px; font-family: var(--face-ui); font-size: 0.84rem; }
+  .assign select { padding: 8px 10px; border: 1px solid var(--rule); background: var(--card); color: var(--ink); font: inherit; min-width: 22ch; }
+  .assign button { padding: 9px 16px; border: 1px solid var(--ink); background: var(--ink); color: var(--paper); font-family: var(--face-ui); cursor: pointer; }
+</style>

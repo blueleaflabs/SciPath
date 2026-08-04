@@ -1,0 +1,25 @@
+---
+import Base from '../../../layouts/Base.astro';
+import PageHead from '../../../components/PageHead.astro';
+import { getCollection, render } from 'astro:content';
+import type { GetStaticPaths } from 'astro';
+import { withTenants } from '../../../lib/tenant-paths';
+
+export const getStaticPaths: GetStaticPaths = withTenants(async () => {
+  const guides = await getCollection('guides');
+  return guides.map((guide) => ({ params: { slug: guide.id }, props: { guide } }));
+});
+
+const { guide } = Astro.props;
+const { Content } = await render(guide);
+---
+
+<Base title={guide.data.title} description={guide.data.summary}>
+  <PageHead eyebrow="Guide" title={guide.data.title} lede={guide.data.summary} />
+  <div class="wrap">
+    <div class="prose" data-pagefind-body>
+      <Content />
+    </div>
+    <p style="margin-top:32px"><a href="/guides/">All guides</a></p>
+  </div>
+</Base>

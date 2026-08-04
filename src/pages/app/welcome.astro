@@ -1,0 +1,183 @@
+---
+export const prerender = false;
+
+import Base from '../../layouts/Base.astro';
+import { serverClient } from '../../lib/supabase';
+import { activeOrg } from '../../lib/tenant';
+
+const { session, account, orgSlug } = Astro.locals;
+const org = activeOrg(Astro) as any;
+
+if (!session) return Astro.redirect('/app/');
+if (account) return Astro.redirect('/app/');
+
+const openProgram = org?.signupMode === 'open';
+
+/* The database is the enforcement; this is so a person finds out before
+   filling in a form rather than after. A tenant that lists domains accepts
+   only those domains, whatever Google was willing to authenticate. */
+const emailDomain = (session.email ?? '').split('@')[1]?.toLowerCase() ?? '';
+const allowedDomains = (org?.verifiedDomains ?? []) as string[];
+const domainRefused =
+  org?.signupMode === 'domain' && !allowedDomains.includes(emailDomain);
+
+/* Sign out on the spot. Leaving someone signed in to an account that cannot
+   be used here, and asking them to sign themselves out, is two steps of
+   nothing. The message survives because the address was already read. */
+if (domainRefused) {
+  const supabase = serverClient(
+    Astro.request,
+    Astro.cookies,
+    (Astro.locals as any).runtime?.env
+  );
+  await supabase.auth.signOut();
+}
+
+const year = new Date().getFullYear();
+const gradYears = [year, year + 1, year + 2, year + 3, year + 4];
+
+let error: string | null = null;
+let sent: Record<string, string> = {};
+
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData();
+  for (const [k, v] of form.entries()) sent[k] = String(v);
+  const ageBand = String(form.get('age_band') ?? '');
+  const guardianEmail = String(form.get('guardian_email') ?? '').trim();
+  const gradYear = String(form.get('grad_year') ?? '');
+
+  if (ageBand === 'under_13') {
+    error = 'This platform is for students aged 13 and over.';
+  } else if (ageBand === '13_17' && !guardianEmail) {
+    error = 'A parent or guardian email is required.';
+  } else {
+    const supabase = serverClient(
+      Astro.request,
+      Astro.cookies,
+      (Astro.locals as any).runtime?.env
+    );
+
+    const { error: rpcError } = await supabase.rpc('complete_signup', {
+      p_org_slug: orgSlug,
+      p_display_name: String(form.get('display_name') ?? '').trim(),
+      p_age_band: ageBand,
+      p_grad_year: gradYear ? Number(gradYear) : null,
+      p_guardian_name: String(form.get('guardian_name') ?? '').trim() || null,
+      p_guardian_email: guardianEmail || null,
+    });
+
+    if (rpcError) error = rpcError.message;
+    else return Astro.redirect('/app/');
+  }
+}
+
+const suggestedName = sent.display_name ?? session.email?.split('@')[0] ?? '';
+const band = sent.age_band ?? '';
+---
+
+<Base title="Finish signing up" noindex={true}>
+  <div class="wrap">
+  <section class="stack">
+    <p class="eyebrow">{org?.name}</p>
+    <h1>Finish signing up</h1>
+    <p>
+      Four things, and nothing your sign-in already proves. Your account works
+      as soon as you finish. Publishing waits for a guardian, which is the only
+      thing that waits.
+    </p>
+
+    {error && <p class="note" role="alert">{error}</p>}
+
+    {domainRefused ? (
+      <div class="note" role="alert">
+        <h4>That account cannot be used here</h4>
+        <p>
+          You signed in as <b>{session.email}</b>. {org?.name} accepts accounts on
+          {allowedDomains.map((d, i) => (
+            <> {i > 0 ? 'or ' : ''}<b>{d}</b></>
+          ))} only.
+        </p>
+        <p style="margin-top:12px">
+          You have been signed out. Sign in again with your school account.
+        </p>
+        <p style="margin-top:14px">
+          <a class="btn" href="/auth/signin/">Sign in with Google</a>
+        </p>
+      </div>
+    ) : (
+    <form method="POST" class="stack">
+      <label>
+        <span>Your name, as it should appear on a byline</span>
+        <input name="display_name" required value={suggestedName} autocomplete="name" />
+      </label>
+
+      <fieldset>
+        <legend>How old are you?</legend>
+        <p class="fine">
+          We store your answer and never your date of birth.
+        </p>
+        <label><input type="radio" name="age_band" value="under_13" required checked={band === 'under_13'} /> Under 13</label>
+        <label><input type="radio" name="age_band" value="13_17" checked={band === '13_17'} /> 13 to 17</label>
+        <label><input type="radio" name="age_band" value="18_plus" checked={band === '18_plus'} /> 18 or older</label>
+      </fieldset>
+
+      <label>
+        <span>Graduation year</span>
+        <select name="grad_year">
+          <option value="">Not a student</option>
+          {gradYears.map((y) => (
+            <option value={y} selected={sent.grad_year === String(y)}>{y}</option>
+          ))}
+        </select>
+      </label>
+
+      <fieldset>
+        <legend>Parent or guardian</legend>
+        <p class="skipnote"><b>Not needed if you are 18 or older.</b></p>
+        <p class="fine">
+          If you are under 18, a parent or guardian confirms by email, once.
+          Your account works straight away either way; only publishing waits.
+        </p>
+        <label>
+          <span>Their name</span>
+          <input name="guardian_name" value={sent.guardian_name ?? ''} autocomplete="off" />
+        </label>
+        <label>
+          <span>Their email</span>
+          <input name="guardian_email" type="email" value={sent.guardian_email ?? ''} autocomplete="off" />
+        </label>
+      </fieldset>
+
+      {openProgram && (
+        <p class="fine">
+          This is an open program. No school and no district behind it.
+        </p>
+      )}
+
+      <button type="submit">Create my account</button>
+      <p class="fine">
+        Your club mentor is attached to your project by a club officer or by
+        the mentor themselves. There is nothing for you to do about it here.
+      </p>
+      <p class="fine">
+        You can change any of this later from your profile.
+      </p>
+    </form>
+    )}
+  </section>
+  </div>
+</Base>
+
+<style>
+  form.stack { max-width: 52ch; }
+  form label { display: block; margin-bottom: 16px; }
+  form label > span { display: block; margin-bottom: 6px; font-family: var(--face-ui); font-size: 0.86rem; }
+  form fieldset { border: 1px solid var(--rule-fine); padding: 16px 18px; margin-bottom: 20px; }
+  form legend { font-family: var(--face-ui); font-size: 0.86rem; padding: 0 6px; }
+  form input, form select { width: 100%; padding: 9px 11px; border: 1px solid var(--rule); background: var(--card); color: var(--ink); font: inherit; }
+  form fieldset label input[type='radio'] { width: auto; margin-right: 8px; }
+  form fieldset > label { display: flex; align-items: center; gap: 4px; margin-bottom: 8px; }
+  .fine { color: var(--ink-3); font-size: 0.84rem; margin-top: 10px; }
+  .skipnote { margin: 0 0 8px; font-family: var(--face-ui); font-size: 0.88rem; }
+  form button { padding: 10px 18px; border: 1px solid var(--ink); background: var(--ink); color: var(--paper); font-family: var(--face-ui); cursor: pointer; }
+</style>

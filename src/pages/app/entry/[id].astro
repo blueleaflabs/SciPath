@@ -1,0 +1,349 @@
+---
+export const prerender = false;
+
+import Base from '../../../layouts/Base.astro';
+import AppShell from '../../../components/AppShell.astro';
+import { activeOrg } from '../../../lib/tenant';
+import { serverClient } from '../../../lib/supabase';
+import { checkDateOrder, worstFinding } from '../../../lib/dateOrder';
+import { standing } from '../../../lib/roles';
+
+const { session, account, roles } = Astro.locals;
+const org = activeOrg(Astro);
+const { id } = Astro.params;
+
+if (!session) return Astro.redirect('/app/');
+if (!account) return Astro.redirect('/app/welcome/');
+
+const me = standing(roles);
+
+const supabase = serverClient(
+  Astro.request,
+  Astro.cookies,
+  (Astro.locals as any).runtime?.env
+);
+
+let error: string | null = null;
+
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData();
+  const action = String(form.get('action') ?? '');
+
+  if (action === 'complete') {
+    const { error: e } = await supabase.rpc('set_milestone_done', {
+      p_milestone_id: String(form.get('milestone_id') ?? ''),
+      p_completed_on:
+        String(form.get('completed_on') ?? '') || new Date().toISOString().slice(0, 10),
+    });
+    if (e) error = e.message;
+  }
+
+  if (action === 'undo') {
+    const { error: e } = await supabase.rpc('set_milestone_done', {
+      p_milestone_id: String(form.get('milestone_id') ?? ''),
+      p_completed_on: null,
+    });
+    if (e) error = e.message;
+  }
+
+  if (action === 'deliverable') {
+    const { error: e } = await supabase.rpc('record_deliverable', {
+      p_entry_id: id,
+      p_milestone_id: String(form.get('milestone_id') ?? '') || null,
+      p_type: String(form.get('type') ?? 'other'),
+      p_label: String(form.get('label') ?? ''),
+      p_signed_on: String(form.get('signed_on') ?? '') || null,
+      p_external_url: String(form.get('external_url') ?? '') || null,
+      p_storage_path: null,
+    });
+    if (e) error = e.message;
+  }
+
+  if (action === 'verify') {
+    const { error: e } = await supabase.rpc('verify_deliverable', {
+      p_id: String(form.get('deliverable_id') ?? ''),
+    });
+    if (e) error = e.message;
+  }
+
+  if (action === 'started') {
+    const { error: e } = await supabase.rpc('set_project_start', {
+      p_project_id: String(form.get('project_id') ?? ''),
+      p_started_on: String(form.get('started_on') ?? '') || null,
+    });
+    if (e) error = e.message;
+  }
+}
+
+const { data: entry } = await supabase
+  .from('entries')
+  .select('id, status, placement, project_id, projects(id, title, started_on, stage), programs(name, season_year, fair_date, advances_to)')
+  .eq('id', id)
+  .maybeSingle();
+
+if (!entry) return Astro.redirect('/app/fairs/');
+
+const { data: milestones } = await supabase
+  .from('entry_milestones')
+  .select('id, name, kind, due_on, required, blocks_experimentation, completed_on, sort_order')
+  .eq('entry_id', id)
+  .order('sort_order', { ascending: true });
+
+const { data: deliverables } = await supabase
+  .from('deliverables')
+  .select('id, milestone_id, label, type, signed_on, external_url, verified_at')
+  .eq('entry_id', id);
+
+const deliverableFor = new Map<string, any>();
+for (const d of deliverables ?? []) {
+  if (d.milestone_id) deliverableFor.set(d.milestone_id, d);
+}
+
+const project: any = entry.projects;
+const program: any = entry.programs;
+
+const findings = checkDateOrder({
+  startedOn: project?.started_on ?? null,
+  today: new Date().toISOString().slice(0, 10),
+  obligations: (milestones ?? []).map((m: any) => ({
+    id: m.id,
+    name: m.name,
+    dueOn: m.due_on,
+    completedOn: m.completed_on,
+    /* The signature on the deliverable, where one exists. It is the date the
+       fair actually cares about. */
+    signedOn: deliverableFor.get(m.id)?.signed_on ?? null,
+    blocksExperimentation: m.blocks_experimentation,
+    required: m.required,
+  })),
+});
+
+const worst = worstFinding(findings);
+const byId = new Map(findings.map((f) => [f.id, f]));
+
+const fmt = (d: string | null) =>
+  d ? new Date(d + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '—';
+
+const done = (milestones ?? []).filter((m: any) => m.completed_on).length;
+const total = milestones?.length ?? 0;
+const openCount = total - done;
+
+const now = new Date();
+const todayIso = now.toISOString().slice(0, 10);
+const todayLabel = now.toLocaleDateString('en-US', {
+  weekday: 'long', month: 'long', day: 'numeric', year: 'numeric',
+});
+
+const daysUntil = (iso: string | null) =>
+  iso ? Math.round((Date.parse(iso + 'T00:00:00') - Date.parse(todayIso + 'T00:00:00')) / 86400000) : null;
+
+const toFair = daysUntil(program?.fair_date ?? null);
+
+/* The next thing actually due, which is more useful than the next thing
+   listed: a deadline already met should not be what the page counts down to. */
+const nextOpen = (milestones ?? [])
+  .filter((m: any) => !m.completed_on && m.due_on)
+  .sort((a: any, b: any) => a.due_on.localeCompare(b.due_on))[0];
+const toNext = daysUntil(nextOpen?.due_on ?? null);
+---
+
+<Base title={project?.title ?? 'Entry'} noindex={true}>
+  <div class="wrap">
+    <AppShell org={org} account={account} roles={roles} here="/app/fairs/" />
+
+    <section class="hero" style="padding-top:0">
+      <p class="t-lbl">{program?.name} {program?.season_year}</p>
+      <h1 class="t-big">{project?.title}</h1>
+      <p class="lede">
+        {done} of {total} obligations complete. Judging {fmt(program?.fair_date)}.
+      </p>
+
+      <div class="countdown">
+        <div>
+          <b>{todayLabel}</b>
+          <span>today</span>
+        </div>
+        {toFair !== null && (
+          <div>
+            <b>{toFair >= 0 ? toFair : 0}</b>
+            <span>{toFair === 1 ? 'day to judging' : 'days to judging'}</span>
+          </div>
+        )}
+        <div>
+          <b>{openCount}</b>
+          <span>{openCount === 1 ? 'task remaining' : 'tasks remaining'}</span>
+        </div>
+        {nextOpen && toNext !== null && (
+          <div>
+            <b>{toNext < 0 ? `${Math.abs(toNext)} overdue` : toNext}</b>
+            <span>{toNext < 0 ? `days · ${nextOpen.name}` : `days to ${nextOpen.name}`}</span>
+          </div>
+        )}
+      </div>
+    </section>
+
+    {error && <p class="note" role="alert">{error}</p>}
+
+    {worst && (
+      <div class={worst.severity === 'disqualifying' ? 'flag bad' : 'flag warn'} role="alert">
+        <h4>{worst.severity === 'disqualifying' ? 'This will disqualify the entry' : 'Needs attention'}</h4>
+        <p>{worst.message}</p>
+      </div>
+    )}
+
+    <section class="sec">
+      <div class="sec-h"><b>Start date</b><span>Checked against every approval</span></div>
+      <form method="POST" class="inline">
+        <input type="hidden" name="action" value="started" />
+        <input type="hidden" name="project_id" value={project?.id} />
+        <input type="date" name="started_on" value={project?.started_on ?? ''} />
+        <button type="submit">Save</button>
+      </form>
+      <p class="t-sm" style="margin-top:8px">
+        The day experimentation actually began. Getting this earlier than an
+        approval is the single most common way a finished project is thrown out.
+      </p>
+    </section>
+
+    <section class="sec">
+      <div class="sec-h"><b>Notebook</b><span>The working record</span></div>
+      <p class="t-sm" style="max-width:72ch">
+        Entries are append only and attributed, and they export as a research
+        notebook a judge can read.
+      </p>
+      <p style="margin-top:12px">
+        <a class="btn btn-2" href={`/app/project/${project?.id}/`}>Open the notebook</a>
+      </p>
+    </section>
+
+    <section class="sec">
+      <div class="sec-h"><b>Deadlines</b><span>{total} in order</span></div>
+      <table class="tbl">
+        <thead>
+          <tr>
+            <th scope="col">Due</th>
+            <th scope="col">Obligation</th>
+            <th scope="col">Status</th>
+            <th scope="col"><span class="sr">Action</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          {(milestones ?? []).map((m: any) => {
+            const f = byId.get(m.id);
+            return (
+              <tr class={f?.severity === 'disqualifying' ? 'row-bad' : f?.severity === 'urgent' ? 'row-warn' : ''}>
+                <td>{fmt(m.due_on)}</td>
+                <td>
+                  {m.name}
+                  {m.blocks_experimentation && <span class="gate">must precede work</span>}
+                </td>
+                <td>
+                  {deliverableFor.get(m.id) ? (
+                    <>
+                      <b>{deliverableFor.get(m.id).label}</b>
+                      <span class="sub">
+                        signed {fmt(deliverableFor.get(m.id).signed_on)}
+                        {deliverableFor.get(m.id).verified_at ? ' · verified' : ' · not verified'}
+                      </span>
+                    </>
+                  ) : m.completed_on ? `Done ${fmt(m.completed_on)}` : f ? f.message : 'Open'}
+                </td>
+                <td>
+                  {deliverableFor.get(m.id) ? (
+                    !deliverableFor.get(m.id).verified_at && me.runsTheClub ? (
+                      <form method="POST" class="inline">
+                        <input type="hidden" name="action" value="verify" />
+                        <input type="hidden" name="deliverable_id" value={deliverableFor.get(m.id).id} />
+                        <button type="submit" class="linkish">Verify</button>
+                      </form>
+                    ) : null
+                  ) : m.completed_on ? (
+                    <form method="POST" class="inline">
+                      <input type="hidden" name="milestone_id" value={m.id} />
+                      <input type="hidden" name="action" value="undo" />
+                      <button type="submit" class="linkish">Undo</button>
+                    </form>
+                  ) : (
+                    <details class="rec">
+                      <summary>Record</summary>
+                      <form method="POST" class="recf">
+                        <input type="hidden" name="action" value="deliverable" />
+                        <input type="hidden" name="milestone_id" value={m.id} />
+                        <label>
+                          <span>What it is</span>
+                          <input name="label" required value={m.name} />
+                        </label>
+                        <label>
+                          <span>Date on the signature</span>
+                          <input type="date" name="signed_on" required />
+                        </label>
+                        <label>
+                          <span>Link to it, if it lives elsewhere</span>
+                          <input type="url" name="external_url" placeholder="https://" />
+                        </label>
+                        <input type="hidden" name="type" value={m.kind} />
+                        <button type="submit">Record</button>
+                      </form>
+                    </details>
+                  )}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </section>
+  </div>
+</Base>
+
+<style>
+  .hero { padding: 44px 0 28px; max-width: 74ch; }
+  .hero .t-lbl { margin-bottom: 14px; }
+  .countdown {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0;
+    margin-top: 26px;
+    border-top: 1px solid var(--rule);
+    border-bottom: 1px solid var(--rule);
+  }
+  .countdown > div {
+    padding: 14px 22px 14px 0;
+    margin-right: 22px;
+    border-right: 1px solid var(--rule-fine);
+  }
+  .countdown > div:last-child { border-right: 0; margin-right: 0; }
+  .countdown b {
+    display: block;
+    font-size: 1.05rem;
+    line-height: 1.2;
+  }
+  .countdown span {
+    display: block;
+    margin-top: 3px;
+    font-family: var(--face-ui);
+    font-size: 0.78rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--ink-3);
+  }
+  .flag { border-left: 3px solid var(--alert); padding: 16px 20px; background: var(--alert-bg); margin-bottom: 26px; }
+  .flag.warn { border-left-color: var(--stage-ready); background: var(--ready-bg); }
+  .flag h4 { margin: 0 0 6px; }
+  .flag p { margin: 0; }
+  .gate { display: inline-block; margin-left: 8px; font-family: var(--face-ui); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--ink-3); }
+  .row-bad td { background: var(--alert-bg); }
+  .row-warn td { background: var(--ready-bg); }
+  .inline { display: flex; gap: 8px; align-items: center; }
+  .inline input[type='date'] { padding: 5px 7px; border: 1px solid var(--rule); background: var(--card); color: var(--ink); font: inherit; font-size: 0.84rem; }
+  .inline button { padding: 6px 12px; border: 1px solid var(--ink); background: var(--ink); color: var(--paper); font-family: var(--face-ui); font-size: 0.8rem; cursor: pointer; }
+  .linkish { background: none !important; border: 0 !important; color: var(--ink-3) !important; padding: 0 !important; cursor: pointer; font-family: var(--face-ui); font-size: 0.8rem; }
+  .sub { display: block; margin-top: 2px; font-family: var(--face-ui); font-size: 0.76rem; color: var(--ink-3); }
+  .rec summary { cursor: pointer; font-family: var(--face-ui); font-size: 0.8rem; color: var(--ink-3); }
+  .recf { margin-top: 10px; min-width: 24ch; }
+  .recf label { display: block; margin-bottom: 8px; }
+  .recf label > span { display: block; margin-bottom: 3px; font-family: var(--face-ui); font-size: 0.76rem; }
+  .recf input { width: 100%; padding: 5px 7px; border: 1px solid var(--rule); background: var(--card); color: var(--ink); font: inherit; font-size: 0.84rem; }
+  .recf button { padding: 6px 12px; border: 1px solid var(--ink); background: var(--ink); color: var(--paper); font-family: var(--face-ui); font-size: 0.8rem; cursor: pointer; }
+  .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+</style>

@@ -129,3 +129,54 @@
 
   --radius: 0;
 }
+
+
+/* ---------------------------------------------------------------------------
+   SCHOOL PALETTES
+
+   A theme decides the whole visual system. A school palette overrides three
+   values inside it and nothing else: the brand, its dark variant, and the
+   mark. Anything more and two schools stop looking like one platform.
+
+   These live here rather than on the organization record because every color
+   in this project lives here, and a CI test enforces it. The org record names
+   which palette to use; it never carries a color.
+
+   Applied by data-school on the html element, so it cascades after the theme
+   block and wins on specificity.
+   --------------------------------------------------------------------------- */
+
+[data-school='lynbrook'] {
+  --brand: #14504a;
+  --brand-deep: #0b322e;
+  --brand-mark: #c08a2b;
+  --stage-pub: #14504a;
+  --focus: var(--brand-mark);
+}
+
+[data-school='blueleaflabs'] {
+  --brand: #1f4f7a;
+  --brand-deep: #14324d;
+  --brand-mark: #3f7fae;
+  --stage-pub: #1f4f7a;
+  --focus: var(--brand-mark);
+}
+
+
+/* ---------------------------------------------------------------------------
+   PRINT SURFACE
+
+   The exported notebook is a document rather than a screen: white stock,
+   black ink, one hairline rule. It does not inherit a theme, because a judge
+   reading a printout should not be able to tell which school's palette the
+   software was wearing.
+   --------------------------------------------------------------------------- */
+
+[data-surface='print'] {
+  --paper: #ffffff;
+  --ink: #16151a;
+  --ink-3: #5c5a63;
+  --rule: #d8d5dd;
+  --wash: #f6f5f8;
+  --desk: #f2f1f4;
+}

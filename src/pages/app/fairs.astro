@@ -1,0 +1,153 @@
+---
+export const prerender = false;
+
+import Base from '../../layouts/Base.astro';
+import AppShell from '../../components/AppShell.astro';
+import { activeOrg } from '../../lib/tenant';
+import { serverClient } from '../../lib/supabase';
+import { standing } from '../../lib/roles';
+
+const { session, account, roles } = Astro.locals;
+const org = activeOrg(Astro);
+
+if (!session) return Astro.redirect('/app/');
+if (!account) return Astro.redirect('/app/welcome/');
+
+const me = standing(roles);
+
+const supabase = serverClient(
+  Astro.request,
+  Astro.cookies,
+  (Astro.locals as any).runtime?.env
+);
+
+let error: string | null = null;
+
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData();
+  const programId = String(form.get('program_id') ?? '');
+  const title = String(form.get('title') ?? '').trim();
+  const startedOn = String(form.get('started_on') ?? '');
+
+  if (!title) {
+    error = 'Give the project a working title. You can change it later.';
+  } else {
+    const { data: entryId, error: startError } = await supabase.rpc('start_entry', {
+      p_program_id: programId,
+      p_title: title,
+      p_started_on: startedOn || null,
+    });
+
+    if (startError) error = startError.message;
+    else return Astro.redirect(`/app/entry/${entryId}/`);
+  }
+}
+
+const { data: programs } = await supabase
+  .from('programs')
+  .select('id, name, season_year, fair_date, advances_to, status')
+  .eq('status', 'open')
+  .order('fair_date', { ascending: true });
+
+const { data: mine } = await supabase
+  .from('entries')
+  .select('id, status, placement, programs(name, season_year, fair_date), projects(title)')
+  .order('entered_at', { ascending: false });
+
+const entered = new Set((mine ?? []).map((e: any) => e.programs?.name + e.programs?.season_year));
+
+const fmt = (d: string | null) =>
+  d ? new Date(d + 'T00:00:00').toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' }) : null;
+---
+
+<Base title="Fairs" noindex={true}>
+  <div class="wrap">
+    <AppShell org={org} account={account} roles={roles} here="/app/fairs/" />
+
+    <section class="hero" style="padding-top:0">
+      <p class="t-lbl">Fairs</p>
+      <h1 class="t-big">Enter a fair</h1>
+      <p class="lede">
+        Entering a fair copies its deadlines onto your project, in order, including
+        the ones your school sets earlier than the fair does.
+      </p>
+    </section>
+
+    {error && <p class="note" role="alert">{error}</p>}
+
+    {mine && mine.length > 0 && (
+      <section class="sec">
+        <div class="sec-h"><b>Your entries</b><span>{mine.length}</span></div>
+        <ul class="linklist">
+          {mine.map((e: any) => (
+            <li>
+              <a href={`/app/entry/${e.id}/`}>
+                {e.projects?.title} · {e.programs?.name} {e.programs?.season_year}
+              </a>
+            </li>
+          ))}
+        </ul>
+      </section>
+    )}
+
+    {me.runsTheClub && !me.isStudent && (
+      <p class="note">
+You run the club, so entering a fair is not your job. This page is here so
+        you can see what students are being asked to do.
+      </p>
+    )}
+
+    <section class="sec">
+      <div class="sec-h"><b>Open fairs</b><span>{programs?.length ?? 0}</span></div>
+
+      {programs && programs.length > 0 ? (
+        <div class="stack">
+          {programs.map((p: any) => (
+            <div class="card prog">
+              <h3>{p.name} {p.season_year}</h3>
+              <dl class="record">
+                <dt>Judging</dt><dd>{fmt(p.fair_date) ?? 'To be announced'}</dd>
+                {p.advances_to && (<><dt>Advances to</dt><dd>{p.advances_to}</dd></>)}
+              </dl>
+
+              <form method="POST" class="enter" hidden={me.runsTheClub && !me.isStudent}>
+                <input type="hidden" name="program_id" value={p.id} />
+                <label>
+                  <span>Working title for your project</span>
+                  <input name="title" required placeholder="Something you can change later" />
+                </label>
+                <label>
+                  <span>The day you started, or plan to start, experimenting</span>
+                  <input name="started_on" type="date" />
+                  <small>
+                    This is the date every approval is checked against. Leave it blank
+                    if you have not started.
+                  </small>
+                </label>
+                <button type="submit">Enter this fair</button>
+              </form>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div class="note">
+          <h4>No fairs are open yet</h4>
+          <p>Programs are loaded by an officer or your advisor.</p>
+        </div>
+      )}
+    </section>
+  </div>
+</Base>
+
+<style>
+  .hero { padding: 44px 0 28px; max-width: 74ch; }
+  .hero .t-lbl { margin-bottom: 14px; }
+  .prog { padding: 22px 24px; }
+  .prog h3 { margin: 0 0 12px; }
+  .enter { margin-top: 18px; border-top: 1px solid var(--rule-fine); padding-top: 16px; max-width: 46ch; }
+  .enter label { display: block; margin-bottom: 14px; }
+  .enter label > span { display: block; margin-bottom: 5px; font-family: var(--face-ui); font-size: 0.84rem; }
+  .enter input { width: 100%; padding: 8px 10px; border: 1px solid var(--rule); background: var(--card); color: var(--ink); font: inherit; }
+  .enter small { display: block; margin-top: 4px; color: var(--ink-3); font-size: 0.8rem; }
+  .enter button { padding: 9px 16px; border: 1px solid var(--ink); background: var(--ink); color: var(--paper); font-family: var(--face-ui); cursor: pointer; }
+</style>

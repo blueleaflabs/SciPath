@@ -14,11 +14,24 @@
 import type { ThemeId } from './fonts';
 
 export interface Org {
-  /** Stable identifier. Becomes org_id. Never reused. */
+  /** Stable identifier. Becomes the organizations.slug. Never reused. */
   id: string;
+  /**
+   * The hostname that resolves this tenant. Tenancy is never resolved from
+   * an email domain: two schools in one district share the same domains.
+   */
+  hostname?: string;
+  /**
+   * domain : only an address on a listed domain may sign up
+   * open   : anyone may sign up. No domain, no district, no club mentor
+   * invite : signup requires a pending grant
+   */
+  signupMode?: 'domain' | 'open' | 'invite';
+  /** False for an open program with no school behind it. */
+  requiresMentor?: boolean;
   /** Full name, rendered in the lockup. */
   name: string;
-  /** Two or three characters for the lockup badge. */
+  /** Two to four characters for the lockup badge. */
   mark: string;
   /** Which shipped theme this organization renders in. */
   theme: ThemeId;
@@ -32,7 +45,7 @@ export interface Org {
   recordPrefix: string;
   /** Where a reader writes to. Never an individual student address. */
   contactEmail: string;
-  /** Domains whose sign-in confirms affiliation without a teacher sponsor. */
+  /** Domains whose sign-in confirms affiliation without a club mentor. */
   verifiedDomains: string[];
   /** Whether publication passes through editorial review before going live. */
   editorialReview: boolean;
@@ -53,6 +66,73 @@ export const orgs: Record<string, Org> = {
     editorialReview: true,
     showcaseNote:
       'Published records from organizations running this software. Reading anything here never requires an account.',
+  },
+
+  /**
+   * Tenant one. The lockup names the school and not the journal: the
+   * research journal is one artifact the school produces, and naming the
+   * tenant after it would make the showcase larger than the institution
+   * that owns it.
+   *
+   * These four facts also exist as a row in the organizations table, seeded
+   * by migration 0001. The config record is what the static build reads,
+   * since a prerendered route may not touch the database; the table is what
+   * row level security reads. They must not be allowed to drift.
+   */
+  montavista: {
+    id: 'montavista',
+    hostname: 'montavista.localhost',
+    signupMode: 'domain',
+    name: 'Monta Vista High School',
+    mark: 'MVHS',
+    theme: 'proceedings',
+    recordPrefix: 'MVRJ',
+    contactEmail: 'hello@example.org',
+    verifiedDomains: ['student.fuhsd.org', 'fuhsd.org'],
+    editorialReview: true,
+    showcaseNote:
+      'Work by students at this school, published as a permanent, citable record.',
+  },
+
+  /**
+   * Tenant two, and the reason tenancy moved to the hostname. Lynbrook holds
+   * exactly the same two district domains as Monta Vista. A sign-in on
+   * student.fuhsd.org is a student at one of five schools and the address
+   * cannot say which, so the URL does.
+   */
+  lynbrook: {
+    id: 'lynbrook',
+    hostname: 'lynbrook.localhost',
+    signupMode: 'domain',
+    name: 'Lynbrook High School',
+    mark: 'LHS',
+    theme: 'proceedings',
+    recordPrefix: 'LHSR',
+    contactEmail: 'hello@example.org',
+    verifiedDomains: ['student.fuhsd.org', 'fuhsd.org'],
+    editorialReview: true,
+    showcaseNote:
+      'Work by students at this school, published as a permanent, citable record.',
+  },
+
+  /**
+   * Tenant three. Open signup, no district, no club mentor. Anyone may
+   * create an account and track a project.
+   */
+  blueleaflabs: {
+    id: 'blueleaflabs',
+    hostname: 'open.localhost',
+    signupMode: 'open',
+    requiresMentor: false,
+    name: 'Open Program',
+    mark: 'OPEN',
+    theme: 'entry',
+    recordPrefix: 'OPN',
+    contactEmail: 'hello@example.org',
+    verifiedDomains: [],
+    editorialReview: false,
+    showcaseNote:
+      'Projects tracked by students working independently, with no school program behind them.',
   },
 
   /**

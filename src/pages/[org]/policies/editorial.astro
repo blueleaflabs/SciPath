@@ -1,0 +1,85 @@
+---
+import { orgPaths } from '../../../lib/tenant-paths';
+export const getStaticPaths = orgPaths;
+
+import Base from '../../../layouts/Base.astro';
+import PageHead from '../../../components/PageHead.astro';
+import { activeOrg } from '../../../lib/tenant';
+
+const org = activeOrg(Astro);
+---
+
+<Base
+  title="Editorial policy"
+  description="What review here actually is, who performs it, and what it does and does not guarantee."
+>
+  <PageHead
+    eyebrow="Policies"
+    title="Editorial policy"
+    lede="The honest statement of what happens to a submission, so nobody has to guess what a record here means."
+  />
+
+  <div class="wrap">
+    <div class="prose">
+      <h2>What review is</h2>
+      <p>
+        {
+          org.editorialReview
+            ? 'Editorial review by named reviewers, with faculty oversight. A submission is screened by an editor, read by one or two reviewers who are identified to the editor and to the decision maker, and decided by the editor in chief or the faculty advisor.'
+            : 'Records are published after the competition season without an editorial review stage.'
+        }
+      </p>
+
+      <h2>What review is not</h2>
+      <p>
+        It is not double blind peer review. At this scale, blinding would be theater: the
+        reviewer pool is small enough that everyone can usually tell whose work they are
+        reading. Signed review is the honest arrangement and the better teacher.
+      </p>
+      <p>
+        It is not a guarantee of correctness. Review here checks that a question is clearly
+        stated, that methods could be repeated from what is written, that conclusions follow
+        from the data shown, that limitations are stated honestly, and that the
+        contributions statement matches the work described. It does not verify raw data, it
+        does not reproduce experiments, and it should not be read as certification that a
+        result is true.
+      </p>
+
+      <h2>Who reviews</h2>
+      <p>
+        Student reviewers and, where available, adults with relevant expertise. Reviewers
+        recommend; they never decide. Anyone with a stake in a submission, as an author or
+        otherwise, is not assigned to it.
+      </p>
+
+      <h2>Decisions</h2>
+      <p>
+        Accept, revise, or decline, made by a named person and recorded with a date.
+        Revisions are capped at two rounds, after which the decision is made on what exists.
+        Authors may withdraw jointly at any point before publication.
+      </p>
+
+      <h2>What gets published</h2>
+      <p>
+        Every record carries its abstract, its full text where available, its figures with
+        captions and alt text, its references, its contributions statement, its competition
+        record if it has one, a permanent identifier, and a formatted citation. Where a
+        record was presented or published somewhere else first, that is stated on the
+        record.
+      </p>
+
+      <h2>Conflicts and complaints</h2>
+      <p>
+        A complaint about a decision or about a reviewer's conduct goes to the faculty
+        advisor, in writing, through <a href="/contact/">the contact address</a>. The
+        advisor's decision on it is final and is recorded.
+      </p>
+
+      <h2>Changing this policy</h2>
+      <p>
+        If what we do changes, this page changes first. A description of review that has
+        drifted from the practice is worse than no description at all.
+      </p>
+    </div>
+  </div>
+</Base>

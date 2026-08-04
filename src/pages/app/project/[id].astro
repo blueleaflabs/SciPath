@@ -1,0 +1,430 @@
+---
+export const prerender = false;
+
+import Base from '../../../layouts/Base.astro';
+import AppShell from '../../../components/AppShell.astro';
+import { activeOrg } from '../../../lib/tenant';
+import { serverClient } from '../../../lib/supabase';
+import { standing } from '../../../lib/roles';
+import { renderNote, linkDomain } from '../../../lib/notes';
+import { blobStore, notePath, MAX_UPLOAD_BYTES } from '../../../lib/blob';
+
+const { session, account, roles } = Astro.locals;
+const org = activeOrg(Astro);
+const { id } = Astro.params;
+
+if (!session) return Astro.redirect('/app/');
+if (!account) return Astro.redirect('/app/welcome/');
+
+const me = standing(roles);
+const supabase = serverClient(
+  Astro.request,
+  Astro.cookies,
+  (Astro.locals as any).runtime?.env
+);
+
+let error: string | null = null;
+let noted = false;
+
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData();
+  const action = String(form.get('action') ?? 'note');
+
+  if (action === 'note') {
+    const { data: noteId, error: e } = await supabase.rpc('add_field_note', {
+      p_project_id: id,
+      p_body_md: String(form.get('body_md') ?? ''),
+      p_occurred_on: String(form.get('occurred_on') ?? '') || null,
+      p_corrects_id: String(form.get('corrects_id') ?? '') || null,
+    });
+
+    if (e) error = e.message;
+    else {
+      noted = true;
+
+      const file = form.get('image');
+      if (file instanceof File && file.size > 0) {
+        const blob = blobStore(Astro.locals);
+
+        if (file.size > MAX_UPLOAD_BYTES) {
+          error = 'The note was saved, but that image is over 5 MB. Try again with a smaller one.';
+        } else if (!blob.available()) {
+          error = 'The note was saved. File storage is not configured on this deployment.';
+        } else {
+          const path = notePath(id!, noteId, file.name);
+          try {
+            await blob.put(path, await file.arrayBuffer(), file.type || 'image/jpeg');
+            const { error: mErr } = await supabase.rpc('attach_note_media', {
+              p_note_id: noteId,
+              p_storage_path: path,
+              p_caption: String(form.get('caption') ?? '') || null,
+            });
+            if (mErr) error = `Note saved, but the image did not attach: ${mErr.message}`;
+          } catch (e: any) {
+            error = `Note saved, but the image did not upload: ${e.message}`;
+          }
+        }
+      }
+    }
+  }
+
+  if (action === 'link') {
+    const { error: e } = await supabase.rpc('add_project_link', {
+      p_project_id: id,
+      p_label: String(form.get('label') ?? ''),
+      p_url: String(form.get('url') ?? ''),
+    });
+    if (e) error = e.message;
+  }
+}
+
+const { data: project } = await supabase
+  .from('projects')
+  .select('id, title, question, stage, started_on, project_authors(role, users(id, display_name))')
+  .eq('id', id)
+  .maybeSingle();
+
+if (!project) return Astro.redirect('/app/');
+
+const { data: notes } = await supabase
+  .from('field_notes')
+  .select('id, body_md, occurred_on, created_at, corrects_id, seq, users:author_id(display_name)')
+  .eq('project_id', id)
+  .order('occurred_on', { ascending: false })
+  .order('seq', { ascending: false });
+
+const noteIds = (notes ?? []).map((n: any) => n.id);
+
+const { data: media } = noteIds.length
+  ? await supabase.from('note_media').select('note_id, storage_path, caption').in('note_id', noteIds)
+  : { data: [] as any[] };
+
+/* Every image is served through a route that re-checks membership, so there
+   is no URL to leak and nothing to expire. */
+const mediaUrl = (path: string) => `/app/media/${path}`;
+
+const { data: links } = await supabase
+  .from('project_links')
+  .select('id, label, url, visibility, created_at')
+  .eq('project_id', id)
+  .order('created_at', { ascending: false });
+
+const { data: entries } = await supabase
+  .from('entries')
+  .select('id, programs(name, season_year)')
+  .eq('project_id', id);
+
+const entryIds = (entries ?? []).map((e: any) => e.id);
+
+const { data: deliverables } = entryIds.length
+  ? await supabase
+      .from('deliverables')
+      .select('id, label, type, signed_on, external_url, storage_path, verified_at, entry_id')
+      .in('entry_id', entryIds)
+      .order('signed_on', { ascending: true })
+  : { data: [] as any[] };
+
+const authors = (project.project_authors ?? []).filter((a: any) => a.role === 'author');
+const mentors = (project.project_authors ?? []).filter((a: any) => a.role === 'mentor');
+
+const noteById = new Map((notes ?? []).map((n: any) => [n.id, n]));
+const today = new Date().toISOString().slice(0, 10);
+
+const fmt = (d: string | null) =>
+  d ? new Date(d + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '—';
+---
+
+<Base title={project.title} noindex={true}>
+  <div class="wrap">
+    <AppShell org={org} account={account} roles={roles} here="/app/" />
+
+    <section class="hero" style="padding-top:0">
+      <p class="t-lbl">Notebook</p>
+      <h1 class="t-big">{project.title}</h1>
+      <p class="lede">
+        {authors.map((a: any) => a.users?.display_name).join(', ')}
+        {mentors.length > 0 && ` · mentored by ${mentors.map((m: any) => m.users?.display_name).join(', ')}`}
+      </p>
+      <div class="row" style="margin-top:20px">
+        <a class="btn btn-2" href={`/app/project/${id}/notebook/`}>Export the notebook</a>
+        {entries && entries.length > 0 && (
+          <a class="btn btn-q" href={`/app/entry/${entries[0].id}/`}>Deadlines</a>
+        )}
+      </div>
+    </section>
+
+    {error && <p class="note" role="alert">{error}</p>}
+    {noted && !error && <p class="note" role="status">Recorded.</p>}
+
+    <section class="sec">
+      <div class="sec-h"><b>Add to the notebook</b><span>Nothing is ever edited</span></div>
+      <form method="POST" enctype="multipart/form-data" class="notef">
+        <input type="hidden" name="action" value="note" />
+
+        <label>
+          <span>What happened</span>
+          <textarea name="body_md" rows="7" required placeholder="Ran three trials at 4C. Second replicate contaminated, discarded."></textarea>
+          <small>
+            Markdown: <code>**bold**</code>, <code>*italic*</code>, <code>- list</code>,
+            <code># heading</code>, <code>[text](url)</code>, <code>```code```</code>.
+            No fonts, no colors, no embeds.
+          </small>
+        </label>
+
+        <div class="grid2">
+          <label>
+            <span>The day the work happened</span>
+            <input type="date" name="occurred_on" value={today} />
+            <small>Not always the day you write it up.</small>
+          </label>
+          <label>
+            <span>Correcting an earlier entry?</span>
+            <select name="corrects_id">
+              <option value="">No</option>
+              {(notes ?? []).slice(0, 25).map((n: any) => (
+                <option value={n.id}>{fmt(n.occurred_on)} · {n.body_md.slice(0, 48)}</option>
+              ))}
+            </select>
+            <small>Corrections are new entries. The original stays.</small>
+          </label>
+        </div>
+
+        <div class="grid2">
+          <label>
+            <span>Photograph or scan</span>
+            <input type="file" name="image" accept="image/*" />
+            <small>A notebook page, an instrument reading, a gel. Up to 5 MB; larger photographs are shrunk before upload.</small>
+          </label>
+          <label>
+            <span>Caption</span>
+            <input name="caption" placeholder="Plate 3, 48 hours" />
+          </label>
+        </div>
+
+        <button type="submit">Record this</button>
+      </form>
+    </section>
+
+    <section class="sec">
+      <div class="sec-h"><b>The notebook</b><span>{notes?.length ?? 0} entries</span></div>
+
+      {notes && notes.length > 0 ? (
+        <ol class="notes">
+          {notes.map((n: any) => {
+            const mine = (media ?? []).filter((m: any) => m.note_id === n.id);
+            const corrected = n.corrects_id ? noteById.get(n.corrects_id) : null;
+            return (
+              <li class="entry" id={`n${n.seq}`}>
+                <div class="meta">
+                  <b>{fmt(n.occurred_on)}</b>
+                  <span>{n.users?.display_name}</span>
+                  <span class="seqno">#{n.seq}</span>
+                </div>
+                {corrected && (
+                  <p class="corrects">
+                    Corrects the entry of {fmt(corrected.occurred_on)}.
+                  </p>
+                )}
+                <div class="body" set:html={renderNote(n.body_md)} />
+                {mine.map((m: any) => (
+                  <figure>
+                    <img src={mediaUrl(m.storage_path)} alt={m.caption ?? 'Notebook image'} loading="lazy" />
+                    {m.caption && <figcaption>{m.caption}</figcaption>}
+                  </figure>
+                ))}
+              </li>
+            );
+          })}
+        </ol>
+      ) : (
+        <div class="note">
+          <h4>Nothing recorded yet</h4>
+          <p>
+            Entries are append only and attributed. Write them as you go rather
+            than reconstructing them in March, which is the difference between a
+            notebook and an alibi.
+          </p>
+        </div>
+      )}
+    </section>
+
+    <section class="sec">
+      <div class="sec-h"><b>Deliverables</b><span>{deliverables?.length ?? 0}</span></div>
+      {deliverables && deliverables.length > 0 ? (
+        <table class="tbl">
+          <thead>
+            <tr>
+              <th scope="col">Signed</th>
+              <th scope="col">Deliverable</th>
+              <th scope="col">Where</th>
+              <th scope="col">Verified</th>
+            </tr>
+          </thead>
+          <tbody>
+            {deliverables.map((d: any) => (
+              <tr>
+                <td>{fmt(d.signed_on)}</td>
+                <td>{d.label}</td>
+                <td>
+                  {d.external_url
+                    ? <a href={d.external_url} rel="noopener">{linkDomain(d.external_url)}</a>
+                    : d.storage_path ? 'Held here' : '—'}
+                </td>
+                <td>{d.verified_at ? 'Yes' : 'Not yet'}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      ) : (
+        <p class="t-sm">
+          Forms and artifacts are recorded against a deadline on the entry page.
+          The date that matters is the one on the signature.
+        </p>
+      )}
+    </section>
+
+    <section class="sec">
+      <div class="sec-h"><b>Linked documents</b><span>{links?.length ?? 0}</span></div>
+
+      <form method="POST" class="linkf">
+        <input type="hidden" name="action" value="link" />
+        <label>
+          <span>Label</span>
+          <input name="label" required placeholder="Data spreadsheet" />
+        </label>
+        <label>
+          <span>URL</span>
+          <input name="url" type="url" required placeholder="https://" />
+        </label>
+        <button type="submit">Add</button>
+      </form>
+
+      {links && links.length > 0 && (
+        <ul class="linklist" style="margin-top:18px">
+          {links.map((l: any) => (
+            <li>
+              <a href={l.url} rel="noopener">{l.label}</a>
+              <span class="t-sm"> · {linkDomain(l.url)}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      <p class="t-sm" style="margin-top:14px">
+        We store the address and never fetch it. Set sharing to your school
+        domain rather than anyone with the link: a permanent public URL to a
+        working document cannot be recalled once it leaks. The domain is shown
+        so a personal account is obvious now rather than after graduation.
+      </p>
+    </section>
+  </div>
+
+<script>
+  /* Shrink before sending. Halves what is stored and what is read back,
+     and a 4000px photograph of a notebook page is no more legible than a
+     1600px one. Falls through untouched if anything goes wrong. */
+  const MAX_EDGE = 1600;
+  const form = document.querySelector('form.notef');
+  const input = form?.querySelector('input[name="image"]');
+
+  form?.addEventListener('submit', async (event) => {
+    const file = input?.files?.[0];
+    if (!file || !file.type.startsWith('image/') || file.size < 400_000) return;
+
+    event.preventDefault();
+    try {
+      const bitmap = await createImageBitmap(file);
+      const scale = Math.min(1, MAX_EDGE / Math.max(bitmap.width, bitmap.height));
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.round(bitmap.width * scale);
+      canvas.height = Math.round(bitmap.height * scale);
+      canvas.getContext('2d').drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+
+      const blob = await new Promise((res) => canvas.toBlob(res, 'image/jpeg', 0.82));
+      if (blob) {
+        const transfer = new DataTransfer();
+        transfer.items.add(new File([blob], file.name.replace(/\.\w+$/, '.jpg'), { type: 'image/jpeg' }));
+        input.files = transfer.files;
+      }
+    } catch {
+      /* Send the original. */
+    }
+    form.submit();
+  });
+</script>
+</Base>
+
+<style>
+  .hero { padding: 44px 0 28px; max-width: 74ch; }
+  .hero .t-lbl { margin-bottom: 14px; }
+
+  .notef { max-width: 64ch; }
+  .notef label { display: block; margin-bottom: 16px; }
+  .notef label > span { display: block; margin-bottom: 6px; font-family: var(--face-ui); font-size: 0.86rem; }
+  .notef textarea,
+  .notef input,
+  .notef select {
+    width: 100%;
+    padding: 9px 11px;
+    border: 1px solid var(--rule);
+    background: var(--card);
+    color: var(--ink);
+    font: inherit;
+  }
+  .notef textarea { font-family: var(--face-mono); font-size: 0.9rem; line-height: 1.55; }
+  .notef small { display: block; margin-top: 5px; color: var(--ink-3); font-size: 0.8rem; }
+  .notef button,
+  .linkf button {
+    padding: 10px 18px;
+    border: 1px solid var(--ink);
+    background: var(--ink);
+    color: var(--paper);
+    font-family: var(--face-ui);
+    cursor: pointer;
+  }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 640px) { .grid2 { grid-template-columns: 1fr; } }
+
+  .linkf { display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap; }
+  .linkf label { display: block; }
+  .linkf label > span { display: block; margin-bottom: 5px; font-family: var(--face-ui); font-size: 0.84rem; }
+  .linkf input { padding: 8px 10px; border: 1px solid var(--rule); background: var(--card); color: var(--ink); font: inherit; min-width: 24ch; }
+
+  .notes { list-style: none; margin: 0; padding: 0; }
+  .entry {
+    border-left: 2px solid var(--rule);
+    padding: 0 0 26px 20px;
+    margin-left: 4px;
+  }
+  .entry .meta {
+    display: flex;
+    gap: 12px;
+    align-items: baseline;
+    font-family: var(--face-ui);
+    font-size: 0.82rem;
+    color: var(--ink-3);
+    margin-bottom: 8px;
+  }
+  .entry .meta b { color: var(--ink); }
+  .entry .seqno { margin-left: auto; font-family: var(--face-mono); }
+  .entry .corrects {
+    font-family: var(--face-ui);
+    font-size: 0.8rem;
+    color: var(--ink-3);
+    margin: 0 0 8px;
+  }
+  .entry .body :global(p) { margin: 0 0 10px; }
+  .entry .body :global(h1),
+  .entry .body :global(h2),
+  .entry .body :global(h3) { font-size: 1.05rem; margin: 14px 0 8px; }
+  .entry .body :global(pre) {
+    background: var(--paper);
+    border: 1px solid var(--rule-fine);
+    padding: 10px 12px;
+    overflow-x: auto;
+    font-size: 0.85rem;
+  }
+  .entry figure { margin: 12px 0 0; }
+  .entry figure img { max-width: 100%; border: 1px solid var(--rule-fine); }
+  .entry figcaption { margin-top: 5px; font-family: var(--face-ui); font-size: 0.8rem; color: var(--ink-3); }
+</style>

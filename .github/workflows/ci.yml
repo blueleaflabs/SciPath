@@ -29,19 +29,43 @@ jobs:
       - name: Archive independence
         run: npm run test:static
 
+      # The date ordering check, tested on its own before anything around it.
+      - name: Date ordering
+        run: npm run test:dates
+
+      # A rename that lands in the migration and not in the code, or the
+      # reverse, builds cleanly and fails at runtime.
+      - name: Code and schema agree on names
+        run: npm run test:drift
+
       # No hex literal outside tokens.css, no organization named in a component.
       - name: Structural rules
         run: npm run test:tokens
+
+      # config.toml is committed and is only safe because every secret in it
+      # is an env(...) reference.
+      - name: No secret literals in committed config
+        run: npm run test:config
+
+      # A layout reading the org singleton renders one school at every
+      # hostname. Invisible until a second tenant exists.
+      - name: Tenancy is resolved per request
+        run: npm run test:tenant
+
+      # Every public route prerendered once per tenant. A page left outside
+      # [org]/ shows one school's name to every other school.
+      - name: Public routes are tenant scoped
+        run: npm run test:routes
 
       # The proof, not the promise: the public surface has to build with the
       # database environment variables absent entirely.
       - name: Build with no database credentials
         env:
           PUBLIC_SUPABASE_URL: ''
-          PUBLIC_SUPABASE_ANON_KEY: ''
-          SUPABASE_SERVICE_ROLE_KEY: ''
+          PUBLIC_SUPABASE_PUBLISHABLE_KEY: ''
+          SUPABASE_SECRET_KEY: ''
         run: |
-          unset PUBLIC_SUPABASE_URL PUBLIC_SUPABASE_ANON_KEY SUPABASE_SERVICE_ROLE_KEY
+          unset PUBLIC_SUPABASE_URL PUBLIC_SUPABASE_PUBLISHABLE_KEY SUPABASE_SECRET_KEY
           npm run build
 
       - name: Check the archive actually rendered
@@ -53,7 +77,20 @@ jobs:
           test -d dist/pagefind
 
       # The second theme has to build too, not just parse.
+      # Reads the built HTML rather than the source, so it catches a tenant
+      # leak however it was caused.
+      - name: No tenant names another tenant
+        run: npm run test:output
+
       - name: Build the alternate theme
         env:
           PUBLIC_ORG: example
         run: npm run build
+
+      # The migration has to apply to an empty database from 0001, not just
+      # to whatever state a laptop happens to be in.
+      - name: Migrations apply from empty
+        run: |
+          npx supabase start --exclude studio,imgproxy,pooler,realtime,vector
+          npx supabase db reset
+          npx supabase stop --no-backup

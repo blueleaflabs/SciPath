@@ -1,0 +1,143 @@
+/**
+ * SESSION RESOLUTION, AND FAILING CLOSED.
+ *
+ * Runs on every request. Public routes are prerendered and never reach a
+ * database; this only does work for routes under /app/ and /auth/.
+ *
+ * The shape that matters: a person can hold a valid session and own no row
+ * in public.users. That is not an error state. Signup is a separate step,
+ * because a trigger on auth.users cannot resolve which organization a
+ * personal email signup belongs to. Until complete_signup() runs, every
+ * policy fails closed and the only reachable screen is signup.
+ */
+
+import { defineMiddleware } from 'astro:middleware';
+import { serverClient, isConfigured } from './lib/supabase';
+import { resolveOrg } from './lib/tenant';
+import { tenantSlugs } from './lib/tenant-paths';
+
+const GUARDED = '/app/';
+const SIGNUP = '/app/welcome/';
+/* The sign-in page, not the OAuth handoff. Bouncing someone straight to
+   Google gives them no idea what they are agreeing to or which school they
+   are signing in to. */
+const SIGNIN = '/app/';
+
+export const onRequest = defineMiddleware(async (context, next) => {
+  const { url, request, cookies, locals } = context;
+
+  /* Tenancy comes from the hostname, and it is resolved on every request
+     rather than only on guarded ones. A layout that reads the organization
+     from a module-level import renders the same school at every hostname,
+     which is exactly the bug this ordering prevents. */
+  const { slug, org } = resolveOrg(url.hostname);
+  locals.orgSlug = slug;
+  locals.org = org;
+
+  /* Cancelling at Google, or an expired state, sends the person back to the
+     project's Site URL with error parameters on whatever path that is. Site
+     URL is one value and cannot be per tenant, so it lands on the bare host
+     and looks like a broken homepage. Catch it anywhere and route it to the
+     sign-in page with something readable. */
+  const oauthError = url.searchParams.get('error_code') ?? url.searchParams.get('error');
+  if (oauthError) {
+    const kind =
+      oauthError === 'access_denied' || oauthError === 'bad_oauth_state'
+        ? 'cancelled'
+        : 'oauth';
+    return context.redirect(`/app/?error=${kind}`);
+  }
+
+  const needsSession =
+    url.pathname.startsWith(GUARDED) || url.pathname.startsWith('/auth/');
+
+  if (!needsSession) {
+    /* Every public route is prerendered once per tenant under /[org]/, so a
+       request for lynbrook.scipath.org/articles/ is served the file built at
+       /lynbrook/articles/. The slug never appears in a URL anyone sees.
+
+       Assets, the shared 404, and the search index are not tenant scoped and
+       pass through untouched. */
+    /* Middleware runs during prerendering as well as at request time, and a
+       prerendered path already carries its tenant segment. Rewriting one
+       again produces /scipath/lynbrook/about/, which matches no route and
+       writes the 404 page into every tenant's files. Any path that already
+       begins with a tenant slug passes through untouched. */
+    const first = url.pathname.split('/')[1];
+    if (
+      tenantSlugs.includes(first) ||
+      url.pathname.startsWith(`/${slug}/`) ||
+      url.pathname.startsWith('/_astro/') ||
+      url.pathname.startsWith('/pagefind/') ||
+      url.pathname.startsWith('/pdf/') ||
+      url.pathname === '/404.html' ||
+      url.pathname.startsWith('/sitemap')
+    ) {
+      return next();
+    }
+    return next(`/${slug}${url.pathname}${url.search}`);
+  }
+
+  const runtime = (locals as Record<string, any>).runtime?.env;
+  locals.org = org;
+
+  locals.session = null;
+  locals.account = null;
+  locals.roles = [];
+
+  if (!isConfigured(runtime)) {
+    locals.configured = false;
+    return next();
+  }
+  locals.configured = true;
+
+  const supabase = serverClient(request, cookies, runtime);
+  locals.supabase = supabase;
+
+  /* getUser revalidates against the auth server. getSession only decodes a
+     cookie the browser sent, which is not evidence of anything. */
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  if (!user) {
+    if (url.pathname.startsWith(GUARDED) && url.pathname !== SIGNIN) {
+      return context.redirect(SIGNIN);
+    }
+    return next();
+  }
+
+  locals.session = { id: user.id, email: user.email ?? null };
+
+  const { data: account } = await supabase
+    .from('users')
+    .select('id, org_id, display_name, grad_year, population, status, ' +
+            'affiliation_state, consent_state, author_slug')
+    .eq('id', user.id)
+    .maybeSingle();
+
+  locals.account = account ?? null;
+
+  if (!account) {
+    /* Session without an account row. Signup is the only reachable page. */
+    if (url.pathname.startsWith(GUARDED) && url.pathname !== SIGNUP) {
+      return context.redirect(SIGNUP);
+    }
+    return next();
+  }
+
+  /* Cheap and idempotent: keeps the identity mirror current, and refreshes
+     affiliation, since a login through a domain identity is the evidence
+     that the person is still there. */
+  await supabase.rpc('sync_identities');
+
+  const { data: roles } = await supabase
+    .from('user_roles')
+    .select('role, scope_id')
+    .eq('user_id', user.id)
+    .is('revoked_at', null);
+
+  locals.roles = roles ?? [];
+
+  return next();
+});

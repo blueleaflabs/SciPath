@@ -1,0 +1,337 @@
+---
+export const prerender = false;
+
+import { activeOrg } from '../../../../lib/tenant';
+import { serverClient } from '../../../../lib/supabase';
+import { renderNote, linkDomain } from '../../../../lib/notes';
+
+const { session, account } = Astro.locals;
+const org = activeOrg(Astro);
+const { id } = Astro.params;
+
+if (!session) return Astro.redirect('/app/');
+if (!account) return Astro.redirect('/app/welcome/');
+
+const supabase = serverClient(
+  Astro.request,
+  Astro.cookies,
+  (Astro.locals as any).runtime?.env
+);
+
+const { data: project } = await supabase
+  .from('projects')
+  .select('id, title, question, stage, started_on, created_at, project_authors(role, users(display_name))')
+  .eq('id', id)
+  .maybeSingle();
+
+if (!project) return Astro.redirect('/app/');
+
+/* Chronological here, unlike the working view. A notebook reads forwards. */
+const { data: notes } = await supabase
+  .from('field_notes')
+  .select('id, body_md, occurred_on, created_at, corrects_id, seq, users:author_id(display_name)')
+  .eq('project_id', id)
+  .order('occurred_on', { ascending: true })
+  .order('seq', { ascending: true });
+
+const noteIds = (notes ?? []).map((n: any) => n.id);
+
+const { data: media } = noteIds.length
+  ? await supabase.from('note_media').select('note_id, storage_path, caption').in('note_id', noteIds)
+  : { data: [] as any[] };
+
+const mediaUrl = (path: string) => `/app/media/${path}`;
+
+const { data: links } = await supabase
+  .from('project_links')
+  .select('label, url')
+  .eq('project_id', id);
+
+const { data: entries } = await supabase
+  .from('entries')
+  .select('id, programs(name, season_year, fair_date)')
+  .eq('project_id', id);
+
+const entryIds = (entries ?? []).map((e: any) => e.id);
+
+const { data: deliverables } = entryIds.length
+  ? await supabase
+      .from('deliverables')
+      .select('label, type, signed_on, external_url, verified_at')
+      .in('entry_id', entryIds)
+      .order('signed_on', { ascending: true })
+  : { data: [] as any[] };
+
+const authors = (project.project_authors ?? []).filter((a: any) => a.role === 'author');
+const mentors = (project.project_authors ?? []).filter((a: any) => a.role === 'mentor');
+const noteById = new Map((notes ?? []).map((n: any) => [n.id, n]));
+
+const first = notes?.[0]?.occurred_on ?? null;
+const last = notes?.[notes.length - 1]?.occurred_on ?? null;
+
+const fmt = (d: string | null) =>
+  d ? new Date(d + 'T00:00:00').toLocaleDateString('en-US', {
+    year: 'numeric', month: 'long', day: 'numeric',
+  }) : '—';
+
+const printedOn = new Date().toLocaleDateString('en-US', {
+  year: 'numeric', month: 'long', day: 'numeric',
+});
+---
+
+<html lang="en" data-surface="print">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex, nofollow" />
+    <title>{project.title} · Research notebook</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Serif:ital,wght@0,400;0,600;1,400&family=IBM+Plex+Sans:wght@400;600&family=IBM+Plex+Mono:wght@400&display=swap"
+      rel="stylesheet"
+    />
+  </head>
+
+  <body>
+    <div class="toolbar">
+      <a href={`/app/project/${id}/`}>Back to the project</a>
+      <button onclick="window.print()">Print or save as PDF</button>
+    </div>
+
+    <article class="book">
+      <header class="title">
+        <p class="kicker">Research notebook</p>
+        <h1>{project.title}</h1>
+        {project.question && <p class="q">{project.question}</p>}
+
+        <dl>
+          <dt>Author{authors.length === 1 ? '' : 's'}</dt>
+          <dd>{authors.map((a: any) => a.users?.display_name).join(', ') || '—'}</dd>
+
+          {mentors.length > 0 && (<><dt>Club mentor</dt>
+          <dd>{mentors.map((m: any) => m.users?.display_name).join(', ')}</dd></>)}
+
+          <dt>School</dt>
+          <dd>{org.name}</dd>
+
+          {entries && entries.length > 0 && (<><dt>Entered</dt>
+          <dd>{entries.map((e: any) => `${e.programs?.name} ${e.programs?.season_year}`).join(', ')}</dd></>)}
+
+          <dt>Work began</dt>
+          <dd>{fmt(project.started_on)}</dd>
+
+          <dt>Entries</dt>
+          <dd>
+            {notes?.length ?? 0}
+            {first && last && `, ${fmt(first)} to ${fmt(last)}`}
+          </dd>
+
+          <dt>Printed</dt>
+          <dd>{printedOn}</dd>
+        </dl>
+
+        <p class="honest">
+          Entries are recorded append only: each one is attributed, carries the
+          day the work happened, and is never edited afterwards. A correction
+          appears as a later entry naming the one it corrects. This is a record
+          kept in order, which is a discipline device rather than proof against
+          a determined author, and it is offered as no more than that.
+        </p>
+      </header>
+
+      <section class="entries">
+        <h2>Entries</h2>
+
+        {(notes ?? []).map((n: any, i: number) => {
+          const mine = (media ?? []).filter((m: any) => m.note_id === n.id);
+          const corrected = n.corrects_id ? noteById.get(n.corrects_id) : null;
+          return (
+            <div class="entry">
+              <div class="meta">
+                <span class="no">{i + 1}</span>
+                <b>{fmt(n.occurred_on)}</b>
+                <span>{n.users?.display_name}</span>
+              </div>
+              {corrected && (
+                <p class="corrects">Corrects the entry of {fmt(corrected.occurred_on)}.</p>
+              )}
+              <div class="body" set:html={renderNote(n.body_md)} />
+              {mine.map((m: any) => (
+                <figure>
+                  <img src={mediaUrl(m.storage_path)} alt={m.caption ?? 'Notebook image'} />
+                  {m.caption && <figcaption>{m.caption}</figcaption>}
+                </figure>
+              ))}
+            </div>
+          );
+        })}
+
+        {(!notes || notes.length === 0) && <p class="empty">No entries recorded.</p>}
+      </section>
+
+      {deliverables && deliverables.length > 0 && (
+        <section class="appendix">
+          <h2>Deliverables</h2>
+          <table>
+            <thead>
+              <tr><th>Signed</th><th>Deliverable</th><th>Verified</th></tr>
+            </thead>
+            <tbody>
+              {deliverables.map((d: any) => (
+                <tr>
+                  <td>{fmt(d.signed_on)}</td>
+                  <td>{d.label}</td>
+                  <td>{d.verified_at ? 'Yes' : 'No'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </section>
+      )}
+
+      {links && links.length > 0 && (
+        <section class="appendix">
+          <h2>External documents</h2>
+          <ul>
+            {links.map((l: any) => (
+              <li>{l.label} — {linkDomain(l.url)}</li>
+            ))}
+          </ul>
+          <p class="fine">
+            Addresses are recorded rather than reproduced. A document held on a
+            school account becomes unreachable when that account closes.
+          </p>
+        </section>
+      )}
+    </article>
+  </body>
+</html>
+
+<style is:global>
+  @import '../../../../styles/tokens.css';
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--desk);
+    color: var(--ink);
+    font-family: 'IBM Plex Serif', Georgia, serif;
+    font-size: 16px;
+    line-height: 1.6;
+  }
+  .toolbar {
+    display: flex;
+    gap: 14px;
+    align-items: center;
+    justify-content: space-between;
+    max-width: 46rem;
+    margin: 18px auto 0;
+    padding: 0 24px;
+    font-family: 'IBM Plex Sans', system-ui, sans-serif;
+    font-size: 0.86rem;
+  }
+  .toolbar button {
+    padding: 8px 14px;
+    border: 1px solid var(--ink);
+    background: var(--ink);
+    color: var(--paper);
+    font-family: inherit;
+    font-size: 0.86rem;
+    cursor: pointer;
+  }
+  .book {
+    max-width: 46rem;
+    margin: 18px auto 60px;
+    padding: 56px 64px;
+    background: var(--paper);
+    border: 1px solid var(--rule);
+  }
+  .kicker {
+    font-family: 'IBM Plex Mono', monospace;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    font-size: 0.72rem;
+    color: var(--ink-3);
+    margin: 0 0 10px;
+  }
+  .title h1 { font-size: 1.9rem; line-height: 1.2; margin: 0 0 10px; }
+  .title .q { font-style: italic; color: var(--ink-3); margin: 0 0 22px; }
+  .title dl {
+    display: grid;
+    grid-template-columns: 10rem 1fr;
+    gap: 4px 16px;
+    margin: 0 0 22px;
+    font-size: 0.92rem;
+  }
+  .title dt {
+    font-family: 'IBM Plex Sans', sans-serif;
+    font-size: 0.78rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--ink-3);
+    padding-top: 2px;
+  }
+  .title dd { margin: 0; }
+  .honest {
+    border-top: 1px solid var(--rule);
+    padding-top: 14px;
+    font-size: 0.86rem;
+    color: var(--ink-3);
+  }
+  h2 {
+    font-family: 'IBM Plex Sans', sans-serif;
+    font-size: 0.82rem;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    border-bottom: 2px solid var(--ink);
+    padding-bottom: 6px;
+    margin: 44px 0 22px;
+  }
+  .entry { margin-bottom: 30px; page-break-inside: avoid; }
+  .entry .meta {
+    display: flex;
+    gap: 12px;
+    align-items: baseline;
+    font-family: 'IBM Plex Sans', sans-serif;
+    font-size: 0.8rem;
+    color: var(--ink-3);
+    border-bottom: 1px solid var(--rule);
+    padding-bottom: 5px;
+    margin-bottom: 10px;
+  }
+  .entry .meta .no { font-family: 'IBM Plex Mono', monospace; }
+  .entry .meta b { color: var(--ink); font-size: 0.9rem; }
+  .entry .corrects { font-size: 0.84rem; font-style: italic; color: var(--ink-3); margin: 0 0 8px; }
+  .entry .body p { margin: 0 0 10px; }
+  .entry .body pre {
+    background: var(--wash);
+    border: 1px solid var(--rule);
+    padding: 10px 12px;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.82rem;
+    overflow-x: auto;
+  }
+  .entry .body table { border-collapse: collapse; font-size: 0.9rem; }
+  .entry .body th, .entry .body td { border: 1px solid var(--rule); padding: 5px 9px; text-align: left; }
+  .entry figure { margin: 12px 0 0; page-break-inside: avoid; }
+  .entry figure img { max-width: 100%; border: 1px solid var(--rule); }
+  .entry figcaption {
+    font-family: 'IBM Plex Sans', sans-serif;
+    font-size: 0.8rem;
+    color: var(--ink-3);
+    margin-top: 5px;
+  }
+  .appendix table { border-collapse: collapse; width: 100%; font-size: 0.9rem; }
+  .appendix th, .appendix td { border-bottom: 1px solid var(--rule); padding: 7px 4px; text-align: left; }
+  .appendix ul { margin: 0; padding-left: 1.2rem; }
+  .fine { font-size: 0.84rem; color: var(--ink-3); }
+  .empty { color: var(--ink-3); }
+
+  @media print {
+    body { background: var(--paper); }
+    .toolbar { display: none; }
+    .book { max-width: none; margin: 0; padding: 0; border: 0; }
+    h2 { page-break-after: avoid; }
+  }
+</style>

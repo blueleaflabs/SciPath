@@ -1,6 +1,14 @@
 ---
-import { org } from '../config/orgs';
+import type { Org } from '../config/orgs';
+import { activeOrg } from '../lib/tenant';
 import { platform } from '../config/site';
+
+interface Props {
+  /** Passed down by the layout, which resolved it from the hostname. */
+  org?: Org;
+}
+
+const org = Astro.props.org ?? activeOrg(Astro);
 
 const columns = [
   {
