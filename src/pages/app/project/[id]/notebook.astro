@@ -20,7 +20,7 @@ const supabase = serverClient(
 
 const { data: project } = await supabase
   .from('projects')
-  .select('id, title, question, stage, started_on, created_at, project_authors(role, users(display_name))')
+  .select('id, title, question, stage, started_on, created_at, project_authors(role, users(id, display_name))')
   .eq('id', id)
   .maybeSingle();
 
@@ -29,7 +29,7 @@ if (!project) return Astro.redirect('/app/');
 /* Chronological here, unlike the working view. A notebook reads forwards. */
 const { data: notes } = await supabase
   .from('field_notes')
-  .select('id, body_md, occurred_on, created_at, corrects_id, seq, users:author_id(display_name)')
+  .select('id, body_md, occurred_on, created_at, corrects_id, seq, author_id, users:author_id(display_name)')
   .eq('project_id', id)
   .order('occurred_on', { ascending: true })
   .order('seq', { ascending: true });
@@ -62,8 +62,17 @@ const { data: deliverables } = entryIds.length
       .order('signed_on', { ascending: true })
   : { data: [] as any[] };
 
-const authors = (project.project_authors ?? []).filter((a: any) => a.role === 'author');
-const mentors = (project.project_authors ?? []).filter((a: any) => a.role === 'mentor');
+const attachments = project.project_authors ?? [];
+const authors = attachments.filter((a: any) => a.role === 'author');
+const officers = attachments.filter((a: any) => a.role === 'officer');
+
+const { data: sponsor } = await supabase
+  .from('project_sponsors')
+  .select('teacher_name')
+  .eq('project_id', id)
+  .is('superseded_at', null)
+  .maybeSingle();
+const roleOf = new Map<string, string>(attachments.map((a: any) => [a.users?.id, a.role]));
 const noteById = new Map((notes ?? []).map((n: any) => [n.id, n]));
 
 const first = notes?.[0]?.occurred_on ?? null;
@@ -109,8 +118,11 @@ const printedOn = new Date().toLocaleDateString('en-US', {
           <dt>Author{authors.length === 1 ? '' : 's'}</dt>
           <dd>{authors.map((a: any) => a.users?.display_name).join(', ') || '—'}</dd>
 
-          {mentors.length > 0 && (<><dt>Club mentor</dt>
-          <dd>{mentors.map((m: any) => m.users?.display_name).join(', ')}</dd></>)}
+          {sponsor && (<><dt>Teacher sponsor</dt>
+          <dd>{sponsor.teacher_name}</dd></>)}
+
+          {officers.length > 0 && (<><dt>Club officer</dt>
+          <dd>{officers.map((m: any) => m.users?.display_name).join(', ')}</dd></>)}
 
           <dt>School</dt>
           <dd>{org.name}</dd>
@@ -152,6 +164,11 @@ const printedOn = new Date().toLocaleDateString('en-US', {
                 <span class="no">{i + 1}</span>
                 <b>{fmt(n.occurred_on)}</b>
                 <span>{n.users?.display_name}</span>
+                {roleOf.get(n.author_id) && roleOf.get(n.author_id) !== 'author' && (
+                  <span class="cap">
+                    officer note
+                  </span>
+                )}
               </div>
               {corrected && (
                 <p class="corrects">Corrects the entry of {fmt(corrected.occurred_on)}.</p>
@@ -229,7 +246,7 @@ const printedOn = new Date().toLocaleDateString('en-US', {
     margin: 18px auto 0;
     padding: 0 24px;
     font-family: 'IBM Plex Sans', system-ui, sans-serif;
-    font-size: 0.86rem;
+    font-size: 0.92rem;
   }
   .toolbar button {
     padding: 8px 14px;
@@ -237,7 +254,7 @@ const printedOn = new Date().toLocaleDateString('en-US', {
     background: var(--ink);
     color: var(--paper);
     font-family: inherit;
-    font-size: 0.86rem;
+    font-size: 0.92rem;
     cursor: pointer;
   }
   .book {
@@ -251,7 +268,7 @@ const printedOn = new Date().toLocaleDateString('en-US', {
     font-family: 'IBM Plex Mono', monospace;
     text-transform: uppercase;
     letter-spacing: 0.12em;
-    font-size: 0.72rem;
+    font-size: 0.8rem;
     color: var(--ink-3);
     margin: 0 0 10px;
   }
@@ -266,7 +283,7 @@ const printedOn = new Date().toLocaleDateString('en-US', {
   }
   .title dt {
     font-family: 'IBM Plex Sans', sans-serif;
-    font-size: 0.78rem;
+    font-size: 0.84rem;
     text-transform: uppercase;
     letter-spacing: 0.05em;
     color: var(--ink-3);
@@ -276,12 +293,12 @@ const printedOn = new Date().toLocaleDateString('en-US', {
   .honest {
     border-top: 1px solid var(--rule);
     padding-top: 14px;
-    font-size: 0.86rem;
+    font-size: 0.92rem;
     color: var(--ink-3);
   }
   h2 {
     font-family: 'IBM Plex Sans', sans-serif;
-    font-size: 0.82rem;
+    font-size: 0.88rem;
     text-transform: uppercase;
     letter-spacing: 0.1em;
     border-bottom: 2px solid var(--ink);
@@ -294,38 +311,46 @@ const printedOn = new Date().toLocaleDateString('en-US', {
     gap: 12px;
     align-items: baseline;
     font-family: 'IBM Plex Sans', sans-serif;
-    font-size: 0.8rem;
+    font-size: 0.86rem;
     color: var(--ink-3);
     border-bottom: 1px solid var(--rule);
     padding-bottom: 5px;
     margin-bottom: 10px;
   }
   .entry .meta .no { font-family: 'IBM Plex Mono', monospace; }
-  .entry .meta b { color: var(--ink); font-size: 0.9rem; }
-  .entry .corrects { font-size: 0.84rem; font-style: italic; color: var(--ink-3); margin: 0 0 8px; }
+  .entry .meta .cap {
+    font-family: 'IBM Plex Sans', sans-serif;
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    border: 1px solid var(--rule);
+    padding: 1px 6px;
+  }
+  .entry .meta b { color: var(--ink); font-size: 0.95rem; }
+  .entry .corrects { font-size: 0.9rem; font-style: italic; color: var(--ink-3); margin: 0 0 8px; }
   .entry .body p { margin: 0 0 10px; }
   .entry .body pre {
     background: var(--wash);
     border: 1px solid var(--rule);
     padding: 10px 12px;
     font-family: 'IBM Plex Mono', monospace;
-    font-size: 0.82rem;
+    font-size: 0.88rem;
     overflow-x: auto;
   }
-  .entry .body table { border-collapse: collapse; font-size: 0.9rem; }
+  .entry .body table { border-collapse: collapse; font-size: 0.95rem; }
   .entry .body th, .entry .body td { border: 1px solid var(--rule); padding: 5px 9px; text-align: left; }
   .entry figure { margin: 12px 0 0; page-break-inside: avoid; }
   .entry figure img { max-width: 100%; border: 1px solid var(--rule); }
   .entry figcaption {
     font-family: 'IBM Plex Sans', sans-serif;
-    font-size: 0.8rem;
+    font-size: 0.86rem;
     color: var(--ink-3);
     margin-top: 5px;
   }
-  .appendix table { border-collapse: collapse; width: 100%; font-size: 0.9rem; }
+  .appendix table { border-collapse: collapse; width: 100%; font-size: 0.95rem; }
   .appendix th, .appendix td { border-bottom: 1px solid var(--rule); padding: 7px 4px; text-align: left; }
   .appendix ul { margin: 0; padding-left: 1.2rem; }
-  .fine { font-size: 0.84rem; color: var(--ink-3); }
+  .fine { font-size: 0.9rem; color: var(--ink-3); }
   .empty { color: var(--ink-3); }
 
   @media print {

@@ -53,3 +53,4 @@ build.log
 #   public/pdf/            the archive itself
 #   src/content/           published records and guides
 #   tests/                 automated tests and fixtures
+.wrangler/

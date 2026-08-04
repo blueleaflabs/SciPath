@@ -22,8 +22,18 @@ const nav = [
 /* The working surface, reachable from every page. On a prerendered page
    there is no session to read, so the label is the invitation rather than the
    state: /app/ shows a sign-in prompt or the overview, whichever is true. */
-const signedIn = Boolean((Astro.locals as any)?.session);
-const workbench = { href: '/app/', label: signedIn ? 'Workbench' : 'Sign in' };
+const locals = (Astro.locals as any) ?? {};
+const signedIn = Boolean(locals.session);
+const account = locals.account ?? null;
+
+/* Consent shows as a fragment beside the name rather than a banner on every
+   page. It is a state, not an announcement. */
+const consentNote =
+  account?.consent_state === 'pending'
+    ? 'Consent pending'
+    : account?.consent_state === 'paused'
+      ? 'Consent needed'
+      : null;
 
 const here = Astro.url.pathname;
 const isCurrent = (href: string) => here === href || (href !== '/' && here.startsWith(href));
@@ -39,7 +49,7 @@ const isCurrent = (href: string) => here === href || (href !== '/' && here.start
           {!org.isPlatform && <span class="plat">{platform.lockupSuffix}</span>}
         </span>
       </a>
-      <nav aria-label="Main">
+      <nav aria-label="Main" class="mnav-bar">
         <ul class="mnav">
           {
             nav.map((item) => (
@@ -50,11 +60,33 @@ const isCurrent = (href: string) => here === href || (href !== '/' && here.start
               </li>
             ))
           }
-          <li class="mnav-cta">
-            <a href={workbench.href} aria-current={here.startsWith('/app/') ? 'page' : undefined}>
-              {workbench.label}
-            </a>
-          </li>
+        </ul>
+
+        {/* The account cluster is a separate group with a rule before it.
+            Sections and "who am I" are different kinds of thing and should
+            not read as one run of links. */}
+        <ul class="mnav mnav-acct">
+          {signedIn && account ? (
+            <>
+              <li class="mnav-who">
+                <a href="/app/profile/" aria-current={here === '/app/profile/' ? 'page' : undefined}>
+                  {account.display_name}
+                </a>
+                {consentNote && <span class="mnav-flag">{consentNote}</span>}
+              </li>
+              <li>
+                <form method="POST" action="/auth/signout/">
+                  <button type="submit" class="mnav-out">Sign out</button>
+                </form>
+              </li>
+            </>
+          ) : (
+            <li class="mnav-cta">
+              <a href="/app/" aria-current={here.startsWith('/app/') ? 'page' : undefined}>
+                {signedIn ? 'Workbench' : 'Sign in'}
+              </a>
+            </li>
+          )}
         </ul>
       </nav>
     </div>
@@ -62,9 +94,61 @@ const isCurrent = (href: string) => here === href || (href !== '/' && here.start
 </header>
 
 <style>
+  .mnav-bar {
+    display: flex;
+    align-items: center;
+    gap: 22px;
+    flex-wrap: wrap;
+  }
+
+  .mnav-acct {
+    align-items: center;
+    padding-left: 22px;
+    border-left: 1px solid var(--masthead-ink-2);
+  }
+
+  .mnav-who { display: flex; align-items: center; gap: 8px; }
+
+  .mnav-flag {
+    font-family: var(--face-num);
+    font-size: 0.72rem;
+    line-height: 1.5;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    padding: 1px 7px;
+    border: 1px solid currentColor;
+    color: var(--masthead-ink-2);
+    white-space: nowrap;
+  }
+
+  /* `font: inherit` took the body serif at full size, so this button was
+     half again as large as the links beside it. It has to match .mnav a. */
+  .mnav-out {
+    background: none;
+    border: 0;
+    padding: 0;
+    cursor: pointer;
+    font-family: var(--face-ui);
+    font-weight: 500;
+    font-size: 0.9rem;
+    line-height: inherit;
+    letter-spacing: inherit;
+    color: var(--masthead-ink);
+  }
+
+  .mnav-out:hover {
+    text-decoration: underline;
+    text-decoration-thickness: 2px;
+    text-underline-offset: 0.3em;
+  }
+
   .mnav-cta a {
     box-shadow: inset 0 0 0 1px currentColor;
     padding: 5px 12px;
     border-radius: var(--radius);
+  }
+
+  @media (max-width: 720px) {
+    .mnav-acct { padding-left: 0; border-left: 0; }
   }
 </style>

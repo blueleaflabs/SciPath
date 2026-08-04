@@ -1113,8 +1113,8 @@ select app.provision_org(
 -- ===========================================================================
 -- PROGRAMS, PROJECTS, ENTRIES, MILESTONES
 --
--- A PROGRAM is one fair in one season: the Synopsys Championship 2027, not
--- "the Synopsys Championship". Dates belong to a season and nothing else.
+-- A PROGRAM is one fair in one season: the SCVSEFA Science Fair 2027, not
+-- "the SCVSEFA Science Fair". Dates belong to a season and nothing else.
 --
 -- A PROGRAM_MILESTONE is one dated obligation in that program. org_id is
 -- nullable and that nullability is the whole design: null means every school
@@ -1479,16 +1479,16 @@ begin
   select id into v_mv from public.organizations where slug = 'montavista';
 
   insert into public.programs
-    (org_id, slug, name, season_year, fair_date, source, advances_to, status)
+    (org_id, slug, name, season_year, fair_date, source, status)
   values
-    (null, 'synopsys-championship', 'Synopsys Championship', 2027,
-     date '2027-03-10', 'external', 'California Science and Engineering Fair', 'open')
+    (null, 'scvsefa-science-fair', 'SCVSEFA Science Fair', 2027,
+     date '2027-03-10', 'external', 'open')
   on conflict (slug, season_year) do nothing
   returning id into v_program;
 
   if v_program is null then
     select id into v_program from public.programs
-     where slug = 'synopsys-championship' and season_year = 2027;
+     where slug = 'scvsefa-science-fair' and season_year = 2027;
   end if;
 
   -- The fair's own deadlines. Every school entering sees these.
@@ -1500,7 +1500,7 @@ begin
     (v_program, null, 'Last day to change title, category, or field of study', 'submission', date '2027-02-20', false, 80),
     (v_program, null, 'Final deadline to upload abstracts',         'submission', date '2027-02-27', false, 90),
     (v_program, null, 'Last day to edit abstracts',                 'submission', date '2027-03-03', false, 100),
-    (v_program, null, 'Synopsys Championship',                      'judging',    date '2027-03-10', false, 120)
+    (v_program, null, 'SCVSEFA Science Fair',                      'judging',    date '2027-03-10', false, 120)
   on conflict do nothing;
 
   -- One school's internal deadlines, which run earlier on purpose.
@@ -1510,7 +1510,7 @@ begin
     (v_program, v_mv, 'Project categories due',      'submission', date '2026-09-18', false, 10),
     (v_program, v_mv, 'General research idea due',   'submission', date '2026-10-02', false, 20),
     (v_program, v_mv, 'Specific research idea due',  'submission', date '2026-10-09', false, 30),
-    (v_program, v_mv, 'Club mentor attached',        'approval',   date '2026-10-16', true,  40),
+    (v_program, v_mv, 'Teacher project sponsor named','approval',  date '2026-10-16', true,  40),
     (v_program, v_mv, 'Proposal deadline',           'submission', date '2026-10-23', false, 50),
     (v_program, v_mv, 'Mock judging',                'judging',    date '2027-03-05', false, 110)
   on conflict do nothing;
@@ -2318,5 +2318,1579 @@ grant execute on function public.attach_note_media(uuid, text, text) to authenti
 grant execute on function public.record_deliverable(uuid, uuid, text, text, date, text, text) to authenticated;
 grant execute on function public.verify_deliverable(uuid) to authenticated;
 grant execute on function public.add_project_link(uuid, text, text) to authenticated;
+
+notify pgrst, 'reload schema';
+
+
+-- ---------------------------------------------------------------------------
+-- Oversight watches. It does not do the work.
+--
+-- A club officer or mentor reads everything on a project and changes none of
+-- it, with two exceptions that are theirs by definition: verifying a
+-- deliverable, and adding an attributed observation to the notebook.
+--
+-- This is the pedagogy rather than a permission detail. Independent Work is
+-- ten of the forty rubric points and judges ask about it directly, so if an
+-- officer can edit a start date or record a form, the boundary a student is
+-- being graded on is one the software quietly erased.
+--
+-- Hiding the controls is not the enforcement. This is.
+-- ---------------------------------------------------------------------------
+
+create or replace function public.record_deliverable(
+  p_entry_id     uuid,
+  p_milestone_id uuid,
+  p_type         text,
+  p_label        text,
+  p_signed_on    date,
+  p_external_url text default null,
+  p_storage_path text default null
+)
+returns uuid
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_org     uuid;
+  v_project uuid;
+  v_id      uuid;
+begin
+  if auth.uid() is null then
+    raise exception 'not authenticated';
+  end if;
+
+  select e.org_id, e.project_id into v_org, v_project
+    from public.entries e where e.id = p_entry_id;
+
+  if v_org is null then
+    raise exception 'no such entry';
+  end if;
+
+  -- Authors only. A mentor confirming a form they did not obtain is the
+  -- boundary this whole design exists to keep visible.
+  if not app.authors_project(v_project) then
+    raise exception 'only an author on this project may record a deliverable';
+  end if;
+
+  if coalesce(trim(p_label), '') = '' then
+    raise exception 'give the deliverable a name';
+  end if;
+
+  insert into public.deliverables
+    (org_id, entry_id, milestone_id, type, label, signed_on,
+     external_url, storage_path, submitted_at, created_by)
+  values
+    (v_org, p_entry_id, p_milestone_id, p_type, trim(p_label), p_signed_on,
+     nullif(trim(coalesce(p_external_url, '')), ''),
+     nullif(trim(coalesce(p_storage_path, '')), ''),
+     now(), auth.uid())
+  returning id into v_id;
+
+  if p_milestone_id is not null and p_signed_on is not null then
+    update public.entry_milestones
+       set completed_on = p_signed_on, completed_by = auth.uid()
+     where id = p_milestone_id and completed_on is null;
+  end if;
+
+  perform app.audit(v_org, 'deliverable.recorded', 'deliverables', v_id, null,
+    jsonb_build_object('type', p_type, 'signed_on', p_signed_on));
+
+  return v_id;
+end;
+$$;
+
+create or replace function public.add_project_link(
+  p_project_id uuid,
+  p_label      text,
+  p_url        text
+)
+returns uuid
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_org uuid;
+  v_id  uuid;
+begin
+  if p_url !~* '^https?://' then
+    raise exception 'a link has to start with http:// or https://';
+  end if;
+
+  if not app.authors_project(p_project_id) then
+    raise exception 'only an author on this project may add a document link';
+  end if;
+
+  select p.org_id into v_org from public.projects p where p.id = p_project_id;
+
+  insert into public.project_links (org_id, project_id, label, url, added_by)
+  values (v_org, p_project_id, trim(p_label), trim(p_url), auth.uid())
+  returning id into v_id;
+
+  return v_id;
+end;
+$$;
+
+-- A note from a mentor is worth having in the record, and it is attributed,
+-- so the distinction between an observation and the student's own account is
+-- visible rather than forbidden. Attachment is still required.
+
+grant execute on function public.record_deliverable(uuid, uuid, text, text, date, text, text) to authenticated;
+grant execute on function public.add_project_link(uuid, text, text) to authenticated;
+
+notify pgrst, 'reload schema';
+
+
+-- ---------------------------------------------------------------------------
+-- Whoever may read a project may add an observation to it.
+--
+-- The first version required attachment, which quietly assumed that seeing a
+-- project and being attached to it are the same thing. They are not: an
+-- officer reads every project at the school by role, and is attached to only
+-- the ones somebody attached them to. So an officer could open a notebook,
+-- be invited to add an observation, and be told they were not attached.
+--
+-- The rule that matches the design: reading is decided by role or
+-- attachment, and writing an attributed observation follows reading. Editing
+-- the work still follows authorship, which is enforced separately.
+-- ---------------------------------------------------------------------------
+
+create or replace function public.add_field_note(
+  p_project_id  uuid,
+  p_body_md     text,
+  p_occurred_on date default null,
+  p_corrects_id uuid default null
+)
+returns uuid
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_org uuid;
+  v_id  uuid;
+begin
+  if auth.uid() is null then
+    raise exception 'not authenticated';
+  end if;
+
+  if coalesce(trim(p_body_md), '') = '' then
+    raise exception 'an empty note records nothing';
+  end if;
+
+  select p.org_id into v_org from public.projects p where p.id = p_project_id;
+
+  if v_org is null then
+    raise exception 'no such project';
+  end if;
+
+  if not (
+    exists (
+      select 1 from public.project_authors a
+       where a.project_id = p_project_id and a.user_id = auth.uid()
+    )
+    or (app.is_staff() and v_org = app.org_id())
+  ) then
+    raise exception 'you cannot write in this notebook';
+  end if;
+
+  if p_corrects_id is not null and not exists (
+    select 1 from public.field_notes n
+     where n.id = p_corrects_id and n.project_id = p_project_id
+  ) then
+    raise exception 'that note is not on this project';
+  end if;
+
+  insert into public.field_notes
+    (org_id, project_id, author_id, body_md, occurred_on, corrects_id)
+  values
+    (v_org, p_project_id, auth.uid(), trim(p_body_md),
+     coalesce(p_occurred_on, current_date), p_corrects_id)
+  returning id into v_id;
+
+  return v_id;
+end;
+$$;
+
+-- Attaching an image follows the same rule as writing the note it hangs off.
+create or replace function public.attach_note_media(
+  p_note_id      uuid,
+  p_storage_path text,
+  p_caption      text default null
+)
+returns uuid
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_org     uuid;
+  v_project uuid;
+  v_id      uuid;
+begin
+  select n.org_id, n.project_id into v_org, v_project
+    from public.field_notes n where n.id = p_note_id;
+
+  if v_org is null then
+    raise exception 'no such note';
+  end if;
+
+  if not (
+    exists (
+      select 1 from public.project_authors a
+       where a.project_id = v_project and a.user_id = auth.uid()
+    )
+    or (app.is_staff() and v_org = app.org_id())
+  ) then
+    raise exception 'you cannot add to this notebook';
+  end if;
+
+  insert into public.note_media (org_id, note_id, storage_path, caption)
+  values (v_org, p_note_id, p_storage_path, p_caption)
+  returning id into v_id;
+
+  return v_id;
+end;
+$$;
+
+grant execute on function public.add_field_note(uuid, text, date, uuid) to authenticated;
+grant execute on function public.attach_note_media(uuid, text, text) to authenticated;
+
+notify pgrst, 'reload schema';
+
+
+-- ===========================================================================
+-- TWO AXES
+--
+-- The earlier model had one: a club role that also decided project access.
+-- The club actually has two independent things, and conflating them is what
+-- made assignment feel awkward.
+--
+--   WHO YOU ARE IN THE CLUB     a standing fact, granted once
+--     student                   runs their own projects
+--     officer                   a student, several of them, each holding
+--                               five or six projects
+--     advisor                   the Teacher Club Advisor. One person, runs
+--                               the club, and decides which projects go
+--                               forward
+--
+--   WHAT YOU ARE ON A PROJECT   an attachment, and there can be several
+--     author                    does the work
+--     officer                   manages it, comments, chases
+--
+-- The Teacher Project Sponsor is neither. It is a FACT ABOUT A PROJECT: a
+-- named teacher, recorded by the student, who signs the fair's form and may
+-- never sign in at all. Modelling it as a role would require provisioning an
+-- account for somebody whose entire involvement might be a signature.
+-- ===========================================================================
+
+alter table public.user_roles
+  drop constraint if exists user_roles_role_check;
+
+alter table public.user_roles
+  add constraint user_roles_role_check
+  check (role in ('student', 'officer', 'advisor'));
+
+alter table public.pending_role_grants
+  drop constraint if exists pending_role_grants_role_check;
+
+alter table public.pending_role_grants
+  add constraint pending_role_grants_role_check
+  check (role in ('student', 'officer', 'advisor'));
+
+alter table public.project_authors
+  drop constraint if exists project_authors_role_check;
+
+alter table public.project_authors
+  add constraint project_authors_role_check
+  check (role in ('author', 'officer'));
+
+
+-- ---------------------------------------------------------------------------
+-- The Teacher Project Sponsor.
+--
+-- Recorded by the student, because in practice that is who does the asking.
+-- No confirmation is required and none is waited for: the fair wants a name
+-- on a form, and blocking a student's account on a teacher clicking a link
+-- is a stalled account in exchange for nothing.
+--
+-- `confirmed_at` exists anyway, unset. It lets the advisor see which sponsors
+-- a teacher has actually acknowledged and which are self-reported, which is
+-- useful to her and invisible to everyone else.
+--
+-- Changing a sponsor is normal and expected. The old row is superseded
+-- rather than edited, so a change after a form was signed leaves a trace.
+-- ---------------------------------------------------------------------------
+
+create table public.project_sponsors (
+  id            uuid primary key default gen_random_uuid(),
+  org_id        uuid not null references public.organizations on delete restrict,
+  project_id    uuid not null references public.projects on delete restrict,
+
+  teacher_name  text not null,
+  teacher_email text not null,
+
+  -- The date on the signature, which is what the ordering check compares.
+  signed_on     date,
+
+  recorded_by   uuid not null references public.users on delete restrict,
+  recorded_at   timestamptz not null default now(),
+
+  -- Set only if that teacher signs in and says yes. Never waited for.
+  confirmed_at  timestamptz,
+  confirmed_by  uuid references public.users on delete restrict,
+
+  superseded_at timestamptz,
+  superseded_by uuid references public.project_sponsors on delete restrict,
+
+  created_at    timestamptz not null default now(),
+  updated_at    timestamptz not null default now()
+);
+
+create index project_sponsors_project_idx
+  on public.project_sponsors (project_id) where superseded_at is null;
+
+create index project_sponsors_email_idx
+  on public.project_sponsors (lower(teacher_email)) where superseded_at is null;
+
+create trigger project_sponsors_set_updated_at
+  before update on public.project_sponsors
+  for each row execute function app.set_updated_at();
+
+
+-- ---------------------------------------------------------------------------
+-- Selection.
+--
+-- The advisor decides which projects the school puts forward. There is a cap,
+-- and it is a real one, so the decision is recorded with a date and a decider
+-- rather than implied by who happens to still be in a list.
+-- ---------------------------------------------------------------------------
+
+alter table public.programs
+  add column if not exists selection_cap int;
+
+alter table public.entries
+  add column if not exists selection_state text not null default 'candidate'
+    check (selection_state in ('candidate', 'selected', 'not_selected', 'withdrawn')),
+  add column if not exists selection_decided_at timestamptz,
+  add column if not exists selection_decided_by uuid references public.users on delete restrict,
+  add column if not exists selection_note text;
+
+update public.programs
+   set selection_cap = 50
+ where slug = 'scvsefa-science-fair' and selection_cap is null;
+
+
+-- ---------------------------------------------------------------------------
+-- Helpers, restated for the two-axis model.
+-- ---------------------------------------------------------------------------
+
+create or replace function app.is_advisor()
+returns boolean
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select exists (
+    select 1 from public.user_roles r
+     where r.user_id = auth.uid() and r.role = 'advisor' and r.revoked_at is null
+  );
+$$;
+
+create or replace function app.is_staff()
+returns boolean
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select exists (
+    select 1 from public.user_roles r
+     where r.user_id = auth.uid()
+       and r.role in ('officer', 'advisor')
+       and r.revoked_at is null
+  );
+$$;
+
+/* A sponsor is matched by email rather than by an account, because a sponsor
+   may never have one. If a teacher whose address is on a project ever signs
+   in, the match is the grant: no invitation, no provisioning, no admin. */
+create or replace function app.sponsors_project(p_project_id uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select exists (
+    select 1
+      from public.project_sponsors s
+      join public.identities i
+        on lower(i.email) = lower(s.teacher_email)
+     where s.project_id = p_project_id
+       and s.superseded_at is null
+       and i.user_id = auth.uid()
+       and i.revoked_at is null
+  );
+$$;
+
+grant execute on function app.is_advisor(), app.sponsors_project(uuid) to authenticated;
+
+
+-- ---------------------------------------------------------------------------
+-- Recording a sponsor. The student does this.
+-- ---------------------------------------------------------------------------
+
+create or replace function public.record_sponsor(
+  p_project_id    uuid,
+  p_teacher_name  text,
+  p_teacher_email text,
+  p_signed_on     date default null
+)
+returns uuid
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_org      uuid;
+  v_previous uuid;
+  v_id       uuid;
+  v_marked   int := 0;
+begin
+  if auth.uid() is null then
+    raise exception 'not authenticated';
+  end if;
+
+  if not (app.authors_project(p_project_id) or app.is_staff()) then
+    raise exception 'only an author on this project may record its sponsor';
+  end if;
+
+  if coalesce(trim(p_teacher_name), '') = '' then
+    raise exception 'give the teacher''s name';
+  end if;
+
+  if p_teacher_email !~* '^[^@[:space:]]+@[^@[:space:]]+\.[^@[:space:]]+$' then
+    raise exception 'that does not look like an email address';
+  end if;
+
+  select p.org_id into v_org from public.projects p where p.id = p_project_id;
+
+  select s.id into v_previous
+    from public.project_sponsors s
+   where s.project_id = p_project_id and s.superseded_at is null
+   limit 1;
+
+  insert into public.project_sponsors
+    (org_id, project_id, teacher_name, teacher_email, signed_on, recorded_by)
+  values
+    (v_org, p_project_id, trim(p_teacher_name), lower(trim(p_teacher_email)),
+     p_signed_on, auth.uid())
+  returning id into v_id;
+
+  /* Superseded, never edited. A sponsor changing after a form was signed is
+     ordinary, and it should still leave a trace. */
+  if v_previous is not null then
+    update public.project_sponsors
+       set superseded_at = now(), superseded_by = v_id
+     where id = v_previous;
+  end if;
+
+  /* Naming a sponsor is what the fair's approval obligation is asking for. */
+  if p_signed_on is not null then
+    update public.entry_milestones em
+       set completed_on = p_signed_on, completed_by = auth.uid()
+      from public.entries e
+     where e.id = em.entry_id
+       and e.project_id = p_project_id
+       and em.kind = 'approval'
+       and em.completed_on is null;
+    get diagnostics v_marked = row_count;
+  end if;
+
+  update public.users u
+     set affiliation_state = 'mentor_verified',
+         affiliation_verified_at = now(),
+         status = case when u.status = 'unaffiliated' then 'active' else u.status end
+    from public.project_authors a
+   where a.project_id = p_project_id
+     and a.role = 'author'
+     and a.user_id = u.id
+     and u.affiliation_state = 'unverified';
+
+  perform app.audit(v_org, 'sponsor.recorded', 'projects', p_project_id,
+    case when v_previous is null then null
+         else jsonb_build_object('superseded', v_previous) end,
+    jsonb_build_object('teacher', trim(p_teacher_name),
+                       'email', lower(trim(p_teacher_email)),
+                       'signed_on', p_signed_on,
+                       'approvals_cleared', v_marked));
+
+  return v_id;
+end;
+$$;
+
+/* A sponsor who does sign in can say so. Nothing depends on it. */
+create or replace function public.confirm_sponsorship(p_sponsor_id uuid)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_project uuid;
+begin
+  select s.project_id into v_project
+    from public.project_sponsors s where s.id = p_sponsor_id;
+
+  if v_project is null or not app.sponsors_project(v_project) then
+    raise exception 'only the named sponsor may confirm this';
+  end if;
+
+  update public.project_sponsors
+     set confirmed_at = now(), confirmed_by = auth.uid()
+   where id = p_sponsor_id and superseded_at is null;
+
+  perform app.audit(app.org_id(), 'sponsor.confirmed', 'projects', v_project,
+    null, jsonb_build_object('sponsor', p_sponsor_id));
+end;
+$$;
+
+
+-- ---------------------------------------------------------------------------
+-- Assigning an officer, and deciding selection.
+-- ---------------------------------------------------------------------------
+
+create or replace function public.assign_officer(
+  p_project_id uuid,
+  p_user_id    uuid
+)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_org uuid;
+begin
+  if not app.is_staff() then
+    raise exception 'only an officer or the club advisor may assign an officer';
+  end if;
+
+  select p.org_id into v_org from public.projects p where p.id = p_project_id;
+
+  if v_org is null or v_org is distinct from app.org_id() then
+    raise exception 'no such project at this school';
+  end if;
+
+  if not exists (
+    select 1 from public.user_roles r
+     where r.user_id = p_user_id
+       and r.role in ('officer', 'advisor')
+       and r.revoked_at is null
+       and r.org_id = v_org
+  ) then
+    raise exception 'that person does not hold a club role here';
+  end if;
+
+  if exists (
+    select 1 from public.project_authors a
+     where a.project_id = p_project_id and a.user_id = p_user_id and a.role = 'author'
+  ) then
+    raise exception 'an author on the project cannot also manage it';
+  end if;
+
+  insert into public.project_authors
+    (org_id, project_id, user_id, role, accepted_at)
+  values (v_org, p_project_id, p_user_id, 'officer', now())
+  on conflict (project_id, user_id) do update
+    set role = 'officer', accepted_at = now();
+
+  perform app.audit(v_org, 'officer.assigned', 'projects', p_project_id,
+    null, jsonb_build_object('officer', p_user_id));
+end;
+$$;
+
+create or replace function public.set_selection(
+  p_entry_id uuid,
+  p_state    text,
+  p_note     text default null
+)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_org uuid;
+begin
+  if not app.is_advisor() then
+    raise exception 'only the club advisor decides which projects go forward';
+  end if;
+
+  if p_state not in ('candidate', 'selected', 'not_selected', 'withdrawn') then
+    raise exception 'unknown selection state';
+  end if;
+
+  select e.org_id into v_org from public.entries e where e.id = p_entry_id;
+
+  if v_org is null or v_org is distinct from app.org_id() then
+    raise exception 'no such entry at this school';
+  end if;
+
+  update public.entries
+     set selection_state = p_state,
+         selection_decided_at = case when p_state = 'candidate' then null else now() end,
+         selection_decided_by = case when p_state = 'candidate' then null else auth.uid() end,
+         selection_note = p_note
+   where id = p_entry_id;
+
+  perform app.audit(v_org, 'selection.' || p_state, 'entries', p_entry_id,
+    null, jsonb_build_object('note', p_note));
+end;
+$$;
+
+grant execute on function public.record_sponsor(uuid, text, text, date) to authenticated;
+grant execute on function public.confirm_sponsorship(uuid) to authenticated;
+grant execute on function public.assign_officer(uuid, uuid) to authenticated;
+grant execute on function public.set_selection(uuid, text, text) to authenticated;
+
+grant select, insert, update on public.project_sponsors to authenticated, service_role;
+revoke delete on public.project_sponsors from authenticated, service_role;
+alter table public.project_sponsors enable row level security;
+
+
+-- ---------------------------------------------------------------------------
+-- Reading, restated. Four ways to see a project:
+--   you author it, you are the officer on it, you run the club, or your
+--   address is the sponsor's.
+-- ---------------------------------------------------------------------------
+
+drop policy if exists projects_read on public.projects;
+
+create policy projects_read on public.projects
+  for select to authenticated
+  using (
+    org_id = (select app.org_id())
+    and (
+      created_by = (select auth.uid())
+      or exists (
+        select 1 from public.project_authors a
+         where a.project_id = id and a.user_id = (select auth.uid())
+      )
+      or (select app.is_staff())
+      or (select app.sponsors_project(id))
+    )
+  );
+
+drop policy if exists field_notes_read on public.field_notes;
+
+create policy field_notes_read on public.field_notes
+  for select to authenticated
+  using (
+    exists (select 1 from public.project_authors a
+             where a.project_id = project_id and a.user_id = (select auth.uid()))
+    or (select app.is_staff())
+    or (select app.sponsors_project(project_id))
+  );
+
+drop policy if exists entries_read on public.entries;
+
+create policy entries_read on public.entries
+  for select to authenticated
+  using (
+    exists (
+      select 1 from public.project_authors a
+       where a.project_id = project_id and a.user_id = (select auth.uid())
+    )
+    or (select app.is_staff())
+    or (select app.sponsors_project(project_id))
+  );
+
+drop policy if exists entry_milestones_read on public.entry_milestones;
+
+create policy entry_milestones_read on public.entry_milestones
+  for select to authenticated
+  using (
+    exists (
+      select 1
+        from public.entries e
+        join public.project_authors a on a.project_id = e.project_id
+       where e.id = entry_id and a.user_id = (select auth.uid())
+    )
+    or (select app.is_staff())
+    or exists (
+      select 1 from public.entries e
+       where e.id = entry_id and (select app.sponsors_project(e.project_id))
+    )
+  );
+
+create policy project_sponsors_read on public.project_sponsors
+  for select to authenticated
+  using (
+    org_id = (select app.org_id())
+    and (
+      exists (select 1 from public.project_authors a
+               where a.project_id = project_id and a.user_id = (select auth.uid()))
+      or (select app.is_staff())
+      or (select app.sponsors_project(project_id))
+    )
+  );
+
+/* A sponsor writes an observation like anyone else who can read the project.
+   add_field_note already asks the reading question; it just has to ask the
+   new one too. */
+create or replace function public.add_field_note(
+  p_project_id  uuid,
+  p_body_md     text,
+  p_occurred_on date default null,
+  p_corrects_id uuid default null
+)
+returns uuid
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_org uuid;
+  v_id  uuid;
+begin
+  if auth.uid() is null then
+    raise exception 'not authenticated';
+  end if;
+
+  if coalesce(trim(p_body_md), '') = '' then
+    raise exception 'an empty note records nothing';
+  end if;
+
+  select p.org_id into v_org from public.projects p where p.id = p_project_id;
+
+  if v_org is null then
+    raise exception 'no such project';
+  end if;
+
+  if not (
+    exists (
+      select 1 from public.project_authors a
+       where a.project_id = p_project_id and a.user_id = auth.uid()
+    )
+    or (app.is_staff() and v_org = app.org_id())
+    or app.sponsors_project(p_project_id)
+  ) then
+    raise exception 'you cannot write in this notebook';
+  end if;
+
+  if p_corrects_id is not null and not exists (
+    select 1 from public.field_notes n
+     where n.id = p_corrects_id and n.project_id = p_project_id
+  ) then
+    raise exception 'that note is not on this project';
+  end if;
+
+  insert into public.field_notes
+    (org_id, project_id, author_id, body_md, occurred_on, corrects_id)
+  values
+    (v_org, p_project_id, auth.uid(), trim(p_body_md),
+     coalesce(p_occurred_on, current_date), p_corrects_id)
+  returning id into v_id;
+
+  return v_id;
+end;
+$$;
+
+grant execute on function public.add_field_note(uuid, text, date, uuid) to authenticated;
+
+notify pgrst, 'reload schema';
+
+
+-- ---------------------------------------------------------------------------
+-- A fair is more structured than a name and a date.
+--
+-- The year is the SEASON, not part of the name: "SCVSEFA Science Fair" is
+-- the fair and 2027 is which running of it. Keeping them in one string means
+-- every list sorts alphabetically by accident and no query can ask for last
+-- season. Advancement is a list, because a fair can feed more than one.
+-- ---------------------------------------------------------------------------
+
+alter table public.programs
+  add column if not exists description text,
+  add column if not exists website_url text,
+  add column if not exists advances_to_fairs text[];
+
+update public.programs
+   set description = 'The regional science and engineering fair for Santa Clara County. '
+                     'Open to students in grades 6 through 12, judged in March, with '
+                     'winners advancing to the state and international fairs.',
+       website_url = 'https://www.scvsefa.org',
+       advances_to_fairs = array[
+         'California Science and Engineering Fair',
+         'International Science and Engineering Fair'
+       ]
+ where slug = 'scvsefa-science-fair' and season_year = 2027;
+
+alter table public.programs drop column if exists advances_to;
+
+notify pgrst, 'reload schema';
+
+
+-- ---------------------------------------------------------------------------
+-- An officer is a student, and runs projects of their own.
+--
+-- The earlier rule refused to let an author be the officer on their own
+-- project, on the reasoning that oversight should not be self-administered.
+-- In a club of this size that rule produces a worse outcome: an officer's own
+-- project ends up with nobody looking after it, and the queue reports it as
+-- unassigned forever.
+--
+-- So it is allowed, and instead of being prevented it is made visible. The
+-- audit records it, and every club screen marks the project as self-managed,
+-- which is what an advisor scanning for problems actually needs.
+-- ---------------------------------------------------------------------------
+
+create or replace function public.assign_officer(
+  p_project_id uuid,
+  p_user_id    uuid
+)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_org  uuid;
+  v_self boolean;
+begin
+  if not app.is_staff() then
+    raise exception 'only an officer or the club advisor may assign an officer';
+  end if;
+
+  select p.org_id into v_org from public.projects p where p.id = p_project_id;
+
+  if v_org is null or v_org is distinct from app.org_id() then
+    raise exception 'no such project at this school';
+  end if;
+
+  if not exists (
+    select 1 from public.user_roles r
+     where r.user_id = p_user_id
+       and r.role in ('officer', 'advisor')
+       and r.revoked_at is null
+       and r.org_id = v_org
+  ) then
+    raise exception 'that person does not hold a club role here';
+  end if;
+
+  select exists (
+    select 1 from public.project_authors a
+     where a.project_id = p_project_id and a.user_id = p_user_id and a.role = 'author'
+  ) into v_self;
+
+  /* An author is already on the project as an author. Adding a second
+     attachment would collide on the unique key, so self-management is
+     recorded on the authorship row rather than as a separate one. */
+  if v_self then
+    update public.project_authors
+       set self_managed_at = now()
+     where project_id = p_project_id and user_id = p_user_id and role = 'author';
+  else
+    insert into public.project_authors
+      (org_id, project_id, user_id, role, accepted_at)
+    values (v_org, p_project_id, p_user_id, 'officer', now())
+    on conflict (project_id, user_id) do update
+      set role = 'officer', accepted_at = now();
+  end if;
+
+  perform app.audit(v_org, 'officer.assigned', 'projects', p_project_id,
+    null, jsonb_build_object('officer', p_user_id, 'self_managed', v_self));
+end;
+$$;
+
+alter table public.project_authors
+  add column if not exists self_managed_at timestamptz;
+
+create or replace function public.detach_from_project(
+  p_project_id uuid,
+  p_user_id    uuid
+)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if not app.is_staff() then
+    raise exception 'only an officer or the club advisor may detach someone';
+  end if;
+
+  /* Detaching a self-managing author clears the marker, not the authorship. */
+  update public.project_authors
+     set self_managed_at = null
+   where project_id = p_project_id and user_id = p_user_id and role = 'author';
+
+  delete from public.project_authors
+   where project_id = p_project_id
+     and user_id = p_user_id
+     and role = 'officer';
+
+  perform app.audit(app.org_id(), 'project.detached', 'projects', p_project_id,
+    jsonb_build_object('user', p_user_id), null);
+end;
+$$;
+
+grant execute on function public.assign_officer(uuid, uuid) to authenticated;
+grant execute on function public.detach_from_project(uuid, uuid) to authenticated;
+
+notify pgrst, 'reload schema';
+
+
+-- ===========================================================================
+-- OBLIGATIONS THE SYSTEM ALREADY KNOWS THE ANSWER TO
+--
+-- Two kinds of obligation live in the same list and want different controls.
+--
+--   MANUAL      something done elsewhere and reported here: upload the
+--               abstract, submit the form. A dropdown is right, because only
+--               the student knows.
+--
+--   DERIVED     a fact this system already holds: a sponsor is named, an
+--               officer is assigned, a start date is set. A dropdown is
+--               wrong three ways here — it lets somebody tick a box while the
+--               fact is false, it puts two sources of truth in one row, and
+--               it makes an obligation editable by the person it constrains.
+--
+-- `satisfied_by` names the fact. Null means manual.
+-- ===========================================================================
+
+alter table public.program_milestones
+  add column if not exists satisfied_by text
+    check (satisfied_by in ('sponsor', 'officer', 'start_date'));
+
+alter table public.entry_milestones
+  add column if not exists satisfied_by text
+    check (satisfied_by in ('sponsor', 'officer', 'start_date'));
+
+comment on column public.entry_milestones.satisfied_by is
+  'The fact that closes this obligation, or null when a person reports it. '
+  'A derived obligation is never hand ticked; it follows the fact.';
+
+-- The copy at entry time carries it across.
+create or replace function public.start_entry(
+  p_program_id uuid,
+  p_title      text,
+  p_started_on date
+)
+returns uuid
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_uid     uuid := auth.uid();
+  v_org     uuid;
+  v_status  text;
+  v_project uuid;
+  v_entry   uuid;
+begin
+  if v_uid is null then
+    raise exception 'not authenticated';
+  end if;
+
+  select u.org_id, u.status into v_org, v_status
+    from public.users u where u.id = v_uid;
+
+  if v_org is null then
+    raise exception 'finish signing up first';
+  end if;
+
+  if v_status = 'suspended' then
+    raise exception 'this account is suspended';
+  end if;
+
+  if coalesce(trim(p_title), '') = '' then
+    raise exception 'give the project a working title';
+  end if;
+
+  if not exists (
+    select 1 from public.programs p
+     where p.id = p_program_id
+       and p.status = 'open'
+       and (p.org_id is null or p.org_id = v_org)
+  ) then
+    raise exception 'that fair is not open to this school';
+  end if;
+
+  insert into public.projects (org_id, title, started_on, created_by)
+  values (v_org, trim(p_title), p_started_on, v_uid)
+  returning id into v_project;
+
+  insert into public.project_authors
+    (org_id, project_id, user_id, role, accepted_at)
+  values (v_org, v_project, v_uid, 'author', now());
+
+  insert into public.entries (org_id, project_id, program_id)
+  values (v_org, v_project, p_program_id)
+  returning id into v_entry;
+
+  insert into public.entry_milestones
+    (org_id, entry_id, program_milestone_id, name, kind, due_on, required,
+     blocks_experimentation, satisfied_by, sort_order)
+  select v_org, v_entry, m.id, m.name, m.kind, m.due_on, m.required,
+         m.blocks_experimentation, m.satisfied_by, m.sort_order
+    from public.program_milestones m
+   where m.program_id = p_program_id
+     and (m.org_id is null or m.org_id = v_org);
+
+  perform app.audit(v_org, 'entry.created', 'entries', v_entry, null,
+    jsonb_build_object('project_id', v_project, 'program_id', p_program_id));
+
+  return v_entry;
+end;
+$$;
+
+grant execute on function public.start_entry(uuid, text, date) to authenticated;
+
+
+-- ---------------------------------------------------------------------------
+-- One place that reconciles derived obligations with the facts.
+--
+-- Called after anything that could change one. It closes what has become
+-- true and reopens what has stopped being true, so a sponsor removed does
+-- not leave an obligation showing as met.
+-- ---------------------------------------------------------------------------
+
+create or replace function app.sync_derived(p_project_id uuid)
+returns int
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_sponsor date;
+  v_officer date;
+  v_start   date;
+  v_touched int := 0;
+begin
+  select s.signed_on, s.recorded_at::date into v_sponsor, v_officer
+    from public.project_sponsors s
+   where s.project_id = p_project_id and s.superseded_at is null
+   limit 1;
+
+  /* A sponsor with no signature date still counts as named; the date it was
+     recorded is what we have. */
+  v_sponsor := coalesce(v_sponsor, v_officer);
+
+  select min(a.accepted_at)::date into v_officer
+    from public.project_authors a
+   where a.project_id = p_project_id
+     and (a.role = 'officer' or (a.role = 'author' and a.self_managed_at is not null));
+
+  select p.started_on into v_start
+    from public.projects p where p.id = p_project_id;
+
+  update public.entry_milestones em
+     set completed_on = case em.satisfied_by
+                          when 'sponsor'    then v_sponsor
+                          when 'officer'    then v_officer
+                          when 'start_date' then v_start
+                        end,
+         completed_by = null
+    from public.entries e
+   where e.id = em.entry_id
+     and e.project_id = p_project_id
+     and em.satisfied_by is not null
+     and em.completed_on is distinct from
+         (case em.satisfied_by
+            when 'sponsor'    then v_sponsor
+            when 'officer'    then v_officer
+            when 'start_date' then v_start
+          end);
+
+  get diagnostics v_touched = row_count;
+  return v_touched;
+end;
+$$;
+
+grant execute on function app.sync_derived(uuid) to authenticated;
+
+
+-- ---------------------------------------------------------------------------
+-- Every write that could change a derived fact reconciles afterwards.
+-- ---------------------------------------------------------------------------
+
+create or replace function public.record_sponsor(
+  p_project_id    uuid,
+  p_teacher_name  text,
+  p_teacher_email text,
+  p_signed_on     date default null
+)
+returns uuid
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_org      uuid;
+  v_previous uuid;
+  v_id       uuid;
+begin
+  if auth.uid() is null then
+    raise exception 'not authenticated';
+  end if;
+
+  if not (app.authors_project(p_project_id) or app.is_staff()) then
+    raise exception 'only an author on this project may record its sponsor';
+  end if;
+
+  if coalesce(trim(p_teacher_name), '') = '' then
+    raise exception 'give the teacher''s name';
+  end if;
+
+  if p_teacher_email !~* '^[^@[:space:]]+@[^@[:space:]]+\.[^@[:space:]]+$' then
+    raise exception 'that does not look like an email address';
+  end if;
+
+  select p.org_id into v_org from public.projects p where p.id = p_project_id;
+
+  select s.id into v_previous
+    from public.project_sponsors s
+   where s.project_id = p_project_id and s.superseded_at is null
+   limit 1;
+
+  insert into public.project_sponsors
+    (org_id, project_id, teacher_name, teacher_email, signed_on, recorded_by)
+  values
+    (v_org, p_project_id, trim(p_teacher_name), lower(trim(p_teacher_email)),
+     p_signed_on, auth.uid())
+  returning id into v_id;
+
+  if v_previous is not null then
+    update public.project_sponsors
+       set superseded_at = now(), superseded_by = v_id
+     where id = v_previous;
+  end if;
+
+  perform app.sync_derived(p_project_id);
+
+  update public.users u
+     set affiliation_state = 'mentor_verified',
+         affiliation_verified_at = now(),
+         status = case when u.status = 'unaffiliated' then 'active' else u.status end
+    from public.project_authors a
+   where a.project_id = p_project_id
+     and a.role = 'author'
+     and a.user_id = u.id
+     and u.affiliation_state = 'unverified';
+
+  perform app.audit(v_org, 'sponsor.recorded', 'projects', p_project_id,
+    case when v_previous is null then null
+         else jsonb_build_object('superseded', v_previous) end,
+    jsonb_build_object('teacher', trim(p_teacher_name),
+                       'email', lower(trim(p_teacher_email)),
+                       'signed_on', p_signed_on));
+
+  return v_id;
+end;
+$$;
+
+create or replace function public.assign_officer(
+  p_project_id uuid,
+  p_user_id    uuid
+)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_org  uuid;
+  v_self boolean;
+begin
+  if not app.is_staff() then
+    raise exception 'only an officer or the club advisor may assign an officer';
+  end if;
+
+  select p.org_id into v_org from public.projects p where p.id = p_project_id;
+
+  if v_org is null or v_org is distinct from app.org_id() then
+    raise exception 'no such project at this school';
+  end if;
+
+  if not exists (
+    select 1 from public.user_roles r
+     where r.user_id = p_user_id
+       and r.role in ('officer', 'advisor')
+       and r.revoked_at is null
+       and r.org_id = v_org
+  ) then
+    raise exception 'that person does not hold a club role here';
+  end if;
+
+  select exists (
+    select 1 from public.project_authors a
+     where a.project_id = p_project_id and a.user_id = p_user_id and a.role = 'author'
+  ) into v_self;
+
+  if v_self then
+    update public.project_authors
+       set self_managed_at = now()
+     where project_id = p_project_id and user_id = p_user_id and role = 'author';
+  else
+    insert into public.project_authors
+      (org_id, project_id, user_id, role, accepted_at)
+    values (v_org, p_project_id, p_user_id, 'officer', now())
+    on conflict (project_id, user_id) do update
+      set role = 'officer', accepted_at = now();
+  end if;
+
+  perform app.sync_derived(p_project_id);
+
+  perform app.audit(v_org, 'officer.assigned', 'projects', p_project_id,
+    null, jsonb_build_object('officer', p_user_id, 'self_managed', v_self));
+end;
+$$;
+
+create or replace function public.detach_from_project(
+  p_project_id uuid,
+  p_user_id    uuid
+)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if not app.is_staff() then
+    raise exception 'only an officer or the club advisor may detach someone';
+  end if;
+
+  update public.project_authors
+     set self_managed_at = null
+   where project_id = p_project_id and user_id = p_user_id and role = 'author';
+
+  delete from public.project_authors
+   where project_id = p_project_id
+     and user_id = p_user_id
+     and role = 'officer';
+
+  /* Reopens the obligation. A fact that stops being true has to stop
+     closing the row that depends on it. */
+  perform app.sync_derived(p_project_id);
+
+  perform app.audit(app.org_id(), 'project.detached', 'projects', p_project_id,
+    jsonb_build_object('user', p_user_id), null);
+end;
+$$;
+
+create or replace function public.set_project_start(
+  p_project_id uuid,
+  p_started_on date
+)
+returns date
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_org uuid;
+  v_was date;
+begin
+  if auth.uid() is null then
+    raise exception 'not authenticated';
+  end if;
+
+  if not app.authors_project(p_project_id) then
+    raise exception 'you are not an author on this project';
+  end if;
+
+  select p.org_id, p.started_on into v_org, v_was
+    from public.projects p where p.id = p_project_id;
+
+  update public.projects
+     set started_on = p_started_on
+   where id = p_project_id;
+
+  perform app.sync_derived(p_project_id);
+
+  perform app.audit(v_org, 'project.start_date', 'projects', p_project_id,
+    jsonb_build_object('started_on', v_was),
+    jsonb_build_object('started_on', p_started_on));
+
+  return p_started_on;
+end;
+$$;
+
+/* A derived obligation cannot be hand ticked. The interface does not offer
+   it, and this refuses it, because an interface is not an enforcement. */
+create or replace function public.set_milestone_done(
+  p_milestone_id uuid,
+  p_completed_on date
+)
+returns date
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_project uuid;
+  v_org     uuid;
+  v_name    text;
+  v_derived text;
+begin
+  if auth.uid() is null then
+    raise exception 'not authenticated';
+  end if;
+
+  select e.project_id, m.org_id, m.name, m.satisfied_by
+    into v_project, v_org, v_name, v_derived
+    from public.entry_milestones m
+    join public.entries e on e.id = m.entry_id
+   where m.id = p_milestone_id;
+
+  if v_project is null then
+    raise exception 'no such obligation';
+  end if;
+
+  if v_derived is not null then
+    raise exception
+      'this obligation follows from the project itself and is not set by hand';
+  end if;
+
+  if not app.authors_project(v_project) then
+    raise exception 'you are not an author on this project';
+  end if;
+
+  update public.entry_milestones
+     set completed_on = p_completed_on,
+         completed_by = case when p_completed_on is null then null else auth.uid() end
+   where id = p_milestone_id;
+
+  perform app.audit(v_org,
+    case when p_completed_on is null then 'milestone.reopened' else 'milestone.completed' end,
+    'entry_milestones', p_milestone_id, null,
+    jsonb_build_object('name', v_name, 'completed_on', p_completed_on));
+
+  return p_completed_on;
+end;
+$$;
+
+grant execute on function public.record_sponsor(uuid, text, text, date) to authenticated;
+grant execute on function public.assign_officer(uuid, uuid) to authenticated;
+grant execute on function public.detach_from_project(uuid, uuid) to authenticated;
+grant execute on function public.set_project_start(uuid, date) to authenticated;
+grant execute on function public.set_milestone_done(uuid, date) to authenticated;
+
+
+-- ---------------------------------------------------------------------------
+-- The 2027 season, with the two derived obligations named as such.
+-- "Club mentor attached" referred to a role that no longer exists.
+-- ---------------------------------------------------------------------------
+
+update public.program_milestones m
+   set satisfied_by = 'sponsor'
+  from public.programs p
+ where p.id = m.program_id
+   and p.slug = 'scvsefa-science-fair'
+   and m.name = 'Teacher project sponsor named';
+
+notify pgrst, 'reload schema';
+
+
+-- ---------------------------------------------------------------------------
+-- One student, one entry, per fair per season.
+--
+-- A person may run several projects across their school career and may enter
+-- different fairs, but a single student cannot have two projects in the same
+-- running of the same fair. The fair itself would refuse the second one, and
+-- a system that lets a student build one for four months before finding that
+-- out is worse than one that says so on the first day.
+--
+-- Enforced in two places on purpose. The function refuses with a sentence a
+-- student can act on; the trigger refuses whatever route the row came by,
+-- including a co-author being added to a project later.
+-- ---------------------------------------------------------------------------
+
+create or replace function app.entry_conflict(
+  p_project_id uuid,
+  p_program_id uuid,
+  p_user_id    uuid
+)
+returns uuid
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select e.project_id
+    from public.entries e
+    join public.project_authors a
+      on a.project_id = e.project_id and a.role = 'author'
+   where e.program_id = p_program_id
+     and a.user_id = p_user_id
+     and e.project_id <> p_project_id
+     and e.status <> 'withdrawn'
+   limit 1;
+$$;
+
+grant execute on function app.entry_conflict(uuid, uuid, uuid) to authenticated;
+
+create or replace function app.guard_one_entry_per_student()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_clash uuid;
+  v_title text;
+begin
+  select app.entry_conflict(new.project_id, new.program_id, a.user_id)
+    into v_clash
+    from public.project_authors a
+   where a.project_id = new.project_id
+     and a.role = 'author'
+     and app.entry_conflict(new.project_id, new.program_id, a.user_id) is not null
+   limit 1;
+
+  if v_clash is not null then
+    select p.title into v_title from public.projects p where p.id = v_clash;
+    raise exception
+      'an author on this project is already entered in this fair with "%"', v_title;
+  end if;
+
+  return new;
+end;
+$$;
+
+drop trigger if exists entries_one_per_student on public.entries;
+
+create trigger entries_one_per_student
+  before insert on public.entries
+  for each row execute function app.guard_one_entry_per_student();
+
+create or replace function app.guard_author_entry_clash()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_clash uuid;
+  v_title text;
+begin
+  if new.role <> 'author' then
+    return new;
+  end if;
+
+  select app.entry_conflict(e.project_id, e.program_id, new.user_id)
+    into v_clash
+    from public.entries e
+   where e.project_id = new.project_id
+     and app.entry_conflict(e.project_id, e.program_id, new.user_id) is not null
+   limit 1;
+
+  if v_clash is not null then
+    select p.title into v_title from public.projects p where p.id = v_clash;
+    raise exception
+      'that person is already entered in this fair with "%"', v_title;
+  end if;
+
+  return new;
+end;
+$$;
+
+drop trigger if exists project_authors_one_entry on public.project_authors;
+
+create trigger project_authors_one_entry
+  before insert on public.project_authors
+  for each row execute function app.guard_author_entry_clash();
+
+
+/* start_entry says it in a sentence a student can act on, before the trigger
+   has to. */
+create or replace function public.start_entry(
+  p_program_id uuid,
+  p_title      text,
+  p_started_on date
+)
+returns uuid
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_uid     uuid := auth.uid();
+  v_org     uuid;
+  v_status  text;
+  v_project uuid;
+  v_entry   uuid;
+  v_clash   uuid;
+begin
+  if v_uid is null then
+    raise exception 'not authenticated';
+  end if;
+
+  select u.org_id, u.status into v_org, v_status
+    from public.users u where u.id = v_uid;
+
+  if v_org is null then
+    raise exception 'finish signing up first';
+  end if;
+
+  if v_status = 'suspended' then
+    raise exception 'this account is suspended';
+  end if;
+
+  if coalesce(trim(p_title), '') = '' then
+    raise exception 'give the project a working title';
+  end if;
+
+  if not exists (
+    select 1 from public.programs p
+     where p.id = p_program_id
+       and p.status = 'open'
+       and (p.org_id is null or p.org_id = v_org)
+  ) then
+    raise exception 'that fair is not open to this school';
+  end if;
+
+  v_clash := app.entry_conflict(gen_random_uuid(), p_program_id, v_uid);
+
+  if v_clash is not null then
+    raise exception
+      'you are already entered in this fair with "%". A student may enter one project per fair each season.',
+      (select p.title from public.projects p where p.id = v_clash);
+  end if;
+
+  insert into public.projects (org_id, title, started_on, created_by)
+  values (v_org, trim(p_title), p_started_on, v_uid)
+  returning id into v_project;
+
+  insert into public.project_authors
+    (org_id, project_id, user_id, role, accepted_at)
+  values (v_org, v_project, v_uid, 'author', now());
+
+  insert into public.entries (org_id, project_id, program_id)
+  values (v_org, v_project, p_program_id)
+  returning id into v_entry;
+
+  insert into public.entry_milestones
+    (org_id, entry_id, program_milestone_id, name, kind, due_on, required,
+     blocks_experimentation, satisfied_by, sort_order)
+  select v_org, v_entry, m.id, m.name, m.kind, m.due_on, m.required,
+         m.blocks_experimentation, m.satisfied_by, m.sort_order
+    from public.program_milestones m
+   where m.program_id = p_program_id
+     and (m.org_id is null or m.org_id = v_org);
+
+  perform app.audit(v_org, 'entry.created', 'entries', v_entry, null,
+    jsonb_build_object('project_id', v_project, 'program_id', p_program_id));
+
+  return v_entry;
+end;
+$$;
+
+grant execute on function public.start_entry(uuid, text, date) to authenticated;
 
 notify pgrst, 'reload schema';

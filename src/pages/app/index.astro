@@ -7,6 +7,7 @@ import { activeOrg } from '../../lib/tenant';
 import { serverClient } from '../../lib/supabase';
 import { standing, roleLabel } from '../../lib/roles';
 import { checkDateOrder, worstFinding } from '../../lib/dateOrder';
+import { assess, tally } from '../../lib/attention';
 
 const { configured, session, account, roles } = Astro.locals;
 const org = activeOrg(Astro);
@@ -14,7 +15,7 @@ const error = Astro.url.searchParams.get('error');
 
 if (configured && session && !account) return Astro.redirect('/app/welcome/');
 
-const me = standing(roles);
+const me = standing(roles, account?.population);
 const today = new Date().toISOString().slice(0, 10);
 
 const supabase = account
@@ -55,22 +56,35 @@ let watched: any[] = [];
 let staffPeople: any[] = [];
 
 if (supabase && account) {
-  if (!me.runsTheClub) {
-    const { data } = await supabase
-      .from('entries')
-      .select('id, status, placement, programs(name, season_year, fair_date), projects(title, stage)')
-      .order('entered_at', { ascending: false });
+  if (me.isStudent || !me.runsTheClub) {
+    /* Scoped by authorship. The policy lets an officer read every entry at
+       the school, which is right for the club table below and wrong for a
+       section headed "this season". */
+    const { data: authored } = await supabase
+      .from('project_authors')
+      .select('project_id')
+      .eq('user_id', account.id)
+      .eq('role', 'author');
+
+    const myProjectIds = (authored ?? []).map((a: any) => a.project_id);
+
+    const { data } = myProjectIds.length
+      ? await supabase
+          .from('entries')
+          .select('id, status, placement, programs(name, season_year, fair_date), projects(title, stage)')
+          .in('project_id', myProjectIds)
+          .order('entered_at', { ascending: false })
+      : { data: [] as any[] };
+
     myEntries = data ?? [];
   }
 
   if (me.runsTheClub) {
-    /* Row level security decides the scope: an officer, editor, or advisor
-       reads every project at the school, and a mentor reads only the ones
-       they are attached to. The query is the same either way, which is the
-       point of putting the rule in the database. */
+    /* Every project at the school. Row level security decides who may run
+       this at all; the heading says so, unlike the section above. */
     const { data: projects } = await supabase
       .from('projects')
-      .select('id, title, stage, started_on, project_authors(role, users(id, display_name, grad_year))')
+      .select('id, title, stage, started_on, project_authors(role, self_managed_at, users(id, display_name, grad_year))')
       .is('archived_at', null)
       .order('created_at', { ascending: false });
 
@@ -81,6 +95,14 @@ if (supabase && account) {
           .from('entries')
           .select('id, project_id, status, programs(name, season_year, fair_date)')
           .in('project_id', ids)
+      : { data: [] as any[] };
+
+    const { data: sponsorRows } = ids.length
+      ? await supabase
+          .from('project_sponsors')
+          .select('project_id, teacher_name')
+          .in('project_id', ids)
+          .is('superseded_at', null)
       : { data: [] as any[] };
 
     const entryIds = (entries ?? []).map((e: any) => e.id);
@@ -109,21 +131,37 @@ if (supabase && account) {
         })),
       });
 
+      const officers = (p.project_authors ?? []).filter((a: any) => a.role === 'officer');
+      const selfManaged = (p.project_authors ?? []).filter(
+        (a: any) => a.role === 'author' && a.self_managed_at
+      );
+      const sponsor = (sponsorRows ?? []).find((s: any) => s.project_id === p.id) ?? null;
+      const worst = worstFinding(findings);
+
       return {
         ...p,
         entry,
         authors: (p.project_authors ?? []).filter((a: any) => a.role === 'author'),
-        mentors: (p.project_authors ?? []).filter((a: any) => a.role === 'mentor'),
-        officers: (p.project_authors ?? []).filter((a: any) => a.role === 'officer'),
+        officers,
+        selfManaged,
+        sponsor,
         done: mine.filter((m: any) => m.completed_on).length,
         total: mine.length,
-        worst: worstFinding(findings),
+        worst,
+        verdict: assess({
+          worst,
+          hasOfficer: officers.length > 0 || selfManaged.length > 0,
+          hasSponsor: Boolean(sponsor),
+          startedOn: p.started_on,
+          obligationsDone: mine.filter((m: any) => m.completed_on).length,
+          obligationsTotal: mine.length,
+        }),
       };
     });
 
     const { data: rows } = await supabase
       .from('user_roles')
-      .select('user_id, role, users(id, display_name)')
+      .select('user_id, role, users:user_id(id, display_name)')
       .is('revoked_at', null)
       .in('role', ['mentor', 'officer']);
 
@@ -147,8 +185,15 @@ const stageLabel: Record<string, string> = {
   published: 'Published',
 };
 
-const flagged = watched.filter((w) => w.worst?.severity === 'disqualifying').length;
-const planned = watched.filter((w) => w.worst?.severity === 'planned').length;
+/* An officer sees every project by role and looks after the ones assigned to
+   them. Counting the first as "in your care" told Marchetti she was
+   responsible for a project nobody had given her. */
+const mine = watched.filter((w) =>
+  w.officers.some((o: any) => o.users?.id === account?.id) ||
+  w.selfManaged.some((o: any) => o.users?.id === account?.id)
+);
+
+const counts = tally(watched.map((w) => w.verdict));
 ---
 
 <Base title="Overview" noindex={true}>
@@ -212,21 +257,22 @@ const planned = watched.filter((w) => w.worst?.severity === 'planned').length;
           <h1 class="t-big">{account.display_name}</h1>
           <p class="lede">
             {me.runsTheClub
-              ? watched.length
-                ? `${watched.length} project${watched.length === 1 ? '' : 's'} in your care.`
-                : me.isMentor && !me.isOfficer
-                  ? 'No projects are assigned to you yet. An officer or your advisor attaches you to one.'
+              ? mine.length
+                ? `${mine.length} project${mine.length === 1 ? '' : 's'} in your care, ${watched.length} at the school.`
+                : watched.length
+                  ? `Nothing assigned to you yet. ${watched.length} project${watched.length === 1 ? '' : 's'} at the school.`
                   : 'No projects have been registered at this school yet.'
               : me.isStudent
-                ? 'Register a project against a fair and the deadlines follow automatically.'
-                : 'You are signed in. A student role is granted by an officer or your advisor.'}
+                ? ''
+                : 'You are signed in. A club role is granted by an officer or the club advisor.'}
           </p>
 
           {me.runsTheClub && watched.length > 0 && (
             <div class="countdown">
-              <div><b>{watched.length}</b><span>projects</span></div>
-              <div><b>{flagged}</b><span>{flagged === 1 ? 'disqualifying' : 'disqualifying'}</span></div>
-              <div><b>{planned}</b><span>need attention</span></div>
+              <div><b>{mine.length}</b><span>in your care</span></div>
+              <div><b>{watched.length}</b><span>at the school</span></div>
+              <div><b>{counts.disqualifying}</b><span>disqualifying</span></div>
+              <div><b>{counts.attention}</b><span>need attention</span></div>
             </div>
           )}
         </section>
@@ -235,7 +281,7 @@ const planned = watched.filter((w) => w.worst?.severity === 'planned').length;
         {me.runsTheClub && (
           <section class="sec">
             <div class="sec-h">
-              <b>{me.isOfficer ? 'Every project' : 'Projects you mentor'}</b>
+              <b>{me.runsTheClub ? 'Every project' : 'Projects you look after'}</b>
               <span>{watched.length}</span>
             </div>
 
@@ -256,16 +302,19 @@ const planned = watched.filter((w) => w.worst?.severity === 'planned').length;
                     <tr class={w.worst?.severity === 'disqualifying' ? 'row-bad' : w.worst?.severity === 'planned' ? 'row-warn' : ''}>
                       <td>
                         <a href={`/app/project/${w.id}/`}>{w.title}</a>
-                        {w.entry && (
-                          <span class="sub"><a href={`/app/entry/${w.entry.id}/`}>deadlines</a></span>
-                        )}
-                        {(w.mentors.length > 0 || w.officers.length > 0) && (
+                        <span class="sub">
+                          {w.entry && <><a href={`/app/entry/${w.entry.id}/`}>deadlines</a> · </>}
+                          <a href={`/app/project/${w.id}/team/`}>who is on it</a>
+                        </span>
+                        {w.officers.length > 0 ? (
                           <span class="sub">
-                            {w.mentors.length > 0 && `mentor: ${w.mentors.map((m: any) => m.users?.display_name).join(', ')}`}
-                            {w.mentors.length > 0 && w.officers.length > 0 && ' · '}
-                            {w.officers.length > 0 && `officer: ${w.officers.map((m: any) => m.users?.display_name).join(', ')}`}
+                            officer: {w.officers.map((m: any) => m.users?.display_name).join(', ')}
                           </span>
-                        )}
+                        ) : w.selfManaged.length > 0 ? (
+                          <span class="sub">
+                            self-managed by {w.selfManaged.map((m: any) => m.users?.display_name).join(', ')}
+                          </span>
+                        ) : null}
                       </td>
                       <td>
                         {w.authors.map((a: any) => a.users?.display_name).join(', ') || '—'}
@@ -278,8 +327,8 @@ const planned = watched.filter((w) => w.worst?.severity === 'planned').length;
                       <td>{stageLabel[w.stage] ?? w.stage}</td>
                       <td>{w.total ? `${w.done} of ${w.total}` : '—'}</td>
                       <td>
-                        {w.worst
-                          ? <span class={w.worst.severity === 'disqualifying' ? 'sev bad' : 'sev warn'}>{w.worst.name}</span>
+                        {w.verdict.reason
+                          ? <span class={w.verdict.level === 'disqualifying' ? 'sev bad' : 'sev warn'}>{w.verdict.reason}</span>
                           : 'In order'}
                       </td>
                     </tr>
@@ -288,11 +337,9 @@ const planned = watched.filter((w) => w.worst?.severity === 'planned').length;
               </table>
             ) : (
               <div class="note">
-                <h4>{me.isMentor && !me.isOfficer ? 'Nothing assigned yet' : 'No projects yet'}</h4>
+                <h4>No projects yet</h4>
                 <p>
-                  {me.isMentor && !me.isOfficer
-                    ? 'A mentor sees the projects they are attached to, and nothing else. An officer or your advisor makes that attachment.'
-                    : 'Projects appear here as students register them.'}
+                  Projects appear here as students register them.
                 </p>
 
               </div>
@@ -300,51 +347,8 @@ const planned = watched.filter((w) => w.worst?.severity === 'planned').length;
           </section>
         )}
 
-        {/* ---------------- ATTACH A MENTOR ---------------- */}
-        {me.runsTheClub && watched.length > 0 && staffPeople.length > 0 && (
-          <section class="sec">
-            <div class="sec-h"><b>Attach someone to a project</b><span>Officers and mentors</span></div>
-            <form method="POST" class="assign">
-              <label>
-                <span>Project</span>
-                <select name="project_id" required>
-                  {watched.map((w) => <option value={w.id}>{w.title}</option>)}
-                </select>
-              </label>
-              <label>
-                <span>Person</span>
-                <select name="user_id" required>
-                  {staffPeople.map((p: any) => (
-                    <option value={p.users.id}>
-                      {p.users.display_name} · {roleLabel[p.role as keyof typeof roleLabel]}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                <span>As</span>
-                <select name="role" required>
-                  <option value="mentor">Club mentor</option>
-                  <option value="officer">Club officer</option>
-                </select>
-              </label>
-              <label>
-                <span>Dated</span>
-                <input type="date" name="dated" />
-              </label>
-              <button type="submit">Attach</button>
-            </form>
-            <p class="t-sm" style="margin-top:10px">
-              The mentor is the sponsor. Attaching one signs off the project,
-              verifies the students' affiliation, and clears every approval
-              obligation waiting on it. A mentor comments and flags; they never
-              edit the work, because independent work is what judges probe.
-            </p>
-          </section>
-        )}
-
         {/* ---------------- STUDENT ---------------- */}
-        {!me.runsTheClub && (
+        {(me.isStudent || !me.runsTheClub) && (
           <>
             <section class="sec">
               <div class="sec-h">
@@ -363,10 +367,6 @@ const planned = watched.filter((w) => w.worst?.severity === 'planned').length;
               ) : (
                 <div class="note">
                   <h4>No fair entered</h4>
-                  <p>
-                    Entering a fair pulls in every deadline for it, in order, and
-                    checks the ones that have to happen before you start experimenting.
-                  </p>
                   <p style="margin-top:12px">
                     <a class="btn btn-2" href="/app/fairs/">See open fairs</a>
                   </p>
@@ -391,21 +391,22 @@ const planned = watched.filter((w) => w.worst?.severity === 'planned').length;
   .fixture { margin-top: 34px; padding: 18px 20px; border: 1px dashed var(--rule); max-width: 52ch; }
   .fixture .t-lbl { margin-bottom: 8px; }
   .fixrow { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
-  .fixrow input { flex: 1 1 14ch; padding: 8px 10px; border: 1px solid var(--rule); background: var(--card); color: var(--ink); font: inherit; font-size: 0.88rem; }
-  .fixrow button { padding: 8px 14px; border: 1px solid var(--ink); background: var(--ink); color: var(--paper); font-family: var(--face-ui); font-size: 0.84rem; cursor: pointer; }
+  .fixrow input { flex: 1 1 14ch; padding: 8px 10px; border: 1px solid var(--rule); background: var(--card); color: var(--ink); font: inherit; font-size: 0.94rem; }
+  .fixrow button { padding: 8px 14px; border: 1px solid var(--ink); background: var(--ink); color: var(--paper); font-family: var(--face-ui); font-size: 0.9rem; cursor: pointer; }
   .countdown { display: flex; flex-wrap: wrap; margin-top: 26px; border-top: 1px solid var(--rule); border-bottom: 1px solid var(--rule); }
   .countdown > div { padding: 14px 22px 14px 0; margin-right: 22px; border-right: 1px solid var(--rule-fine); }
   .countdown > div:last-child { border-right: 0; margin-right: 0; }
   .countdown b { display: block; font-size: 1.05rem; line-height: 1.2; }
-  .countdown span { display: block; margin-top: 3px; font-family: var(--face-ui); font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--ink-3); }
-  .sub { display: block; margin-top: 3px; font-family: var(--face-ui); font-size: 0.76rem; color: var(--ink-3); }
-  .sev { font-family: var(--face-ui); font-size: 0.8rem; }
+  .countdown span { display: block; margin-top: 3px; font-family: var(--face-ui); font-size: 0.84rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--ink-3); }
+  .also { font-size: 0.95rem; }
+  .sub { display: block; margin-top: 3px; font-family: var(--face-ui); font-size: 0.82rem; color: var(--ink-3); }
+  .sev { font-family: var(--face-ui); font-size: 0.86rem; }
   .sev.bad { color: var(--alert); font-weight: 600; }
   .row-bad td { background: var(--alert-bg); }
   .row-warn td { background: var(--ready-bg); }
   .assign { display: flex; flex-wrap: wrap; gap: 14px; align-items: flex-end; }
   .assign label { display: block; }
-  .assign label > span { display: block; margin-bottom: 5px; font-family: var(--face-ui); font-size: 0.84rem; }
+  .assign label > span { display: block; margin-bottom: 5px; font-family: var(--face-ui); font-size: 0.9rem; }
   .assign select { padding: 8px 10px; border: 1px solid var(--rule); background: var(--card); color: var(--ink); font: inherit; min-width: 22ch; }
-  .assign button { padding: 9px 16px; border: 1px solid var(--ink); background: var(--ink); color: var(--paper); font-family: var(--face-ui); cursor: pointer; }
+  .assign button { padding: 9px 16px; border: 1px solid var(--ink); background: var(--ink); color: var(--paper); font-family: var(--face-ui); font-size: 1rem; font-weight: 600; cursor: pointer; }
 </style>

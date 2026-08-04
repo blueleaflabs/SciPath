@@ -1,0 +1,340 @@
+---
+export const prerender = false;
+
+import Base from '../../layouts/Base.astro';
+import AppShell from '../../components/AppShell.astro';
+import { activeOrg } from '../../lib/tenant';
+import { serverClient } from '../../lib/supabase';
+import { standing } from '../../lib/roles';
+import { checkDateOrder, worstFinding } from '../../lib/dateOrder';
+
+const { session, account, roles } = Astro.locals;
+const org = activeOrg(Astro);
+
+if (!session) return Astro.redirect('/app/');
+if (!account) return Astro.redirect('/app/welcome/');
+
+const me = standing(roles, account?.population);
+if (!me.runsTheClub) return Astro.redirect('/app/');
+
+const supabase = serverClient(
+  Astro.request,
+  Astro.cookies,
+  (Astro.locals as any).runtime?.env
+);
+
+let error: string | null = null;
+let assigned = false;
+
+let unassignedNow = false;
+
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData();
+  const projectId = String(form.get('project_id') ?? '');
+  const userId = String(form.get('user_id') ?? '');
+
+  if (userId === '') {
+    /* Sending it back to the queue. The person to detach is whoever is on it,
+       which the form carries so the page does not have to look it up again. */
+    const { error: e } = await supabase.rpc('detach_from_project', {
+      p_project_id: projectId,
+      p_user_id: String(form.get('current_id') ?? ''),
+    });
+    if (e) error = e.message;
+    else unassignedNow = true;
+  } else {
+    const { error: e } = await supabase.rpc('assign_officer', {
+      p_project_id: projectId,
+      p_user_id: userId,
+    });
+    if (e) error = e.message;
+    else assigned = true;
+  }
+}
+
+const today = new Date().toISOString().slice(0, 10);
+
+const { data: projects } = await supabase
+  .from('projects')
+  .select('id, title, created_at, started_on, project_authors(role, self_managed_at, users(id, display_name, grad_year))')
+  .is('archived_at', null)
+  .order('created_at', { ascending: true });
+
+const ids = (projects ?? []).map((p: any) => p.id);
+
+const { data: entries } = ids.length
+  ? await supabase
+      .from('entries')
+      .select('id, project_id, selection_state, programs(name, season_year)')
+      .in('project_id', ids)
+  : { data: [] as any[] };
+
+const entryIds = (entries ?? []).map((e: any) => e.id);
+
+const { data: milestones } = entryIds.length
+  ? await supabase
+      .from('entry_milestones')
+      .select('id, entry_id, name, due_on, required, blocks_experimentation, completed_on')
+      .in('entry_id', entryIds)
+  : { data: [] as any[] };
+
+const { data: sponsors } = ids.length
+  ? await supabase
+      .from('project_sponsors')
+      .select('project_id, teacher_name, confirmed_at')
+      .in('project_id', ids)
+      .is('superseded_at', null)
+  : { data: [] as any[] };
+
+/* Everyone who can hold projects, and how many each already holds. That
+   count is the whole point of this screen: "assign randomly" in practice
+   means "give it to whoever has fewest". */
+const { data: clubRoles } = await supabase
+  .from('user_roles')
+  .select('role, users:user_id(id, display_name)')
+  .is('revoked_at', null)
+  .in('role', ['officer', 'advisor']);
+
+const seen = new Set<string>();
+const holders = (clubRoles ?? []).filter((r: any) => {
+  const uid = r.users?.id;
+  if (!uid || seen.has(uid)) return false;
+  seen.add(uid);
+  return true;
+});
+
+const rows = (projects ?? []).map((p: any) => {
+  const entry = (entries ?? []).find((e: any) => e.project_id === p.id);
+  const mine = (milestones ?? []).filter((m: any) => m.entry_id === entry?.id);
+
+  const findings = checkDateOrder({
+    startedOn: p.started_on,
+    today,
+    obligations: mine.map((m: any) => ({
+      id: m.id,
+      name: m.name,
+      dueOn: m.due_on,
+      completedOn: m.completed_on,
+      blocksExperimentation: m.blocks_experimentation,
+      required: m.required,
+    })),
+  });
+
+  return {
+    ...p,
+    entry,
+    authors: (p.project_authors ?? []).filter((a: any) => a.role === 'author'),
+    officers: (p.project_authors ?? []).filter((a: any) => a.role === 'officer'),
+    selfManaged: (p.project_authors ?? []).filter(
+      (a: any) => a.role === 'author' && a.self_managed_at
+    ),
+    sponsor: (sponsors ?? []).find((s: any) => s.project_id === p.id) ?? null,
+    done: mine.filter((m: any) => m.completed_on).length,
+    total: mine.length,
+    worst: worstFinding(findings),
+  };
+});
+
+const looked = (r: any) => r.officers.length > 0 || r.selfManaged.length > 0;
+const unassigned = rows.filter((r) => !looked(r));
+const assignedRows = rows.filter(looked);
+
+const load = holders.map((h: any) => ({
+  id: h.users.id,
+  name: h.users.display_name,
+  role: h.role,
+  count: assignedRows.filter((r) =>
+    r.officers.some((o: any) => o.users?.id === h.users.id) ||
+    r.selfManaged.some((o: any) => o.users?.id === h.users.id)
+  ).length,
+})).sort((a, b) => a.count - b.count);
+
+const fmt = (d: string | null) =>
+  d ? new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '—';
+---
+
+<Base title="Assign officers" noindex={true}>
+  <div class="wrap">
+    <AppShell org={org} account={account} roles={roles} here="/app/assign/" />
+
+    <section class="hero" style="padding-top:0">
+      <p class="t-lbl">Club administration</p>
+      <h1 class="t-big">Assign an officer</h1>
+    </section>
+
+    {error && <p class="note" role="alert">{error}</p>}
+    {assigned && !error && <p class="note" role="status">Assigned.</p>}
+    {unassignedNow && !error && (
+      <p class="note" role="status">Back in the queue.</p>
+    )}
+
+    <section class="sec">
+      <div class="sec-h"><b>Current load</b><span>{assignedRows.length} of {rows.length} assigned</span></div>
+      <ul class="load">
+        <li class="gap">
+          <b class="n">{unassigned.length}</b>
+          <span class="who">Unassigned</span>
+        </li>
+        {load.map((h) => (
+          <li>
+            <b class="n">{h.count}</b>
+            <span class="who">{h.name}</span>
+          </li>
+        ))}
+      </ul>
+    </section>
+
+    <section class="sec">
+      <div class="sec-h"><b>Waiting for an officer</b><span>{unassigned.length}</span></div>
+
+      {unassigned.length > 0 ? (
+        <table class="tbl">
+          <thead>
+            <tr>
+              <th scope="col">Project</th>
+              <th scope="col">Students</th>
+              <th scope="col">Registered</th>
+              <th scope="col">Sponsor</th>
+              <th scope="col">Obligations</th>
+              <th scope="col">Assign to</th>
+            </tr>
+          </thead>
+          <tbody>
+            {unassigned.map((r) => (
+              <tr class={r.worst?.severity === 'disqualifying' ? 'row-bad' : ''}>
+                <td><a href={`/app/project/${r.id}/`}>{r.title}</a></td>
+                <td>{r.authors.map((a: any) => a.users?.display_name).join(', ') || '—'}</td>
+                <td>{fmt(r.created_at)}</td>
+                <td>{r.sponsor ? r.sponsor.teacher_name : <span class="miss">none named</span>}</td>
+                <td>{r.total ? `${r.done} of ${r.total}` : '—'}</td>
+                <td>
+                  <form method="POST" class="inline">
+                    <input type="hidden" name="project_id" value={r.id} />
+                    <select name="user_id" required>
+                      {load.map((h) => (
+                        <option value={h.id}>{h.name} ({h.count})</option>
+                      ))}
+                    </select>
+                    <button type="submit">Assign</button>
+                  </form>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      ) : (
+        <div class="note">
+          <h4>Everything is assigned</h4>
+          <p>New projects appear here as students register them.</p>
+        </div>
+      )}
+    </section>
+
+    <section class="sec">
+      <div class="sec-h"><b>Already assigned</b><span>{assignedRows.length}</span></div>
+      {assignedRows.length > 0 ? (
+        <table class="tbl">
+          <thead>
+            <tr>
+              <th scope="col">Project</th>
+              <th scope="col">Officer</th>
+              <th scope="col">Sponsor</th>
+              <th scope="col">Obligations</th>
+              <th scope="col">Reassign</th>
+            </tr>
+          </thead>
+          <tbody>
+            {assignedRows.map((r) => (
+              <tr>
+                <td><a href={`/app/project/${r.id}/`}>{r.title}</a></td>
+                <td>
+                  {r.officers.length > 0
+                    ? r.officers.map((o: any) => o.users?.display_name).join(', ')
+                    : <>{r.selfManaged.map((o: any) => o.users?.display_name).join(', ')}
+                        <span class="self">self-managed</span></>}
+                </td>
+                <td>{r.sponsor ? r.sponsor.teacher_name : <span class="miss">none named</span>}</td>
+                <td>{r.total ? `${r.done} of ${r.total}` : '—'}</td>
+                <td>
+                  <form method="POST" class="inline">
+                    <input type="hidden" name="project_id" value={r.id} />
+                    <input
+                      type="hidden"
+                      name="current_id"
+                      value={r.officers[0]?.users?.id ?? r.selfManaged[0]?.users?.id ?? ''}
+                    />
+                    <select name="user_id">
+                      {load.map((h) => (
+                        <option
+                          value={h.id}
+                          selected={
+                            r.officers.some((o: any) => o.users?.id === h.id) ||
+                            r.selfManaged.some((o: any) => o.users?.id === h.id)
+                          }
+                        >
+                          {h.name} ({h.count})
+                        </option>
+                      ))}
+                      <option value="">Unassign</option>
+                    </select>
+                    <button type="submit">Move</button>
+                  </form>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      ) : (
+        <p class="t-sm">Nothing assigned yet.</p>
+      )}
+    </section>
+  </div>
+</Base>
+
+<style>
+  .hero { padding: 44px 0 28px; max-width: 74ch; }
+  .hero .t-lbl { margin-bottom: 14px; }
+  /* One row per person, unassigned first, because the number that needs
+     acting on should be the one at the top rather than the one at the end. */
+  .load {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    max-width: 34rem;
+    border-top: 1px solid var(--rule);
+  }
+  .load li {
+    display: flex;
+    align-items: baseline;
+    gap: 16px;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--rule-fine);
+  }
+  .load .n {
+    min-width: 2.5ch;
+    font-family: var(--face-num);
+    font-size: 1.25rem;
+    font-variant-numeric: tabular-nums;
+    text-align: right;
+  }
+  .load .who { font-size: 1rem; }
+  .load .gap {
+    border-bottom: 1px solid var(--rule);
+  }
+  .load .gap .n { color: var(--alert); }
+  .load .gap .who { color: var(--alert); }
+  .miss { color: var(--ink-3); font-style: italic; }
+  .self {
+    display: block;
+    margin-top: 2px;
+    font-family: var(--face-ui);
+    font-size: 0.78rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--ink-3);
+  }
+  .row-bad td { background: var(--alert-bg); }
+  .inline { display: flex; gap: 8px; align-items: center; }
+  .inline select { padding: 6px 9px; border: 1px solid var(--rule); background: var(--card); color: var(--ink); font: inherit; font-size: 0.9rem; }
+  .inline button { padding: 7px 14px; border: 1px solid var(--ink); background: var(--ink); color: var(--paper); font-family: var(--face-ui); font-size: 0.86rem; cursor: pointer; }
+</style>

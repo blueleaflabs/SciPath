@@ -47,7 +47,7 @@ const { data: current } = await supabase
   .eq('id', account.id)
   .single();
 
-const me = current ?? account;
+const person = current ?? account;
 
 const { data: guardian } = await supabase
   .from('guardian_consents')
@@ -103,7 +103,7 @@ const consentLabel: Record<string, string> = {
 
     <section class="hero" style="padding-top:0">
       <p class="t-lbl">Profile</p>
-      <h1 class="t-big">{me.display_name}</h1>
+      <h1 class="t-big">{person.display_name}</h1>
       <p class="lede">
         What appears on a byline, and who has confirmed you. Everything here is
         yours to edit except the confirmations.
@@ -118,7 +118,7 @@ const consentLabel: Record<string, string> = {
       <form method="POST" class="stack">
         <label>
           <span>Name, as it should appear on a byline</span>
-          <input name="display_name" required value={me.display_name} autocomplete="name" />
+          <input name="display_name" required value={person.display_name} autocomplete="name" />
         </label>
 
         <label>
@@ -126,25 +126,25 @@ const consentLabel: Record<string, string> = {
           <select name="grad_year">
             <option value="">Not a student</option>
             {gradYears.map((y) => (
-              <option value={y} selected={me.grad_year === y}>{y}</option>
+              <option value={y} selected={person.grad_year === y}>{y}</option>
             ))}
           </select>
         </label>
 
         <label>
           <span>ORCID</span>
-          <input name="orcid" value={me.orcid ?? ''} placeholder="0000-0000-0000-0000" />
+          <input name="orcid" value={person.orcid ?? ''} placeholder="0000-0000-0000-0000" />
           <small>Optional. A permanent identifier that follows you to university.</small>
         </label>
 
         <label>
           <span>A link of your own</span>
-          <input name="outbound_url" type="url" value={me.outbound_url ?? ''} placeholder="https://" />
+          <input name="outbound_url" type="url" value={person.outbound_url ?? ''} placeholder="https://" />
           <small>Optional. Shown on your author page once you have published.</small>
         </label>
 
         <label class="check">
-          <input type="checkbox" name="photo_consent" checked={me.photo_consent} />
+          <input type="checkbox" name="photo_consent" checked={person.photo_consent} />
           <span>Show my photo on my author page</span>
         </label>
 
@@ -158,12 +158,12 @@ const consentLabel: Record<string, string> = {
       <div class="sec-h"><b>Confirmations</b><span>Not editable here</span></div>
       <dl class="record">
         <dt>School affiliation</dt>
-        <dd>{affiliationLabel[me.affiliation_state] ?? me.affiliation_state}</dd>
+        <dd>{affiliationLabel[person.affiliation_state] ?? person.affiliation_state}</dd>
 
         <dt>Parent or guardian</dt>
         <dd>
-          {consentLabel[me.consent_state] ?? me.consent_state}
-          {guardian && me.consent_state !== 'not_required' && (
+          {consentLabel[person.consent_state] ?? person.consent_state}
+          {guardian && person.consent_state !== 'not_required' && (
             <> · {guardian.guardian_email}</>
           )}
         </dd>
@@ -176,7 +176,7 @@ const consentLabel: Record<string, string> = {
         </dd>
 
         <dt>Author page</dt>
-        <dd>{me.author_slug ? <a href={`/authors/${me.author_slug}/`}>View</a> : 'Created when you first publish'}</dd>
+        <dd>{person.author_slug ? <a href={`/authors/${person.author_slug}/`}>View</a> : 'Created when you first publish'}</dd>
       </dl>
     </section>
   </div>
@@ -187,10 +187,10 @@ const consentLabel: Record<string, string> = {
   .hero .t-lbl { margin-bottom: 14px; }
   form.stack { max-width: 52ch; }
   form label { display: block; margin-bottom: 18px; }
-  form label > span { display: block; margin-bottom: 6px; font-family: var(--face-ui); font-size: 0.86rem; }
-  form small { display: block; margin-top: 5px; color: var(--ink-3); font-size: 0.82rem; }
+  form label > span { display: block; margin-bottom: 6px; font-family: var(--face-ui); font-size: 0.92rem; }
+  form small { display: block; margin-top: 5px; color: var(--ink-3); font-size: 0.88rem; }
   form input[type='text'], form input, form select { width: 100%; padding: 9px 11px; border: 1px solid var(--rule); background: var(--card); color: var(--ink); font: inherit; }
   form label.check { display: flex; gap: 9px; align-items: center; }
   form label.check input { width: auto; }
-  form button { padding: 10px 18px; border: 1px solid var(--ink); background: var(--ink); color: var(--paper); font-family: var(--face-ui); cursor: pointer; }
+  form button { padding: 10px 18px; border: 1px solid var(--ink); background: var(--ink); color: var(--paper); font-family: var(--face-ui); font-size: 1rem; font-weight: 600; cursor: pointer; }
 </style>

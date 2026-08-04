@@ -26,8 +26,14 @@ const schema = new Set();
 for (const file of fs.readdirSync(MIGRATIONS)) {
   const sql = fs.readFileSync(path.join(MIGRATIONS, file), 'utf8');
 
-  /* Column definitions inside create table, plus anything renamed later. */
+  /* Column definitions inside create table. */
   for (const m of sql.matchAll(/^\s{2}([a-z_]+)\s+(uuid|text|int|integer|boolean|date|timestamptz|jsonb|bigserial)/gm)) {
+    schema.add(m[1]);
+  }
+
+  /* Columns added later. A table grows by ALTER as often as it is created,
+     and a scanner that only reads CREATE reports false drift on every one. */
+  for (const m of sql.matchAll(/add column\s+(?:if not exists\s+)?([a-z_]+)/gi)) {
     schema.add(m[1]);
   }
   /* Function parameters, referenced by name from every rpc call. They are

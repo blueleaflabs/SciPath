@@ -81,9 +81,7 @@ const band = sent.age_band ?? '';
     <p class="eyebrow">{org?.name}</p>
     <h1>Finish signing up</h1>
     <p>
-      Four things, and nothing your sign-in already proves. Your account works
-      as soon as you finish. Publishing waits for a guardian, which is the only
-      thing that waits.
+      Three things, and nothing your sign-in already proves.
     </p>
 
     {error && <p class="note" role="alert">{error}</p>}
@@ -92,9 +90,9 @@ const band = sent.age_band ?? '';
       <div class="note" role="alert">
         <h4>That account cannot be used here</h4>
         <p>
-          You signed in as <b>{session.email}</b>. {org?.name} accepts accounts on
-          {allowedDomains.map((d, i) => (
-            <> {i > 0 ? 'or ' : ''}<b>{d}</b></>
+          You signed in as <b>{session.email}</b>. {org?.name} accepts accounts
+          on {allowedDomains.map((d, i) => (
+            <>{i > 0 && <span> or </span>}<b>{d}</b></>
           ))} only.
         </p>
         <p style="margin-top:12px">
@@ -112,10 +110,7 @@ const band = sent.age_band ?? '';
       </label>
 
       <fieldset>
-        <legend>How old are you?</legend>
-        <p class="fine">
-          We store your answer and never your date of birth.
-        </p>
+        <legend>Current age <i class="req">*</i></legend>
         <label><input type="radio" name="age_band" value="under_13" required checked={band === 'under_13'} /> Under 13</label>
         <label><input type="radio" name="age_band" value="13_17" checked={band === '13_17'} /> 13 to 17</label>
         <label><input type="radio" name="age_band" value="18_plus" checked={band === '18_plus'} /> 18 or older</label>
@@ -131,19 +126,19 @@ const band = sent.age_band ?? '';
         </select>
       </label>
 
-      <fieldset>
+      <fieldset id="guardian" data-needed={band === '13_17' ? 'yes' : undefined}>
         <legend>Parent or guardian</legend>
         <p class="skipnote"><b>Not needed if you are 18 or older.</b></p>
         <p class="fine">
-          If you are under 18, a parent or guardian confirms by email, once.
-          Your account works straight away either way; only publishing waits.
+          If you are under 18, parent or guardian consent is required for
+          publishing.
         </p>
         <label>
-          <span>Their name</span>
+          <span>Their name <i class="req">*</i></span>
           <input name="guardian_name" value={sent.guardian_name ?? ''} autocomplete="off" />
         </label>
         <label>
-          <span>Their email</span>
+          <span>Their email <i class="req">*</i></span>
           <input name="guardian_email" type="email" value={sent.guardian_email ?? ''} autocomplete="off" />
         </label>
       </fieldset>
@@ -154,30 +149,62 @@ const band = sent.age_band ?? '';
         </p>
       )}
 
-      <button type="submit">Create my account</button>
-      <p class="fine">
-        Your club mentor is attached to your project by a club officer or by
-        the mentor themselves. There is nothing for you to do about it here.
-      </p>
-      <p class="fine">
-        You can change any of this later from your profile.
-      </p>
+      <div class="finish">
+        <button type="submit">Create my account</button>
+        <ul class="terms">
+          <li><i class="req">*</i> required</li>
+          <li>A club officer will be assigned to your project.</li>
+          <li>Publishing requires approval of a parent or guardian.</li>
+        </ul>
+      </div>
     </form>
     )}
   </section>
   </div>
 </Base>
 
+<script>
+  /* Required only when it applies. The server refuses a minor with no
+     guardian address, and being told that after submitting is a worse way to
+     learn it than the field being required at the moment it becomes so. */
+  const guardian = document.getElementById('guardian');
+  const bands = document.querySelectorAll('input[name="age_band"]');
+  const guardianFields = guardian ? guardian.querySelectorAll('input') : [];
+
+  function syncGuardian() {
+    const chosen = document.querySelector('input[name="age_band"]:checked');
+    const minor = chosen && chosen.value === '13_17';
+
+    if (guardian) guardian.dataset.needed = minor ? 'yes' : '';
+    guardianFields.forEach((field) => {
+      field.required = Boolean(minor);
+    });
+  }
+
+  bands.forEach((band) => band.addEventListener('change', syncGuardian));
+  syncGuardian();
+</script>
+
 <style>
   form.stack { max-width: 52ch; }
   form label { display: block; margin-bottom: 16px; }
-  form label > span { display: block; margin-bottom: 6px; font-family: var(--face-ui); font-size: 0.86rem; }
+  form label > span { display: block; margin-bottom: 6px; font-family: var(--face-ui); font-size: 0.92rem; }
   form fieldset { border: 1px solid var(--rule-fine); padding: 16px 18px; margin-bottom: 20px; }
-  form legend { font-family: var(--face-ui); font-size: 0.86rem; padding: 0 6px; }
+  form legend { font-family: var(--face-ui); font-size: 0.92rem; padding: 0 6px; }
   form input, form select { width: 100%; padding: 9px 11px; border: 1px solid var(--rule); background: var(--card); color: var(--ink); font: inherit; }
   form fieldset label input[type='radio'] { width: auto; margin-right: 8px; }
   form fieldset > label { display: flex; align-items: center; gap: 4px; margin-bottom: 8px; }
-  .fine { color: var(--ink-3); font-size: 0.84rem; margin-top: 10px; }
-  .skipnote { margin: 0 0 8px; font-family: var(--face-ui); font-size: 0.88rem; }
-  form button { padding: 10px 18px; border: 1px solid var(--ink); background: var(--ink); color: var(--paper); font-family: var(--face-ui); cursor: pointer; }
+  .fine { color: var(--ink-3); font-size: 0.9rem; margin-top: 10px; }
+  .finish { display: flex; flex-wrap: wrap; gap: 20px; align-items: center; margin-top: 6px; }
+  .terms { margin: 0; padding-left: 1.1rem; color: var(--ink-3); font-size: 0.92rem; }
+  .req { color: var(--alert); font-style: normal; }
+
+  /* The guardian fields matter only for someone under 18, so the asterisks
+     are hidden until the age band says otherwise rather than marking a
+     field required that half the people filling this in should skip. */
+  #guardian .req { display: none; }
+  #guardian[data-needed='yes'] .req { display: inline; }
+  .terms li { margin-bottom: 3px; }
+  .skipnote { margin: 0 0 8px; font-family: var(--face-ui); font-size: 0.94rem; }
+  form button { padding: 10px 18px; border: 1px solid var(--ink); background: var(--ink); color: var(--paper); font-family: var(--face-ui); font-size: 1rem; font-weight: 600; cursor: pointer; }
 </style>

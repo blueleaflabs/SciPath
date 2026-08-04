@@ -38,7 +38,7 @@ const ORG_SLUGS = (process.env.DEMO_ORGS ?? 'montavista,lynbrook,blueleaflabs')
 
 const PRODUCTION_REF = 'mejibvorrfjiadnsvkyu';
 const FIXTURE_DOMAIN = 'demo.invalid';
-const PASSWORD = process.env.DEMO_PASSWORD ?? 'demo-fixture-password';
+const PASSWORD = process.env.DEMO_PASSWORD ?? 'scipath';
 
 /* ── Guard 1 ─────────────────────────────────────────────────────────────── */
 
@@ -94,16 +94,18 @@ const YEAR = new Date().getFullYear();
 /* Three roles. The officer is a student, usually the club president, and
    holds real administrative authority; the mentor is the teacher. */
 const PEOPLE = [
-  { handle: 'mentor.a',  name: 'S. Halvorsen',role: 'mentor',  population: 'staff',   grad: null,     age: '18_plus' },
-  { handle: 'mentor.b',  name: 'A. Fenwick',  role: 'mentor',  population: 'staff',   grad: null,     age: '18_plus' },
-  { handle: 'officer.a', name: 'T. Marchetti',role: 'officer', population: 'student', grad: YEAR + 1, age: '13_17' },
-  { handle: 'officer.b', name: 'R. Calloway', role: 'officer', population: 'student', grad: YEAR + 1, age: '13_17' },
+  { handle: 'advisor',   name: 'S. Halvorsen', role: 'advisor', population: 'staff',   grad: null,     age: '18_plus' },
+  { handle: 'officer.a', name: 'T. Marchetti', role: 'officer', population: 'student', grad: YEAR + 1, age: '13_17' },
+  { handle: 'officer.b', name: 'R. Calloway',  role: 'officer', population: 'student', grad: YEAR + 1, age: '13_17' },
+  { handle: 'officer.c', name: 'P. Osei',      role: 'officer', population: 'student', grad: YEAR + 1, age: '13_17' },
   { handle: 'student.a', name: 'B. Adeyemi',  role: 'student', population: 'student', grad: YEAR + 2, age: '13_17' },
   { handle: 'student.b', name: 'K. Solheim',  role: 'student', population: 'student', grad: YEAR + 2, age: '13_17' },
   { handle: 'student.c', name: 'M. Ferreira', role: 'student', population: 'student', grad: YEAR + 1, age: '13_17' },
   { handle: 'student.d', name: 'D. Ainsworth',role: 'student', population: 'student', grad: YEAR + 3, age: '13_17' },
   { handle: 'student.e', name: 'V. Rasmussen',role: 'student', population: 'student', grad: YEAR,     age: '18_plus' },
   { handle: 'student.f', name: 'N. Petrossian',role:'student', population: 'student', grad: YEAR,     age: '18_plus' },
+  { handle: 'student.g', name: 'L. Nakamura', role: 'student', population: 'student', grad: YEAR + 2, age: '13_17' },
+  { handle: 'student.h', name: 'C. Duarte',   role: 'student', population: 'student', grad: YEAR + 1, age: '13_17' },
 ];
 
 const db = createClient(URL, KEY, {
@@ -198,21 +200,28 @@ async function seedOrg(slug) {
     );
     if (rowError) fail(`${email}: ${rowError.message}`);
 
-    /* Not an upsert. The uniqueness on user_roles comes from two partial
-       indexes, and ON CONFLICT cannot infer a target from those. */
-    const { data: held } = await db
-      .from('user_roles')
-      .select('id')
-      .eq('user_id', id)
-      .eq('role', person.role)
-      .is('revoked_at', null)
-      .maybeSingle();
+    /* An officer is a student who also runs the club, so they hold both.
+       Only the advisor, who is a teacher, holds one. */
+    const roles =
+      person.role === 'officer' ? ['student', 'officer'] : [person.role];
 
-    if (!held) {
-      const { error: roleError } = await db
+    for (const role of roles) {
+      /* Not an upsert. The uniqueness on user_roles comes from two partial
+         indexes, and ON CONFLICT cannot infer a target from those. */
+      const { data: held } = await db
         .from('user_roles')
-        .insert({ org_id: org.id, user_id: id, role: person.role });
-      if (roleError) fail(`${email}: ${roleError.message}`);
+        .select('id')
+        .eq('user_id', id)
+        .eq('role', role)
+        .is('revoked_at', null)
+        .maybeSingle();
+
+      if (!held) {
+        const { error: roleError } = await db
+          .from('user_roles')
+          .insert({ org_id: org.id, user_id: id, role });
+        if (roleError) fail(`${email}: ${roleError.message}`);
+      }
     }
 
     console.log(`  ${person.role.padEnd(8)} ${person.name.padEnd(14)} ${email}`);

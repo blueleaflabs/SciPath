@@ -5,7 +5,7 @@ import Base from '../../../layouts/Base.astro';
 import AppShell from '../../../components/AppShell.astro';
 import { activeOrg } from '../../../lib/tenant';
 import { serverClient } from '../../../lib/supabase';
-import { standing } from '../../../lib/roles';
+import { standing, isAuthorOf, attachmentLabel } from '../../../lib/roles';
 import { renderNote, linkDomain } from '../../../lib/notes';
 import { blobStore, notePath, MAX_UPLOAD_BYTES } from '../../../lib/blob';
 
@@ -16,7 +16,7 @@ const { id } = Astro.params;
 if (!session) return Astro.redirect('/app/');
 if (!account) return Astro.redirect('/app/welcome/');
 
-const me = standing(roles);
+const me = standing(roles, account?.population);
 const supabase = serverClient(
   Astro.request,
   Astro.cookies,
@@ -25,10 +25,15 @@ const supabase = serverClient(
 
 let error: string | null = null;
 let noted = false;
+let sent: Record<string, string> = {};
 
 if (Astro.request.method === 'POST') {
   const form = await Astro.request.formData();
   const action = String(form.get('action') ?? 'note');
+
+  for (const [k, v] of form.entries()) {
+    if (typeof v === 'string') sent[k] = v;
+  }
 
   if (action === 'note') {
     const { data: noteId, error: e } = await supabase.rpc('add_field_note', {
@@ -41,6 +46,7 @@ if (Astro.request.method === 'POST') {
     if (e) error = e.message;
     else {
       noted = true;
+      sent = {};
 
       const file = form.get('image');
       if (file instanceof File && file.size > 0) {
@@ -88,7 +94,7 @@ if (!project) return Astro.redirect('/app/');
 
 const { data: notes } = await supabase
   .from('field_notes')
-  .select('id, body_md, occurred_on, created_at, corrects_id, seq, users:author_id(display_name)')
+  .select('id, body_md, occurred_on, created_at, corrects_id, seq, author_id, users:author_id(display_name)')
   .eq('project_id', id)
   .order('occurred_on', { ascending: false })
   .order('seq', { ascending: false });
@@ -124,8 +130,25 @@ const { data: deliverables } = entryIds.length
       .order('signed_on', { ascending: true })
   : { data: [] as any[] };
 
-const authors = (project.project_authors ?? []).filter((a: any) => a.role === 'author');
-const mentors = (project.project_authors ?? []).filter((a: any) => a.role === 'mentor');
+const attachments = project.project_authors ?? [];
+const authors = attachments.filter((a: any) => a.role === 'author');
+const officers = attachments.filter((a: any) => a.role === 'officer');
+
+const { data: sponsor } = await supabase
+  .from('project_sponsors')
+  .select('teacher_name, confirmed_at')
+  .eq('project_id', id)
+  .is('superseded_at', null)
+  .maybeSingle();
+
+/* Does the work, or watches it. Everything on this page follows from that. */
+const iAuthor = isAuthorOf(attachments, account.id);
+
+/* Who wrote which note, and in what capacity. A mentor's observation reads
+   differently from a student's own account, and it should look different. */
+const roleOf = new Map<string, string>(
+  attachments.map((a: any) => [a.users?.id, a.role])
+);
 
 const noteById = new Map((notes ?? []).map((n: any) => [n.id, n]));
 const today = new Date().toISOString().slice(0, 10);
@@ -142,11 +165,15 @@ const fmt = (d: string | null) =>
       <p class="t-lbl">Notebook</p>
       <h1 class="t-big">{project.title}</h1>
       <p class="lede">
-        {authors.map((a: any) => a.users?.display_name).join(', ')}
-        {mentors.length > 0 && ` · mentored by ${mentors.map((m: any) => m.users?.display_name).join(', ')}`}
+        {authors.map((a: any) => a.users?.display_name).join(', ') || 'No authors'}
+        {officers.length > 0 && ` · officer ${officers.map((m: any) => m.users?.display_name).join(', ')}`}
+        {sponsor && ` · sponsored by ${sponsor.teacher_name}`}
       </p>
       <div class="row" style="margin-top:20px">
         <a class="btn btn-2" href={`/app/project/${id}/notebook/`}>Export the notebook</a>
+        <a class="btn btn-q" href={`/app/project/${id}/team/`}>
+          {sponsor ? 'Who is on this' : 'No sponsor named'}
+        </a>
         {entries && entries.length > 0 && (
           <a class="btn btn-q" href={`/app/entry/${entries[0].id}/`}>Deadlines</a>
         )}
@@ -156,14 +183,33 @@ const fmt = (d: string | null) =>
     {error && <p class="note" role="alert">{error}</p>}
     {noted && !error && <p class="note" role="status">Recorded.</p>}
 
+    {!iAuthor && (
+      <p class="note">
+        You are watching this project rather than working on it. You can read
+        everything and add an observation. Recording forms, marking obligations,
+        and setting the start date belong to the authors, because independent
+        work is what the judges ask about.
+      </p>
+    )}
+
     <section class="sec">
-      <div class="sec-h"><b>Add to the notebook</b><span>Nothing is ever edited</span></div>
+      <div class="sec-h">
+        <b>{iAuthor ? 'Add to the notebook' : 'Add an observation'}</b>
+        <span>Nothing is ever edited</span>
+      </div>
       <form method="POST" enctype="multipart/form-data" class="notef">
         <input type="hidden" name="action" value="note" />
 
         <label>
           <span>What happened</span>
-          <textarea name="body_md" rows="7" required placeholder="Ran three trials at 4C. Second replicate contaminated, discarded."></textarea>
+          <textarea
+            name="body_md"
+            rows="7"
+            required
+            placeholder={iAuthor
+              ? 'Ran three trials at 4C. Second replicate contaminated, discarded.'
+              : 'Checked the controls with them. Suggested a second replicate before the SRC deadline.'}
+          >{sent.body_md ?? ''}</textarea>
           <small>
             Markdown: <code>**bold**</code>, <code>*italic*</code>, <code>- list</code>,
             <code># heading</code>, <code>[text](url)</code>, <code>```code```</code>.
@@ -173,8 +219,8 @@ const fmt = (d: string | null) =>
 
         <div class="grid2">
           <label>
-            <span>The day the work happened</span>
-            <input type="date" name="occurred_on" value={today} />
+            <span>{iAuthor ? 'The day the work happened' : 'The day you observed it'}</span>
+            <input type="date" name="occurred_on" value={sent.occurred_on ?? today} />
             <small>Not always the day you write it up.</small>
           </label>
           <label>
@@ -197,11 +243,17 @@ const fmt = (d: string | null) =>
           </label>
           <label>
             <span>Caption</span>
-            <input name="caption" placeholder="Plate 3, 48 hours" />
+            <input name="caption" value={sent.caption ?? ''} placeholder="Plate 3, 48 hours" />
           </label>
         </div>
 
-        <button type="submit">Record this</button>
+        <button type="submit">{iAuthor ? 'Record this' : 'Add the observation'}</button>
+        {!iAuthor && (
+          <p class="fine">
+            Your name and role appear on it. It sits in the notebook alongside
+            the authors' entries and is exported with them.
+          </p>
+        )}
       </form>
     </section>
 
@@ -218,6 +270,9 @@ const fmt = (d: string | null) =>
                 <div class="meta">
                   <b>{fmt(n.occurred_on)}</b>
                   <span>{n.users?.display_name}</span>
+                  {roleOf.get(n.author_id) && roleOf.get(n.author_id) !== 'author' && (
+                    <span class="cap">{attachmentLabel[roleOf.get(n.author_id)!]}</span>
+                  )}
                   <span class="seqno">#{n.seq}</span>
                 </div>
                 {corrected && (
@@ -286,18 +341,20 @@ const fmt = (d: string | null) =>
     <section class="sec">
       <div class="sec-h"><b>Linked documents</b><span>{links?.length ?? 0}</span></div>
 
-      <form method="POST" class="linkf">
-        <input type="hidden" name="action" value="link" />
-        <label>
-          <span>Label</span>
-          <input name="label" required placeholder="Data spreadsheet" />
-        </label>
-        <label>
-          <span>URL</span>
-          <input name="url" type="url" required placeholder="https://" />
-        </label>
-        <button type="submit">Add</button>
-      </form>
+      {iAuthor && (
+        <form method="POST" class="linkf">
+          <input type="hidden" name="action" value="link" />
+          <label>
+            <span>Label</span>
+            <input name="label" required placeholder="Data spreadsheet" />
+          </label>
+          <label>
+            <span>URL</span>
+            <input name="url" type="url" required placeholder="https://" />
+          </label>
+          <button type="submit">Add</button>
+        </form>
+      )}
 
       {links && links.length > 0 && (
         <ul class="linklist" style="margin-top:18px">
@@ -308,6 +365,10 @@ const fmt = (d: string | null) =>
             </li>
           ))}
         </ul>
+      )}
+
+      {!iAuthor && (!links || links.length === 0) && (
+        <p class="t-sm">No documents linked yet.</p>
       )}
 
       <p class="t-sm" style="margin-top:14px">
@@ -360,7 +421,7 @@ const fmt = (d: string | null) =>
 
   .notef { max-width: 64ch; }
   .notef label { display: block; margin-bottom: 16px; }
-  .notef label > span { display: block; margin-bottom: 6px; font-family: var(--face-ui); font-size: 0.86rem; }
+  .notef label > span { display: block; margin-bottom: 6px; font-family: var(--face-ui); font-size: 0.92rem; }
   .notef textarea,
   .notef input,
   .notef select {
@@ -371,15 +432,15 @@ const fmt = (d: string | null) =>
     color: var(--ink);
     font: inherit;
   }
-  .notef textarea { font-family: var(--face-mono); font-size: 0.9rem; line-height: 1.55; }
-  .notef small { display: block; margin-top: 5px; color: var(--ink-3); font-size: 0.8rem; }
+  .notef textarea { font-family: var(--face-mono); font-size: 0.95rem; line-height: 1.55; }
+  .notef small { display: block; margin-top: 5px; color: var(--ink-3); font-size: 0.86rem; }
   .notef button,
   .linkf button {
     padding: 10px 18px;
     border: 1px solid var(--ink);
     background: var(--ink);
     color: var(--paper);
-    font-family: var(--face-ui);
+    font-family: var(--face-ui); font-size: 1rem; font-weight: 600;
     cursor: pointer;
   }
   .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
@@ -387,7 +448,7 @@ const fmt = (d: string | null) =>
 
   .linkf { display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap; }
   .linkf label { display: block; }
-  .linkf label > span { display: block; margin-bottom: 5px; font-family: var(--face-ui); font-size: 0.84rem; }
+  .linkf label > span { display: block; margin-bottom: 5px; font-family: var(--face-ui); font-size: 0.9rem; }
   .linkf input { padding: 8px 10px; border: 1px solid var(--rule); background: var(--card); color: var(--ink); font: inherit; min-width: 24ch; }
 
   .notes { list-style: none; margin: 0; padding: 0; }
@@ -401,15 +462,24 @@ const fmt = (d: string | null) =>
     gap: 12px;
     align-items: baseline;
     font-family: var(--face-ui);
-    font-size: 0.82rem;
+    font-size: 0.88rem;
     color: var(--ink-3);
     margin-bottom: 8px;
   }
   .entry .meta b { color: var(--ink); }
+  .cap {
+    font-family: var(--face-ui);
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    padding: 1px 6px;
+    border: 1px solid var(--rule);
+    color: var(--ink-3);
+  }
   .entry .seqno { margin-left: auto; font-family: var(--face-mono); }
   .entry .corrects {
     font-family: var(--face-ui);
-    font-size: 0.8rem;
+    font-size: 0.86rem;
     color: var(--ink-3);
     margin: 0 0 8px;
   }
@@ -426,5 +496,5 @@ const fmt = (d: string | null) =>
   }
   .entry figure { margin: 12px 0 0; }
   .entry figure img { max-width: 100%; border: 1px solid var(--rule-fine); }
-  .entry figcaption { margin-top: 5px; font-family: var(--face-ui); font-size: 0.8rem; color: var(--ink-3); }
+  .entry figcaption { margin-top: 5px; font-family: var(--face-ui); font-size: 0.86rem; color: var(--ink-3); }
 </style>

@@ -10,10 +10,17 @@ interface Props {
 
 const { org, account, here, roles = [] } = Astro.props;
 
+import { standing } from '../lib/roles';
+
+const me = standing(roles, account?.population);
+
+/* Profile and sign out live in the masthead, top right, where an account
+   menu belongs. This bar is for the work. */
 const nav = [
   { href: '/app/', label: 'Overview' },
-  { href: '/app/fairs/', label: 'Fairs' },
-  { href: '/app/profile/', label: 'Profile' },
+  ...(me.runsTheClub ? [{ href: '/app/assign/', label: 'Assign' }] : []),
+  ...(me.isAdvisor ? [{ href: '/app/selection/', label: 'Selection' }] : []),
+  { href: '/app/fairs/', label: 'Entries' },
 ];
 ---
 
@@ -25,24 +32,8 @@ const nav = [
       </li>
     ))}
   </ul>
-  <form method="POST" action="/auth/signout/">
-    <button type="submit" class="linkish">Sign out</button>
-  </form>
 </nav>
 
-{account?.consent_state === 'pending' && (
-  <p class="note" role="status">
-    Your account is active and you can work normally. Publishing waits until your
-    parent or guardian confirms by email.
-  </p>
-)}
-
-{account?.consent_state === 'paused' && (
-  <p class="note" role="alert">
-    Work is paused until your parent or guardian confirms.
-    <a href="/app/profile/">Check the address we have</a>.
-  </p>
-)}
 
 <style>
   .appnav {
@@ -63,7 +54,7 @@ const nav = [
   }
   .appnav a {
     font-family: var(--face-ui);
-    font-size: 0.82rem;
+    font-size: 0.88rem;
     letter-spacing: 0.04em;
     text-transform: uppercase;
     text-decoration: none;
@@ -79,7 +70,7 @@ const nav = [
     padding: 0;
     cursor: pointer;
     font-family: var(--face-ui);
-    font-size: 0.82rem;
+    font-size: 0.88rem;
     letter-spacing: 0.04em;
     text-transform: uppercase;
     color: var(--ink-3);

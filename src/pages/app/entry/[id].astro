@@ -6,7 +6,7 @@ import AppShell from '../../../components/AppShell.astro';
 import { activeOrg } from '../../../lib/tenant';
 import { serverClient } from '../../../lib/supabase';
 import { checkDateOrder, worstFinding } from '../../../lib/dateOrder';
-import { standing } from '../../../lib/roles';
+import { standing, isAuthorOf } from '../../../lib/roles';
 
 const { session, account, roles } = Astro.locals;
 const org = activeOrg(Astro);
@@ -15,7 +15,7 @@ const { id } = Astro.params;
 if (!session) return Astro.redirect('/app/');
 if (!account) return Astro.redirect('/app/welcome/');
 
-const me = standing(roles);
+const me = standing(roles, account?.population);
 
 const supabase = serverClient(
   Astro.request,
@@ -29,34 +29,33 @@ if (Astro.request.method === 'POST') {
   const form = await Astro.request.formData();
   const action = String(form.get('action') ?? '');
 
-  if (action === 'complete') {
-    const { error: e } = await supabase.rpc('set_milestone_done', {
-      p_milestone_id: String(form.get('milestone_id') ?? ''),
-      p_completed_on:
-        String(form.get('completed_on') ?? '') || new Date().toISOString().slice(0, 10),
-    });
-    if (e) error = e.message;
-  }
+  if (action === 'status') {
+    const milestoneId = String(form.get('milestone_id') ?? '');
+    const status = String(form.get('status') ?? 'open');
+    const on = String(form.get('on') ?? '') || new Date().toISOString().slice(0, 10);
+    const url = String(form.get('external_url') ?? '').trim();
 
-  if (action === 'undo') {
-    const { error: e } = await supabase.rpc('set_milestone_done', {
-      p_milestone_id: String(form.get('milestone_id') ?? ''),
-      p_completed_on: null,
-    });
-    if (e) error = e.message;
-  }
-
-  if (action === 'deliverable') {
-    const { error: e } = await supabase.rpc('record_deliverable', {
-      p_entry_id: id,
-      p_milestone_id: String(form.get('milestone_id') ?? '') || null,
-      p_type: String(form.get('type') ?? 'other'),
-      p_label: String(form.get('label') ?? ''),
-      p_signed_on: String(form.get('signed_on') ?? '') || null,
-      p_external_url: String(form.get('external_url') ?? '') || null,
-      p_storage_path: null,
-    });
-    if (e) error = e.message;
+    if (status === 'complete') {
+      /* The obligation's own name is the label. Asking a student to retype
+         "General research idea due" into a box that already said it was a
+         question with one answer. */
+      const { error: e } = await supabase.rpc('record_deliverable', {
+        p_entry_id: id,
+        p_milestone_id: milestoneId,
+        p_type: String(form.get('kind') ?? 'other'),
+        p_label: String(form.get('name') ?? 'Deliverable'),
+        p_signed_on: on,
+        p_external_url: url || null,
+        p_storage_path: null,
+      });
+      if (e) error = e.message;
+    } else {
+      const { error: e } = await supabase.rpc('set_milestone_done', {
+        p_milestone_id: milestoneId,
+        p_completed_on: null,
+      });
+      if (e) error = e.message;
+    }
   }
 
   if (action === 'verify') {
@@ -77,7 +76,7 @@ if (Astro.request.method === 'POST') {
 
 const { data: entry } = await supabase
   .from('entries')
-  .select('id, status, placement, project_id, projects(id, title, started_on, stage), programs(name, season_year, fair_date, advances_to)')
+  .select('id, status, placement, project_id, projects(id, title, started_on, stage, project_authors(role, users(id))), programs(name, season_year, fair_date, advances_to_fairs)')
   .eq('id', id)
   .maybeSingle();
 
@@ -85,7 +84,7 @@ if (!entry) return Astro.redirect('/app/fairs/');
 
 const { data: milestones } = await supabase
   .from('entry_milestones')
-  .select('id, name, kind, due_on, required, blocks_experimentation, completed_on, sort_order')
+  .select('id, name, kind, due_on, required, blocks_experimentation, completed_on, satisfied_by, sort_order')
   .eq('entry_id', id)
   .order('sort_order', { ascending: true });
 
@@ -94,6 +93,22 @@ const { data: deliverables } = await supabase
   .select('id, milestone_id, label, type, signed_on, external_url, verified_at')
   .eq('entry_id', id);
 
+const { data: sponsor } = await supabase
+  .from('project_sponsors')
+  .select('teacher_name, signed_on, recorded_at')
+  .eq('project_id', entry.project_id)
+  .is('superseded_at', null)
+  .maybeSingle();
+
+const { data: overseers } = await supabase
+  .from('project_authors')
+  .select('role, self_managed_at, accepted_at, users(display_name)')
+  .eq('project_id', entry.project_id);
+
+const officer = (overseers ?? []).find(
+  (a: any) => a.role === 'officer' || (a.role === 'author' && a.self_managed_at)
+);
+
 const deliverableFor = new Map<string, any>();
 for (const d of deliverables ?? []) {
   if (d.milestone_id) deliverableFor.set(d.milestone_id, d);
@@ -101,6 +116,9 @@ for (const d of deliverables ?? []) {
 
 const project: any = entry.projects;
 const program: any = entry.programs;
+
+/* Does the work, or watches it. */
+const iAuthor = isAuthorOf(project?.project_authors ?? [], account.id);
 
 const findings = checkDateOrder({
   startedOn: project?.started_on ?? null,
@@ -124,14 +142,44 @@ const byId = new Map(findings.map((f) => [f.id, f]));
 const fmt = (d: string | null) =>
   d ? new Date(d + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '—';
 
+/* What a derived obligation reports, and where to go and change it. */
+const derived = (m: any) => {
+  if (m.satisfied_by === 'sponsor') {
+    return {
+      met: Boolean(sponsor),
+      says: sponsor ? sponsor.teacher_name : 'No sponsor named',
+      href: `/app/project/${project?.id}/team/`,
+      verb: sponsor ? 'Change' : 'Name one',
+    };
+  }
+  if (m.satisfied_by === 'officer') {
+    return {
+      met: Boolean(officer),
+      says: officer ? officer.users?.display_name : 'No officer assigned',
+      href: `/app/project/${project?.id}/team/`,
+      verb: officer ? 'Change' : 'Assign one',
+    };
+  }
+  if (m.satisfied_by === 'start_date') {
+    return {
+      met: Boolean(project?.started_on),
+      says: project?.started_on ? fmt(project.started_on) : 'Not set',
+      href: '#start',
+      verb: 'Set it',
+    };
+  }
+  return null;
+};
+
 const done = (milestones ?? []).filter((m: any) => m.completed_on).length;
 const total = milestones?.length ?? 0;
 const openCount = total - done;
 
 const now = new Date();
 const todayIso = now.toISOString().slice(0, 10);
-const todayLabel = now.toLocaleDateString('en-US', {
-  weekday: 'long', month: 'long', day: 'numeric', year: 'numeric',
+const weekday = now.toLocaleDateString('en-US', { weekday: 'long' });
+const dateLabel = now.toLocaleDateString('en-US', {
+  month: 'long', day: 'numeric', year: 'numeric',
 });
 
 const daysUntil = (iso: string | null) =>
@@ -154,32 +202,39 @@ const toNext = daysUntil(nextOpen?.due_on ?? null);
     <section class="hero" style="padding-top:0">
       <p class="t-lbl">{program?.name} {program?.season_year}</p>
       <h1 class="t-big">{project?.title}</h1>
-      <p class="lede">
-        {done} of {total} obligations complete. Judging {fmt(program?.fair_date)}.
-      </p>
+      <div class="cards">
+        <div class="card today">
+          <p class="kicker">Today</p>
+          <p class="weekday">{weekday}</p>
+          <p class="date">{dateLabel}</p>
+        </div>
 
-      <div class="countdown">
-        <div>
-          <b>{todayLabel}</b>
-          <span>today</span>
+        <div class="card">
+          <p class="kicker">Days to fair</p>
+          <p class="num">{toFair !== null ? (toFair >= 0 ? toFair : 0) : '—'}</p>
+          <p class="under">{fmt(program?.fair_date)}</p>
         </div>
-        {toFair !== null && (
-          <div>
-            <b>{toFair >= 0 ? toFair : 0}</b>
-            <span>{toFair === 1 ? 'day to judging' : 'days to judging'}</span>
-          </div>
-        )}
-        <div>
-          <b>{openCount}</b>
-          <span>{openCount === 1 ? 'task remaining' : 'tasks remaining'}</span>
+
+        <div class="card">
+          <p class="kicker">Days to next milestone</p>
+          {nextOpen && toNext !== null ? (
+            <>
+              <p class="what">{nextOpen.name}</p>
+              <p class={toNext < 0 ? 'num late' : 'num'}>{Math.abs(toNext)}</p>
+              {toNext < 0 && <p class="under late">overdue</p>}
+            </>
+          ) : (
+            <p class="under">Nothing open</p>
+          )}
         </div>
-        {nextOpen && toNext !== null && (
-          <div>
-            <b>{toNext < 0 ? `${Math.abs(toNext)} overdue` : toNext}</b>
-            <span>{toNext < 0 ? `days · ${nextOpen.name}` : `days to ${nextOpen.name}`}</span>
-          </div>
-        )}
+
+        <div class="card">
+          <p class="kicker">Task counter</p>
+          <p class="num">{done}<span class="of"> of {total}</span></p>
+          <p class="under">complete</p>
+        </div>
       </div>
+
     </section>
 
     {error && <p class="note" role="alert">{error}</p>}
@@ -191,28 +246,35 @@ const toNext = daysUntil(nextOpen?.due_on ?? null);
       </div>
     )}
 
-    <section class="sec">
-      <div class="sec-h"><b>Start date</b><span>Checked against every approval</span></div>
-      <form method="POST" class="inline">
-        <input type="hidden" name="action" value="started" />
-        <input type="hidden" name="project_id" value={project?.id} />
-        <input type="date" name="started_on" value={project?.started_on ?? ''} />
-        <button type="submit">Save</button>
-      </form>
-      <p class="t-sm" style="margin-top:8px">
-        The day experimentation actually began. Getting this earlier than an
-        approval is the single most common way a finished project is thrown out.
+    {!iAuthor && (
+      <p class="note">
+        You are watching this entry rather than working on it. Recording forms,
+        marking obligations, and setting the start date belong to the authors.
+        Verifying a deliverable is yours.
       </p>
+    )}
+
+    <section class="sec" id="start">
+      <div class="sec-h"><b>Start date</b><span>Checked against every approval</span></div>
+      {iAuthor ? (
+        <form method="POST" class="inline">
+          <input type="hidden" name="action" value="started" />
+          <input type="hidden" name="project_id" value={project?.id} />
+          <input type="date" name="started_on" value={project?.started_on ?? ''} />
+          <button type="submit">Save</button>
+        </form>
+      ) : (
+        <p><b>{project?.started_on ? fmt(project.started_on) : 'Not set'}</b></p>
+      )}
     </section>
 
     <section class="sec">
       <div class="sec-h"><b>Notebook</b><span>The working record</span></div>
       <p class="t-sm" style="max-width:72ch">
-        Entries are append only and attributed, and they export as a research
-        notebook a judge can read.
+        Append only, exports as a research notebook for judges.
       </p>
       <p style="margin-top:12px">
-        <a class="btn btn-2" href={`/app/project/${project?.id}/`}>Open the notebook</a>
+        <a class="btn btn-2" href={`/app/project/${project?.id}/`}>Work in the notebook</a>
       </p>
     </section>
 
@@ -237,54 +299,48 @@ const toNext = daysUntil(nextOpen?.due_on ?? null);
                   {m.name}
                   {m.blocks_experimentation && <span class="gate">must precede work</span>}
                 </td>
-                <td>
-                  {deliverableFor.get(m.id) ? (
-                    <>
-                      <b>{deliverableFor.get(m.id).label}</b>
-                      <span class="sub">
-                        signed {fmt(deliverableFor.get(m.id).signed_on)}
-                        {deliverableFor.get(m.id).verified_at ? ' · verified' : ' · not verified'}
-                      </span>
-                    </>
-                  ) : m.completed_on ? `Done ${fmt(m.completed_on)}` : f ? f.message : 'Open'}
-                </td>
-                <td>
-                  {deliverableFor.get(m.id) ? (
-                    !deliverableFor.get(m.id).verified_at && me.runsTheClub ? (
+                <td class="act">
+                  {m.satisfied_by ? (
+                    <a class="linkish" href={derived(m)?.href}>{derived(m)?.verb}</a>
+                  ) : !iAuthor ? (
+                    deliverableFor.get(m.id) && !deliverableFor.get(m.id).verified_at && me.runsTheClub ? (
                       <form method="POST" class="inline">
                         <input type="hidden" name="action" value="verify" />
                         <input type="hidden" name="deliverable_id" value={deliverableFor.get(m.id).id} />
                         <button type="submit" class="linkish">Verify</button>
                       </form>
                     ) : null
-                  ) : m.completed_on ? (
-                    <form method="POST" class="inline">
-                      <input type="hidden" name="milestone_id" value={m.id} />
-                      <input type="hidden" name="action" value="undo" />
-                      <button type="submit" class="linkish">Undo</button>
-                    </form>
                   ) : (
-                    <details class="rec">
-                      <summary>Record</summary>
-                      <form method="POST" class="recf">
-                        <input type="hidden" name="action" value="deliverable" />
-                        <input type="hidden" name="milestone_id" value={m.id} />
-                        <label>
-                          <span>What it is</span>
-                          <input name="label" required value={m.name} />
-                        </label>
-                        <label>
-                          <span>Date on the signature</span>
-                          <input type="date" name="signed_on" required />
-                        </label>
-                        <label>
-                          <span>Link to it, if it lives elsewhere</span>
-                          <input type="url" name="external_url" placeholder="https://" />
-                        </label>
-                        <input type="hidden" name="type" value={m.kind} />
-                        <button type="submit">Record</button>
-                      </form>
-                    </details>
+                    <form method="POST" class="statusf">
+                      <input type="hidden" name="action" value="status" />
+                      <input type="hidden" name="milestone_id" value={m.id} />
+                      <input type="hidden" name="name" value={m.name} />
+                      <input type="hidden" name="kind" value={m.kind} />
+
+                      <select name="status" aria-label={`Status of ${m.name}`}>
+                        <option value="open" selected={!m.completed_on}>Open</option>
+                        <option value="complete" selected={Boolean(m.completed_on)}>Complete</option>
+                      </select>
+
+                      <input
+                        type="date"
+                        name="on"
+                        value={deliverableFor.get(m.id)?.signed_on ?? m.completed_on ?? ''}
+                        aria-label={m.kind === 'approval' || m.kind === 'form'
+                          ? 'Date on the signature'
+                          : 'Date completed'}
+                      />
+
+                      <input
+                        type="url"
+                        name="external_url"
+                        placeholder="External URL"
+                        value={deliverableFor.get(m.id)?.external_url ?? ''}
+                        aria-label="External URL"
+                      />
+
+                      <button type="submit">Save</button>
+                    </form>
                   )}
                 </td>
               </tr>
@@ -299,51 +355,87 @@ const toNext = daysUntil(nextOpen?.due_on ?? null);
 <style>
   .hero { padding: 44px 0 28px; max-width: 74ch; }
   .hero .t-lbl { margin-bottom: 14px; }
-  .countdown {
+  /* Four cards, one line. Each answers one question: what day is it, how
+     long to the fair, what is next, and how much is left. */
+  .cards {
+    display: grid;
+    grid-template-columns: 0.95fr 0.8fr 1.25fr 0.8fr;
+    gap: 12px;
+    margin-top: 28px;
+    align-items: stretch;
+  }
+
+  @media (max-width: 1020px) {
+    .cards { grid-template-columns: 1fr 1fr; }
+  }
+  @media (max-width: 560px) {
+    .cards { grid-template-columns: 1fr; }
+  }
+
+  .card {
+    border: 1px solid var(--rule);
+    border-radius: var(--radius);
+    background: var(--card);
+    padding: 16px 18px 18px;
     display: flex;
-    flex-wrap: wrap;
-    gap: 0;
-    margin-top: 26px;
-    border-top: 1px solid var(--rule);
-    border-bottom: 1px solid var(--rule);
+    flex-direction: column;
   }
-  .countdown > div {
-    padding: 14px 22px 14px 0;
-    margin-right: 22px;
-    border-right: 1px solid var(--rule-fine);
-  }
-  .countdown > div:last-child { border-right: 0; margin-right: 0; }
-  .countdown b {
-    display: block;
-    font-size: 1.05rem;
-    line-height: 1.2;
-  }
-  .countdown span {
-    display: block;
-    margin-top: 3px;
+
+  .kicker {
+    margin: 0 0 10px;
     font-family: var(--face-ui);
-    font-size: 0.78rem;
+    font-size: 0.76rem;
     text-transform: uppercase;
-    letter-spacing: 0.05em;
+    letter-spacing: 0.08em;
     color: var(--ink-3);
   }
+
+  .num {
+    margin: 0;
+    font-family: var(--face-num);
+    font-size: 2.5rem;
+    line-height: 1;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+  }
+  .num.late { color: var(--alert); }
+  .num .of {
+    font-family: var(--face-ed);
+    font-size: 1.1rem;
+    font-weight: 400;
+    color: var(--ink-3);
+  }
+
+  .under { margin: 8px 0 0; color: var(--ink-3); font-size: 0.95rem; }
+  .under.late { color: var(--alert); }
+
+  .what { margin: 0 0 8px; font-size: 1.05rem; line-height: 1.25; }
+
+  .today .weekday { margin: 0; font-size: 1.3rem; line-height: 1.2; }
+  .today .date { margin: 4px 0 0; color: var(--ink-3); font-size: 0.95rem; }
+
   .flag { border-left: 3px solid var(--alert); padding: 16px 20px; background: var(--alert-bg); margin-bottom: 26px; }
   .flag.warn { border-left-color: var(--stage-ready); background: var(--ready-bg); }
   .flag h4 { margin: 0 0 6px; }
   .flag p { margin: 0; }
-  .gate { display: inline-block; margin-left: 8px; font-family: var(--face-ui); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--ink-3); }
+  .gate { display: inline-block; margin-left: 8px; font-family: var(--face-ui); font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--ink-3); }
   .row-bad td { background: var(--alert-bg); }
   .row-warn td { background: var(--ready-bg); }
   .inline { display: flex; gap: 8px; align-items: center; }
-  .inline input[type='date'] { padding: 5px 7px; border: 1px solid var(--rule); background: var(--card); color: var(--ink); font: inherit; font-size: 0.84rem; }
-  .inline button { padding: 6px 12px; border: 1px solid var(--ink); background: var(--ink); color: var(--paper); font-family: var(--face-ui); font-size: 0.8rem; cursor: pointer; }
-  .linkish { background: none !important; border: 0 !important; color: var(--ink-3) !important; padding: 0 !important; cursor: pointer; font-family: var(--face-ui); font-size: 0.8rem; }
-  .sub { display: block; margin-top: 2px; font-family: var(--face-ui); font-size: 0.76rem; color: var(--ink-3); }
-  .rec summary { cursor: pointer; font-family: var(--face-ui); font-size: 0.8rem; color: var(--ink-3); }
+  .inline input[type='date'] { padding: 6px 9px; border: 1px solid var(--rule); background: var(--card); color: var(--ink); font: inherit; font-size: 0.9rem; }
+  .inline button { padding: 7px 14px; border: 1px solid var(--ink); background: var(--ink); color: var(--paper); font-family: var(--face-ui); font-size: 0.86rem; cursor: pointer; }
+  a.linkish {
+    font-family: var(--face-ui);
+    font-size: 0.92rem;
+    color: var(--ink-3);
+  }
+  .linkish { background: none !important; border: 0 !important; color: var(--ink-3) !important; padding: 0 !important; cursor: pointer; font-family: var(--face-ui); font-size: 0.86rem; }
+  .sub { display: block; margin-top: 2px; font-family: var(--face-ui); font-size: 0.82rem; color: var(--ink-3); }
+  .rec summary { cursor: pointer; font-family: var(--face-ui); font-size: 0.86rem; color: var(--ink-3); }
   .recf { margin-top: 10px; min-width: 24ch; }
   .recf label { display: block; margin-bottom: 8px; }
-  .recf label > span { display: block; margin-bottom: 3px; font-family: var(--face-ui); font-size: 0.76rem; }
-  .recf input { width: 100%; padding: 5px 7px; border: 1px solid var(--rule); background: var(--card); color: var(--ink); font: inherit; font-size: 0.84rem; }
-  .recf button { padding: 6px 12px; border: 1px solid var(--ink); background: var(--ink); color: var(--paper); font-family: var(--face-ui); font-size: 0.8rem; cursor: pointer; }
+  .recf label > span { display: block; margin-bottom: 3px; font-family: var(--face-ui); font-size: 0.82rem; }
+  .recf input { width: 100%; padding: 5px 7px; border: 1px solid var(--rule); background: var(--card); color: var(--ink); font: inherit; font-size: 0.9rem; }
+  .recf button { padding: 7px 14px; border: 1px solid var(--ink); background: var(--ink); color: var(--paper); font-family: var(--face-ui); font-size: 0.86rem; cursor: pointer; }
   .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
 </style>

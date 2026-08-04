@@ -1,0 +1,321 @@
+---
+export const prerender = false;
+
+import Base from '../../../../layouts/Base.astro';
+import AppShell from '../../../../components/AppShell.astro';
+import { activeOrg } from '../../../../lib/tenant';
+import { serverClient } from '../../../../lib/supabase';
+import { standing, isAuthorOf, attachmentLabel } from '../../../../lib/roles';
+
+const { session, account, roles } = Astro.locals;
+const org = activeOrg(Astro);
+const { id } = Astro.params;
+
+if (!session) return Astro.redirect('/app/');
+if (!account) return Astro.redirect('/app/welcome/');
+
+const me = standing(roles, account?.population);
+const supabase = serverClient(
+  Astro.request,
+  Astro.cookies,
+  (Astro.locals as any).runtime?.env
+);
+
+let error: string | null = null;
+let cleared: number | null = null;
+let detached = false;
+
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData();
+
+  const action = String(form.get('action') ?? '');
+
+  if (action === 'detach') {
+    const { error: e } = await supabase.rpc('detach_from_project', {
+      p_project_id: id,
+      p_user_id: String(form.get('user_id') ?? ''),
+    });
+    if (e) error = e.message;
+    else detached = true;
+  }
+
+  if (action === 'officer') {
+    const { error: e } = await supabase.rpc('assign_officer', {
+      p_project_id: id,
+      p_user_id: String(form.get('user_id') ?? ''),
+    });
+    if (e) error = e.message;
+  }
+
+  if (action === 'sponsor') {
+    const { error: e } = await supabase.rpc('record_sponsor', {
+      p_project_id: id,
+      p_teacher_name: String(form.get('teacher_name') ?? ''),
+      p_teacher_email: String(form.get('teacher_email') ?? ''),
+      p_signed_on: String(form.get('signed_on') ?? '') || null,
+    });
+    if (e) error = e.message;
+    else cleared = 0;
+  }
+
+  if (action === 'confirm') {
+    const { error: e } = await supabase.rpc('confirm_sponsorship', {
+      p_sponsor_id: String(form.get('sponsor_id') ?? ''),
+    });
+    if (e) error = e.message;
+  }
+}
+
+const { data: project } = await supabase
+  .from('projects')
+  .select('id, title, started_on, project_authors(id, role, accepted_at, self_managed_at, users(id, display_name, grad_year))')
+  .eq('id', id)
+  .maybeSingle();
+
+if (!project) return Astro.redirect('/app/');
+
+const attachments = project.project_authors ?? [];
+const authors = attachments.filter((a: any) => a.role === 'author');
+const officers = attachments.filter((a: any) => a.role === 'officer');
+const selfManaged = attachments.filter(
+  (a: any) => a.role === 'author' && a.self_managed_at
+);
+
+const { data: sponsor } = await supabase
+  .from('project_sponsors')
+  .select('id, teacher_name, teacher_email, signed_on, confirmed_at, recorded_at')
+  .eq('project_id', id)
+  .is('superseded_at', null)
+  .maybeSingle();
+
+const { data: sponsorHistory } = await supabase
+  .from('project_sponsors')
+  .select('teacher_name, teacher_email, recorded_at, superseded_at')
+  .eq('project_id', id)
+  .not('superseded_at', 'is', null)
+  .order('recorded_at', { ascending: false });
+
+/* A sponsor who happens to be signed in can acknowledge it. Nothing waits. */
+const iSponsor = Boolean(
+  sponsor && session.email &&
+  sponsor.teacher_email.toLowerCase() === session.email.toLowerCase()
+);
+const iAuthor = isAuthorOf(attachments, account.id);
+const attachedIds = new Set(attachments.map((a: any) => a.users?.id));
+
+/* Everyone at this school holding a club role, minus the people already on
+   this project and anyone who is an author on it. */
+let candidates: any[] = [];
+
+if (me.runsTheClub) {
+  const { data: rows } = await supabase
+    .from('user_roles')
+    .select('role, users:user_id(id, display_name)')
+    .is('revoked_at', null)
+    .in('role', ['officer', 'advisor']);
+
+  /* An author who holds a club role may take their own project on. Excluding
+     them left an officer's own project unassignable forever, which is worse
+     than self-management being visible. */
+  const alreadyLooking = new Set([
+    ...officers.map((a: any) => a.users?.id),
+    ...selfManaged.map((a: any) => a.users?.id),
+  ]);
+
+  const seen = new Set<string>();
+  candidates = (rows ?? []).filter((r: any) => {
+    const uid = r.users?.id;
+    if (!uid || seen.has(uid) || alreadyLooking.has(uid)) return false;
+    seen.add(uid);
+    return true;
+  });
+}
+
+const fmt = (d: string | null) =>
+  d ? new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '—';
+---
+
+<Base title={`Who is on ${project.title}`} noindex={true}>
+  <div class="wrap">
+    <AppShell org={org} account={account} roles={roles} here="/app/" />
+
+    <section class="hero" style="padding-top:0">
+      <p class="t-lbl">{project.title}</p>
+      <h1 class="t-big">Who is on this project</h1>
+      <p class="lede">
+        Authors do the work. A club officer looks after it. The teacher project
+        sponsor signs the fair's form, and the student is the one who asks.
+      </p>
+      <p style="margin-top:18px">
+        <a class="btn btn-2" href={`/app/project/${id}/`}>Back to the notebook</a>
+      </p>
+    </section>
+
+    {error && <p class="note" role="alert">{error}</p>}
+    {detached && !error && <p class="note" role="status">Removed.</p>}
+    {cleared !== null && !error && <p class="note" role="status">Recorded.</p>}
+
+    <section class="sec">
+      <div class="sec-h"><b>Teacher project sponsor</b><span>Recorded by the student</span></div>
+
+      {sponsor ? (
+        <dl class="record">
+          <dt>Teacher</dt>
+          <dd>{sponsor.teacher_name}</dd>
+          <dt>Email</dt>
+          <dd>{sponsor.teacher_email}</dd>
+          <dt>Form signed</dt>
+          <dd>{sponsor.signed_on ? fmt(sponsor.signed_on) : 'Not recorded'}</dd>
+          <dt>Acknowledged</dt>
+          <dd>
+            {sponsor.confirmed_at
+              ? `Yes, ${fmt(sponsor.confirmed_at)}`
+              : 'Not yet. Nothing depends on it'}
+          </dd>
+        </dl>
+      ) : (
+        <div class="note">
+          <h4>No sponsor named</h4>
+          <p>
+            The fair requires a teacher to sign for the project.
+          </p>
+        </div>
+      )}
+
+      {iSponsor && sponsor && !sponsor.confirmed_at && (
+        <form method="POST" style="margin-top:16px">
+          <input type="hidden" name="action" value="confirm" />
+          <input type="hidden" name="sponsor_id" value={sponsor.id} />
+          <button type="submit">Yes, I am sponsoring this project</button>
+        </form>
+      )}
+
+      {(iAuthor || me.runsTheClub) && (
+        <form method="POST" class="assign" style="margin-top:20px">
+          <input type="hidden" name="action" value="sponsor" />
+          <label>
+            <span>Teacher's name</span>
+            <input name="teacher_name" required value={sponsor?.teacher_name ?? ''} />
+          </label>
+          <label>
+            <span>Their school email</span>
+            <input name="teacher_email" type="email" required value={sponsor?.teacher_email ?? ''} />
+            <small>They can sign in with their district email to see this notebook.</small>
+          </label>
+          <label>
+            <span>Date on the signature</span>
+            <input type="date" name="signed_on" value={sponsor?.signed_on ?? ''} />
+            <small>Clears the approval obligation, dated to the signature.</small>
+          </label>
+          <button type="submit">{sponsor ? 'Change the sponsor' : 'Record the sponsor'}</button>
+        </form>
+      )}
+
+      {sponsorHistory && sponsorHistory.length > 0 && (
+        <details style="margin-top:18px">
+          <summary class="t-sm">Previously named ({sponsorHistory.length})</summary>
+          <ul class="linklist" style="margin-top:10px">
+            {sponsorHistory.map((h: any) => (
+              <li class="t-sm">
+                {h.teacher_name} · {h.teacher_email} · replaced {fmt(h.superseded_at)}
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
+    </section>
+
+    <section class="sec">
+      <div class="sec-h"><b>People</b><span>{attachments.length}</span></div>
+      <table class="tbl">
+        <thead>
+          <tr>
+            <th scope="col">Name</th>
+            <th scope="col">On this project</th>
+            <th scope="col">Since</th>
+            <th scope="col"><span class="sr">Remove</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          {attachments.map((a: any) => (
+            <tr>
+              <td>
+                {a.users?.display_name}
+                {a.users?.grad_year && <span class="sub">class of {a.users.grad_year}</span>}
+              </td>
+              <td>
+                {attachmentLabel[a.role] ?? a.role}
+                {a.self_managed_at && <span class="sub">also looking after it</span>}
+              </td>
+              <td>{fmt(a.accepted_at)}</td>
+              <td>
+                {me.runsTheClub && a.role !== 'author' && (
+                  <form method="POST" class="inline">
+                    <input type="hidden" name="action" value="detach" />
+                    <input type="hidden" name="user_id" value={a.users?.id} />
+                    <button type="submit" class="linkish">Remove</button>
+                  </form>
+                )}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+
+      {officers.length === 0 && selfManaged.length === 0 && (
+        <div class="note" style="margin-top:20px">
+          <h4>No club officer assigned</h4>
+          <p><a href="/app/assign/">Assign</a></p>
+        </div>
+      )}
+    </section>
+
+    {me.runsTheClub && (
+      <section class="sec">
+        <div class="sec-h"><b>Assign a club officer</b><span>Officers and the advisor</span></div>
+        {candidates.length > 0 ? (
+          <form method="POST" class="assign">
+            <input type="hidden" name="action" value="officer" />
+            <label>
+              <span>Officer</span>
+              <select name="user_id" required>
+                {candidates.map((c: any) => (
+                  <option value={c.users.id}>{c.users.display_name}</option>
+                ))}
+              </select>
+            </label>
+            <button type="submit">Assign</button>
+          </form>
+        ) : (
+          <p class="t-sm">
+            Nobody at this school holds a club role who is not already on this
+            project.
+          </p>
+        )}
+      </section>
+    )}
+  </div>
+</Base>
+
+<style>
+  .hero { padding: 44px 0 28px; max-width: 74ch; }
+  .hero .t-lbl { margin-bottom: 14px; }
+  .sub { display: block; margin-top: 2px; font-family: var(--face-ui); font-size: 0.82rem; color: var(--ink-3); }
+  .inline { display: flex; gap: 8px; align-items: center; }
+  .linkish { background: none; border: 0; padding: 0; cursor: pointer; font-family: var(--face-ui); font-size: 0.86rem; color: var(--ink-3); }
+  .assign { display: flex; flex-wrap: wrap; gap: 14px; align-items: stretch; max-width: 82ch; }
+  .assign label {
+    display: flex;
+    flex-direction: column;
+    /* The hint under each field is a different length, so aligning on the top
+       left the three boxes at three different heights. The label grows, the
+       hint is pushed to the bottom, and the inputs line up. */
+    flex: 1 1 20ch;
+  }
+  .assign label > span { display: block; margin-bottom: 5px; font-family: var(--face-ui); font-size: 0.9rem; }
+  .assign small { display: block; margin-top: auto; padding-top: 4px; color: var(--ink-3); font-size: 0.84rem; }
+  .assign select,
+  .assign input { padding: 8px 10px; border: 1px solid var(--rule); background: var(--card); color: var(--ink); font: inherit; min-width: 20ch; }
+  .assign button { padding: 9px 16px; border: 1px solid var(--ink); background: var(--ink); color: var(--paper); font-family: var(--face-ui); font-size: 1rem; font-weight: 600; cursor: pointer; margin-top: 22px; }
+  .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+</style>
