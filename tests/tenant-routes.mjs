@@ -15,13 +15,16 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { NON_TENANT_TREES, ROOT_FILES } from '../src/config/routes.ts';
 
 const PAGES = 'src/pages';
 const TENANTED = path.join(PAGES, '[org]');
 
-/* On demand, hostname aware at request time. Plus the one file Astro
-   requires at the root. */
-const EXEMPT = new Set(['app', 'auth', '404.astro']);
+/* Read from the same file the middleware reads. This list used to be stated
+   here and again in the middleware, and updating one of them is how the
+   tracker came to be rewritten into a tenant path that matches nothing.
+   A test that guards a rule from its own copy of the rule guards nothing. */
+const EXEMPT = new Set([...NON_TENANT_TREES, ...ROOT_FILES]);
 
 const problems = [];
 

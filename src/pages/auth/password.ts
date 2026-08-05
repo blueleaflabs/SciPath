@@ -23,6 +23,6 @@ export const POST: APIRoute = async ({ request, cookies, locals, redirect }) => 
   const supabase = serverClient(request, cookies, runtime);
   const { error } = await supabase.auth.signInWithPassword({ email, password });
 
-  if (error) return redirect('/app/?error=password');
+  if (error) return redirect('/app/?signin=password');
   return redirect('/app/');
 };

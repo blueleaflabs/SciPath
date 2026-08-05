@@ -1,0 +1,220 @@
+---
+export const prerender = false;
+
+import Base from '../../../layouts/Base.astro';
+import { daysFrom } from '../../../lib/dates';
+import AppShell from '../../../components/AppShell.astro';
+import { activeOrg } from '../../../lib/tenant';
+import { serverClient } from '../../../lib/supabase';
+import { standing } from '../../../lib/roles';
+import { QUEUE_ORDER, editorLabel } from '../../../lib/workflow';
+
+const { session, account, roles } = Astro.locals;
+const org = activeOrg(Astro);
+
+if (!session) return Astro.redirect('/app/');
+if (!account) return Astro.redirect('/app/welcome/');
+
+const me = standing(roles, account?.population);
+const isEditor = me.isEditor;
+
+const supabase = serverClient(
+  Astro.request,
+  Astro.cookies,
+  (Astro.locals as any).runtime?.env
+);
+
+const { data: rows } = isEditor
+  ? await supabase
+      .from('submissions')
+      .select(
+        'id, state, round, submitted_at, assigned_editor, withdrawal_requested_at, record_kind, manuscripts(title), projects(title), users!submissions_assigned_editor_fkey(display_name)'
+      )
+      .order('submitted_at', { ascending: true })
+  : { data: [] };
+
+const submissions = rows ?? [];
+
+/* Reviews still out, so the queue can say what a state cannot: an editor
+   needs to know a paper is waiting on one person rather than on them. */
+const { data: reviewRows } = isEditor
+  ? await supabase
+      .from('reviews')
+      .select('submission_id, submitted_at, due_at')
+  : { data: [] };
+
+const reviewsFor = new Map<string, { out: number; overdue: number }>();
+for (const r of reviewRows ?? []) {
+  const tally = reviewsFor.get(r.submission_id) ?? { out: 0, overdue: 0 };
+  if (!r.submitted_at) {
+    tally.out += 1;
+    if (new Date(r.due_at) < new Date()) tally.overdue += 1;
+  }
+  reviewsFor.set(r.submission_id, tally);
+}
+
+const live = submissions.filter((s: any) => QUEUE_ORDER.includes(s.state));
+const done = submissions.filter((s: any) => !QUEUE_ORDER.includes(s.state));
+
+const byState = QUEUE_ORDER.map((state) => ({
+  state,
+  rows: live.filter((s: any) => s.state === state),
+})).filter((g) => g.rows.length > 0);
+
+const waited = (iso: string | null) => {
+  const days = daysFrom(iso);
+  if (days === null) return '';
+  const waiting = Math.abs(days);
+  if (waiting === 0) return 'today';
+  return `${waiting} ${waiting === 1 ? 'day' : 'days'}`;
+};
+---
+
+<Base title="Editorial" noindex={true}>
+  <div class="wrap">
+    <AppShell org={org} account={account} roles={roles} here="/app/editorial/" />
+
+    {!isEditor ? (
+      <section class="sec">
+        <p class="note">
+          The queue is for editors and the club advisor. If you should have it,
+          the advisor grants it.
+        </p>
+      </section>
+    ) : (
+      <>
+        <section class="hero">
+          <p class="t-lbl">Editorial</p>
+          <h1 class="t-big">The queue</h1>
+          <p class="lede">
+            {live.length === 0
+              ? 'Nothing is waiting.'
+              : `${live.length} ${live.length === 1 ? 'submission' : 'submissions'} in progress`}
+          </p>
+        </section>
+
+        {byState.map((group) => (
+          <section class="sec">
+            <div class="sec-h">
+              <b>{editorLabel[group.state]}</b>
+              <span>{group.rows.length}</span>
+            </div>
+
+            <ul class="q">
+              {group.rows.map((s: any) => {
+                const tally = reviewsFor.get(s.id) ?? { out: 0, overdue: 0 };
+                return (
+                  <li>
+                    <a href={`/app/editorial/${s.id}/`}>
+                      {s.manuscripts?.title ?? s.projects?.title ?? 'Untitled'}
+                    </a>
+                    <span class="meta">
+                      {s.record_kind === 'project' ? 'Project entry' : 'Article'}
+                      {s.round > 1 && ` · round ${s.round}`}
+                      {s.users?.display_name
+                        ? ` · ${s.users.display_name}`
+                        : ' · unclaimed'}
+                    </span>
+                    <span class="flags">
+                      {s.withdrawal_requested_at && (
+                        <b class="urgent">withdrawal asked</b>
+                      )}
+                      {tally.overdue > 0 && (
+                        <b class="urgent">{tally.overdue} overdue</b>
+                      )}
+                      {tally.overdue === 0 && tally.out > 0 && (
+                        <b>{tally.out} out</b>
+                      )}
+                      <i>{waited(s.submitted_at)}</i>
+                    </span>
+                  </li>
+                );
+              })}
+            </ul>
+          </section>
+        ))}
+
+        {live.length === 0 && (
+          <section class="sec">
+            <p class="note">
+              Nothing is waiting on anybody. This is what the queue looks like
+              when it is working.
+            </p>
+          </section>
+        )}
+
+        {done.length > 0 && (
+          <section class="sec">
+            <div class="sec-h"><b>Finished with</b><span>{done.length}</span></div>
+            <ul class="q quiet">
+              {done.map((s: any) => (
+                <li>
+                  <a href={`/app/editorial/${s.id}/`}>
+                    {s.manuscripts?.title ?? 'Untitled'}
+                  </a>
+                  <span class="meta">{editorLabel[s.state]}</span>
+                  <span class="flags"></span>
+                </li>
+              ))}
+            </ul>
+          </section>
+        )}
+      </>
+    )}
+  </div>
+</Base>
+
+<style>
+  .hero { padding: 34px 0 26px; }
+
+  .q {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    border-top: 1px solid var(--rule-fine);
+  }
+  .q li {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 4px 20px;
+    padding: 14px 0;
+    border-bottom: 1px solid var(--rule-fine);
+    align-items: baseline;
+  }
+  .q a {
+    font-size: 1.05rem;
+    grid-column: 1;
+  }
+  .q .meta {
+    grid-column: 1;
+    font-size: 0.88rem;
+    color: var(--ink-3);
+  }
+  .q .flags {
+    grid-column: 2;
+    grid-row: 1 / span 2;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    font-family: var(--face-num);
+    font-size: 0.8rem;
+    color: var(--ink-3);
+  }
+  .q .flags b {
+    font-weight: 400;
+    border: 1px solid var(--rule);
+    padding: 2px 8px;
+  }
+  /* Something is waiting on a person rather than on the process. */
+  .q .flags .urgent {
+    border-color: var(--alert);
+    color: var(--alert);
+  }
+  .q .flags i { font-style: normal; }
+  .q.quiet a { color: var(--ink-2); }
+
+  @media (max-width: 640px) {
+    .q li { grid-template-columns: 1fr; }
+    .q .flags { grid-column: 1; grid-row: auto; margin-top: 6px; }
+  }
+</style>

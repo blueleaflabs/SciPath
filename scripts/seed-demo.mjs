@@ -91,11 +91,15 @@ if (!isLoopback) {
  */
 const YEAR = new Date().getFullYear();
 
-/* Three roles. The officer is a student, usually the club president, and
-   holds real administrative authority; the mentor is the teacher. */
+/* Four roles now. The officer is a student, usually the club president, and
+   holds real administrative authority; the advisor is the teacher. Editor is
+   the fourth, restored in the review build, and it is deliberately not the
+   same set of people as officer: running the queue and chasing deadlines are
+   different jobs, and a club may hand them to different students. The
+   advisor is always an editor because the advisor decides. */
 const PEOPLE = [
   { handle: 'advisor',   name: 'S. Halvorsen', role: 'advisor', population: 'staff',   grad: null,     age: '18_plus' },
-  { handle: 'officer.a', name: 'T. Marchetti', role: 'officer', population: 'student', grad: YEAR + 1, age: '13_17' },
+  { handle: 'officer.a', name: 'T. Marchetti', role: 'officer', population: 'student', grad: YEAR + 1, age: '13_17', alsoEditor: true },
   { handle: 'officer.b', name: 'R. Calloway',  role: 'officer', population: 'student', grad: YEAR + 1, age: '13_17' },
   { handle: 'officer.c', name: 'P. Osei',      role: 'officer', population: 'student', grad: YEAR + 1, age: '13_17' },
   { handle: 'student.a', name: 'B. Adeyemi',  role: 'student', population: 'student', grad: YEAR + 2, age: '13_17' },
@@ -204,6 +208,11 @@ async function seedOrg(slug) {
        Only the advisor, who is a teacher, holds one. */
     const roles =
       person.role === 'officer' ? ['student', 'officer'] : [person.role];
+
+    /* One officer also runs the queue, so there is somebody to sign in as
+       who is an editor and not the advisor. Testing the whole flow as the
+       advisor would hide every place the two are wrongly conflated. */
+    if (person.alsoEditor) roles.push('editor');
 
     for (const role of roles) {
       /* Not an upsert. The uniqueness on user_roles comes from two partial

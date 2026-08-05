@@ -2,6 +2,7 @@
 export const prerender = false;
 
 import Base from '../../../layouts/Base.astro';
+import { formatDate, daysFrom } from '../../../lib/dates';
 import AppShell from '../../../components/AppShell.astro';
 import { activeOrg } from '../../../lib/tenant';
 import { serverClient } from '../../../lib/supabase';
@@ -65,6 +66,21 @@ if (Astro.request.method === 'POST') {
     if (e) error = e.message;
   }
 
+  if (action === 'result') {
+    const { error: e } = await supabase.rpc('record_entry_result', {
+      p_entry_id: id,
+      p_category: String(form.get('category') ?? ''),
+      p_entry_code: String(form.get('entry_code') ?? ''),
+      p_placement: String(form.get('placement') ?? ''),
+      p_awards: String(form.get('awards') ?? '')
+        .split(/\r?\n/)
+        .map((a) => a.trim())
+        .filter(Boolean),
+      p_advanced_to: String(form.get('advanced_to') ?? ''),
+    });
+    if (e) error = e.message;
+  }
+
   if (action === 'started') {
     const { error: e } = await supabase.rpc('set_project_start', {
       p_project_id: String(form.get('project_id') ?? ''),
@@ -76,7 +92,7 @@ if (Astro.request.method === 'POST') {
 
 const { data: entry } = await supabase
   .from('entries')
-  .select('id, status, placement, project_id, projects(id, title, started_on, stage, project_authors(role, users(id))), programs(name, season_year, fair_date, advances_to_fairs)')
+  .select('id, status, placement, category, entry_code, awards, advanced_to, result_recorded_at, project_id, projects(id, title, started_on, stage, project_authors(role, users(id))), programs(name, season_year, fair_date, advances_to_fairs)')
   .eq('id', id)
   .maybeSingle();
 
@@ -140,7 +156,7 @@ const worst = worstFinding(findings);
 const byId = new Map(findings.map((f) => [f.id, f]));
 
 const fmt = (d: string | null) =>
-  d ? new Date(d + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '—';
+  formatDate(d, 'short');
 
 /* What a derived obligation reports, and where to go and change it. */
 const derived = (m: any) => {
@@ -183,7 +199,7 @@ const dateLabel = now.toLocaleDateString('en-US', {
 });
 
 const daysUntil = (iso: string | null) =>
-  iso ? Math.round((Date.parse(iso + 'T00:00:00') - Date.parse(todayIso + 'T00:00:00')) / 86400000) : null;
+  iso ? daysFrom(iso) : null;
 
 const toFair = daysUntil(program?.fair_date ?? null);
 
@@ -349,6 +365,56 @@ const toNext = daysUntil(nextOpen?.due_on ?? null);
         </tbody>
       </table>
     </section>
+
+    <!-- ── What the fair decided ────────────────────────────────────────── -->
+    <section class="sec">
+      <div class="sec-h">
+        <b>Result</b>
+        <span>
+          {entry.result_recorded_at ? 'Recorded' : 'After the fair'}
+        </span>
+      </div>
+
+      <p class="aside">
+        What a published record quotes. Facts with names, and no adjectives
+        doing work the evidence should do.
+      </p>
+
+      <form method="POST" class="resultf">
+        <input type="hidden" name="action" value="result" />
+
+        <div class="rgrid">
+          <label>
+            <span>Category</span>
+            <input class="in" name="category" value={entry.category ?? ''} placeholder="Chemistry" />
+            <small>The fair's own, which need not match your discipline.</small>
+          </label>
+          <label>
+            <span>Entry code</span>
+            <input class="in" name="entry_code" value={entry.entry_code ?? ''} placeholder="CHEM047" />
+            <small>Displayed, never used as an identifier: the fair reassigns it next season.</small>
+          </label>
+          <label>
+            <span>Placement</span>
+            <input class="in" name="placement" value={entry.placement ?? ''} placeholder="Second Award" />
+            <small>What you placed in your category, if anything.</small>
+          </label>
+          <label>
+            <span>Advanced to</span>
+            <input class="in" name="advanced_to" value={entry.advanced_to ?? ''} placeholder="California Science and Engineering Fair" />
+            <small>Where this project actually went, not where placing could send it.</small>
+          </label>
+        </div>
+
+        <label>
+          <span>Awards, one per line</span>
+          <textarea class="ta" name="awards" rows="3" placeholder="Ricoh Sustainable Development Award">{(entry.awards ?? []).join('\n')}</textarea>
+          <small>Special awards and sponsored prizes. Facts with names, no adjectives.</small>
+        </label>
+
+        <button class="btn" type="submit">Record the result</button>
+      </form>
+    </section>
   </div>
 </Base>
 
@@ -379,6 +445,51 @@ const toNext = daysUntil(nextOpen?.due_on ?? null);
     padding: 16px 18px 18px;
     display: flex;
     flex-direction: column;
+  }
+
+  .resultf {
+    display: grid;
+    gap: 18px;
+    max-width: var(--measure-form);
+  }
+  .resultf label {
+    display: grid;
+    gap: 6px;
+    /* Without this a cell with shorter help text stretches and its input
+       floats away from the one beside it. */
+    align-content: start;
+  }
+  .resultf button,
+  .resultf .btn {
+    justify-self: start;
+    width: auto;
+  }
+  .aside {
+    max-width: var(--measure-form);
+    margin: 0 0 22px;
+    color: var(--ink-3);
+    font-size: 0.9rem;
+    line-height: 1.55;
+  }
+  .resultf label > span {
+    font-family: var(--face-ui);
+    font-size: 0.78rem;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: var(--ink-2);
+  }
+  .resultf small {
+    color: var(--ink-3);
+    font-size: 0.86rem;
+    line-height: 1.5;
+  }
+  .rgrid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 18px;
+  }
+  @media (max-width: 700px) {
+    .rgrid { grid-template-columns: 1fr; }
   }
 
   .kicker {

@@ -29,12 +29,17 @@ export const GET: APIRoute = async ({ params, request, cookies, locals }) => {
   /* Policies on these two tables already answer "may this person see it".
      If neither returns a row, either the object is not ours or they are not
      allowed to see it, and both answers are 404. */
-  const [{ data: media }, { data: deliverable }] = await Promise.all([
-    supabase.from('note_media').select('id').eq('storage_path', path).maybeSingle(),
-    supabase.from('deliverables').select('id').eq('storage_path', path).maybeSingle(),
-  ]);
+  const [{ data: media }, { data: deliverable }, { data: figure }, { data: paper }] =
+    await Promise.all([
+      supabase.from('note_media').select('id').eq('storage_path', path).maybeSingle(),
+      supabase.from('deliverables').select('id').eq('storage_path', path).maybeSingle(),
+      supabase.from('manuscript_figures').select('id').eq('storage_path', path).maybeSingle(),
+      supabase.from('manuscripts').select('id').eq('pdf_path', path).maybeSingle(),
+    ]);
 
-  if (!media && !deliverable) return new Response('Not found', { status: 404 });
+  if (!media && !deliverable && !figure && !paper) {
+    return new Response('Not found', { status: 404 });
+  }
 
   const object = await blobStore(locals).get(path);
   if (!object) return new Response('Not found', { status: 404 });

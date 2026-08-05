@@ -205,7 +205,7 @@ const fmt = (d: string | null) =>
                 <td><a href={`/app/project/${r.id}/`}>{r.title}</a></td>
                 <td>{r.authors.map((a: any) => a.users?.display_name).join(', ') || '—'}</td>
                 <td>{fmt(r.created_at)}</td>
-                <td>{r.sponsor ? r.sponsor.teacher_name : <span class="miss">none named</span>}</td>
+                <td class="spon">{r.sponsor ? r.sponsor.teacher_name : <span class="miss">none named</span>}</td>
                 <td>{r.total ? `${r.done} of ${r.total}` : '—'}</td>
                 <td>
                   <form method="POST" class="inline">
@@ -247,13 +247,13 @@ const fmt = (d: string | null) =>
             {assignedRows.map((r) => (
               <tr>
                 <td><a href={`/app/project/${r.id}/`}>{r.title}</a></td>
-                <td>
+                <td class="who">
                   {r.officers.length > 0
                     ? r.officers.map((o: any) => o.users?.display_name).join(', ')
                     : <>{r.selfManaged.map((o: any) => o.users?.display_name).join(', ')}
                         <span class="self">self-managed</span></>}
                 </td>
-                <td>{r.sponsor ? r.sponsor.teacher_name : <span class="miss">none named</span>}</td>
+                <td class="spon">{r.sponsor ? r.sponsor.teacher_name : <span class="miss">none named</span>}</td>
                 <td>{r.total ? `${r.done} of ${r.total}` : '—'}</td>
                 <td>
                   <form method="POST" class="inline">
@@ -324,14 +324,27 @@ const fmt = (d: string | null) =>
   .load .gap .n { color: var(--alert); }
   .load .gap .who { color: var(--alert); }
   .miss { color: var(--ink-3); font-style: italic; }
+  /* A qualifier on the name, not a second line under it.
+   
+     Set as a block in uppercase with letterspacing, "self-managed" was wider
+     than the column, hyphenated across two lines, and made that one row
+     noticeably taller than the seven around it. Inline, at the size of the
+     surrounding text, it reads as part of the same fact and costs no
+     height. */
   .self {
-    display: block;
-    margin-top: 2px;
-    font-family: var(--face-ui);
-    font-size: 0.78rem;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
+    white-space: nowrap;
     color: var(--ink-3);
+    font-size: 0.92rem;
+  }
+  .self::before {
+    content: ' · ';
+  }
+
+  /* Same reasoning one column over: "A. Beaumont" broken after the initial
+     is a wrapped line for no gain, and these columns have the room. */
+  .who,
+  .spon {
+    white-space: nowrap;
   }
   .row-bad td { background: var(--alert-bg); }
   .inline { display: flex; gap: 8px; align-items: center; }

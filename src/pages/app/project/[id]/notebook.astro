@@ -2,6 +2,7 @@
 export const prerender = false;
 
 import { activeOrg } from '../../../../lib/tenant';
+import { toDate } from '../../../../lib/dates';
 import { serverClient } from '../../../../lib/supabase';
 import { renderNote, linkDomain } from '../../../../lib/notes';
 
@@ -79,7 +80,7 @@ const first = notes?.[0]?.occurred_on ?? null;
 const last = notes?.[notes.length - 1]?.occurred_on ?? null;
 
 const fmt = (d: string | null) =>
-  d ? new Date(d + 'T00:00:00').toLocaleDateString('en-US', {
+  d ? toDate(d)!.toLocaleDateString('en-US', {
     year: 'numeric', month: 'long', day: 'numeric',
   }) : '—';
 

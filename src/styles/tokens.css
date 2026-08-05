@@ -22,6 +22,14 @@
   --u: 8px;
   --measure-text: 66ch;
   --measure-lede: 74ch;
+
+  /* Forms. Wider than the reading measure because a form has labels, help
+     text, and two column rows to fit, and narrower than the column because a
+     textarea is proofread as well as typed into: at the full 1080px a line
+     runs to about 130 characters, roughly double the comfortable range.
+     Every form block uses this one value, which is what makes the left and
+     right edges line up down the page. */
+  --measure-form: 72ch;
   --shell: 1080px;
   --shell-pad: 20px;
 }

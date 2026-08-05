@@ -1,0 +1,386 @@
+---
+export const prerender = false;
+
+import Base from '../../layouts/Base.astro';
+import AppShell from '../../components/AppShell.astro';
+import { activeOrg } from '../../lib/tenant';
+import { serverClient } from '../../lib/supabase';
+import { standing, roleLabel, GRANTABLE } from '../../lib/roles';
+import { formatDate } from '../../lib/dates';
+import { parseRoster, ROSTER_EXAMPLE } from '../../lib/roster';
+
+const { session, account, roles } = Astro.locals;
+const org = activeOrg(Astro);
+
+if (!session) return Astro.redirect('/app/');
+if (!account) return Astro.redirect('/app/welcome/');
+
+const me = standing(roles, account?.population);
+const supabase = serverClient(
+  Astro.request,
+  Astro.cookies,
+  (Astro.locals as any).runtime?.env
+);
+
+let error: string | null = null;
+let done: string | null = null;
+let outcomes: any[] = [];
+let rejected: any[] = [];
+
+if (Astro.request.method === 'POST' && me.isAdvisor) {
+  const form = await Astro.request.formData();
+  const action = String(form.get('action') ?? '');
+  const userId = String(form.get('user_id') ?? '');
+  const role = String(form.get('role') ?? '');
+
+  if (action === 'roster') {
+    const { rows, problems } = parseRoster(String(form.get('csv') ?? ''));
+    rejected = problems;
+
+    if (rows.length === 0) {
+      error = problems.length
+        ? 'Nothing on that list could be read.'
+        : 'Nothing to add.';
+    } else {
+      const { data, error: e } = await supabase.rpc('add_role_reservations', {
+        p_rows: rows.map((r) => ({
+          email: r.email,
+          display_name: r.display_name,
+          role: r.role,
+        })),
+      });
+      if (e) error = e.message;
+      else {
+        outcomes = data ?? [];
+        done = `${outcomes.length} ${outcomes.length === 1 ? 'line' : 'lines'} processed.`;
+      }
+    }
+  } else if (action === 'drop') {
+    const { error: e } = await supabase.rpc('drop_role_reservation', {
+      p_id: String(form.get('reservation_id') ?? ''),
+    });
+    if (e) error = e.message;
+    else done = 'Removed from the waiting list.';
+  } else {
+    const { error: e } = await supabase.rpc(
+      action === 'grant' ? 'grant_club_role' : 'revoke_club_role',
+      { p_user_id: userId, p_role: role }
+    );
+
+    if (e) error = e.message;
+    else done = action === 'grant' ? `${roleLabel[role]} granted.` : `${roleLabel[role]} taken back.`;
+  }
+}
+
+const [{ data: people }, { data: held }, { data: waiting }] = await Promise.all([
+  supabase
+    .from('users')
+    .select('id, display_name, population, grad_year')
+    .order('display_name'),
+  supabase
+    .from('user_roles')
+    .select('user_id, role, granted_at, granted_by')
+    .is('revoked_at', null),
+  supabase
+    .from('role_reservations')
+    .select('id, email, display_name, role, created_at')
+    .is('claimed_at', null)
+    .order('email'),
+]);
+
+const rolesFor = new Map<string, Set<string>>();
+const grantedAt = new Map<string, string>();
+for (const r of held ?? []) {
+  const set = rolesFor.get(r.user_id) ?? new Set<string>();
+  set.add(r.role);
+  rolesFor.set(r.user_id, set);
+  if (GRANTABLE.includes(r.role as any)) grantedAt.set(`${r.user_id}:${r.role}`, r.granted_at);
+}
+
+/* Staff first, then students by name. The advisor is looking for a student to
+   promote far more often than anything else, but the teachers are the shorter
+   list and belong at the top. */
+const roster = (people ?? []).sort((a: any, b: any) => {
+  if (a.population !== b.population) return a.population === 'staff' ? -1 : 1;
+  return a.display_name.localeCompare(b.display_name);
+});
+
+const counts = GRANTABLE.map((role) => ({
+  role,
+  n: (held ?? []).filter((r: any) => r.role === role).length,
+}));
+---
+
+<Base title="Who runs the club" noindex={true}>
+  <div class="wrap">
+    <AppShell org={org} account={account} roles={roles} here="/app/roles/" />
+
+    {!me.isAdvisor ? (
+      <section class="sec">
+        <p class="note">
+          Only the club advisor changes who runs the club. If something needs
+          changing, ask them.
+        </p>
+      </section>
+    ) : (
+      <>
+        <section class="hero">
+          <p class="t-lbl">Roles</p>
+          <h1 class="t-big">Who runs the club</h1>
+          <p class="lede">
+            {counts.map((c, i) => (
+              <>
+                {i > 0 && ' · '}
+                {c.n} {c.n === 1 ? roleLabel[c.role].toLowerCase() : `${roleLabel[c.role].toLowerCase()}s`}
+              </>
+            ))}
+          </p>
+        </section>
+
+        {error && <p class="note" role="alert">{error}</p>}
+        {done && !error && <p class="note" role="status">{done}</p>}
+
+        <section class="sec">
+          <div class="sec-h"><b>The roster</b><span>{roster.length}</span></div>
+
+          <p class="aside">
+            An <b>officer</b> manages projects, chases deadlines, and sees every
+            project at the school. An <b>editor</b> also runs the review queue:
+            screening, assigning reviewers, and deciding. They are separate on
+            purpose, so a club can hand the two jobs to different people.
+          </p>
+
+          <table class="tbl">
+            <thead>
+              <tr>
+                <th>Person</th>
+                {GRANTABLE.map((role) => <th>{roleLabel[role]}</th>)}
+              </tr>
+            </thead>
+            <tbody>
+              {roster.map((p: any) => {
+                const has = rolesFor.get(p.id) ?? new Set();
+                const isAdvisor = has.has('advisor');
+                return (
+                  <tr>
+                    <td>
+                      <b>{p.display_name}</b>
+                      <span class="sub">
+                        {isAdvisor
+                          ? roleLabel.advisor
+                          : p.grad_year
+                            ? `Class of ${p.grad_year}`
+                            : 'Staff'}
+                      </span>
+                    </td>
+
+                    {GRANTABLE.map((role) => (
+                      <td class="cell">
+                        {isAdvisor ? (
+                          <span class="na">holds everything</span>
+                        ) : has.has(role) ? (
+                          <form method="POST">
+                            <input type="hidden" name="action" value="revoke" />
+                            <input type="hidden" name="user_id" value={p.id} />
+                            <input type="hidden" name="role" value={role} />
+                            <button class="btn btn-q" type="submit">Take back</button>
+                            <span class="since">
+                              since {formatDate(grantedAt.get(`${p.id}:${role}`), 'short', '')}
+                            </span>
+                          </form>
+                        ) : (
+                          <form method="POST">
+                            <input type="hidden" name="action" value="grant" />
+                            <input type="hidden" name="user_id" value={p.id} />
+                            <input type="hidden" name="role" value={role} />
+                            <button class="btn btn-2" type="submit">Make {roleLabel[role].toLowerCase()}</button>
+                          </form>
+                        )}
+                      </td>
+                    ))}
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </section>
+
+        <!-- ── The roster ─────────────────────────────────────────────── -->
+        <section class="sec">
+          <div class="sec-h">
+            <b>Add from a list</b>
+            <span>{(waiting ?? []).length} waiting</span>
+          </div>
+
+          <p class="aside">
+            Paste a list, one person and role per line. Nobody gets an account
+            from this: signup is where somebody's age band is collected and
+            guardian permission is asked for, and a roster that created
+            accounts would walk around both. A line is a reservation. The
+            person signs up in the ordinary way and the role attaches when
+            they do. Somebody who already has an account gets it immediately.
+          </p>
+
+          <form method="POST" class="mform">
+            <input type="hidden" name="action" value="roster" />
+            <label>
+              <span>The list</span>
+              <textarea class="ta" name="csv" rows="6" placeholder={ROSTER_EXAMPLE}></textarea>
+              <small>
+                Comma separated. A header row is optional and the column order
+                does not matter. Officer and editor only.
+              </small>
+            </label>
+            <button class="btn btn-2" type="submit">Add them</button>
+          </form>
+
+          {outcomes.length > 0 && (
+            <table class="tbl" style="margin-top:26px">
+              <thead>
+                <tr><th>Address</th><th>Role</th><th>What happened</th></tr>
+              </thead>
+              <tbody>
+                {outcomes.map((o: any) => (
+                  <tr>
+                    <td>{o.email}</td>
+                    <td>{roleLabel[o.role] ?? o.role}</td>
+                    <td>{o.outcome}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+
+          {rejected.length > 0 && (
+            <ul class="bad">
+              {rejected.map((p: any) => (
+                <li>
+                  <b>Line {p.line}</b>
+                  <span>{p.reason}</span>
+                  <code>{p.text}</code>
+                </li>
+              ))}
+            </ul>
+          )}
+
+          {(waiting ?? []).length > 0 && (
+            <>
+              <h3 class="sub-h">Waiting for somebody to sign up</h3>
+              <table class="tbl">
+                <thead>
+                  <tr><th>Address</th><th>Role</th><th>Added</th><th></th></tr>
+                </thead>
+                <tbody>
+                  {(waiting ?? []).map((r: any) => (
+                    <tr>
+                      <td>
+                        <b>{r.display_name ?? r.email}</b>
+                        {r.display_name && <span class="sub">{r.email}</span>}
+                      </td>
+                      <td>{roleLabel[r.role] ?? r.role}</td>
+                      <td>{formatDate(r.created_at, 'short', '')}</td>
+                      <td>
+                        <form method="POST">
+                          <input type="hidden" name="action" value="drop" />
+                          <input type="hidden" name="reservation_id" value={r.id} />
+                          <button class="btn btn-q" type="submit">Remove</button>
+                        </form>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <p class="aside" style="margin-top:16px">
+                These do not expire. A name here for a student who never signs
+                up costs nothing and is one click to remove, which is more
+                honest than a date somebody would have to guess at.
+              </p>
+            </>
+          )}
+        </section>
+
+        <section class="sec">
+          <div class="note">
+            <h4>The one role that is not here</h4>
+            <p>
+              Yours. The advisor is a teacher, and a teacher's standing comes
+              from the school rather than from this software, so it is set when
+              the school is set up and cannot be handed out from inside. A role
+              that can appoint itself only has to be captured once.
+            </p>
+            <p>
+              Taking a role back does not delete the record of it. A club that
+              cannot say who was editor last season cannot explain a decision
+              made last season.
+            </p>
+          </div>
+        </section>
+      </>
+    )}
+  </div>
+</Base>
+
+<style>
+  .hero { padding: 34px 0 26px; }
+  .aside {
+    max-width: var(--measure-form);
+    margin: 0 0 24px;
+    color: var(--ink-2);
+    font-size: 0.94rem;
+    line-height: 1.6;
+  }
+  .tbl td .sub {
+    display: block;
+    margin-top: 3px;
+    font-family: var(--face-ui);
+    font-size: 0.82rem;
+    color: var(--ink-3);
+  }
+  .cell form {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 6px 12px;
+  }
+  .cell .since {
+    font-family: var(--face-num);
+    font-size: 0.8rem;
+    color: var(--ink-3);
+  }
+  .na {
+    font-family: var(--face-ui);
+    font-size: 0.84rem;
+    color: var(--ink-3);
+  }
+  .sub-h {
+    margin: 34px 0 12px;
+    font-family: var(--face-ui);
+    font-size: 0.82rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--ink-2);
+  }
+  .bad {
+    list-style: none;
+    margin: 22px 0 0;
+    padding: 0;
+    max-width: var(--measure-form);
+  }
+  .bad li {
+    display: grid;
+    grid-template-columns: 6rem 1fr;
+    gap: 4px 14px;
+    padding: 10px 0 10px 12px;
+    border-bottom: 1px solid var(--rule-fine);
+    box-shadow: inset 3px 0 0 var(--alert);
+  }
+  .bad b {
+    font-family: var(--face-num);
+    font-size: 0.85rem;
+  }
+  .bad code {
+    grid-column: 2;
+    font-size: 0.85rem;
+    color: var(--ink-3);
+  }
+</style>

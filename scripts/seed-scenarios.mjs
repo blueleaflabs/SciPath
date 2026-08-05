@@ -67,7 +67,16 @@ const SCENARIOS = [
     complete: 4,
     notes: 5,
     selection: 'selected',
-    note: 'Everything in order. The picture a healthy project makes.',
+    /* Finished, and the check should find nothing blocking. */
+    manuscript: {
+      write: 7,
+      references: 5,
+      keywords: ['thermal tolerance', 'intertidal', 'gastropods'],
+      discipline: 'biology-biomedicine',
+      abstract:
+        'Intertidal gastropods experience a steep thermal gradient across a few vertical meters of shore, and their upper thermal limits are known to shift with acclimation history. This study asked whether exposure logged directly in the field predicts thermal tolerance measured in the laboratory, using 240 animals collected across three shore bands on four dates, with continuous temperature logging at each band for the six weeks preceding collection. Survival at thirty two degrees fell from eighty eight percent at the high shore to forty one percent at the low shore, and logged exposure above twenty five degrees predicted the temperature of reattachment failure more strongly than shore height alone. Within band variation was large enough that height predicts a population mean well and an individual animal poorly. The design is correlational and cannot separate acclimation from selection, which a transplant experiment would.',
+    },
+    note: 'Everything in order, including a finished manuscript.',
   },
   {
     key: 'disqualified',
@@ -106,6 +115,16 @@ const SCENARIOS = [
     sponsor: { name: 'M. Lindqvist', email: 'm.lindqvist@fuhsd.org', signedDaysAgo: 40 },
     startedDaysAgo: 25,
     complete: 1,
+    /* Part written, so the editor shows a real 'four of thirteen'. */
+    manuscript: {
+      write: 3,
+      references: 2,
+      keywords: ['nitrate', 'stormwater'],
+      discipline: 'earth-climate',
+      abstract:
+        'Nitrate concentrations were sampled across four catchments at increasing distance from a major freeway to test whether roadway proximity predicts rainwater nitrate loading. Samples were collected after each of six storm events.',
+      contributions: null,
+    },
     /* Two obligations backdated into the past and left open. */
     overdue: 2,
     notes: 3,
@@ -129,6 +148,17 @@ const SCENARIOS = [
     title: 'Acoustic detection of bearing wear',
     question: 'Can a phone microphone detect bearing wear before failure?',
     authors: ['student.f'],
+    /* Arrived finished from elsewhere. Every automated finding is advice. */
+    manuscript: {
+      write: 0,
+      references: 0,
+      source: 'external',
+      bodyFormat: 'pdf-only',
+      keywords: ['acoustics', 'predictive maintenance', 'bearings'],
+      discipline: 'engineering-robotics',
+      abstract:
+        'Rolling element bearings emit a characteristic acoustic signature as they wear, well before failure. This work tests whether a phone microphone and a small convolutional model can detect that signature early enough to be useful, using recordings from a test rig run to destruction.',
+    },
     officer: null,
     sponsor: { name: 'J. Okonkwo', email: 'j.okonkwo@fuhsd.org', signedDaysAgo: 12 },
     startedDaysAgo: 8,
@@ -155,6 +185,18 @@ const SCENARIOS = [
     title: 'Low-cost turbidity sensing for creek monitoring',
     question: 'Can an LED and photodiode match a commercial turbidity meter?',
     authors: ['student.g', 'student.h'],
+    /* Two authors, and the contributions statement names only one, which is
+       the finding that is easy to miss by reading and trivial to catch. */
+    manuscript: {
+      write: 5,
+      references: 5,
+      keywords: ['turbidity', 'water quality', 'low-cost sensing'],
+      discipline: 'engineering-robotics',
+      abstract:
+        'Commercial turbidity meters cost more than a school science budget allows, which puts continuous creek monitoring out of reach for most student projects. This work tests whether an LED and photodiode pair, calibrated against formazin standards, can match a commercial nephelometer across the range encountered in a local creek. Paired measurements were taken at six sites over eight weeks, spanning two storm events, and the agreement between instruments was assessed by Bland-Altman analysis rather than by correlation alone.',
+      contributions:
+        'L. Nakamura designed the optical path, built and calibrated the sensor, ran the field comparison, and wrote the paper.',
+    },
     officer: 'officer.a',
     sponsor: { name: 'J. Okonkwo', email: 'j.okonkwo@fuhsd.org', signedDaysAgo: 22 },
     startedDaysAgo: 14,
@@ -193,6 +235,35 @@ const NOTE_TEXTS = [
 const OBSERVATIONS = [
   'Checked in with them. The rig is sound and the discard was the right call. Suggested they record the ambient temperature as well, since the lab is not stable overnight.',
   'Reminded them that the abstract deadline is earlier than they think and that the title cannot change after February.',
+];
+
+/* Manuscript prose, long enough to clear the word minimums where a scenario
+   is meant to read as finished and deliberately short where it is not. The
+   point is to be able to open the editor and see a real check result rather
+   than seven identical "not started" rows. */
+const SECTION_TEXT = {
+  background:
+    'Intertidal gastropods live across a steep thermal gradient compressed into a few vertical meters of shore, which makes them a convenient natural experiment in thermal tolerance. Animals at the high shore are emersed for longer on each tide and experience body temperatures well above the water they feed in, while animals a meter lower are rarely out of the splash zone. Published work has established that upper thermal limits vary with acclimation history, but most of it has been done on animals held at constant laboratory temperatures rather than on animals sampled directly from a shore with a known exposure regime. The question here is whether prior heat exposure measured in the field predicts the upper thermal limit measured in the laboratory, and whether that relationship is strong enough to be useful for predicting which populations are most at risk as summer air temperatures rise. If it holds, shore height becomes a cheap proxy for thermal vulnerability that anybody with a tape measure can apply.',
+  prior_work:
+    'Thermal tolerance in marine invertebrates is usually reported as a critical thermal maximum, the temperature at which a standardized behavior fails. Several studies have shown that this limit shifts with acclimation, typically by one to two degrees over a few weeks. Work on limpets and mussels has found that vertical position on the shore correlates with tolerance, though the effect sizes vary widely between sites and the mechanism is disputed: it may reflect acclimation, or selection, or simply that different species dominate at different heights. What has been done less often is to measure exposure directly at the same time as tolerance, in the same animals, on the same shore. That gap is the one this study works in.',
+  methods:
+    'Animals were collected from a single rocky shore across three bands defined by height above mean lower low water: high, at 1.8 to 2.1 meters, mid at 1.2 to 1.5 meters, and low at 0.4 to 0.7 meters. Twenty animals were taken from each band on each of four collection dates, giving 240 animals in total. Height was measured with a surveyor level against a tide staff rather than estimated by eye, because a twenty centimeter error spans most of the difference between bands. Temperature loggers were epoxied to the rock at each band and recorded at thirty second intervals for the six weeks preceding collection, so that each animal carries an exposure history rather than an assumed one. Animals were transported in chilled seawater and held at fourteen degrees for twenty four hours before testing to standardize handling stress. Thermal tolerance was assessed by ramping a water bath at one degree every fifteen minutes and recording the temperature at which an animal failed to reattach after being dislodged, tested blind to collection band by having a second person code the containers. Survival was scored again at twenty four hours. All analysis was done in R and the scripts are linked below.',
+  results:
+    'Survival at thirty two degrees fell from eighty eight percent in the high shore group to forty one percent in the low shore group, with the mid shore group intermediate at sixty seven percent. The relationship between logged exposure above twenty five degrees and the temperature of reattachment failure was positive and approximately linear across the range sampled. The upper asymptote sat roughly two degrees below the figure reported in the most cited comparable study, a difference discussed below. Variation within bands was substantial: the interquartile range within the high shore group overlapped the median of the mid shore group, so shore height predicts a population mean much better than it predicts any individual animal.',
+  discussion:
+    'The direction of the result matches the prediction and the size of it is large enough to matter, but three limitations bound what can be claimed. The design is correlational: animals were not moved between bands, so acclimation and selection cannot be separated, and either would produce this pattern. Collection happened across four dates spanning six weeks, and although exposure was logged continuously, the animals collected last had experienced a warmer period overall, which is partially confounded with band because the low shore loggers were submerged more often. And the reattachment endpoint is a behavioral proxy for a physiological limit, which is standard practice and still a proxy. The two degree offset from the published figure is most likely a population difference or a ramp rate difference rather than a measurement error, since the loggers were calibrated against an ice bath and agreed within three tenths of a degree.',
+  conclusion:
+    'Shore height, measured properly rather than estimated, predicts population level thermal tolerance on this shore well enough to be worth using. It does not predict individual tolerance, and any application that treats it as though it does will be wrong about specific animals a great deal of the time. The relationship with directly logged exposure is stronger than the relationship with height alone, which suggests that exposure is the thing doing the work and height is a proxy for it.',
+  future_work:
+    'The obvious next step is a transplant: move animals between bands, hold them for six weeks, and test them, which separates acclimation from selection in a way this design cannot. A second season would also address the confound between collection date and band. Extending the logger deployment through a full summer would show whether the relationship holds through the hottest part of the year or saturates.',
+};
+
+const REFERENCES = [
+  'Somero, G. N. (2010). The physiology of climate change. Journal of Experimental Biology, 213(6), 912-920.',
+  'Helmuth, B., et al. (2006). Mosaic patterns of thermal stress in the rocky intertidal zone. Ecological Monographs, 76(4), 461-479.',
+  'Stillman, J. H. (2003). Acclimation capacity underlies susceptibility to climate change. Science, 301(5629), 65.',
+  'Denny, M. W., & Harley, C. D. G. (2006). Hot limpets: predicting body temperature in a conductance-mediated thermal system. Journal of Experimental Biology, 209(13), 2409-2419.',
+  'Dong, Y., & Williams, G. A. (2011). Variations in cardiac performance and heat shock protein expression. Marine Biology, 158(6), 1223-1231.',
 ];
 
 /* ── Work ───────────────────────────────────────────────────────────────── */
@@ -442,6 +513,70 @@ async function main() {
       url: 'https://docs.google.com/spreadsheets/d/example',
       added_by: authors[0].id,
     });
+
+    /* The manuscript, at whatever stage this scenario is meant to show.
+       `write` is how many sections exist, so the editor reads as a real
+       document part way through rather than as a blank template. */
+    if (scene.manuscript) {
+      const spec = scene.manuscript;
+      const names = authors.map((a) => a.display_name);
+
+      const { data: manuscript } = await db
+        .from('manuscripts')
+        .insert({
+          org_id: org.id,
+          project_id: project.id,
+          record_kind: spec.kind ?? 'article',
+          source: spec.source ?? 'workbench',
+          body_format: spec.bodyFormat ?? 'full-text',
+          title: scene.title,
+          abstract: spec.abstract ?? null,
+          keywords: spec.keywords ?? [],
+          discipline: spec.discipline ?? null,
+          contributions:
+            spec.contributions === undefined
+              ? `${names.join(' and ')} designed the study, collected and analyzed the data, and wrote the paper. ${scene.sponsor ? `${scene.sponsor.name} reviewed the protocol and supervised laboratory safety.` : ''}`.trim()
+              : spec.contributions,
+          completed_on: shift(-2),
+          date_precision: 'month',
+          created_by: authors[0].id,
+        })
+        .select('id')
+        .single();
+
+      if (manuscript) {
+        const order = [
+          'background',
+          'prior_work',
+          'methods',
+          'results',
+          'discussion',
+          'conclusion',
+          'future_work',
+        ];
+
+        for (const [index, key] of order.entries()) {
+          if (index >= (spec.write ?? 0)) break;
+          await db.from('manuscript_sections').insert({
+            org_id: org.id,
+            manuscript_id: manuscript.id,
+            section_key: key,
+            body: SECTION_TEXT[key],
+            sort_order: index,
+            updated_by: authors[0].id,
+          });
+        }
+
+        for (const [index, citation] of REFERENCES.slice(0, spec.references ?? 0).entries()) {
+          await db.from('manuscript_references').insert({
+            org_id: org.id,
+            manuscript_id: manuscript.id,
+            sort_order: index + 1,
+            citation,
+          });
+        }
+      }
+    }
 
     console.log(
       `  ${scene.title}\n` +

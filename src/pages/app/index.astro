@@ -2,6 +2,7 @@
 export const prerender = false;
 
 import Base from '../../layouts/Base.astro';
+import { formatDate } from '../../lib/dates';
 import AppShell from '../../components/AppShell.astro';
 import { activeOrg } from '../../lib/tenant';
 import { serverClient } from '../../lib/supabase';
@@ -11,7 +12,9 @@ import { assess, tally } from '../../lib/attention';
 
 const { configured, session, account, roles } = Astro.locals;
 const org = activeOrg(Astro);
-const error = Astro.url.searchParams.get('error');
+/* Ours, not the provider's. See the comment in middleware.ts: sharing the
+   `error` parameter with Supabase produced a redirect loop. */
+const signin = Astro.url.searchParams.get('signin');
 
 if (configured && session && !account) return Astro.redirect('/app/welcome/');
 
@@ -50,6 +53,8 @@ if (Astro.request.method === 'POST' && supabase && me.runsTheClub) {
 
 /* --- What a student sees: their own entries -------------------------- */
 let myEntries: any[] = [];
+let myReviews: any[] = [];
+let myManuscripts = new Set<string>();
 
 /* --- What everyone else sees: the projects they are responsible for --- */
 let watched: any[] = [];
@@ -71,12 +76,32 @@ if (supabase && account) {
     const { data } = myProjectIds.length
       ? await supabase
           .from('entries')
-          .select('id, status, placement, programs(name, season_year, fair_date), projects(title, stage)')
+          .select('id, status, placement, project_id, programs(name, season_year, fair_date), projects(title, stage)')
           .in('project_id', myProjectIds)
           .order('entered_at', { ascending: false })
       : { data: [] as any[] };
 
     myEntries = data ?? [];
+
+    /* Which of these already have a manuscript, so the link can say "start"
+       or "open" rather than making somebody click to find out. */
+    const { data: started } = myProjectIds.length
+      ? await supabase.from('manuscripts').select('project_id').in('project_id', myProjectIds)
+      : { data: [] as any[] };
+
+    myManuscripts = new Set((started ?? []).map((m: any) => m.project_id));
+
+    /* Reviewing is an attachment rather than a standing role, so it appears
+       nowhere in the nav. If it did not appear here it would appear nowhere
+       at all, which is exactly how an assignment sits untouched until the
+       week of the fair. */
+    const { data: assigned } = await supabase
+      .from('reviews')
+      .select('id, due_at, submitted_at, submissions(manuscripts(title))')
+      .is('submitted_at', null)
+      .order('due_at', { ascending: true });
+
+    myReviews = assigned ?? [];
   }
 
   if (me.runsTheClub) {
@@ -174,8 +199,7 @@ if (supabase && account) {
   }
 }
 
-const fmt = (d: string | null) =>
-  d ? new Date(d + 'T00:00:00').toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' }) : 'To be announced';
+const fmt = (d: string | null) => formatDate(d, 'long', 'To be announced');
 
 const stageLabel: Record<string, string> = {
   registered: 'Registered',
@@ -205,17 +229,18 @@ const counts = tally(watched.map((w) => w.verdict));
       </p>
     )}
 
-    {error === 'cancelled' && (
+    {signin === 'cancelled' && (
       <p class="note" role="status">
         Sign in was cancelled, or the sign-in link expired. Nothing happened.
         Start again when you are ready.
       </p>
     )}
-    {error === 'password' && (
+    {signin === 'password' && (
       <p class="note" role="alert">That email and password did not match.</p>
     )}
-    {error === 'oauth' && <p class="note" role="alert">Sign in could not start. Try again.</p>}
-    {error === 'exchange' && <p class="note" role="alert">Sign in did not complete. Try again.</p>}
+    {signin === 'oauth' && <p class="note" role="alert">Sign in could not start. Try again.</p>}
+    {signin === 'exchange' && <p class="note" role="alert">Sign in did not complete. Try again.</p>}
+    {signin === 'no_code' && <p class="note" role="alert">Sign in did not complete. Try again.</p>}
     {error2 && <p class="note" role="alert">{error2}</p>}
     {cleared !== null && (
       <p class="note" role="status">
@@ -281,7 +306,7 @@ const counts = tally(watched.map((w) => w.verdict));
         {me.runsTheClub && (
           <section class="sec">
             <div class="sec-h">
-              <b>{me.runsTheClub ? 'Every project' : 'Projects you look after'}</b>
+              <b>{me.runsTheClub ? 'All projects' : 'Projects you look after'}</b>
               <span>{watched.length}</span>
             </div>
 
@@ -350,6 +375,30 @@ const counts = tally(watched.map((w) => w.verdict));
         {/* ---------------- STUDENT ---------------- */}
         {(me.isStudent || !me.runsTheClub) && (
           <>
+            {myReviews.length > 0 && (
+              <section class="sec">
+                <div class="sec-h">
+                  <b>To review</b>
+                  <span>{myReviews.length} waiting</span>
+                </div>
+                <ul class="plain">
+                  {myReviews.map((r) => {
+                    const late = new Date(r.due_at) < new Date();
+                    return (
+                      <li>
+                        <a href={`/app/review/${r.id}/`}>
+                          {r.submissions?.manuscripts?.title ?? 'A submission'}
+                        </a>
+                        <span class:list={['t-sm', late && 'late']}>
+                          {late ? 'overdue, was due ' : 'due '}{fmt(r.due_at)}
+                        </span>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </section>
+            )}
+
             <section class="sec">
               <div class="sec-h">
                 <b>This season</b>
@@ -359,8 +408,18 @@ const counts = tally(watched.map((w) => w.verdict));
                 <ul class="linklist">
                   {myEntries.map((e) => (
                     <li>
-                      <a href={`/app/entry/${e.id}/`}>{e.projects?.title}</a>
+                      {/* The project, not the entry. A student's own front page
+                          linking only to a deadlines view buried the work
+                          itself two clicks down. */}
+                      <a href={`/app/project/${e.project_id}/`}>{e.projects?.title}</a>
                       <span class="t-sm"> · {e.programs?.name} {e.programs?.season_year} · judging {fmt(e.programs?.fair_date)}</span>
+                      <span class="going">
+                        <a href={`/app/project/${e.project_id}/manuscript/`}>
+                          {myManuscripts.has(e.project_id) ? 'Manuscript' : 'Start the manuscript'}
+                        </a>
+                        <a href={`/app/entry/${e.id}/`}>Deadlines</a>
+                        <a href={`/app/project/${e.project_id}/team/`}>Who is on it</a>
+                      </span>
                     </li>
                   ))}
                 </ul>
@@ -386,6 +445,34 @@ const counts = tally(watched.map((w) => w.verdict));
 </Base>
 
 <style>
+  .plain { list-style: none; margin: 0; padding: 0; }
+  .plain li {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 10px;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--rule-fine);
+  }
+  .plain .late { color: var(--alert); }
+  /* The two or three places a student actually goes from a project, said
+     once rather than discovered by clicking. */
+  .going {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 16px;
+    margin-top: 6px;
+  }
+  .going a {
+    font-family: var(--face-ui);
+    font-size: 0.82rem;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+  }
+  .going a:hover {
+    color: var(--ink);
+  }
   .hero { padding: 44px 0 28px; max-width: 74ch; }
   .hero .t-lbl { margin-bottom: 14px; }
   .fixture { margin-top: 34px; padding: 18px 20px; border: 1px dashed var(--rule); max-width: 52ch; }
@@ -393,9 +480,31 @@ const counts = tally(watched.map((w) => w.verdict));
   .fixrow { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
   .fixrow input { flex: 1 1 14ch; padding: 8px 10px; border: 1px solid var(--rule); background: var(--card); color: var(--ink); font: inherit; font-size: 0.94rem; }
   .fixrow button { padding: 8px 14px; border: 1px solid var(--ink); background: var(--ink); color: var(--paper); font-family: var(--face-ui); font-size: 0.9rem; cursor: pointer; }
-  .countdown { display: flex; flex-wrap: wrap; margin-top: 26px; border-top: 1px solid var(--rule); border-bottom: 1px solid var(--rule); }
-  .countdown > div { padding: 14px 22px 14px 0; margin-right: 22px; border-right: 1px solid var(--rule-fine); }
-  .countdown > div:last-child { border-right: 0; margin-right: 0; }
+  /* A grid rather than a flex row. Sized to content, the fourth cell dropped
+     to a line of its own as soon as one label ran long, which left a gap
+     beside "disqualifying" and a stranded number underneath. Equal columns
+     put all four on one line and wrap them in pairs rather than one at a
+     time. */
+  .countdown {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    margin-top: 26px;
+    border-top: 1px solid var(--rule);
+    border-bottom: 1px solid var(--rule);
+  }
+  .countdown > div {
+    padding: 14px 22px 14px 0;
+    border-right: 1px solid var(--rule-fine);
+  }
+  .countdown > div:last-child { border-right: 0; }
+
+  @media (max-width: 720px) {
+    .countdown { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    /* The divider belongs between columns, so it comes off the right hand
+       one and the first row gains a rule underneath it. */
+    .countdown > div:nth-child(2n) { border-right: 0; }
+    .countdown > div:nth-child(-n + 2) { border-bottom: 1px solid var(--rule-fine); }
+  }
   .countdown b { display: block; font-size: 1.05rem; line-height: 1.2; }
   .countdown span { display: block; margin-top: 3px; font-family: var(--face-ui); font-size: 0.84rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--ink-3); }
   .also { font-size: 0.95rem; }

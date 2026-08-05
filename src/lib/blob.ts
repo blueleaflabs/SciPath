@@ -63,6 +63,16 @@ export function notePath(projectId: string, noteId: string, filename: string): s
   return `projects/${projectId}/notes/${noteId}/${Date.now()}-${clean}`;
 }
 
+export function figurePath(manuscriptId: string, filename: string): string {
+  const clean = filename.replace(/[^\w.-]/g, '_').slice(-80);
+  return `manuscripts/${manuscriptId}/figures/${Date.now()}-${clean}`;
+}
+
+export function manuscriptPdfPath(manuscriptId: string, filename: string): string {
+  const clean = filename.replace(/[^\w.-]/g, '_').slice(-80);
+  return `manuscripts/${manuscriptId}/paper/${Date.now()}-${clean}`;
+}
+
 export function deliverablePath(entryId: string, filename: string): string {
   const clean = filename.replace(/[^\w.-]/g, '_').slice(-80);
   return `entries/${entryId}/deliverables/${Date.now()}-${clean}`;

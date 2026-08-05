@@ -16,7 +16,10 @@ import { serverClient, isConfigured } from './lib/supabase';
 import { resolveOrg } from './lib/tenant';
 import { tenantSlugs } from './lib/tenant-paths';
 
+import { isNonTenantPath } from './config/routes';
+
 const GUARDED = '/app/';
+
 const SIGNUP = '/app/welcome/';
 /* The sign-in page, not the OAuth handoff. Bouncing someone straight to
    Google gives them no idea what they are agreeing to or which school they
@@ -39,17 +42,33 @@ export const onRequest = defineMiddleware(async (context, next) => {
      URL is one value and cannot be per tenant, so it lands on the bare host
      and looks like a broken homepage. Catch it anywhere and route it to the
      sign-in page with something readable. */
-  const oauthError = url.searchParams.get('error_code') ?? url.searchParams.get('error');
-  if (oauthError) {
+  /* Two namespaces, deliberately. `error` and `error_code` belong to the
+     identity provider; `signin` is ours.
+   
+     They used to share one, and the result was a redirect loop on every
+     failed sign in: our own /app/?error=password came back through here,
+     matched `error`, and was redirected to /app/?error=oauth, which matched
+     again. A password typed wrong took the browser round until it gave up.
+     Nothing about that said "wrong password", which is the part that made it
+     hard to see. */
+  const providerError =
+    url.searchParams.get('error_code') ?? url.searchParams.get('error');
+
+  if (providerError) {
     const kind =
-      oauthError === 'access_denied' || oauthError === 'bad_oauth_state'
+      providerError === 'access_denied' || providerError === 'bad_oauth_state'
         ? 'cancelled'
         : 'oauth';
-    return context.redirect(`/app/?error=${kind}`);
+    return context.redirect(`/app/?signin=${kind}`);
   }
 
-  const needsSession =
-    url.pathname.startsWith(GUARDED) || url.pathname.startsWith('/auth/');
+  /* The tracker needs no session to work, and it does need one to render.
+     Nobody is turned away from it, but somebody arriving from inside the
+     application should not be shown a Sign in button they already used. */
+  /* One list, in config/routes.ts, read by this and by test:routes. Keeping
+     two copies is how the tracker came to be rewritten into a tenant path
+     that matches nothing. */
+  const needsSession = isNonTenantPath(url.pathname);
 
   if (!needsSession) {
     /* Every public route is prerendered once per tenant under /[org]/, so a

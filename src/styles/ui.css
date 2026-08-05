@@ -582,6 +582,32 @@ a.btn-q:visited {
   background: var(--card);
 }
 
+/* TEXT PANELS CARRY THE MEASURE, AND THE TEXT INSIDE FILLS THEM.
+ *
+ * The measure used to live on .prose and .lede, so a padded card stretched
+ * to the full 1080px column while the paragraph inside it wrapped two thirds
+ * of the way across. The box then looked half empty on the right and every
+ * one of these panels had the same fault, on twenty pages.
+ *
+ * The container is the right place for a measure: a box and the text in it
+ * cannot disagree if only one of them is constrained. .prose and .lede keep
+ * their own caps for published articles, where they are not inside a panel.
+ *
+ * Bare .card without .pad is a stat tile rather than a text panel and is left
+ * alone, since those sit in grid columns that are already narrower than this.
+ */
+.card.pad,
+.note {
+  max-width: var(--measure-form);
+}
+
+.card.pad .prose,
+.card.pad .lede,
+.note .prose,
+.note .lede {
+  max-width: none;
+}
+
 .note h4 {
   font-family: var(--face-ui);
   font-weight: 700;
@@ -841,4 +867,83 @@ mark {
   color: var(--masthead-ink);
   line-height: 1.7;
   max-width: 74ch;
+}
+
+
+/* ===========================================================================
+ * FORMS
+ *
+ * These lived inside one page's <style> block and were reached for by class
+ * name from two others, which meant a form on the editorial page rendered
+ * its labels as plain body text while the same markup on the manuscript page
+ * did not. A class whose styles live somewhere else is a class that works by
+ * accident.
+ *
+ * One measure, one label treatment, one button placement, and every page that
+ * writes class="mform" gets all three.
+ * ======================================================================== */
+
+.mform {
+  display: grid;
+  gap: 18px;
+  max-width: var(--measure-form);
+}
+
+.mform label {
+  display: grid;
+  gap: 6px;
+  /* Without this, a cell whose help text runs to two lines stretches its row
+     and the input beside it floats down to meet nothing. */
+  align-content: start;
+}
+
+.mform label > span {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 14px;
+  font-family: var(--face-ui);
+  font-size: 0.78rem;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+}
+
+.mform small {
+  color: var(--ink-3);
+  font-size: 0.86rem;
+  line-height: 1.5;
+}
+
+/* A button in a grid stretches to fill its column unless told not to, which
+   is how one save turns into a banner across the page. */
+.mform button,
+.mform .btn {
+  justify-self: start;
+  width: auto;
+}
+
+/* Two and three across, collapsing together rather than one at a time. */
+.mform .row-2 {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+}
+
+.mform .row-3 {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 18px;
+}
+
+.mform .row-2 > label,
+.mform .row-3 > label {
+  align-content: start;
+}
+
+@media (max-width: 760px) {
+  .mform .row-2,
+  .mform .row-3 {
+    grid-template-columns: 1fr;
+  }
 }

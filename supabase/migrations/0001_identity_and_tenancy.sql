@@ -331,6 +331,12 @@ create table public.notifications (
   body          text not null,
   entity_type   text,
   entity_id     uuid,
+
+  -- Seven kinds bypass the digest: an authorship invitation, a review
+  -- assignment, and each thing a person is expected to act on or would be
+  -- embarrassed to learn about late. 11.5.
+  immediate     boolean not null default false,
+
   queued_at     timestamptz not null default now(),
   digest_bucket date,
   sent_at       timestamptz,
@@ -1376,7 +1382,7 @@ create policy projects_read on public.projects
     and (
       exists (
         select 1 from public.project_authors a
-         where a.project_id = id and a.user_id = (select auth.uid())
+         where a.project_id = projects.id and a.user_id = (select auth.uid())
       )
       or (select app.is_staff())
     )
@@ -1395,7 +1401,7 @@ create policy projects_update on public.projects
   using (
     exists (
       select 1 from public.project_authors a
-       where a.project_id = id
+       where a.project_id = projects.id
          and a.user_id = (select auth.uid())
          and a.role = 'author'
          and a.accepted_at is not null
@@ -1419,7 +1425,7 @@ create policy entries_read on public.entries
   using (
     exists (
       select 1 from public.project_authors a
-       where a.project_id = project_id and a.user_id = (select auth.uid())
+       where a.project_id = entries.project_id and a.user_id = (select auth.uid())
     )
     or (select app.is_staff())
   );
@@ -1429,7 +1435,7 @@ create policy entries_write on public.entries
   using (
     exists (
       select 1 from public.project_authors a
-       where a.project_id = project_id and a.user_id = (select auth.uid())
+       where a.project_id = entries.project_id and a.user_id = (select auth.uid())
     )
   );
 
@@ -1636,7 +1642,7 @@ create policy projects_read on public.projects
       created_by = (select auth.uid())
       or exists (
         select 1 from public.project_authors a
-         where a.project_id = id and a.user_id = (select auth.uid())
+         where a.project_id = projects.id and a.user_id = (select auth.uid())
       )
       or (select app.is_staff())
     )
@@ -2058,7 +2064,7 @@ create policy field_notes_read on public.field_notes
   for select to authenticated
   using (
     exists (select 1 from public.project_authors a
-             where a.project_id = project_id and a.user_id = (select auth.uid()))
+             where a.project_id = field_notes.project_id and a.user_id = (select auth.uid()))
     or (select app.is_staff())
   );
 
@@ -2077,7 +2083,7 @@ create policy project_links_read on public.project_links
   for select to authenticated
   using (
     exists (select 1 from public.project_authors a
-             where a.project_id = project_id and a.user_id = (select auth.uid()))
+             where a.project_id = project_links.project_id and a.user_id = (select auth.uid()))
     or (select app.is_staff())
   );
 
@@ -2590,14 +2596,14 @@ alter table public.user_roles
 
 alter table public.user_roles
   add constraint user_roles_role_check
-  check (role in ('student', 'officer', 'advisor'));
+  check (role in ('student', 'officer', 'advisor', 'editor'));
 
 alter table public.pending_role_grants
   drop constraint if exists pending_role_grants_role_check;
 
 alter table public.pending_role_grants
   add constraint pending_role_grants_role_check
-  check (role in ('student', 'officer', 'advisor'));
+  check (role in ('student', 'officer', 'advisor', 'editor'));
 
 alter table public.project_authors
   drop constraint if exists project_authors_role_check;
@@ -2978,7 +2984,7 @@ create policy projects_read on public.projects
       created_by = (select auth.uid())
       or exists (
         select 1 from public.project_authors a
-         where a.project_id = id and a.user_id = (select auth.uid())
+         where a.project_id = projects.id and a.user_id = (select auth.uid())
       )
       or (select app.is_staff())
       or (select app.sponsors_project(id))
@@ -2991,7 +2997,7 @@ create policy field_notes_read on public.field_notes
   for select to authenticated
   using (
     exists (select 1 from public.project_authors a
-             where a.project_id = project_id and a.user_id = (select auth.uid()))
+             where a.project_id = field_notes.project_id and a.user_id = (select auth.uid()))
     or (select app.is_staff())
     or (select app.sponsors_project(project_id))
   );
@@ -3003,7 +3009,7 @@ create policy entries_read on public.entries
   using (
     exists (
       select 1 from public.project_authors a
-       where a.project_id = project_id and a.user_id = (select auth.uid())
+       where a.project_id = entries.project_id and a.user_id = (select auth.uid())
     )
     or (select app.is_staff())
     or (select app.sponsors_project(project_id))
@@ -3033,7 +3039,7 @@ create policy project_sponsors_read on public.project_sponsors
     org_id = (select app.org_id())
     and (
       exists (select 1 from public.project_authors a
-               where a.project_id = project_id and a.user_id = (select auth.uid()))
+               where a.project_id = project_sponsors.project_id and a.user_id = (select auth.uid()))
       or (select app.is_staff())
       or (select app.sponsors_project(project_id))
     )
@@ -3892,5 +3898,2443 @@ end;
 $$;
 
 grant execute on function public.start_entry(uuid, text, date) to authenticated;
+
+notify pgrst, 'reload schema';
+
+
+-- ===========================================================================
+-- THE MANUSCRIPT
+--
+-- Publication does not begin at `submissions`. Section 8 assumed a thing to
+-- submit and nothing held one: `projects` carries a title, a question, a
+-- discipline, a stage, and a start date, while 8.1 needs an abstract,
+-- keywords, a contributions statement, references, and figures with captions
+-- and alt text, and 7.12 checks thirteen sections against minimum lengths.
+--
+-- One manuscript per project. A project that publishes twice is rare enough
+-- to handle on the day it happens rather than to model now.
+-- ===========================================================================
+
+create table public.manuscripts (
+  id            uuid primary key default gen_random_uuid(),
+  org_id        uuid not null references public.organizations on delete restrict,
+  project_id    uuid not null unique references public.projects on delete restrict,
+
+  -- An article is a manuscript. A project entry is what a fair produces:
+  -- a title, an abstract, a category, a board, and a result. They are
+  -- siblings rather than versions of each other, so the kind is a fact about
+  -- this record and never a stage it passes through.
+  record_kind   text not null default 'article'
+                  check (record_kind in ('article', 'project')),
+
+  -- Which path it arrived by. The published page reads this rather than
+  -- guessing, because a record that came in finished from somewhere else
+  -- must not claim a process it never went through.
+  source        text not null default 'workbench'
+                  check (source in ('workbench', 'external', 'migrated')),
+
+  title         text not null,
+  abstract      text,
+  keywords      text[] not null default '{}',
+  discipline    text,
+
+  -- Names what each author did and what any mentor did. The written form of
+  -- what Independent Work scores, and what the existing archive most
+  -- conspicuously lacks.
+  contributions text,
+
+  license       text not null default 'CC BY 4.0',
+
+  -- Month precision is the honest default: most work is known to the month,
+  -- and rendering a day nobody recorded is inventing one.
+  completed_on   date,
+  date_precision text not null default 'month'
+                  check (date_precision in ('month', 'day')),
+
+  body_format   text not null default 'full-text'
+                  check (body_format in ('full-text', 'pdf-only', 'link-only', 'none')),
+
+  -- Set only with link-only: the authoritative version held elsewhere, for
+  -- work a conference or journal already holds rights to.
+  external_url  text,
+  pdf_path      text,
+
+  created_by    uuid not null references public.users on delete restrict,
+  created_at    timestamptz not null default now(),
+  updated_at    timestamptz not null default now(),
+
+  constraint manuscripts_link_needs_url
+    check (body_format <> 'link-only' or external_url is not null)
+);
+
+create index manuscripts_org_idx on public.manuscripts (org_id);
+
+comment on table public.manuscripts is
+  'One per project. The thing that is submitted, reviewed, and published.';
+
+
+-- ---------------------------------------------------------------------------
+-- Sections are rows.
+--
+-- 7.12 checks presence and length per section, and a parser that infers a
+-- section from a student''s headings turns their formatting into a pass or a
+-- fail. `section_key` is the join to the rule set in src/config/structure.ts.
+-- ---------------------------------------------------------------------------
+
+create table public.manuscript_sections (
+  id            uuid primary key default gen_random_uuid(),
+  org_id        uuid not null references public.organizations on delete restrict,
+  manuscript_id uuid not null references public.manuscripts on delete restrict,
+
+  section_key   text not null,
+  body          text not null default '',
+  sort_order    int  not null default 0,
+
+  -- The concurrency token. Abstract and discussion are genuinely shared
+  -- prose between co-authors, which field notes deliberately are not.
+  updated_at    timestamptz not null default now(),
+  updated_by    uuid references public.users on delete restrict,
+  created_at    timestamptz not null default now(),
+
+  unique (manuscript_id, section_key)
+);
+
+create index manuscript_sections_idx
+  on public.manuscript_sections (manuscript_id, sort_order);
+
+
+-- ---------------------------------------------------------------------------
+-- A figure without alt text is impossible to store.
+--
+-- Not validated at submission, where somebody can be talked into waiving it.
+-- The column is NOT NULL and the check rejects whitespace, so the only way
+-- to have a figure is to have described it.
+-- ---------------------------------------------------------------------------
+
+create table public.manuscript_figures (
+  id            uuid primary key default gen_random_uuid(),
+  org_id        uuid not null references public.organizations on delete restrict,
+  manuscript_id uuid not null references public.manuscripts on delete restrict,
+
+  number        int  not null,
+  storage_path  text not null,
+  caption       text not null check (length(btrim(caption)) > 0),
+  alt           text not null check (length(btrim(alt)) > 0),
+
+  withdrawn_at  timestamptz,
+  added_by      uuid not null references public.users on delete restrict,
+  created_at    timestamptz not null default now(),
+  updated_at    timestamptz not null default now()
+);
+
+create unique index manuscript_figures_number_idx
+  on public.manuscript_figures (manuscript_id, number) where withdrawn_at is null;
+
+create index manuscript_figures_path_idx
+  on public.manuscript_figures (storage_path);
+
+
+create table public.manuscript_references (
+  id            uuid primary key default gen_random_uuid(),
+  org_id        uuid not null references public.organizations on delete restrict,
+  manuscript_id uuid not null references public.manuscripts on delete restrict,
+
+  sort_order    int  not null,
+  citation      text not null check (length(btrim(citation)) > 0),
+  created_at    timestamptz not null default now()
+);
+
+create index manuscript_references_idx
+  on public.manuscript_references (manuscript_id, sort_order);
+
+
+-- ---------------------------------------------------------------------------
+-- What the record quotes from the competition.
+--
+-- `placement` existed and nothing else did. "Presented at the Synopsys
+-- Championship 2027, Category: Computational Biology, First Award" is the
+-- evidence an admissions officer is looking for, and it cannot be assembled
+-- from a placement alone. `advances_to_fairs` on the program says where
+-- placing *can* send a project; this records where one *went*.
+--
+-- `entry_code` is the fair''s own, e.g. CHEM047. It is displayed and is never
+-- a key: the fair reassigns it to a different project next season.
+-- ---------------------------------------------------------------------------
+
+alter table public.entries
+  add column if not exists category    text,
+  add column if not exists entry_code  text,
+  add column if not exists awards      text[] not null default '{}',
+  add column if not exists advanced_to text,
+  add column if not exists result_recorded_at timestamptz,
+  add column if not exists result_recorded_by uuid references public.users on delete restrict;
+
+
+create trigger manuscripts_set_updated_at
+  before update on public.manuscripts
+  for each row execute function app.set_updated_at();
+
+create trigger manuscript_sections_set_updated_at
+  before update on public.manuscript_sections
+  for each row execute function app.set_updated_at();
+
+create trigger manuscript_figures_set_updated_at
+  before update on public.manuscript_figures
+  for each row execute function app.set_updated_at();
+
+
+-- ---------------------------------------------------------------------------
+-- Row level security answers "may I read this". A query still has to answer
+-- "is this mine", which is what the functions below do.
+-- ---------------------------------------------------------------------------
+
+alter table public.manuscripts            enable row level security;
+alter table public.manuscript_sections    enable row level security;
+alter table public.manuscript_figures     enable row level security;
+alter table public.manuscript_references  enable row level security;
+
+grant select, insert, update on
+  public.manuscripts, public.manuscript_sections,
+  public.manuscript_figures, public.manuscript_references
+  to authenticated, service_role;
+
+revoke delete on
+  public.manuscripts, public.manuscript_sections,
+  public.manuscript_figures, public.manuscript_references
+  from authenticated, anon, service_role;
+
+
+create or replace function app.manuscript_project(p_manuscript_id uuid)
+returns uuid
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select m.project_id from public.manuscripts m where m.id = p_manuscript_id;
+$$;
+
+grant execute on function app.manuscript_project(uuid) to authenticated;
+
+
+-- Who may see a project is already decided. These policies ask the same
+-- question in four more places rather than inventing a second answer.
+create policy manuscripts_read on public.manuscripts
+  for select to authenticated
+  using (
+    exists (select 1 from public.project_authors a
+             where a.project_id = manuscripts.project_id and a.user_id = (select auth.uid()))
+    or (select app.is_staff())
+  );
+
+create policy manuscripts_write on public.manuscripts
+  for insert to authenticated
+  with check (org_id = (select app.org_id()));
+
+create policy manuscripts_update on public.manuscripts
+  for update to authenticated
+  using (org_id = (select app.org_id()));
+
+create policy manuscript_sections_read on public.manuscript_sections
+  for select to authenticated
+  using (
+    exists (
+      select 1 from public.project_authors a
+       where a.project_id = (select app.manuscript_project(manuscript_sections.manuscript_id))
+         and a.user_id = (select auth.uid())
+    )
+    or (select app.is_staff())
+  );
+
+create policy manuscript_sections_write on public.manuscript_sections
+  for insert to authenticated
+  with check (org_id = (select app.org_id()));
+
+create policy manuscript_sections_update on public.manuscript_sections
+  for update to authenticated
+  using (org_id = (select app.org_id()));
+
+create policy manuscript_figures_read on public.manuscript_figures
+  for select to authenticated
+  using (
+    exists (
+      select 1 from public.project_authors a
+       where a.project_id = (select app.manuscript_project(manuscript_figures.manuscript_id))
+         and a.user_id = (select auth.uid())
+    )
+    or (select app.is_staff())
+  );
+
+create policy manuscript_figures_write on public.manuscript_figures
+  for insert to authenticated
+  with check (org_id = (select app.org_id()));
+
+create policy manuscript_figures_update on public.manuscript_figures
+  for update to authenticated
+  using (org_id = (select app.org_id()));
+
+create policy manuscript_references_read on public.manuscript_references
+  for select to authenticated
+  using (
+    exists (
+      select 1 from public.project_authors a
+       where a.project_id = (select app.manuscript_project(manuscript_references.manuscript_id))
+         and a.user_id = (select auth.uid())
+    )
+    or (select app.is_staff())
+  );
+
+create policy manuscript_references_write on public.manuscript_references
+  for insert to authenticated
+  with check (org_id = (select app.org_id()));
+
+create policy manuscript_references_update on public.manuscript_references
+  for update to authenticated
+  using (org_id = (select app.org_id()));
+
+
+-- ---------------------------------------------------------------------------
+-- Writing a manuscript.
+--
+-- Every function here requires authorship. An officer or an advisor reads
+-- everything and writes nothing, which is the same boundary 1.17 drew for
+-- deliverables and links: independent work is what a judge probes, and a
+-- club member editing a student''s methods section would make that claim
+-- untrue in a way nobody could later see.
+-- ---------------------------------------------------------------------------
+
+create or replace function app.require_author(p_project_id uuid)
+returns uuid
+language plpgsql
+stable
+security definer
+set search_path = ''
+as $$
+declare
+  v_uid uuid := auth.uid();
+  v_org uuid;
+begin
+  if v_uid is null then
+    raise exception 'not authenticated';
+  end if;
+
+  select p.org_id into v_org
+    from public.projects p where p.id = p_project_id;
+
+  if v_org is null then
+    raise exception 'no such project';
+  end if;
+
+  if not exists (
+    select 1 from public.project_authors a
+     where a.project_id = p_project_id
+       and a.user_id = v_uid
+       and a.role = 'author'
+       and a.accepted_at is not null
+  ) then
+    raise exception
+      'only an author of this project can change its manuscript. You can read it and add an observation to the notebook.';
+  end if;
+
+  return v_org;
+end;
+$$;
+
+grant execute on function app.require_author(uuid) to authenticated;
+
+
+create or replace function public.ensure_manuscript(p_project_id uuid)
+returns uuid
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_org   uuid;
+  v_id    uuid;
+  v_title text;
+  v_disc  text;
+begin
+  v_org := app.require_author(p_project_id);
+
+  select m.id into v_id
+    from public.manuscripts m where m.project_id = p_project_id;
+
+  if v_id is not null then
+    return v_id;
+  end if;
+
+  select p.title, p.discipline into v_title, v_disc
+    from public.projects p where p.id = p_project_id;
+
+  insert into public.manuscripts
+    (org_id, project_id, title, discipline, created_by)
+  values (v_org, p_project_id, v_title, v_disc, auth.uid())
+  returning id into v_id;
+
+  perform app.audit(v_org, 'manuscript.created', 'manuscripts', v_id, null,
+    jsonb_build_object('project_id', p_project_id));
+
+  return v_id;
+end;
+$$;
+
+grant execute on function public.ensure_manuscript(uuid) to authenticated;
+
+
+-- The concurrency token is passed in and compared. Two co-authors editing the
+-- same abstract is the ordinary case, not an edge one, and last-write-wins
+-- would lose somebody's paragraph without anybody knowing it happened.
+create or replace function public.save_manuscript(
+  p_manuscript_id  uuid,
+  p_expected       timestamptz,
+  p_title          text,
+  p_abstract       text default null,
+  p_keywords       text[] default '{}',
+  p_discipline     text default null,
+  p_contributions  text default null,
+  p_license        text default 'CC BY 4.0',
+  p_completed_on   date default null,
+  p_date_precision text default 'month',
+  p_record_kind    text default 'article',
+  p_body_format    text default 'full-text',
+  p_external_url   text default null
+)
+returns timestamptz
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_project uuid;
+  v_org     uuid;
+  v_current timestamptz;
+  v_who     text;
+begin
+  select m.project_id, m.updated_at into v_project, v_current
+    from public.manuscripts m where m.id = p_manuscript_id;
+
+  if v_project is null then
+    raise exception 'no such manuscript';
+  end if;
+
+  v_org := app.require_author(v_project);
+
+  if p_expected is not null and v_current is distinct from p_expected then
+    raise exception
+      'somebody else saved this while you were writing. Reload the page, and your text is still in the box below it.';
+  end if;
+
+  if coalesce(btrim(p_title), '') = '' then
+    raise exception 'the manuscript needs a title';
+  end if;
+
+  if p_body_format = 'link-only' and coalesce(btrim(p_external_url), '') = '' then
+    raise exception 'a record that points elsewhere needs the address it points at';
+  end if;
+
+  update public.manuscripts
+     set title          = btrim(p_title),
+         abstract       = nullif(btrim(coalesce(p_abstract, '')), ''),
+         keywords       = coalesce(p_keywords, '{}'),
+         discipline     = nullif(btrim(coalesce(p_discipline, '')), ''),
+         contributions  = nullif(btrim(coalesce(p_contributions, '')), ''),
+         license        = coalesce(nullif(btrim(p_license), ''), 'CC BY 4.0'),
+         completed_on   = p_completed_on,
+         date_precision = coalesce(p_date_precision, 'month'),
+         record_kind    = coalesce(p_record_kind, 'article'),
+         body_format    = coalesce(p_body_format, 'full-text'),
+         external_url   = nullif(btrim(coalesce(p_external_url, '')), '')
+   where id = p_manuscript_id
+   returning updated_at into v_current;
+
+  perform app.audit(v_org, 'manuscript.saved', 'manuscripts', p_manuscript_id, null,
+    jsonb_build_object('project_id', v_project));
+
+  return v_current;
+end;
+$$;
+
+grant execute on function public.save_manuscript(
+  uuid, timestamptz, text, text, text[], text, text, text, date, text, text, text, text
+) to authenticated;
+
+
+create or replace function public.save_section(
+  p_manuscript_id uuid,
+  p_section_key   text,
+  p_body          text,
+  p_sort_order    int default 0,
+  p_expected      timestamptz default null
+)
+returns timestamptz
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_project uuid;
+  v_org     uuid;
+  v_current timestamptz;
+  v_id      uuid;
+begin
+  select m.project_id into v_project
+    from public.manuscripts m where m.id = p_manuscript_id;
+
+  if v_project is null then
+    raise exception 'no such manuscript';
+  end if;
+
+  v_org := app.require_author(v_project);
+
+  select s.id, s.updated_at into v_id, v_current
+    from public.manuscript_sections s
+   where s.manuscript_id = p_manuscript_id and s.section_key = p_section_key;
+
+  if v_id is null then
+    insert into public.manuscript_sections
+      (org_id, manuscript_id, section_key, body, sort_order, updated_by)
+    values (v_org, p_manuscript_id, p_section_key, coalesce(p_body, ''),
+            coalesce(p_sort_order, 0), auth.uid())
+    returning updated_at into v_current;
+
+    return v_current;
+  end if;
+
+  if p_expected is not null and v_current is distinct from p_expected then
+    raise exception
+      'somebody else saved this section while you were writing it. Reload, and your text is still in the box.';
+  end if;
+
+  update public.manuscript_sections
+     set body = coalesce(p_body, ''),
+         sort_order = coalesce(p_sort_order, sort_order),
+         updated_by = auth.uid()
+   where id = v_id
+   returning updated_at into v_current;
+
+  return v_current;
+end;
+$$;
+
+grant execute on function public.save_section(uuid, text, text, int, timestamptz)
+  to authenticated;
+
+
+-- Numbering is assigned here rather than by the person, because a figure
+-- numbered by hand drifts from the body text the moment one is removed.
+create or replace function public.add_figure(
+  p_manuscript_id uuid,
+  p_storage_path  text,
+  p_caption       text,
+  p_alt           text
+)
+returns uuid
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_project uuid;
+  v_org     uuid;
+  v_next    int;
+  v_id      uuid;
+begin
+  select m.project_id into v_project
+    from public.manuscripts m where m.id = p_manuscript_id;
+
+  if v_project is null then
+    raise exception 'no such manuscript';
+  end if;
+
+  v_org := app.require_author(v_project);
+
+  if coalesce(btrim(p_caption), '') = '' then
+    raise exception 'a figure needs a caption. Say what it shows.';
+  end if;
+
+  if coalesce(btrim(p_alt), '') = '' then
+    raise exception
+      'a figure needs alt text. Describe what a reader who cannot see it would need to know.';
+  end if;
+
+  select coalesce(max(f.number), 0) + 1 into v_next
+    from public.manuscript_figures f
+   where f.manuscript_id = p_manuscript_id and f.withdrawn_at is null;
+
+  insert into public.manuscript_figures
+    (org_id, manuscript_id, number, storage_path, caption, alt, added_by)
+  values (v_org, p_manuscript_id, v_next, p_storage_path,
+          btrim(p_caption), btrim(p_alt), auth.uid())
+  returning id into v_id;
+
+  return v_id;
+end;
+$$;
+
+grant execute on function public.add_figure(uuid, text, text, text) to authenticated;
+
+
+create or replace function public.withdraw_figure(p_figure_id uuid)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_manuscript uuid;
+  v_project    uuid;
+begin
+  select f.manuscript_id into v_manuscript
+    from public.manuscript_figures f where f.id = p_figure_id;
+
+  if v_manuscript is null then
+    raise exception 'no such figure';
+  end if;
+
+  select m.project_id into v_project
+    from public.manuscripts m where m.id = v_manuscript;
+
+  perform app.require_author(v_project);
+
+  update public.manuscript_figures
+     set withdrawn_at = now()
+   where id = p_figure_id and withdrawn_at is null;
+
+  -- Close the gap, so Figure 3 does not vanish out of the middle of a
+  -- numbered sequence the body text refers to.
+  --
+  -- Two passes, and the reason is the partial unique index on
+  -- (manuscript_id, number). A partial index cannot be a deferrable
+  -- constraint, so uniqueness is checked as each row is written rather than
+  -- at the end of the statement. Renumbering 2,3 to 1,2 in one update
+  -- therefore fails the moment 3 becomes 2 while 2 is still 2, which is a
+  -- collision between a row and its own predecessor and reads as a
+  -- nonsensical error. Parking the numbers below zero first sidesteps it:
+  -- negatives cannot collide with positives, and they cannot collide with
+  -- each other because the numbers they came from were already unique.
+  update public.manuscript_figures
+     set number = -number
+   where manuscript_id = v_manuscript and withdrawn_at is null;
+
+  with ordered as (
+    select id, row_number() over (order by number desc) as n
+      from public.manuscript_figures
+     where manuscript_id = v_manuscript and withdrawn_at is null
+  )
+  update public.manuscript_figures f
+     set number = ordered.n
+    from ordered
+   where f.id = ordered.id;
+end;
+$$;
+
+grant execute on function public.withdraw_figure(uuid) to authenticated;
+
+
+-- References arrive as a block of text, one per line, because that is how a
+-- student has them: pasted out of a document. Replacing the set is simpler
+-- than reconciling it and there is nothing here worth preserving row identity
+-- for.
+create or replace function public.save_references(
+  p_manuscript_id uuid,
+  p_citations     text[]
+)
+returns int
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_project uuid;
+  v_org     uuid;
+  v_count   int := 0;
+  v_line    text;
+begin
+  select m.project_id into v_project
+    from public.manuscripts m where m.id = p_manuscript_id;
+
+  if v_project is null then
+    raise exception 'no such manuscript';
+  end if;
+
+  v_org := app.require_author(v_project);
+
+  delete from public.manuscript_references where manuscript_id = p_manuscript_id;
+
+  foreach v_line in array coalesce(p_citations, '{}') loop
+    if coalesce(btrim(v_line), '') <> '' then
+      v_count := v_count + 1;
+      insert into public.manuscript_references
+        (org_id, manuscript_id, sort_order, citation)
+      values (v_org, p_manuscript_id, v_count, btrim(v_line));
+    end if;
+  end loop;
+
+  return v_count;
+end;
+$$;
+
+grant execute on function public.save_references(uuid, text[]) to authenticated;
+
+-- Replacing the set means deleting the old rows, which is the one place in
+-- this schema where a delete is correct. Granted narrowly and to nothing else.
+grant delete on public.manuscript_references to authenticated, service_role;
+
+create policy manuscript_references_delete on public.manuscript_references
+  for delete to authenticated
+  using (org_id = (select app.org_id()));
+
+
+-- ---------------------------------------------------------------------------
+-- Recording what the fair decided.
+--
+-- Either an author or somebody running the club may record a result, which
+-- is a deliberate exception to the author-only rule above. A placement is a
+-- fact the fair announced rather than a claim a student makes about their
+-- own compliance, and in practice an officer standing at the awards ceremony
+-- knows it first.
+-- ---------------------------------------------------------------------------
+
+create or replace function public.record_entry_result(
+  p_entry_id    uuid,
+  p_category    text default null,
+  p_entry_code  text default null,
+  p_placement   text default null,
+  p_awards      text[] default '{}',
+  p_advanced_to text default null
+)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_uid     uuid := auth.uid();
+  v_org     uuid;
+  v_project uuid;
+begin
+  if v_uid is null then
+    raise exception 'not authenticated';
+  end if;
+
+  select e.org_id, e.project_id into v_org, v_project
+    from public.entries e where e.id = p_entry_id;
+
+  if v_org is null then
+    raise exception 'no such entry';
+  end if;
+
+  if not exists (
+    select 1 from public.project_authors a
+     where a.project_id = v_project and a.user_id = v_uid
+       and a.role = 'author' and a.accepted_at is not null
+  ) and not app.is_staff() then
+    raise exception 'only an author or somebody running the club can record a result';
+  end if;
+
+  update public.entries
+     set category    = nullif(btrim(coalesce(p_category, '')), ''),
+         entry_code  = nullif(btrim(coalesce(p_entry_code, '')), ''),
+         placement   = nullif(btrim(coalesce(p_placement, '')), ''),
+         awards      = coalesce(p_awards, '{}'),
+         advanced_to = nullif(btrim(coalesce(p_advanced_to, '')), ''),
+         result_recorded_at = now(),
+         result_recorded_by = v_uid
+   where id = p_entry_id;
+
+  perform app.audit(v_org, 'entry.result_recorded', 'entries', p_entry_id, null,
+    jsonb_build_object('placement', p_placement, 'awards', p_awards));
+end;
+$$;
+
+grant execute on function public.record_entry_result(uuid, text, text, text, text[], text)
+  to authenticated;
+
+notify pgrst, 'reload schema';
+
+
+-- ===========================================================================
+-- SUBMISSION
+--
+-- The seam between the working surface and the published one. Everything
+-- before this is the authors' own; everything after is a queue with a named
+-- human on the end of it.
+-- ===========================================================================
+
+create table public.submissions (
+  id            uuid primary key default gen_random_uuid(),
+  org_id        uuid not null references public.organizations on delete restrict,
+  project_id    uuid not null references public.projects on delete restrict,
+  manuscript_id uuid not null references public.manuscripts on delete restrict,
+  record_kind   text not null,
+
+  submitted_by  uuid references public.users on delete restrict,
+  submitted_at  timestamptz,
+
+  state         text not null default 'submitted'
+                  check (state in ('draft', 'submitted', 'screening', 'in_review',
+                                   'revisions_requested', 'editorial_review',
+                                   'accepted', 'scheduled', 'exported',
+                                   'published', 'declined', 'withdrawn')),
+  round         int not null default 1,
+
+  assigned_editor uuid references public.users on delete restrict,
+  decision      text,
+  decided_by    uuid references public.users on delete restrict,
+  decided_at    timestamptz,
+
+  -- The id is a bearer token in a URL. This is how it stops working.
+  tracking_revoked_at timestamptz,
+
+  -- Once reviewers are working, withdrawal stops being a button and becomes
+  -- a request an editor accepts. Recorded here rather than acted on.
+  withdrawal_requested_at timestamptz,
+  withdrawal_reason       text,
+
+  created_at    timestamptz not null default now(),
+  updated_at    timestamptz not null default now()
+);
+
+create index submissions_project_idx on public.submissions (project_id);
+create index submissions_state_idx on public.submissions (org_id, state);
+
+-- One live submission per manuscript. A withdrawn or declined one does not
+-- stop somebody trying again.
+create unique index submissions_one_live_idx
+  on public.submissions (manuscript_id)
+  where state not in ('withdrawn', 'declined');
+
+
+create table public.state_events (
+  id            bigserial primary key,
+  org_id        uuid not null references public.organizations on delete restrict,
+  submission_id uuid not null references public.submissions on delete restrict,
+
+  from_state    text,
+  to_state      text not null,
+  actor_id      uuid references public.users on delete restrict,
+
+  -- What the tracker shows. Never the raw state: the author sees
+  -- "With reviewers" where the queue says in_review with two named people on
+  -- it, and the two surfaces must not leak into each other.
+  public_label  text not null,
+  note          text,
+  occurred_at   timestamptz not null default now()
+);
+
+create index state_events_submission_idx
+  on public.state_events (submission_id, occurred_at);
+
+create trigger submissions_set_updated_at
+  before update on public.submissions
+  for each row execute function app.set_updated_at();
+
+alter table public.submissions  enable row level security;
+alter table public.state_events enable row level security;
+
+grant select, insert, update on public.submissions to authenticated, service_role;
+grant select, insert on public.state_events to authenticated, service_role;
+grant usage, select on sequence public.state_events_id_seq
+  to authenticated, service_role;
+
+revoke delete on public.submissions, public.state_events
+  from authenticated, anon, service_role;
+revoke update on public.state_events from authenticated, anon, service_role;
+
+create policy submissions_read on public.submissions
+  for select to authenticated
+  using (
+    exists (select 1 from public.project_authors a
+             where a.project_id = submissions.project_id
+               and a.user_id = (select auth.uid()))
+    or (select app.is_staff())
+  );
+
+create policy state_events_read on public.state_events
+  for select to authenticated
+  using (
+    exists (select 1 from public.submissions s
+             where s.id = state_events.submission_id
+               and (
+                 exists (select 1 from public.project_authors a
+                          where a.project_id = s.project_id
+                            and a.user_id = (select auth.uid()))
+                 or (select app.is_staff())
+               ))
+  );
+
+
+-- ---------------------------------------------------------------------------
+-- Submitting.
+--
+-- Three gates, and only two of them live here. Authorship acceptance and
+-- guardian consent are permission questions and belong in the database.
+-- The structural check does not: it is a completeness gate rather than a
+-- security boundary, it runs in the application against one rule set that the
+-- public checklist also reads, and somebody who defeats it has submitted an
+-- incomplete paper that an editor will see at screening.
+-- ---------------------------------------------------------------------------
+
+create or replace function public.submit_manuscript(p_manuscript_id uuid)
+returns uuid
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_uid       uuid := auth.uid();
+  v_project   uuid;
+  v_org       uuid;
+  v_kind      text;
+  v_id        uuid;
+  v_unaccepted text;
+  v_unconsented text;
+begin
+  select m.project_id, m.record_kind into v_project, v_kind
+    from public.manuscripts m where m.id = p_manuscript_id;
+
+  if v_project is null then
+    raise exception 'no such manuscript';
+  end if;
+
+  v_org := app.require_author(v_project);
+
+  -- Attributing work to somebody who has not agreed to it is not a
+  -- formatting problem, so this blocks on every path.
+  select string_agg(u.display_name, ', ')
+    into v_unaccepted
+    from public.project_authors a
+    join public.users u on u.id = a.user_id
+   where a.project_id = v_project
+     and a.role = 'author'
+     and a.accepted_at is null;
+
+  if v_unaccepted is not null then
+    raise exception
+      '% has not accepted authorship yet. Nothing is submitted until every listed author has.',
+      v_unaccepted;
+  end if;
+
+  -- Every listed author who is a minor, not only the person pressing the
+  -- button. A two author paper has two guardians.
+  select string_agg(u.display_name, ', ')
+    into v_unconsented
+    from public.project_authors a
+    join public.users u on u.id = a.user_id
+   where a.project_id = v_project
+     and a.role = 'author'
+     and u.consent_state not in ('active', 'not_required');
+
+  if v_unconsented is not null then
+    raise exception
+      'Guardian permission has not been confirmed for %. Nothing can be published before it is.',
+      v_unconsented;
+  end if;
+
+  if exists (
+    select 1 from public.submissions s
+     where s.manuscript_id = p_manuscript_id
+       and s.state not in ('withdrawn', 'declined')
+  ) then
+    raise exception 'this manuscript has already been submitted';
+  end if;
+
+  insert into public.submissions
+    (org_id, project_id, manuscript_id, record_kind, submitted_by, submitted_at, state)
+  values (v_org, v_project, p_manuscript_id, v_kind, v_uid, now(), 'submitted')
+  returning id into v_id;
+
+  insert into public.state_events
+    (org_id, submission_id, from_state, to_state, actor_id, public_label)
+  values (v_org, v_id, 'draft', 'submitted', v_uid, 'Received');
+
+  perform app.audit(v_org, 'submission.created', 'submissions', v_id, null,
+    jsonb_build_object('project_id', v_project, 'manuscript_id', p_manuscript_id));
+
+  return v_id;
+end;
+$$;
+
+grant execute on function public.submit_manuscript(uuid) to authenticated;
+
+
+create or replace function public.withdraw_submission(p_submission_id uuid)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_project uuid;
+  v_org     uuid;
+  v_state   text;
+begin
+  select s.project_id, s.org_id, s.state into v_project, v_org, v_state
+    from public.submissions s where s.id = p_submission_id;
+
+  if v_project is null then
+    raise exception 'no such submission';
+  end if;
+
+  perform app.require_author(v_project);
+
+  if v_state = 'published' then
+    raise exception
+      'a published record is not withdrawn. It is corrected or retracted, and both leave a dated notice.';
+  end if;
+
+  /* Before anybody has read it, withdrawal is the authors' own business.
+     Once reviewers are working it becomes a request, because other people
+     have spent time on it by then. That is what journals do, and COPE's
+     position is that a request made before formal acceptance should be
+     accepted, so this is a change of manners rather than a refusal. */
+  if v_state not in ('draft', 'submitted', 'screening') then
+    raise exception
+      'reviewers are already working on this. Ask to withdraw instead, and an editor will confirm it.';
+  end if;
+
+  update public.submissions
+     set state = 'withdrawn'
+   where id = p_submission_id;
+
+  insert into public.state_events
+    (org_id, submission_id, from_state, to_state, actor_id, public_label)
+  values (v_org, p_submission_id, v_state, 'withdrawn', auth.uid(), 'Withdrawn by the authors');
+end;
+$$;
+
+grant execute on function public.withdraw_submission(uuid) to authenticated;
+
+
+create or replace function public.request_withdrawal(
+  p_submission_id uuid,
+  p_reason        text default null
+)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_project uuid;
+  v_org     uuid;
+  v_state   text;
+begin
+  select s.project_id, s.org_id, s.state into v_project, v_org, v_state
+    from public.submissions s where s.id = p_submission_id;
+
+  if v_project is null then
+    raise exception 'no such submission';
+  end if;
+
+  perform app.require_author(v_project);
+
+  if v_state = 'published' then
+    raise exception
+      'a published record is not withdrawn. It is corrected or retracted, and both leave a dated notice.';
+  end if;
+
+  update public.submissions
+     set withdrawal_requested_at = now(),
+         withdrawal_reason = nullif(btrim(coalesce(p_reason, '')), '')
+   where id = p_submission_id;
+
+  /* The state does not move. An editor confirms it, which is the whole point
+     of it being a request rather than a button. */
+  insert into public.state_events
+    (org_id, submission_id, from_state, to_state, actor_id, public_label, note)
+  values (v_org, p_submission_id, v_state, v_state, auth.uid(),
+          'Withdrawal requested by the authors', p_reason);
+
+  perform app.audit(v_org, 'submission.withdrawal_requested', 'submissions',
+    p_submission_id, null, jsonb_build_object('reason', p_reason));
+end;
+$$;
+
+grant execute on function public.request_withdrawal(uuid, text) to authenticated;
+
+
+-- ---------------------------------------------------------------------------
+-- The public tracker.
+--
+-- A per-submission URL with an opaque identifier, no login. The id in the URL
+-- is a bearer token, so this returns the least that is useful and nothing
+-- that could embarrass anyone: no reviewer names, no comments, no editor
+-- notes, no addresses. The author's own view, behind a login, shows the rest.
+-- ---------------------------------------------------------------------------
+
+create or replace function public.track_submission(p_id uuid)
+returns table (
+  title       text,
+  authors     text,
+  record_kind text,
+  state       text,
+  submitted_at timestamptz,
+  events      jsonb
+)
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select
+    m.title,
+    (select string_agg(u.display_name, ', ' order by a.created_at)
+       from public.project_authors a
+       join public.users u on u.id = a.user_id
+      where a.project_id = s.project_id and a.role = 'author'),
+    s.record_kind,
+    s.state,
+    s.submitted_at,
+    (select jsonb_agg(jsonb_build_object('label', e.public_label, 'on', e.occurred_at)
+                      order by e.occurred_at)
+       from public.state_events e where e.submission_id = s.id)
+  from public.submissions s
+  join public.manuscripts m on m.id = s.manuscript_id
+ where s.id = p_id
+   and s.tracking_revoked_at is null;
+$$;
+
+grant execute on function public.track_submission(uuid) to anon, authenticated;
+
+
+-- ---------------------------------------------------------------------------
+-- A finished paper, brought in as a file.
+-- ---------------------------------------------------------------------------
+
+create or replace function public.set_manuscript_pdf(
+  p_manuscript_id uuid,
+  p_storage_path  text
+)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_project uuid;
+begin
+  select m.project_id into v_project
+    from public.manuscripts m where m.id = p_manuscript_id;
+
+  if v_project is null then
+    raise exception 'no such manuscript';
+  end if;
+
+  perform app.require_author(v_project);
+
+  update public.manuscripts
+     set pdf_path = nullif(btrim(coalesce(p_storage_path, '')), '')
+   where id = p_manuscript_id;
+end;
+$$;
+
+grant execute on function public.set_manuscript_pdf(uuid, text) to authenticated;
+
+notify pgrst, 'reload schema';
+
+
+-- ===========================================================================
+-- EDITORIAL REVIEW
+--
+-- 1.13 collapsed six roles into three and recorded that reviewer and editor
+-- return when peer review is built. This is that.
+--
+-- They return on different axes, which is 6.4's correction applied a second
+-- time. Being an editor is a standing fact about a person: they run the
+-- queue, they screen, they decide. Reviewing one submission is a fact about
+-- that submission, so it is an attachment with a due date rather than a
+-- badge somebody keeps between seasons.
+--
+-- And be precise about what this is. Editorial review by named reviewers,
+-- not double blind peer review. In a club this size blinding is theater, and
+-- signed review is both the honest option and the better teaching.
+-- ===========================================================================
+
+create or replace function app.is_editor()
+returns boolean
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select exists (
+    select 1 from public.user_roles r
+     where r.user_id = auth.uid()
+       and r.role in ('editor', 'advisor')
+       and r.revoked_at is null
+  );
+$$;
+
+grant execute on function app.is_editor() to authenticated;
+
+comment on function app.is_editor is
+  'Editors and the club advisor. The advisor is always an editor because the advisor decides.';
+
+
+create table public.reviews (
+  id            uuid primary key default gen_random_uuid(),
+  org_id        uuid not null references public.organizations on delete restrict,
+  submission_id uuid not null references public.submissions on delete restrict,
+  reviewer_id   uuid not null references public.users on delete restrict,
+  round         int  not null,
+
+  assigned_at   timestamptz not null default now(),
+  assigned_by   uuid references public.users on delete restrict,
+  due_at        timestamptz not null,
+  submitted_at  timestamptz,
+  declined_at   timestamptz,
+
+  recommendation text check (recommendation in ('accept', 'minor', 'major', 'decline')),
+
+  -- The structured form. Scales inform the reviewer's thinking and are never
+  -- averaged into a score, because a number would be argued with and the
+  -- prose would not be read.
+  responses     jsonb,
+
+  comments_to_author text,
+  -- Authors never read this, and it is not protected by a policy. Their
+  -- access to a review goes through a function that does not select the
+  -- column, so it cannot leak by somebody widening a query later.
+  comments_to_editor text,
+
+  created_at    timestamptz not null default now(),
+  updated_at    timestamptz not null default now(),
+
+  unique (submission_id, reviewer_id, round)
+);
+
+create index reviews_reviewer_idx on public.reviews (reviewer_id, submitted_at);
+create index reviews_submission_idx on public.reviews (submission_id, round);
+
+
+-- The editor's consolidated list. Authors get one merged, ordered set of
+-- changes, not raw reviewer dumps: two reviewers contradicting each other is
+-- the editor's problem to resolve, not the student's to referee.
+create table public.review_findings (
+  id            uuid primary key default gen_random_uuid(),
+  org_id        uuid not null references public.organizations on delete restrict,
+  submission_id uuid not null references public.submissions on delete restrict,
+  round         int  not null,
+  sort_order    int  not null,
+
+  severity      text not null check (severity in ('required', 'suggested')),
+  section       text,
+  finding       text not null check (length(btrim(finding)) > 0),
+
+  -- The author works down the list and answers each one, which produces the
+  -- response to reviewers document. Standard practice, and an unusually good
+  -- teaching artifact: it makes a student defend or concede each point in
+  -- writing.
+  author_response text,
+  resolved      boolean not null default false,
+
+  created_by    uuid references public.users on delete restrict,
+  created_at    timestamptz not null default now(),
+  updated_at    timestamptz not null default now()
+);
+
+create index review_findings_idx
+  on public.review_findings (submission_id, round, sort_order);
+
+create trigger reviews_set_updated_at
+  before update on public.reviews
+  for each row execute function app.set_updated_at();
+
+create trigger review_findings_set_updated_at
+  before update on public.review_findings
+  for each row execute function app.set_updated_at();
+
+alter table public.reviews         enable row level security;
+alter table public.review_findings enable row level security;
+
+grant select, insert, update on public.reviews, public.review_findings
+  to authenticated, service_role;
+revoke delete on public.reviews, public.review_findings
+  from authenticated, anon, service_role;
+
+
+-- A reviewer reads their own assignment. An editor reads all of them.
+-- An author reads none of them, and gets the parts meant for them through
+-- author_feedback() instead.
+create policy reviews_read on public.reviews
+  for select to authenticated
+  using (
+    reviews.reviewer_id = (select auth.uid())
+    or (select app.is_editor())
+  );
+
+create policy reviews_write on public.reviews
+  for insert to authenticated
+  with check (org_id = (select app.org_id()) and (select app.is_editor()));
+
+create policy reviews_update on public.reviews
+  for update to authenticated
+  using (
+    org_id = (select app.org_id())
+    and (reviews.reviewer_id = (select auth.uid()) or (select app.is_editor()))
+  );
+
+-- Findings are the half of a review the author is meant to read.
+create policy review_findings_read on public.review_findings
+  for select to authenticated
+  using (
+    (select app.is_editor())
+    or exists (
+      select 1 from public.submissions s
+       join public.project_authors a on a.project_id = s.project_id
+       where s.id = review_findings.submission_id
+         and a.user_id = (select auth.uid())
+         and a.role = 'author'
+    )
+  );
+
+create policy review_findings_write on public.review_findings
+  for insert to authenticated
+  with check (org_id = (select app.org_id()) and (select app.is_editor()));
+
+create policy review_findings_update on public.review_findings
+  for update to authenticated
+  using (org_id = (select app.org_id()));
+
+
+-- ---------------------------------------------------------------------------
+-- Moving a submission.
+--
+-- One guard, used by every transition, so the state machine is stated once
+-- rather than reimplemented in each function. The same table is mirrored in
+-- src/lib/workflow.ts for the interface, and a test asserts the two agree.
+-- ---------------------------------------------------------------------------
+
+create or replace function app.move_submission(
+  p_submission_id uuid,
+  p_to            text,
+  p_label         text,
+  p_note          text default null
+)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_org   uuid;
+  v_from  text;
+begin
+  select s.org_id, s.state into v_org, v_from
+    from public.submissions s where s.id = p_submission_id;
+
+  if v_org is null then
+    raise exception 'no such submission';
+  end if;
+
+  update public.submissions set state = p_to where id = p_submission_id;
+
+  insert into public.state_events
+    (org_id, submission_id, from_state, to_state, actor_id, public_label, note)
+  values (v_org, p_submission_id, v_from, p_to, auth.uid(), p_label, p_note);
+
+  perform app.audit(v_org, 'submission.' || p_to, 'submissions',
+    p_submission_id, jsonb_build_object('state', v_from),
+    jsonb_build_object('state', p_to));
+end;
+$$;
+
+
+create or replace function app.require_editor()
+returns void
+language plpgsql
+stable
+security definer
+set search_path = ''
+as $$
+begin
+  if auth.uid() is null then
+    raise exception 'not authenticated';
+  end if;
+  if not app.is_editor() then
+    raise exception 'only an editor or the club advisor can do this';
+  end if;
+end;
+$$;
+
+grant execute on function app.require_editor() to authenticated;
+
+
+-- Taking a submission off the queue. Whoever claims it is the editor of
+-- record for it, which is the point: an unclaimed queue is nobody's job.
+create or replace function public.claim_submission(p_submission_id uuid)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_state text;
+  v_held  uuid;
+begin
+  perform app.require_editor();
+
+  select s.state, s.assigned_editor into v_state, v_held
+    from public.submissions s where s.id = p_submission_id;
+
+  if v_state is null then
+    raise exception 'no such submission';
+  end if;
+
+  if v_held is not null and v_held <> auth.uid() then
+    raise exception 'somebody else is already the editor for this one';
+  end if;
+
+  if v_state <> 'submitted' then
+    raise exception 'this is already past screening';
+  end if;
+
+  update public.submissions
+     set assigned_editor = auth.uid()
+   where id = p_submission_id;
+
+  perform app.move_submission(p_submission_id, 'screening', 'Being screened');
+end;
+$$;
+
+grant execute on function public.claim_submission(uuid) to authenticated;
+
+
+-- Screening. Scope, ethics flags, prior venue disclosure, and anything the
+-- automated checks cannot judge, before anybody's volunteer time is spent.
+create or replace function public.screen_submission(
+  p_submission_id uuid,
+  p_outcome       text,
+  p_note          text default null
+)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_state text;
+begin
+  perform app.require_editor();
+
+  select s.state into v_state from public.submissions s where s.id = p_submission_id;
+
+  if v_state <> 'screening' then
+    raise exception 'this submission is not being screened';
+  end if;
+
+  if p_outcome = 'advance' then
+    perform app.move_submission(p_submission_id, 'in_review', 'With reviewers', p_note);
+  elsif p_outcome = 'return' then
+    /* Returning at screening skips the findings list entirely, so this note
+       is the only thing the authors receive. Sending it back with nothing
+       attached tells them something is wrong and not what, which is worse
+       than not sending it back at all. */
+    if coalesce(btrim(coalesce(p_note, '')), '') = '' then
+      raise exception
+        'say what needs fixing. Returning a submission at screening sends no list, so this note is all the authors get.';
+    end if;
+
+    perform app.move_submission(p_submission_id, 'revisions_requested',
+      'Back with the authors', p_note);
+  elsif p_outcome = 'decline' then
+    update public.submissions
+       set decision = 'declined', decided_by = auth.uid(), decided_at = now()
+     where id = p_submission_id;
+    perform app.move_submission(p_submission_id, 'declined', 'Not accepted', p_note);
+  else
+    raise exception 'unknown screening outcome';
+  end if;
+end;
+$$;
+
+grant execute on function public.screen_submission(uuid, text, text) to authenticated;
+
+
+-- ---------------------------------------------------------------------------
+-- Reviewers.
+--
+-- Anybody in the organization who is not an author of this project. Not a
+-- standing role: an assignment, with a date on it.
+-- ---------------------------------------------------------------------------
+
+create or replace function public.assign_reviewer(
+  p_submission_id uuid,
+  p_reviewer_id   uuid,
+  p_due_at        timestamptz
+)
+returns uuid
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_org     uuid;
+  v_project uuid;
+  v_round   int;
+  v_state   text;
+  v_id      uuid;
+begin
+  perform app.require_editor();
+
+  select s.org_id, s.project_id, s.round, s.state
+    into v_org, v_project, v_round, v_state
+    from public.submissions s where s.id = p_submission_id;
+
+  if v_org is null then
+    raise exception 'no such submission';
+  end if;
+
+  if v_state not in ('screening', 'in_review') then
+    raise exception 'reviewers are assigned during screening or review';
+  end if;
+
+  if exists (
+    select 1 from public.project_authors a
+     where a.project_id = v_project and a.user_id = p_reviewer_id and a.role = 'author'
+  ) then
+    raise exception 'an author cannot review their own work';
+  end if;
+
+  /* Reviewing is a job the club gives somebody, so it goes to people the
+     club has already given a job to: an officer, an editor, or the advisor.
+     Enforced here and not only in the picker, because a picker is a
+     convenience and this is a rule.
+
+     And within this organization. Nothing else in the assignment path
+     checked, so a reviewer id from another school would have been accepted
+     and their work shown to somebody who is not part of it. */
+  if not exists (
+    select 1 from public.user_roles r
+     where r.user_id = p_reviewer_id
+       and r.org_id = v_org
+       and r.role in ('officer', 'advisor', 'editor')
+       and r.revoked_at is null
+  ) then
+    raise exception
+      'reviewers are officers, editors, or the club advisor at this school. Give them the role first if they should be reviewing.';
+  end if;
+
+  if p_due_at is null or p_due_at <= now() then
+    raise exception 'a review needs a due date in the future. An assignment with no date is the one that sits.';
+  end if;
+
+  insert into public.reviews
+    (org_id, submission_id, reviewer_id, round, assigned_by, due_at)
+  values (v_org, p_submission_id, p_reviewer_id, v_round, auth.uid(), p_due_at)
+  returning id into v_id;
+
+  insert into public.notifications
+    (org_id, user_id, kind, subject, body, entity_type, entity_id, immediate, queued_at)
+  values (v_org, p_reviewer_id, 'review_assigned',
+    'You have a paper to review',
+    'A submission has been assigned to you for review. It is due on '
+      || to_char(p_due_at, 'FMMonth FMDD') || '.',
+    'submissions', p_submission_id, true, now());
+
+  if v_state = 'screening' then
+    perform app.move_submission(p_submission_id, 'in_review', 'With reviewers');
+  end if;
+
+  return v_id;
+end;
+$$;
+
+grant execute on function public.assign_reviewer(uuid, uuid, timestamptz) to authenticated;
+
+
+create or replace function public.submit_review(
+  p_review_id      uuid,
+  p_recommendation text,
+  p_responses      jsonb,
+  p_to_author      text,
+  p_to_editor      text default null
+)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_reviewer uuid;
+  v_org      uuid;
+  v_sub      uuid;
+  v_editor   uuid;
+begin
+  select r.reviewer_id, r.org_id, r.submission_id
+    into v_reviewer, v_org, v_sub
+    from public.reviews r where r.id = p_review_id;
+
+  if v_reviewer is null then
+    raise exception 'no such review';
+  end if;
+
+  if v_reviewer <> auth.uid() then
+    raise exception 'this review is somebody else''s';
+  end if;
+
+  if coalesce(btrim(p_to_author), '') = '' then
+    raise exception
+      'write something to the author. A recommendation with no reasoning is not a review.';
+  end if;
+
+  update public.reviews
+     set recommendation = p_recommendation,
+         responses = p_responses,
+         comments_to_author = btrim(p_to_author),
+         comments_to_editor = nullif(btrim(coalesce(p_to_editor, '')), ''),
+         submitted_at = now()
+   where id = p_review_id;
+
+  select s.assigned_editor into v_editor
+    from public.submissions s where s.id = v_sub;
+
+  if v_editor is not null then
+    insert into public.notifications
+      (org_id, user_id, kind, subject, body, entity_type, entity_id, queued_at)
+    values (v_org, v_editor, 'review_returned', 'A review has come back',
+      'A reviewer has returned their comments.', 'submissions', v_sub, now());
+  end if;
+end;
+$$;
+
+grant execute on function
+  public.submit_review(uuid, text, jsonb, text, text) to authenticated;
+
+
+-- ---------------------------------------------------------------------------
+-- The consolidated list, and the revision loop.
+-- ---------------------------------------------------------------------------
+
+create or replace function public.add_finding(
+  p_submission_id uuid,
+  p_severity      text,
+  p_finding       text,
+  p_section       text default null
+)
+returns uuid
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_org   uuid;
+  v_round int;
+  v_next  int;
+  v_id    uuid;
+begin
+  perform app.require_editor();
+
+  select s.org_id, s.round into v_org, v_round
+    from public.submissions s where s.id = p_submission_id;
+
+  if v_org is null then
+    raise exception 'no such submission';
+  end if;
+
+  select coalesce(max(f.sort_order), 0) + 1 into v_next
+    from public.review_findings f
+   where f.submission_id = p_submission_id and f.round = v_round;
+
+  insert into public.review_findings
+    (org_id, submission_id, round, sort_order, severity, section, finding, created_by)
+  values (v_org, p_submission_id, v_round, v_next, p_severity,
+          nullif(btrim(coalesce(p_section, '')), ''), btrim(p_finding), auth.uid())
+  returning id into v_id;
+
+  return v_id;
+end;
+$$;
+
+grant execute on function public.add_finding(uuid, text, text, text) to authenticated;
+
+
+/* An earlier version took only the submission id. If both survive, PostgREST
+   has two candidates for the same call and refuses to pick, so every attempt
+   to send a submission back fails on a database that was migrated rather than
+   rebuilt. */
+drop function if exists public.request_revisions(uuid);
+
+create or replace function public.request_revisions(
+  p_submission_id uuid,
+  p_note          text default null
+)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_org   uuid;
+  v_round int;
+  v_state text;
+  v_count int;
+  v_author record;
+begin
+  perform app.require_editor();
+
+  select s.org_id, s.round, s.state into v_org, v_round, v_state
+    from public.submissions s where s.id = p_submission_id;
+
+  if v_state not in ('screening', 'in_review', 'editorial_review') then
+    raise exception 'this submission is not with you';
+  end if;
+
+  select count(*) into v_count
+    from public.review_findings f
+   where f.submission_id = p_submission_id and f.round = v_round;
+
+  /* Something has to reach them, and it can be either. A consolidated list
+     is right after a round of review; a note on its own is right for the
+     small correction that does not need one, which is a real and frequent
+     case and used to have no route once a submission was past screening. */
+  if v_count = 0 and coalesce(btrim(coalesce(p_note, '')), '') = '' then
+    raise exception
+      'send them something. Either put changes on the list or write a note saying what needs doing.';
+  end if;
+
+  perform app.move_submission(p_submission_id, 'revisions_requested',
+    'Back with the authors', p_note);
+
+  for v_author in
+    select a.user_id from public.project_authors a
+     join public.submissions s on s.project_id = a.project_id
+     where s.id = p_submission_id and a.role = 'author'
+  loop
+    insert into public.notifications
+      (org_id, user_id, kind, subject, body, entity_type, entity_id, immediate, queued_at)
+    values (v_org, v_author.user_id, 'revisions_requested',
+      'Changes have been asked for',
+      case when v_count > 0
+           then 'The editor has sent back a list of ' || v_count || ' changes.'
+           else 'The editor has sent it back with a note.' end,
+      'submissions', p_submission_id, true, now());
+  end loop;
+end;
+$$;
+
+grant execute on function public.request_revisions(uuid, text) to authenticated;
+
+
+-- The author answers each finding in writing. That is the artifact: it makes
+-- a student defend or concede every point rather than silently ignoring one.
+create or replace function public.respond_to_finding(
+  p_finding_id uuid,
+  p_response   text
+)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_project uuid;
+begin
+  select s.project_id into v_project
+    from public.review_findings f
+    join public.submissions s on s.id = f.submission_id
+   where f.id = p_finding_id;
+
+  if v_project is null then
+    raise exception 'no such finding';
+  end if;
+
+  perform app.require_author(v_project);
+
+  update public.review_findings
+     set author_response = nullif(btrim(coalesce(p_response, '')), '')
+   where id = p_finding_id;
+end;
+$$;
+
+grant execute on function public.respond_to_finding(uuid, text) to authenticated;
+
+
+create or replace function public.resubmit(p_submission_id uuid)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_project   uuid;
+  v_org       uuid;
+  v_state     text;
+  v_round     int;
+  v_unanswered int;
+begin
+  select s.project_id, s.org_id, s.state, s.round
+    into v_project, v_org, v_state, v_round
+    from public.submissions s where s.id = p_submission_id;
+
+  if v_project is null then
+    raise exception 'no such submission';
+  end if;
+
+  perform app.require_author(v_project);
+
+  if v_state <> 'revisions_requested' then
+    raise exception 'this submission is not waiting on you';
+  end if;
+
+  select count(*) into v_unanswered
+    from public.review_findings f
+   where f.submission_id = p_submission_id
+     and f.round = v_round
+     and f.severity = 'required'
+     and coalesce(btrim(f.author_response), '') = '';
+
+  if v_unanswered > 0 then
+    raise exception
+      '% required % still unanswered. Say what you changed, or say why you disagree. Either is an answer.',
+      v_unanswered, case when v_unanswered = 1 then 'change is' else 'changes are' end;
+  end if;
+
+  /* No cap on rounds.
+   
+     An earlier version stopped at two and sent the third straight to a
+     decision, on the reasoning that an uncapped queue becomes a graveyard.
+     That reasoning was about submissions nobody is working on, and this is
+     the opposite: a short correction sent back and returned the same day is
+     the loop working. The thing that actually prevents a graveyard is the
+     editor being able to decide at any point, which they can, from
+     `to_editorial_review`.
+
+     So a resubmission always goes back to the editor, and the round number
+     is a count of how many times rather than a budget. */
+  update public.submissions set round = v_round + 1 where id = p_submission_id;
+  perform app.move_submission(p_submission_id, 'in_review', 'With reviewers');
+end;
+$$;
+
+grant execute on function public.resubmit(uuid) to authenticated;
+
+
+-- The editor moves it, not a quorum of returned reviews. If advancement
+-- waited on every assigned reviewer, one student who stops answering would
+-- hold a paper indefinitely.
+create or replace function public.to_editorial_review(p_submission_id uuid)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_state text;
+begin
+  perform app.require_editor();
+
+  select s.state into v_state from public.submissions s where s.id = p_submission_id;
+
+  if v_state <> 'in_review' then
+    raise exception 'this submission is not with reviewers';
+  end if;
+
+  perform app.move_submission(p_submission_id, 'editorial_review',
+    'With the editor for a decision');
+end;
+$$;
+
+grant execute on function public.to_editorial_review(uuid) to authenticated;
+
+
+-- One person reads the paper alongside the reviews and decides. Reviewers
+-- recommend; they do not decide, and no average decides either.
+create or replace function public.decide_submission(
+  p_submission_id uuid,
+  p_decision      text,
+  p_note          text default null
+)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_org    uuid;
+  v_state  text;
+  v_author record;
+  v_label  text;
+begin
+  perform app.require_editor();
+
+  select s.org_id, s.state into v_org, v_state
+    from public.submissions s where s.id = p_submission_id;
+
+  if v_state <> 'editorial_review' then
+    raise exception 'a decision is made from the editorial read';
+  end if;
+
+  if p_decision not in ('accepted', 'declined') then
+    raise exception 'a decision is accepted or declined';
+  end if;
+
+  update public.submissions
+     set decision = p_decision, decided_by = auth.uid(), decided_at = now()
+   where id = p_submission_id;
+
+  v_label := case when p_decision = 'accepted' then 'Accepted' else 'Not accepted' end;
+  perform app.move_submission(p_submission_id, p_decision, v_label, p_note);
+
+  for v_author in
+    select a.user_id from public.project_authors a
+     join public.submissions s on s.project_id = a.project_id
+     where s.id = p_submission_id and a.role = 'author'
+  loop
+    insert into public.notifications
+      (org_id, user_id, kind, subject, body, entity_type, entity_id, immediate, queued_at)
+    values (v_org, v_author.user_id, p_decision,
+      case when p_decision = 'accepted' then 'Your work has been accepted'
+           else 'A decision on your submission' end,
+      coalesce(p_note, ''), 'submissions', p_submission_id, true, now());
+  end loop;
+end;
+$$;
+
+grant execute on function public.decide_submission(uuid, text, text) to authenticated;
+
+
+create or replace function public.confirm_withdrawal(p_submission_id uuid)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_requested timestamptz;
+begin
+  perform app.require_editor();
+
+  select s.withdrawal_requested_at into v_requested
+    from public.submissions s where s.id = p_submission_id;
+
+  if v_requested is null then
+    raise exception 'the authors have not asked to withdraw this';
+  end if;
+
+  perform app.move_submission(p_submission_id, 'withdrawn',
+    'Withdrawn at the authors'' request');
+end;
+$$;
+
+grant execute on function public.confirm_withdrawal(uuid) to authenticated;
+
+
+-- ---------------------------------------------------------------------------
+-- What an author may read of a review.
+--
+-- A function rather than a policy, deliberately. Row level security cannot
+-- withhold a column, so protecting comments_to_editor with a policy would
+-- mean trusting every future select not to ask for it. This returns a fixed
+-- shape and the column is not in it.
+-- ---------------------------------------------------------------------------
+
+create or replace function public.author_feedback(p_submission_id uuid)
+returns table (
+  round          int,
+  recommendation text,
+  comments       text,
+  returned_at    timestamptz
+)
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select r.round, r.recommendation, r.comments_to_author, r.submitted_at
+    from public.reviews r
+    join public.submissions s on s.id = r.submission_id
+    join public.project_authors a on a.project_id = s.project_id
+   where r.submission_id = p_submission_id
+     and r.submitted_at is not null
+     and a.user_id = auth.uid()
+     and a.role = 'author'
+   order by r.round, r.submitted_at;
+$$;
+
+grant execute on function public.author_feedback(uuid) to authenticated;
+
+notify pgrst, 'reload schema';
+
+
+-- ---------------------------------------------------------------------------
+-- What an author may read of the change list.
+--
+-- The same treatment as author_feedback, and for the same reason. Reaching
+-- review_findings through a policy meant the author's read depended on a
+-- subquery over submissions and project_authors, each of which carries its
+-- own row level security, so a correct policy on this table could still
+-- return nothing because of a policy two joins away. That failure is silent:
+-- an empty list looks exactly like a list with nothing on it.
+--
+-- A function returns a fixed shape, bypasses the chain, and is one place to
+-- read when it goes wrong.
+-- ---------------------------------------------------------------------------
+
+create or replace function public.author_changes(p_submission_id uuid)
+returns table (
+  id              uuid,
+  round           int,
+  sort_order      int,
+  severity        text,
+  section         text,
+  finding         text,
+  author_response text
+)
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select f.id, f.round, f.sort_order, f.severity, f.section, f.finding,
+         f.author_response
+    from public.review_findings f
+    join public.submissions s on s.id = f.submission_id
+    join public.project_authors a on a.project_id = s.project_id
+   where f.submission_id = p_submission_id
+     and f.round = s.round
+     and a.user_id = auth.uid()
+     and a.role = 'author'
+   order by f.sort_order;
+$$;
+
+grant execute on function public.author_changes(uuid) to authenticated;
+
+notify pgrst, 'reload schema';
+
+
+-- ---------------------------------------------------------------------------
+-- What the editor wrote to the authors.
+--
+-- Screening returns, declines, and decisions all carry an optional line for
+-- the authors, and it lands in state_events.note. Nothing read it, so an
+-- editor could return a submission with a written explanation and the author
+-- would see a page saying nothing was on the list.
+--
+-- Never on the tracker. That page promises it does not show what anybody has
+-- said, and a note addressed to the authors is exactly that. This is for the
+-- authors, signed in.
+-- ---------------------------------------------------------------------------
+
+create or replace function public.author_notes(p_submission_id uuid)
+returns table (
+  label       text,
+  note        text,
+  occurred_at timestamptz
+)
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select e.public_label, e.note, e.occurred_at
+    from public.state_events e
+    join public.submissions s on s.id = e.submission_id
+    join public.project_authors a on a.project_id = s.project_id
+   where e.submission_id = p_submission_id
+     and coalesce(btrim(e.note), '') <> ''
+     and a.user_id = auth.uid()
+     and a.role = 'author'
+   order by e.occurred_at desc;
+$$;
+
+grant execute on function public.author_notes(uuid) to authenticated;
+
+notify pgrst, 'reload schema';
+
+
+-- ===========================================================================
+-- WHO RUNS THE CLUB
+--
+-- Officer and editor are grants, and until now the only thing that wrote
+-- either of them was a seed script. A club could therefore be set up exactly
+-- once, by somebody with database access, and never changed by the people
+-- who run it. An officer graduating in June left no way to appoint the next
+-- one.
+--
+-- The advisor grants them, and nobody else. That is the one role a school
+-- appoints out of band, when the organization is provisioned, because the
+-- advisor is a teacher and the school decides who its teachers are. Every
+-- other role in the club is theirs to hand out and take back.
+-- ===========================================================================
+
+create or replace function app.require_advisor()
+returns void
+language plpgsql
+stable
+security definer
+set search_path = ''
+as $$
+begin
+  if auth.uid() is null then
+    raise exception 'not authenticated';
+  end if;
+  if not app.is_advisor() then
+    raise exception
+      'only the club advisor can change who runs the club. Ask them.';
+  end if;
+end;
+$$;
+
+grant execute on function app.require_advisor() to authenticated;
+
+
+create or replace function public.grant_club_role(
+  p_user_id uuid,
+  p_role    text
+)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_org  uuid;
+  v_them uuid;
+begin
+  perform app.require_advisor();
+
+  /* Officer and editor only.
+   
+     Not advisor: a role that can appoint itself is a role that only needs
+     to be captured once, and the advisor is a teacher whose standing comes
+     from the school rather than from this software. Not student either,
+     which follows from the account rather than being granted. */
+  if p_role not in ('officer', 'editor') then
+    raise exception 'officer and editor are the roles you can hand out';
+  end if;
+
+  select u.org_id into v_org from public.users u where u.id = auth.uid();
+  select u.org_id into v_them from public.users u where u.id = p_user_id;
+
+  if v_them is null then
+    raise exception 'no such person';
+  end if;
+
+  if v_them is distinct from v_org then
+    raise exception 'that person is not at this school';
+  end if;
+
+  /* The uniqueness here comes from two partial indexes and ON CONFLICT
+     cannot infer a target from those, so this checks first. A grant that is
+     already held is not an error; it is a no-op, because the advisor's
+     intent was that the person holds the role. */
+  if exists (
+    select 1 from public.user_roles r
+     where r.user_id = p_user_id
+       and r.role = p_role
+       and r.scope_id is null
+       and r.revoked_at is null
+  ) then
+    return;
+  end if;
+
+  insert into public.user_roles (org_id, user_id, role, granted_by)
+  values (v_org, p_user_id, p_role, auth.uid());
+
+  perform app.audit(v_org, 'role.granted', 'user_roles', p_user_id, null,
+    jsonb_build_object('role', p_role));
+end;
+$$;
+
+grant execute on function public.grant_club_role(uuid, text) to authenticated;
+
+
+create or replace function public.revoke_club_role(
+  p_user_id uuid,
+  p_role    text
+)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_org uuid;
+begin
+  perform app.require_advisor();
+
+  if p_role not in ('officer', 'editor') then
+    raise exception 'officer and editor are the roles you can take back';
+  end if;
+
+  select u.org_id into v_org from public.users u where u.id = auth.uid();
+
+  /* Revoked rather than deleted, so who held what and when survives. A club
+     that cannot answer "who was the editor last season" cannot explain a
+     decision made last season. */
+  update public.user_roles
+     set revoked_at = now()
+   where user_id = p_user_id
+     and role = p_role
+     and scope_id is null
+     and revoked_at is null;
+
+  perform app.audit(v_org, 'role.revoked', 'user_roles', p_user_id, null,
+    jsonb_build_object('role', p_role));
+end;
+$$;
+
+grant execute on function public.revoke_club_role(uuid, text) to authenticated;
+
+notify pgrst, 'reload schema';
+
+
+-- ===========================================================================
+-- THE ROSTER
+--
+-- A club starts with a spreadsheet. This accepts one.
+--
+-- The important thing it does NOT do is create accounts. Signup is where the
+-- age band is collected and guardian permission is requested, and a roster
+-- that provisioned people directly would walk around both. For a list that is
+-- mostly minors, that is the one shortcut this system cannot take.
+--
+-- So a row is a reservation rather than a person: this address, when it signs
+-- up, holds this role. The person still signs up normally, still meets the age
+-- gate, still triggers the consent flow. The role attaches on the way in.
+--
+-- This is the same mechanism the teacher sponsor already uses. A sponsor is
+-- matched by email because a sponsor may never have an account, and if they
+-- ever sign in, the match is the grant. Roles now work the same way, which
+-- also solves the bootstrap: an organization is provisioned with a file
+-- naming its advisor, nobody holds anything until a real person signs in with
+-- that address, and no path inside the application can grant advisor at all.
+-- ===========================================================================
+
+create table public.role_reservations (
+  id           uuid primary key default gen_random_uuid(),
+  org_id       uuid not null references public.organizations on delete restrict,
+
+  email        text not null,
+  display_name text,
+  role         text not null check (role in ('advisor', 'officer', 'editor')),
+
+  added_by     uuid references public.users on delete restrict,
+  created_at   timestamptz not null default now(),
+
+  -- An unclaimed row is visibly different from a granted one, which is the
+  -- whole point of keeping it after it has been used.
+  claimed_at   timestamptz,
+  claimed_by   uuid references public.users on delete restrict
+);
+
+-- Addresses are compared case insensitively everywhere else here, so the
+-- uniqueness has to be too.
+create unique index role_reservations_uq
+  on public.role_reservations (org_id, lower(email), role)
+  where claimed_at is null;
+
+create index role_reservations_email_idx
+  on public.role_reservations (lower(email)) where claimed_at is null;
+
+alter table public.role_reservations enable row level security;
+
+grant select, insert, update, delete on public.role_reservations
+  to authenticated, service_role;
+
+create policy role_reservations_read on public.role_reservations
+  for select to authenticated
+  using (org_id = (select app.org_id()) and (select app.is_staff()));
+
+create policy role_reservations_write on public.role_reservations
+  for insert to authenticated
+  with check (org_id = (select app.org_id()) and (select app.is_advisor()));
+
+create policy role_reservations_update on public.role_reservations
+  for update to authenticated
+  using (org_id = (select app.org_id()) and (select app.is_advisor()));
+
+create policy role_reservations_delete on public.role_reservations
+  for delete to authenticated
+  using (org_id = (select app.org_id()) and (select app.is_advisor()));
+
+
+-- ---------------------------------------------------------------------------
+-- Claiming.
+--
+-- Two moments, because a reservation and an account can arrive in either
+-- order: the file may be uploaded before somebody signs up, or a name may be
+-- added to a roster after they already have an account.
+-- ---------------------------------------------------------------------------
+
+create or replace function app.claim_reservations(p_user_id uuid, p_email text)
+returns int
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_org uuid;
+  v_row record;
+  v_n   int := 0;
+begin
+  select u.org_id into v_org from public.users u where u.id = p_user_id;
+  if v_org is null then
+    return 0;
+  end if;
+
+  for v_row in
+    select r.id, r.role
+      from public.role_reservations r
+     where r.org_id = v_org
+       and lower(r.email) = lower(p_email)
+       and r.claimed_at is null
+  loop
+    if not exists (
+      select 1 from public.user_roles ur
+       where ur.user_id = p_user_id
+         and ur.role = v_row.role
+         and ur.scope_id is null
+         and ur.revoked_at is null
+    ) then
+      insert into public.user_roles (org_id, user_id, role, granted_by)
+      values (v_org, p_user_id, v_row.role, null);
+    end if;
+
+    update public.role_reservations
+       set claimed_at = now(), claimed_by = p_user_id
+     where id = v_row.id;
+
+    v_n := v_n + 1;
+  end loop;
+
+  if v_n > 0 then
+    perform app.audit(v_org, 'roles.claimed', 'users', p_user_id, null,
+      jsonb_build_object('count', v_n, 'email', p_email));
+  end if;
+
+  return v_n;
+end;
+$$;
+
+
+-- An address arriving. Fires on signup and on any later address added to an
+-- account, so a reservation written for a school address is picked up even if
+-- the person first signed in with a personal one.
+create or replace function app.claim_on_identity()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  perform app.claim_reservations(new.user_id, new.email);
+  return new;
+end;
+$$;
+
+create trigger identities_claim_reservations
+  after insert on public.identities
+  for each row execute function app.claim_on_identity();
+
+
+create or replace function public.add_role_reservations(p_rows jsonb)
+returns table (email text, role text, outcome text)
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_org   uuid;
+  v_row   jsonb;
+  v_email text;
+  v_role  text;
+  v_name  text;
+  v_user  uuid;
+begin
+  perform app.require_advisor();
+
+  select u.org_id into v_org from public.users u where u.id = auth.uid();
+
+  for v_row in select * from jsonb_array_elements(p_rows)
+  loop
+    v_email := lower(btrim(coalesce(v_row->>'email', '')));
+    v_role  := lower(btrim(coalesce(v_row->>'role', '')));
+    v_name  := nullif(btrim(coalesce(v_row->>'display_name', '')), '');
+
+    email := v_email;
+    role  := v_role;
+
+    if v_email = '' or position('@' in v_email) = 0 then
+      outcome := 'not an address';
+      return next;
+      continue;
+    end if;
+
+    /* Advisor is not on this list for the same reason it is not on the roles
+       page: a role that can appoint itself only has to be captured once. An
+       advisor is named when the organization is provisioned. */
+    if v_role not in ('officer', 'editor') then
+      outcome := 'officer and editor only';
+      return next;
+      continue;
+    end if;
+
+    /* Already signed in? Then this is a grant, not a reservation, and there
+       is no reason to make them sign out and back in for it. */
+    select i.user_id into v_user
+      from public.identities i
+     where lower(i.email) = v_email
+       and i.org_id = v_org
+       and i.revoked_at is null
+     limit 1;
+
+    if v_user is not null then
+      if exists (
+        select 1 from public.user_roles ur
+         where ur.user_id = v_user and ur.role = v_role
+           and ur.scope_id is null and ur.revoked_at is null
+      ) then
+        outcome := 'already held';
+      else
+        insert into public.user_roles (org_id, user_id, role, granted_by)
+        values (v_org, v_user, v_role, auth.uid());
+        outcome := 'granted now';
+      end if;
+      return next;
+      continue;
+    end if;
+
+    if exists (
+      select 1 from public.role_reservations r
+       where r.org_id = v_org and lower(r.email) = v_email
+         and r.role = v_role and r.claimed_at is null
+    ) then
+      outcome := 'already waiting';
+      return next;
+      continue;
+    end if;
+
+    insert into public.role_reservations
+      (org_id, email, display_name, role, added_by)
+    values (v_org, v_email, v_name, v_role, auth.uid());
+
+    outcome := 'waiting for them to sign up';
+    return next;
+  end loop;
+end;
+$$;
+
+grant execute on function public.add_role_reservations(jsonb) to authenticated;
+
+
+create or replace function public.drop_role_reservation(p_id uuid)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  perform app.require_advisor();
+
+  delete from public.role_reservations
+   where id = p_id and claimed_at is null;
+end;
+$$;
+
+grant execute on function public.drop_role_reservation(uuid) to authenticated;
 
 notify pgrst, 'reload schema';

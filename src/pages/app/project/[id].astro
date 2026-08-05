@@ -2,6 +2,7 @@
 export const prerender = false;
 
 import Base from '../../../layouts/Base.astro';
+import { formatDate } from '../../../lib/dates';
 import AppShell from '../../../components/AppShell.astro';
 import { activeOrg } from '../../../lib/tenant';
 import { serverClient } from '../../../lib/supabase';
@@ -130,6 +131,23 @@ const { data: deliverables } = entryIds.length
       .order('signed_on', { ascending: true })
   : { data: [] as any[] };
 
+/* The manuscript is one row per project and the project page only needs to
+   know whether it exists and how far along it is. Counting the check here
+   would mean assembling the whole snapshot for a line of text. */
+const { data: manuscript } = await supabase
+  .from('manuscripts')
+  .select('id, record_kind, title, abstract, updated_at')
+  .eq('project_id', id)
+  .maybeSingle();
+
+const { count: sectionsWritten } = manuscript
+  ? await supabase
+      .from('manuscript_sections')
+      .select('id', { count: 'exact', head: true })
+      .eq('manuscript_id', manuscript.id)
+      .neq('body', '')
+  : { count: 0 };
+
 const attachments = project.project_authors ?? [];
 const authors = attachments.filter((a: any) => a.role === 'author');
 const officers = attachments.filter((a: any) => a.role === 'officer');
@@ -154,7 +172,7 @@ const noteById = new Map((notes ?? []).map((n: any) => [n.id, n]));
 const today = new Date().toISOString().slice(0, 10);
 
 const fmt = (d: string | null) =>
-  d ? new Date(d + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '—';
+  formatDate(d, 'short');
 ---
 
 <Base title={project.title} noindex={true}>
@@ -169,14 +187,18 @@ const fmt = (d: string | null) =>
         {officers.length > 0 && ` · officer ${officers.map((m: any) => m.users?.display_name).join(', ')}`}
         {sponsor && ` · sponsored by ${sponsor.teacher_name}`}
       </p>
-      <div class="row" style="margin-top:20px">
-        <a class="btn btn-2" href={`/app/project/${id}/notebook/`}>Export the notebook</a>
-        <a class="btn btn-q" href={`/app/project/${id}/team/`}>
-          {sponsor ? 'Who is on this' : 'No sponsor named'}
+      {/* Four ways out of this page, all the same weight. One of them being
+          quiet and another outlined implied a hierarchy that does not exist:
+          a student needs the manuscript far more often than the export. */}
+      <div class="actions">
+        <a class="btn btn-2" href={`/app/project/${id}/manuscript/`}>
+          {manuscript ? 'Manuscript' : 'Start the manuscript'}
         </a>
         {entries && entries.length > 0 && (
-          <a class="btn btn-q" href={`/app/entry/${entries[0].id}/`}>Deadlines</a>
+          <a class="btn btn-2" href={`/app/entry/${entries[0].id}/`}>Deadlines</a>
         )}
+        <a class="btn btn-2" href={`/app/project/${id}/team/`}>Authors and sponsor</a>
+        <a class="btn btn-2" href={`/app/project/${id}/notebook/`}>Export the notebook</a>
       </div>
     </section>
 
@@ -416,6 +438,17 @@ const fmt = (d: string | null) =>
 </Base>
 
 <style>
+  /* Wraps as a grid rather than a line, so a fourth button drops onto a
+     second row aligned with the first rather than hanging off the end. */
+  .actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    margin-top: 20px;
+  }
+  .actions .btn {
+    margin: 0;
+  }
   .hero { padding: 44px 0 28px; max-width: 74ch; }
   .hero .t-lbl { margin-bottom: 14px; }
 

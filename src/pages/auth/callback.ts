@@ -10,13 +10,13 @@ import { serverClient } from '../../lib/supabase';
  */
 export const GET: APIRoute = async ({ request, cookies, url, locals, redirect }) => {
   const code = url.searchParams.get('code');
-  if (!code) return redirect('/app/?error=no_code');
+  if (!code) return redirect('/app/?signin=no_code');
 
   const runtime = (locals as Record<string, any>).runtime?.env;
   const supabase = serverClient(request, cookies, runtime);
 
   const { error } = await supabase.auth.exchangeCodeForSession(code);
-  if (error) return redirect('/app/?error=exchange');
+  if (error) return redirect('/app/?signin=exchange');
 
   return redirect('/app/');
 };

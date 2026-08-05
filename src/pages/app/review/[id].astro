@@ -1,0 +1,342 @@
+---
+export const prerender = false;
+
+import Base from '../../../layouts/Base.astro';
+import AppShell from '../../../components/AppShell.astro';
+import { activeOrg } from '../../../lib/tenant';
+import { serverClient } from '../../../lib/supabase';
+import {
+  REVIEW_QUESTIONS,
+  SCALE,
+  RECOMMENDATIONS,
+  recommendationLabel,
+  doneLabel,
+} from '../../../lib/workflow';
+import { sectionsFor } from '../../../config/structure';
+
+const { session, account, roles } = Astro.locals;
+const org = activeOrg(Astro);
+const { id } = Astro.params;
+
+if (!session) return Astro.redirect('/app/');
+if (!account) return Astro.redirect('/app/welcome/');
+
+const supabase = serverClient(
+  Astro.request,
+  Astro.cookies,
+  (Astro.locals as any).runtime?.env
+);
+
+let error: string | null = null;
+let didAction: string | null = null;
+
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData();
+
+  /* One object per question, keyed the way workflow.ts declares them, so the
+     editor's screen can read them back without a second agreement. */
+  const responses: Record<string, { scale: string; comment: string }> = {};
+  for (const q of REVIEW_QUESTIONS) {
+    const scale = String(form.get(`${q.key}_scale`) ?? '');
+    const comment = String(form.get(`${q.key}_comment`) ?? '').trim();
+    if (scale || comment) responses[q.key] = { scale, comment };
+  }
+
+  const { error: e } = await supabase.rpc('submit_review', {
+    p_review_id: id,
+    p_recommendation: String(form.get('recommendation') ?? ''),
+    p_responses: responses,
+    p_to_author: String(form.get('to_author') ?? ''),
+    p_to_editor: String(form.get('to_editor') ?? ''),
+  });
+
+  if (e) error = e.message;
+  else didAction = 'submit_review';
+}
+
+const { data: review } = await supabase
+  .from('reviews')
+  .select(
+    'id, round, due_at, submitted_at, recommendation, responses, comments_to_author, comments_to_editor, submission_id'
+  )
+  .eq('id', id)
+  .maybeSingle();
+
+if (!review) return Astro.redirect('/app/');
+
+const { data: submission } = await supabase
+  .from('submissions')
+  .select('id, record_kind, manuscript_id, project_id')
+  .eq('id', review.submission_id)
+  .maybeSingle();
+
+const [{ data: manuscript }, { data: sections }, { data: figures }, { data: references }] =
+  await Promise.all([
+    supabase
+      .from('manuscripts')
+      .select(
+        'title, abstract, keywords, discipline, contributions, body_format, pdf_path, external_url, record_kind'
+      )
+      .eq('id', submission?.manuscript_id)
+      .maybeSingle(),
+    supabase
+      .from('manuscript_sections')
+      .select('section_key, body')
+      .eq('manuscript_id', submission?.manuscript_id),
+    supabase
+      .from('manuscript_figures')
+      .select('number, storage_path, caption, alt')
+      .eq('manuscript_id', submission?.manuscript_id)
+      .is('withdrawn_at', null)
+      .order('number'),
+    supabase
+      .from('manuscript_references')
+      .select('citation')
+      .eq('manuscript_id', submission?.manuscript_id)
+      .order('sort_order'),
+  ]);
+
+const done = Boolean(review.submitted_at);
+const bodyByKey = new Map((sections ?? []).map((s: any) => [s.section_key, s.body]));
+const sectionRules = sectionsFor((manuscript?.record_kind ?? 'article') as any);
+
+const overdue = !done && new Date(review.due_at) < new Date();
+const due = new Date(review.due_at).toLocaleDateString('en-US', {
+  month: 'long',
+  day: 'numeric',
+});
+
+/* Names are deliberately absent. Not because this is blinded, which it is
+   not, but because a reviewer should read the paper before they read the
+   byline. The editor's page shows everybody. */
+---
+
+<Base title={`Review · ${manuscript?.title ?? ''}`} noindex={true}>
+  <div class="wrap">
+    <AppShell org={org} account={account} roles={roles} here="/app/" />
+
+    <section class="hero">
+      <p class="t-lbl">
+        To review{review.round > 1 && ` · round ${review.round}`}
+      </p>
+      <h1 class="t-big">{manuscript?.title}</h1>
+      <p class:list={['lede', overdue && 'late']}>
+        {done ? `Sent ${new Date(review.submitted_at).toLocaleDateString('en-US', { month: 'long', day: 'numeric' })}` : `Due ${due}`}
+      </p>
+    </section>
+
+    {error && <p class="note" role="alert">{error}</p>}
+    {didAction && !error && (
+      <p class="note done" role="status">
+        <b>{doneLabel(didAction)}</b>
+        <span>
+          {new Date().toLocaleString('en-US', {
+            month: 'long',
+            day: 'numeric',
+            hour: 'numeric',
+            minute: '2-digit',
+          })}
+        </span>
+      </p>
+    )}
+
+    <!-- ── The paper ────────────────────────────────────────────────────── -->
+    <section class="sec">
+      <div class="sec-h"><b>The paper</b><span>Read this first</span></div>
+
+      <div class="ms">
+        <h3>Abstract</h3>
+        <p class="prose">{manuscript?.abstract}</p>
+
+        {manuscript?.pdf_path && (
+          <p class="prose"><a href={`/app/media/${manuscript.pdf_path}`}>The full paper, as a PDF</a></p>
+        )}
+        {manuscript?.external_url && (
+          <p class="prose">Published elsewhere: <a href={manuscript.external_url}>{manuscript.external_url}</a></p>
+        )}
+
+        {sectionRules.map((rule) =>
+          bodyByKey.get(rule.key) ? (
+            <>
+              <h3>{rule.label}</h3>
+              <p class="prose body">{bodyByKey.get(rule.key)}</p>
+            </>
+          ) : null
+        )}
+
+        {(figures ?? []).length > 0 && (
+          <>
+            <h3>Figures</h3>
+            <ul class="figs">
+              {(figures ?? []).map((f: any) => (
+                <li>
+                  <img src={`/app/media/${f.storage_path}`} alt={f.alt} />
+                  <p>Figure {f.number}. {f.caption}</p>
+                </li>
+              ))}
+            </ul>
+          </>
+        )}
+
+        {manuscript?.contributions && (
+          <>
+            <h3>Contributions</h3>
+            <p class="prose">{manuscript.contributions}</p>
+          </>
+        )}
+
+        {(references ?? []).length > 0 && (
+          <>
+            <h3>References</h3>
+            <ol class="refs">{(references ?? []).map((r: any) => <li>{r.citation}</li>)}</ol>
+          </>
+        )}
+      </div>
+    </section>
+
+    <!-- ── The form ─────────────────────────────────────────────────────── -->
+    <section class="sec">
+      <div class="sec-h">
+        <b>Your review</b>
+        <span>{done ? recommendationLabel[review.recommendation] : 'Not sent yet'}</span>
+      </div>
+
+      {done ? (
+        <div class="ms">
+          <p class="aside">
+            Sent, and the editor has it. If something needs correcting, tell
+            them rather than editing this.
+          </p>
+          <h3>To the author</h3>
+          <p class="prose">{review.comments_to_author}</p>
+          {review.comments_to_editor && (
+            <>
+              <h3>To the editor only</h3>
+              <p class="prose">{review.comments_to_editor}</p>
+            </>
+          )}
+        </div>
+      ) : (
+        <form method="POST" class="mform">
+          <p class="aside">
+            The scales are to steady your thinking. Nobody averages them into a
+            score, and the writing underneath is the part that gets read.
+          </p>
+
+          {REVIEW_QUESTIONS.map((q) => (
+            <fieldset class="q">
+              <legend>{q.prompt}</legend>
+              <div class="scale">
+                {SCALE.map((s) => (
+                  <label class="opt">
+                    <input type="radio" name={`${q.key}_scale`} value={s.value} />
+                    <span>{s.label}</span>
+                  </label>
+                ))}
+              </div>
+              <textarea
+                class="ta grow"
+                name={`${q.key}_comment`}
+                rows="2"
+                placeholder="Why, briefly"
+              ></textarea>
+            </fieldset>
+          ))}
+
+          <label>
+            <span>Comments to the author</span>
+            <textarea class="ta grow" name="to_author" rows="8" required></textarea>
+            <small>
+              Shared with them in full. Be specific enough to act on: a
+              reviewer who writes "unclear" has moved the problem rather than
+              named it.
+            </small>
+          </label>
+
+          <label>
+            <span>Comments to the editor only</span>
+            <textarea class="ta grow" name="to_editor" rows="4"></textarea>
+            <small>Never shown to the authors. Optional, and often empty.</small>
+          </label>
+
+          <label>
+            <span>Recommendation</span>
+            <select class="se" name="recommendation" required>
+              <option value="">Choose one</option>
+              {RECOMMENDATIONS.map((r) => <option value={r.value}>{r.label}</option>)}
+            </select>
+            <small>The editor decides. This is your advice to them.</small>
+          </label>
+
+          <button class="btn btn-2" type="submit">Send the review</button>
+        </form>
+      )}
+    </section>
+  </div>
+</Base>
+
+<script>
+  const grow = (field) => {
+    field.style.height = 'auto';
+    field.style.height = `${field.scrollHeight + 2}px`;
+  };
+  for (const field of document.querySelectorAll('textarea.grow')) {
+    field.style.overflowY = 'hidden';
+    grow(field);
+    field.addEventListener('input', () => grow(field));
+  }
+</script>
+
+<style>
+  .hero { padding: 34px 0 26px; }
+  .done {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 6px 16px;
+  }
+  .done span {
+    font-family: var(--face-num);
+    font-size: 0.85rem;
+    color: var(--ink-3);
+  }
+  .lede.late { color: var(--alert); }
+
+  .ms { max-width: var(--measure-form); }
+  .ms h3 {
+    margin: 26px 0 6px;
+    font-family: var(--face-ui);
+    font-size: 0.82rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--ink-2);
+  }
+  .ms .body { white-space: pre-wrap; }
+  .figs { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 18px; }
+  .figs img { max-width: 320px; border: 1px solid var(--rule-fine); }
+  .figs p { margin: 6px 0 0; font-size: 0.92rem; color: var(--ink-2); }
+  .refs { margin: 8px 0 0; padding-left: 1.3rem; }
+  .refs li { margin-bottom: 6px; line-height: 1.5; }
+
+  .mform { gap: 22px; }
+
+  .aside {
+    max-width: var(--measure-form);
+    margin: 0;
+    color: var(--ink-3);
+    font-size: 0.9rem;
+    line-height: 1.55;
+  }
+
+  .q { border: 0; padding: 0; margin: 0; display: grid; gap: 8px; }
+  .q legend { padding: 0; font-size: 1rem; line-height: 1.45; }
+  .scale { display: flex; flex-wrap: wrap; gap: 16px; }
+  .opt { display: flex; align-items: center; gap: 6px; }
+  .opt span {
+    font-family: var(--face-ui);
+    font-size: 0.86rem;
+    color: var(--ink-2);
+    text-transform: none;
+    letter-spacing: 0;
+  }
+</style>

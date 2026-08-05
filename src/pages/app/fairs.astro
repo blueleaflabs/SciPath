@@ -2,6 +2,7 @@
 export const prerender = false;
 
 import Base from '../../layouts/Base.astro';
+import { formatDate } from '../../lib/dates';
 import AppShell from '../../components/AppShell.astro';
 import { activeOrg } from '../../lib/tenant';
 import { serverClient } from '../../lib/supabase';
@@ -71,7 +72,7 @@ const { data: mine } = myProjectIds.length
 const entered = new Set((mine ?? []).map((e: any) => e.program_id));
 
 const fmt = (d: string | null) =>
-  d ? new Date(d + 'T00:00:00').toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' }) : null;
+  d ? formatDate(d, 'long') : null;
 ---
 
 <Base title="Fairs and entries" noindex={true}>

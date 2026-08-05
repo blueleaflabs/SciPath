@@ -1,0 +1,697 @@
+---
+export const prerender = false;
+
+import Base from '../../../layouts/Base.astro';
+import { formatDate } from '../../../lib/dates';
+import AppShell from '../../../components/AppShell.astro';
+import { activeOrg } from '../../../lib/tenant';
+import { serverClient } from '../../../lib/supabase';
+import { standing } from '../../../lib/roles';
+import {
+  actionsFor,
+  editorLabel,
+  publicLabel,
+  recommendationLabel,
+  doneLabel,
+  REVIEW_QUESTIONS,
+  type State,
+} from '../../../lib/workflow';
+import { sectionsFor } from '../../../config/structure';
+import { formatCompleted } from '../../../lib/manuscript';
+
+const { session, account, roles } = Astro.locals;
+const org = activeOrg(Astro);
+const { id } = Astro.params;
+
+if (!session) return Astro.redirect('/app/');
+if (!account) return Astro.redirect('/app/welcome/');
+
+const me = standing(roles, account?.population);
+const isEditor = me.isEditor;
+
+const supabase = serverClient(
+  Astro.request,
+  Astro.cookies,
+  (Astro.locals as any).runtime?.env
+);
+
+let error: string | null = null;
+/* Which action succeeded, not whether one did. The confirmation is built
+   after the reads below, so it can name the state the submission actually
+   landed in rather than the one we assumed. */
+let didAction: string | null = null;
+
+if (Astro.request.method === 'POST' && isEditor) {
+  const form = await Astro.request.formData();
+  const action = String(form.get('action') ?? '');
+  const note = String(form.get('note') ?? '') || null;
+
+  const call = async (fn: string, args: Record<string, unknown>) => {
+    const { error: e } = await supabase.rpc(fn, args);
+    if (e) error = e.message;
+    else didAction = action;
+  };
+
+  if (action === 'claim_submission') await call('claim_submission', { p_submission_id: id });
+
+  if (action.startsWith('screen_')) {
+    await call('screen_submission', {
+      p_submission_id: id,
+      p_outcome: action.replace('screen_', ''),
+      p_note: note,
+    });
+  }
+
+  if (action === 'assign_reviewer') {
+    await call('assign_reviewer', {
+      p_submission_id: id,
+      p_reviewer_id: String(form.get('reviewer_id') ?? ''),
+      p_due_at: new Date(String(form.get('due_at') ?? '')).toISOString(),
+    });
+  }
+
+  if (action === 'add_finding') {
+    await call('add_finding', {
+      p_submission_id: id,
+      p_severity: String(form.get('severity') ?? 'required'),
+      p_finding: String(form.get('finding') ?? ''),
+      p_section: String(form.get('section') ?? ''),
+    });
+  }
+
+  if (action === 'request_revisions') {
+    await call('request_revisions', { p_submission_id: id, p_note: note });
+  }
+  if (action === 'to_editorial_review') await call('to_editorial_review', { p_submission_id: id });
+  if (action === 'confirm_withdrawal') await call('confirm_withdrawal', { p_submission_id: id });
+
+  if (action.startsWith('decide_')) {
+    await call('decide_submission', {
+      p_submission_id: id,
+      p_decision: action.replace('decide_', ''),
+      p_note: note,
+    });
+  }
+}
+
+const { data: submission } = await supabase
+  .from('submissions')
+  .select(
+    'id, state, round, record_kind, submitted_at, assigned_editor, decision, decided_at, withdrawal_requested_at, withdrawal_reason, project_id, manuscript_id, projects(title), users!submissions_assigned_editor_fkey(display_name)'
+  )
+  .eq('id', id)
+  .maybeSingle();
+
+if (!submission) return Astro.redirect('/app/editorial/');
+
+const reads = await Promise.all([
+  supabase
+    .from('manuscripts')
+    .select(
+      'id, title, abstract, keywords, discipline, contributions, license, completed_on, date_precision, body_format, external_url, pdf_path, source, record_kind'
+    )
+    .eq('id', submission.manuscript_id)
+    .maybeSingle(),
+  supabase
+    .from('manuscript_sections')
+    .select('section_key, body')
+    .eq('manuscript_id', submission.manuscript_id),
+  supabase
+    .from('manuscript_figures')
+    .select('number, storage_path, caption, alt')
+    .eq('manuscript_id', submission.manuscript_id)
+    .is('withdrawn_at', null)
+    .order('number'),
+  supabase
+    .from('manuscript_references')
+    .select('citation')
+    .eq('manuscript_id', submission.manuscript_id)
+    .order('sort_order'),
+  supabase
+    .from('project_authors')
+    .select('user_id, users(display_name)')
+    .eq('project_id', submission.project_id)
+    .eq('role', 'author'),
+  supabase
+    .from('reviews')
+    .select(
+      /* reviews has two foreign keys to users, reviewer_id and assigned_by,
+         so a bare users() embed is ambiguous and PostgREST refuses the whole
+         query. Name the constraint. */
+      'id, round, due_at, submitted_at, recommendation, responses, comments_to_author, comments_to_editor, users!reviews_reviewer_id_fkey(display_name)'
+    )
+    .eq('submission_id', id)
+    .order('round')
+    .order('assigned_at'),
+  supabase
+    .from('review_findings')
+    .select('id, round, sort_order, severity, section, finding, author_response')
+    .eq('submission_id', id)
+    .order('round')
+    .order('sort_order'),
+  supabase
+    .from('state_events')
+    .select('from_state, to_state, public_label, note, occurred_at')
+    .eq('submission_id', id)
+    .order('occurred_at'),
+  /* Officers, editors, and the advisor. Not every account: reviewing is a
+     job the club gives somebody, and a picker listing every student invites
+     an assignment the database will refuse. Row level security scopes this
+     to the organization. */
+  supabase
+    .from('user_roles')
+    /* user_roles points at users twice, user_id and granted_by. */
+    .select('user_id, role, users!user_roles_user_id_fkey(id, display_name)')
+    .in('role', ['officer', 'advisor', 'editor'])
+    .is('revoked_at', null),
+]);
+
+/* Discarding these is how an ambiguous embed rendered as an empty section
+   rather than as a message naming the problem. */
+const readError = reads.find((r: any) => r?.error)?.error;
+if (readError) error = error ?? readError.message;
+
+const [
+  { data: manuscript },
+  { data: sections },
+  { data: figures },
+  { data: references },
+  { data: authors },
+  { data: reviews },
+  { data: findings },
+  { data: events },
+  { data: people },
+] = reads as any;
+
+const state = submission.state as State;
+const authorIds = new Set((authors ?? []).map((a: any) => a.user_id));
+const roundFindings = (findings ?? []).filter((f: any) => f.round === submission.round);
+
+const actions = actionsFor(state, 'editor', {
+  withdrawalRequested: Boolean(submission.withdrawal_requested_at),
+  findingCount: roundFindings.length,
+  round: submission.round,
+});
+
+/* One entry per person: an officer who is also an editor holds two roles and
+   should appear once. */
+const candidates = Array.from(
+  new Map(
+    (people ?? [])
+      .filter((r: any) => r.users?.id && !authorIds.has(r.users.id))
+      .map((r: any) => [r.users.id, { id: r.users.id, display_name: r.users.display_name }])
+  ).values()
+).sort((a: any, b: any) => a.display_name.localeCompare(b.display_name));
+const sectionRules = sectionsFor((manuscript?.record_kind ?? 'article') as any);
+const bodyByKey = new Map((sections ?? []).map((s: any) => [s.section_key, s.body]));
+
+const returned = (reviews ?? []).filter((r: any) => r.submitted_at);
+const outstanding = (reviews ?? []).filter((r: any) => !r.submitted_at);
+
+const when = (iso: string | null) => formatDate(iso, 'short', '');
+
+const defaultDue = new Date(Date.now() + 14 * 86400000).toISOString().slice(0, 10);
+
+/* What happened, when, and where it is now. The timestamp comes from the
+   event the database wrote rather than from this request, so a page reloaded
+   an hour later does not claim it just happened. */
+const latest = (events ?? [])[(events ?? []).length - 1];
+const confirmation = didAction
+  ? {
+      what: doneLabel(didAction),
+      when: new Date(latest?.occurred_at ?? Date.now()).toLocaleString('en-US', {
+        month: 'long',
+        day: 'numeric',
+        hour: 'numeric',
+        minute: '2-digit',
+      }),
+      now: editorLabel[state],
+    }
+  : null;
+---
+
+<Base title={`Editorial · ${manuscript?.title ?? ''}`} noindex={true}>
+  <div class="wrap">
+    <AppShell org={org} account={account} roles={roles} here="/app/editorial/" />
+
+    {!isEditor ? (
+      <section class="sec">
+        <p class="note">The queue is for editors and the club advisor.</p>
+      </section>
+    ) : (
+      <>
+        <section class="hero">
+          <p class="t-lbl">
+            {editorLabel[state]}
+            {submission.round > 1 && ` · round ${submission.round}`}
+          </p>
+          <h1 class="t-big">{manuscript?.title}</h1>
+          <p class="lede">
+            {(authors ?? []).map((a: any) => a.users?.display_name).join(', ')}
+          </p>
+          <div class="actions">
+            <a class="btn btn-2" href="/app/editorial/">Back to the queue</a>
+            <a class="btn btn-2" href={`/track/${submission.id}/`}>What the authors see</a>
+          </div>
+        </section>
+
+        {error && <p class="note" role="alert">{error}</p>}
+        {confirmation && !error && (
+          <p class="note done" role="status">
+            <b>{confirmation.what}</b>
+            <span>{confirmation.when}</span>
+            <span>Now {confirmation.now.toLowerCase()}</span>
+          </p>
+        )}
+
+        {submission.withdrawal_requested_at && state !== 'withdrawn' && (
+          <p class="note" role="alert">
+            The authors have asked to withdraw this
+            {submission.withdrawal_reason && `: ${submission.withdrawal_reason}`}.
+            Confirming it is the expected answer.
+          </p>
+        )}
+
+        <!-- ── What happens next ───────────────────────────────────────── -->
+        <section class="sec">
+          <div class="sec-h">
+            <b>What you can do</b>
+            <span>{submission.users?.display_name ?? 'Unclaimed'}</span>
+          </div>
+
+          {actions.length === 0 ? (
+            <p class="prose">
+              Nothing, from here. {publicLabel[state]}.
+            </p>
+          ) : (
+            <ul class="acts">
+              {actions.map((action) => (
+                <li>
+                  <form method="POST">
+                    <input type="hidden" name="action" value={action.id} />
+
+                    {action.id === 'assign_reviewer' ? (
+                      <div class="assign">
+                        <select class="se" name="reviewer_id" required aria-label="Reviewer">
+                          <option value="">
+                            {candidates.length === 0
+                              ? 'Nobody is eligible yet'
+                              : 'Choose somebody'}
+                          </option>
+                          {candidates.map((p: any) => (
+                            <option value={p.id}>{p.display_name}</option>
+                          ))}
+                        </select>
+                        <input
+                          class="in"
+                          type="date"
+                          name="due_at"
+                          value={defaultDue}
+                          required
+                          aria-label="Due"
+                        />
+                        <button class="btn btn-2" type="submit">{action.label}</button>
+                      </div>
+                    ) : (
+                      <>
+                        {[
+                          'screen_return',
+                          'screen_decline',
+                          'request_revisions',
+                          'decide_declined',
+                          'decide_accepted',
+                        ].includes(action.id) && (
+                          <input
+                            class="in"
+                            name="note"
+                            placeholder={
+                              action.id === 'request_revisions' && roundFindings.length === 0
+                                ? 'What needs doing, since the list is empty'
+                                : 'A line for the authors, optional'
+                            }
+                            aria-label="Note to the authors"
+                          />
+                        )}
+                        <button
+                          class:list={['btn', action.grave ? 'btn-q' : 'btn-2']}
+                          type="submit"
+                        >
+                          {action.label}
+                        </button>
+                      </>
+                    )}
+                  </form>
+                  {action.hint && <p class="hint">{action.hint}</p>}
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+
+        <!-- ── Reviews ─────────────────────────────────────────────────── -->
+        <section class="sec">
+          <div class="sec-h">
+            <b>Reviews</b>
+            <span>
+              {returned.length} back
+              {outstanding.length > 0 && ` · ${outstanding.length} out`}
+            </span>
+          </div>
+
+          {(reviews ?? []).length === 0 && (
+            <p class="prose">Nobody has been asked yet.</p>
+          )}
+
+          {outstanding.length > 0 && (
+            <ul class="out">
+              {outstanding.map((r: any) => (
+                <li>
+                  <b>{r.users?.display_name}</b>
+                  <span class={new Date(r.due_at) < new Date() ? 'late' : undefined}>
+                    due {when(r.due_at)}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+
+          {returned.map((r: any) => (
+            <article class="rev">
+              <div class="rev-h">
+                <b>{r.users?.display_name}</b>
+                <span>
+                  {recommendationLabel[r.recommendation] ?? r.recommendation}
+                  {' · '}
+                  {when(r.submitted_at)}
+                  {r.round > 1 && ` · round ${r.round}`}
+                </span>
+              </div>
+
+              {r.responses && (
+                <dl class="answers">
+                  {REVIEW_QUESTIONS.map((q) =>
+                    r.responses[q.key] ? (
+                      <>
+                        <dt>{q.prompt}</dt>
+                        <dd>
+                          <b>{r.responses[q.key].scale}</b>
+                          {r.responses[q.key].comment && ` — ${r.responses[q.key].comment}`}
+                        </dd>
+                      </>
+                    ) : null
+                  )}
+                </dl>
+              )}
+
+              <h4>To the author</h4>
+              <p class="prose">{r.comments_to_author}</p>
+
+              {r.comments_to_editor && (
+                <>
+                  <h4>To you only</h4>
+                  <p class="prose private">{r.comments_to_editor}</p>
+                </>
+              )}
+            </article>
+          ))}
+        </section>
+
+        <!-- ── The consolidated list ───────────────────────────────────── -->
+        <section class="sec">
+          <div class="sec-h">
+            <b>The list for the authors</b>
+            <span>{roundFindings.length} on round {submission.round}</span>
+          </div>
+
+          <p class="aside">
+            Please list out the merged, ordered set of changes for the authors
+            to make based on all the reviewer comments you have received.
+            Where two reviewers contradict each other, resolving it is your
+            job rather than theirs to referee.
+          </p>
+
+          {roundFindings.length > 0 && (
+            <ol class="finds">
+              {roundFindings.map((f: any) => (
+                <li>
+                  <span class:list={['sev', f.severity]}>{f.severity}</span>
+                  <div>
+                    {f.section && <b>{f.section}</b>}
+                    <p>{f.finding}</p>
+                    {f.author_response && (
+                      <p class="reply">Author: {f.author_response}</p>
+                    )}
+                  </div>
+                </li>
+              ))}
+            </ol>
+          )}
+
+          {!['accepted', 'declined', 'withdrawn', 'published'].includes(state) && (
+            <form method="POST" class="mform">
+              <input type="hidden" name="action" value="add_finding" />
+
+              {/* The finding is the long field and gets the full width. Two
+                  short ones share the row beneath it, rather than all three
+                  competing and the textarea losing. */}
+              <label>
+                <span>What has to change</span>
+                <textarea class="ta" name="finding" rows="3" required></textarea>
+                <small>Your feedback should be specific enough for the authors to act on.</small>
+              </label>
+
+              <div class="row-2">
+                <label>
+                  <span>Severity</span>
+                  <select class="se" name="severity">
+                    <option value="required">Required</option>
+                    <option value="suggested">Suggested</option>
+                  </select>
+                  <small>Required blocks resubmission until it is answered.</small>
+                </label>
+                <label>
+                  <span>Section</span>
+                  <input class="in" name="section" placeholder="Methods" />
+                  <small>Optional, and it helps them find it.</small>
+                </label>
+              </div>
+
+              <button class="btn btn-2" type="submit">Add to the list</button>
+            </form>
+          )}
+        </section>
+
+        <!-- ── The manuscript ──────────────────────────────────────────── -->
+        <section class="sec">
+          <div class="sec-h">
+            <b>The manuscript</b>
+            <span>
+              {manuscript?.source === 'workbench' ? 'Written here' : 'Brought in'}
+              {' · '}
+              {formatCompleted(manuscript?.completed_on ?? null, manuscript?.date_precision ?? 'month')}
+            </span>
+          </div>
+
+          <div class="ms">
+            <h3>Abstract</h3>
+            <p class="prose">{manuscript?.abstract}</p>
+
+            <p class="kw">
+              {(manuscript?.keywords ?? []).join(' · ')}
+              {manuscript?.discipline && ` · ${manuscript.discipline}`}
+              {` · ${manuscript?.license}`}
+            </p>
+
+            {manuscript?.contributions && (
+              <>
+                <h3>Contributions</h3>
+                <p class="prose">{manuscript.contributions}</p>
+              </>
+            )}
+
+            {manuscript?.pdf_path && (
+              <p class="prose">
+                <a href={`/app/media/${manuscript.pdf_path}`}>The uploaded paper</a>
+              </p>
+            )}
+
+            {manuscript?.external_url && (
+              <p class="prose">
+                Published elsewhere: <a href={manuscript.external_url}>{manuscript.external_url}</a>
+              </p>
+            )}
+
+            {sectionRules.map((rule) =>
+              bodyByKey.get(rule.key) ? (
+                <>
+                  <h3>{rule.label}</h3>
+                  <p class="prose body">{bodyByKey.get(rule.key)}</p>
+                </>
+              ) : null
+            )}
+
+            {(figures ?? []).length > 0 && (
+              <>
+                <h3>Figures</h3>
+                <ul class="figs">
+                  {(figures ?? []).map((f: any) => (
+                    <li>
+                      <img src={`/app/media/${f.storage_path}`} alt={f.alt} />
+                      <p>Figure {f.number}. {f.caption}</p>
+                    </li>
+                  ))}
+                </ul>
+              </>
+            )}
+
+            {(references ?? []).length > 0 && (
+              <>
+                <h3>References</h3>
+                <ol class="refs">
+                  {(references ?? []).map((r: any) => <li>{r.citation}</li>)}
+                </ol>
+              </>
+            )}
+          </div>
+        </section>
+
+        <!-- ── History ─────────────────────────────────────────────────── -->
+        <section class="sec">
+          <div class="sec-h"><b>What has happened</b><span>{(events ?? []).length}</span></div>
+          <ol class="hist">
+            {(events ?? []).map((e: any) => (
+              <li>
+                <span class="when">{when(e.occurred_at)}</span>
+                <span>
+                  {e.public_label}
+                  {e.note && <i> — {e.note}</i>}
+                </span>
+              </li>
+            ))}
+          </ol>
+        </section>
+      </>
+    )}
+  </div>
+</Base>
+
+<style>
+  .hero { padding: 34px 0 26px; }
+
+  /* One line: what, when, and where it is now. Three facts a person can
+     check, rather than an acknowledgement they have to trust. */
+  .done {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 6px 16px;
+  }
+  .done span {
+    font-family: var(--face-num);
+    font-size: 0.85rem;
+    color: var(--ink-3);
+  }
+  .actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 20px; }
+
+  .acts { list-style: none; margin: 0; padding: 0; display: grid; gap: 18px; }
+  .acts form { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+  .acts .in { max-width: 34ch; }
+  .acts .hint {
+    margin: 5px 0 0;
+    max-width: var(--measure-form);
+    color: var(--ink-3);
+    font-size: 0.88rem;
+    line-height: 1.5;
+  }
+  .assign { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+  .assign .se { max-width: 24ch; }
+  .assign .in { max-width: 18ch; }
+
+  .out { list-style: none; margin: 0 0 22px; padding: 0; }
+  .out li {
+    display: flex;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 9px 0;
+    border-bottom: 1px solid var(--rule-fine);
+    max-width: var(--measure-form);
+  }
+  .out span { font-family: var(--face-num); font-size: 0.85rem; color: var(--ink-3); }
+  .out .late { color: var(--alert); }
+
+  .rev {
+    border-top: 1px solid var(--rule);
+    padding: 18px 0 4px;
+    max-width: var(--measure-form);
+  }
+  .rev-h { display: flex; justify-content: space-between; gap: 16px; align-items: baseline; }
+  .rev-h span { font-family: var(--face-num); font-size: 0.82rem; color: var(--ink-3); }
+  .rev h4 {
+    margin: 16px 0 4px;
+    font-family: var(--face-ui);
+    font-size: 0.78rem;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: var(--ink-2);
+  }
+  .answers { margin: 12px 0 0; }
+  .answers dt { font-size: 0.88rem; color: var(--ink-3); margin-top: 8px; }
+  .answers dd { margin: 2px 0 0; line-height: 1.5; }
+  /* Never shown to an author. Marked so nobody quotes it into a finding by
+     accident. */
+  .private {
+    border-left: 3px solid var(--rule);
+    padding-left: 12px;
+    color: var(--ink-2);
+  }
+
+  .finds { list-style: none; margin: 0 0 24px; padding: 0; counter-reset: f; }
+  .finds li {
+    display: grid;
+    grid-template-columns: 7rem 1fr;
+    gap: 16px;
+    padding: 12px 0;
+    border-bottom: 1px solid var(--rule-fine);
+    max-width: var(--measure-form);
+  }
+  .finds p { margin: 0; line-height: 1.55; }
+  .finds .reply { margin-top: 6px; color: var(--ink-3); font-size: 0.92rem; }
+  .sev {
+    font-family: var(--face-ui);
+    font-size: 0.74rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    align-self: start;
+  }
+  .sev.required { color: var(--alert); }
+  .sev.suggested { color: var(--ink-3); }
+
+
+  .ms { max-width: var(--measure-form); }
+  .ms h3 {
+    margin: 26px 0 6px;
+    font-family: var(--face-ui);
+    font-size: 0.82rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--ink-2);
+  }
+  .ms .body { white-space: pre-wrap; }
+  .kw { color: var(--ink-3); font-size: 0.9rem; margin: 8px 0 0; }
+  .figs { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 18px; }
+  .figs img { max-width: 320px; border: 1px solid var(--rule-fine); }
+  .figs p { margin: 6px 0 0; font-size: 0.92rem; color: var(--ink-2); }
+  .refs { margin: 8px 0 0; padding-left: 1.3rem; }
+  .refs li { margin-bottom: 6px; line-height: 1.5; }
+
+  .hist { list-style: none; margin: 0; padding: 0; max-width: var(--measure-form); }
+  .hist li {
+    display: grid;
+    grid-template-columns: 9rem 1fr;
+    gap: 16px;
+    padding: 9px 0;
+    border-bottom: 1px solid var(--rule-fine);
+  }
+  .hist .when { font-family: var(--face-num); font-size: 0.85rem; color: var(--ink-3); }
+  .hist i { color: var(--ink-3); font-style: normal; }
+</style>

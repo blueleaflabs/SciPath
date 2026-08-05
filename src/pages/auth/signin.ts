@@ -24,6 +24,6 @@ export const GET: APIRoute = async ({ request, cookies, url, locals, redirect })
     },
   });
 
-  if (error || !data?.url) return redirect('/app/?error=oauth');
+  if (error || !data?.url) return redirect('/app/?signin=oauth');
   return redirect(data.url);
 };

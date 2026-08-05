@@ -1,0 +1,1454 @@
+---
+export const prerender = false;
+
+import Base from '../../../../layouts/Base.astro';
+import AppShell from '../../../../components/AppShell.astro';
+import { activeOrg } from '../../../../lib/tenant';
+import { serverClient } from '../../../../lib/supabase';
+import { standing, isAuthorOf } from '../../../../lib/roles';
+import { blobStore, figurePath, manuscriptPdfPath, MAX_UPLOAD_BYTES } from '../../../../lib/blob';
+import { disciplines, disciplineLabel } from '../../../../config/site';
+import { rulesFor, sectionsFor } from '../../../../config/structure';
+import { checkStructure, completeness, checklist, maySubmit, words } from '../../../../lib/structure';
+import { doneLabel, publicLabel, authorMayEdit } from '../../../../lib/workflow';
+import {
+  toSnapshot,
+  parseKeywords,
+  parseReferences,
+  bodyFormatLabel,
+  formatCompleted,
+} from '../../../../lib/manuscript';
+
+const { session, account, roles } = Astro.locals;
+const org = activeOrg(Astro);
+const { id } = Astro.params;
+
+if (!session) return Astro.redirect('/app/');
+if (!account) return Astro.redirect('/app/welcome/');
+
+const me = standing(roles, account?.population);
+const supabase = serverClient(
+  Astro.request,
+  Astro.cookies,
+  (Astro.locals as any).runtime?.env
+);
+
+let error: string | null = null;
+/* Which action ran. The sentence is built after the reads, so it can name the
+   state the submission is actually in. */
+let didAction: string | null = null;
+
+const { data: project } = await supabase
+  .from('projects')
+  .select('id, title, question, discipline, stage, project_authors(role, accepted_at, users(id, display_name))')
+  .eq('id', id)
+  .maybeSingle();
+
+if (!project) return Astro.redirect('/app/');
+
+const attachments = project.project_authors ?? [];
+const authorRows = attachments.filter((a: any) => a.role === 'author');
+const iAuthor = isAuthorOf(attachments, account.id);
+
+/* ── Writes ─────────────────────────────────────────────────────────────── */
+
+if (Astro.request.method === 'POST' && iAuthor) {
+  const form = await Astro.request.formData();
+  const action = String(form.get('action') ?? '');
+
+  if (action === 'start') {
+    const { error: e } = await supabase.rpc('ensure_manuscript', { p_project_id: id });
+    if (e) error = e.message;
+    else didAction = action;
+  }
+
+  if (action === 'meta') {
+    const { error: e } = await supabase.rpc('save_manuscript', {
+      p_manuscript_id: String(form.get('manuscript_id') ?? ''),
+      p_expected: String(form.get('expected') ?? '') || null,
+      p_title: String(form.get('title') ?? ''),
+      p_abstract: String(form.get('abstract') ?? ''),
+      p_keywords: parseKeywords(String(form.get('keywords') ?? '')),
+      p_discipline: String(form.get('discipline') ?? ''),
+      p_contributions: String(form.get('contributions') ?? ''),
+      p_license: String(form.get('license') ?? 'CC BY 4.0'),
+      p_completed_on: String(form.get('completed_on') ?? '') || null,
+      p_date_precision: String(form.get('date_precision') ?? 'month'),
+      p_record_kind: String(form.get('record_kind') ?? 'article'),
+      p_body_format: String(form.get('body_format') ?? 'full-text'),
+      p_external_url: String(form.get('external_url') ?? ''),
+    });
+    if (e) error = e.message;
+    else didAction = action;
+  }
+
+  if (action === 'section') {
+    const { error: e } = await supabase.rpc('save_section', {
+      p_manuscript_id: String(form.get('manuscript_id') ?? ''),
+      p_section_key: String(form.get('section_key') ?? ''),
+      p_body: String(form.get('body') ?? ''),
+      p_sort_order: Number(form.get('sort_order') ?? 0),
+      p_expected: String(form.get('expected') ?? '') || null,
+    });
+    if (e) error = e.message;
+    else didAction = action;
+  }
+
+  if (action === 'references') {
+    const { error: e } = await supabase.rpc('save_references', {
+      p_manuscript_id: String(form.get('manuscript_id') ?? ''),
+      p_citations: parseReferences(String(form.get('citations') ?? '')),
+    });
+    if (e) error = e.message;
+    else didAction = action;
+  }
+
+  if (action === 'figure') {
+    const manuscriptId = String(form.get('manuscript_id') ?? '');
+    const file = form.get('image');
+    const caption = String(form.get('caption') ?? '');
+    const alt = String(form.get('alt') ?? '');
+
+    if (!(file instanceof File) || file.size === 0) {
+      error = 'Choose an image.';
+    } else if (file.size > MAX_UPLOAD_BYTES) {
+      error = 'That image is over 5 MB. Export it smaller and try again.';
+    } else if (caption.trim() === '' || alt.trim() === '') {
+      /* Both are NOT NULL in the schema. Saying so here saves a round trip
+         and a database error message written for a developer. */
+      error = 'A figure needs both a caption and alt text before it can be stored.';
+    } else {
+      const blob = blobStore(Astro.locals);
+      if (!blob.available()) {
+        error = 'File storage is not configured on this deployment.';
+      } else {
+        const path = figurePath(manuscriptId, file.name);
+        try {
+          await blob.put(path, await file.arrayBuffer(), file.type || 'image/png');
+          const { error: e } = await supabase.rpc('add_figure', {
+            p_manuscript_id: manuscriptId,
+            p_storage_path: path,
+            p_caption: caption,
+            p_alt: alt,
+          });
+          if (e) error = e.message;
+          else didAction = action;
+        } catch (e: any) {
+          error = `The image did not upload: ${e.message}`;
+        }
+      }
+    }
+  }
+
+  if (action === 'paper') {
+    const manuscriptId = String(form.get('manuscript_id') ?? '');
+    const file = form.get('paper');
+
+    if (!(file instanceof File) || file.size === 0) {
+      error = 'Choose a PDF.';
+    } else if (file.size > MAX_UPLOAD_BYTES) {
+      error = 'That file is over 5 MB.';
+    } else {
+      const blob = blobStore(Astro.locals);
+      if (!blob.available()) {
+        error = 'File storage is not configured on this deployment.';
+      } else {
+        const path = manuscriptPdfPath(manuscriptId, file.name);
+        try {
+          await blob.put(path, await file.arrayBuffer(), file.type || 'application/pdf');
+          const { error: e } = await supabase.rpc('set_manuscript_pdf', {
+            p_manuscript_id: manuscriptId,
+            p_storage_path: path,
+          });
+          if (e) error = e.message;
+          else didAction = action;
+        } catch (e: any) {
+          error = `The file did not upload: ${e.message}`;
+        }
+      }
+    }
+  }
+
+  if (action === 'submit') {
+    const { error: e } = await supabase.rpc('submit_manuscript', {
+      p_manuscript_id: String(form.get('manuscript_id') ?? ''),
+    });
+    if (e) error = e.message;
+    else didAction = action;
+  }
+
+  if (action === 'withdraw') {
+    const { error: e } = await supabase.rpc('withdraw_submission', {
+      p_submission_id: String(form.get('submission_id') ?? ''),
+    });
+    if (e) error = e.message;
+    else didAction = action;
+  }
+
+  if (action === 'respond') {
+    const { error: e } = await supabase.rpc('respond_to_finding', {
+      p_finding_id: String(form.get('finding_id') ?? ''),
+      p_response: String(form.get('response') ?? ''),
+    });
+    if (e) error = e.message;
+    else didAction = action;
+  }
+
+  if (action === 'resubmit') {
+    const { error: e } = await supabase.rpc('resubmit', {
+      p_submission_id: String(form.get('submission_id') ?? ''),
+    });
+    if (e) error = e.message;
+    else didAction = action;
+  }
+
+  if (action === 'ask-withdraw') {
+    const { error: e } = await supabase.rpc('request_withdrawal', {
+      p_submission_id: String(form.get('submission_id') ?? ''),
+      p_reason: String(form.get('reason') ?? ''),
+    });
+    if (e) error = e.message;
+    else didAction = action;
+  }
+
+  if (action === 'figure-remove') {
+    const { error: e } = await supabase.rpc('withdraw_figure', {
+      p_figure_id: String(form.get('figure_id') ?? ''),
+    });
+    if (e) error = e.message;
+    else didAction = action;
+  }
+}
+
+/* ── Reads ──────────────────────────────────────────────────────────────── */
+
+const { data: manuscript } = await supabase
+  .from('manuscripts')
+  .select(
+    'id, record_kind, source, title, abstract, keywords, discipline, contributions, license, completed_on, date_precision, body_format, external_url, pdf_path, updated_at'
+  )
+  .eq('project_id', id)
+  .maybeSingle();
+
+let sections: any[] = [];
+let figures: any[] = [];
+let references: any[] = [];
+
+if (manuscript) {
+  const [s, f, r] = await Promise.all([
+    supabase
+      .from('manuscript_sections')
+      .select('section_key, body, sort_order, updated_at')
+      .eq('manuscript_id', manuscript.id),
+    supabase
+      .from('manuscript_figures')
+      .select('id, number, storage_path, caption, alt')
+      .eq('manuscript_id', manuscript.id)
+      .is('withdrawn_at', null)
+      .order('number', { ascending: true }),
+    supabase
+      .from('manuscript_references')
+      .select('citation, sort_order')
+      .eq('manuscript_id', manuscript.id)
+      .order('sort_order', { ascending: true }),
+  ]);
+  sections = s.data ?? [];
+  figures = f.data ?? [];
+  references = r.data ?? [];
+}
+
+const { data: submission } = manuscript
+  ? await supabase
+      .from('submissions')
+      .select('id, state, round, submitted_at, withdrawal_requested_at')
+      .eq('manuscript_id', manuscript.id)
+      .not('state', 'in', '("withdrawn","declined")')
+      .maybeSingle()
+  : { data: null };
+
+/* Both through functions rather than through policies. A read that depends
+   on a subquery over two other tables, each with its own row level security,
+   can return nothing for a reason two joins away, and an empty list looks
+   exactly like a list with nothing on it. */
+const [changes, reviewerNotes, editorNotes] = submission
+  ? await Promise.all([
+      supabase.rpc('author_changes', { p_submission_id: submission.id }),
+      supabase.rpc('author_feedback', { p_submission_id: submission.id }),
+      supabase.rpc('author_notes', { p_submission_id: submission.id }),
+    ])
+  : [
+      { data: [], error: null },
+      { data: [], error: null },
+      { data: [], error: null },
+    ];
+
+const changeList = changes.data ?? [];
+const feedback = reviewerNotes.data ?? [];
+const notes = editorNotes.data ?? [];
+
+/* Swallowing these is how the list came back empty and said nothing about
+   why. If the read fails the person is told, rather than shown a section
+   that looks finished and is not. */
+if (changes.error) error = changes.error.message;
+else if (reviewerNotes.error) error = reviewerNotes.error.message;
+else if (editorNotes.error) error = editorNotes.error.message;
+
+const { count: entryCount } = await supabase
+  .from('entries')
+  .select('id', { count: 'exact', head: true })
+  .eq('project_id', id);
+
+const rules = rulesFor();
+
+const snapshot = manuscript
+  ? toSnapshot({
+      manuscript: manuscript as any,
+      sections,
+      figures,
+      references,
+      authors: authorRows.map((a: any) => ({
+        displayName: a.users?.display_name ?? 'Unknown',
+        accepted: Boolean(a.accepted_at),
+      })),
+      entryCount: entryCount ?? 0,
+    })
+  : null;
+
+const findings = snapshot ? checkStructure({ rules, manuscript: snapshot }) : [];
+const progress = snapshot ? completeness(rules, snapshot, findings) : { done: 0, total: 0 };
+const clear = snapshot ? maySubmit(findings) : false;
+
+const blocking = findings.filter((f) => f.severity === 'blocking');
+const human = findings.filter((f) => f.severity === 'human');
+const items = snapshot ? checklist(rules, snapshot, findings) : [];
+
+const kind = (manuscript?.record_kind ?? 'article') as 'article' | 'project';
+const orderedSections = sectionsFor(kind);
+const bodyByKey = new Map(sections.map((s: any) => [s.section_key, s]));
+const findingFor = (key: string) => findings.find((f) => f.key === key && f.severity !== 'human');
+
+const writesProse = (manuscript?.body_format ?? 'full-text') === 'full-text';
+const isPdf = manuscript?.body_format === 'pdf-only';
+/* Locked while somebody else is reading it, open again the moment it comes
+   back. A list of changes beside a form nobody can type in is a dead end
+   dressed as a task. */
+const locked = !authorMayEdit(submission?.state as any);
+
+/* Withdrawal is the authors' own before anybody has read it, and a request
+   afterward. Never a refusal: journals accept a withdrawal request up to
+   formal acceptance, and what changes once reviewers are working is the
+   manners rather than the answer. */
+const revising = submission?.state === 'revisions_requested';
+
+const confirmation = didAction
+  ? {
+      what: doneLabel(didAction),
+      when: new Date().toLocaleString('en-US', {
+        month: 'long',
+        day: 'numeric',
+        hour: 'numeric',
+        minute: '2-digit',
+      }),
+      now: submission ? publicLabel[submission.state as keyof typeof publicLabel] : null,
+    }
+  : null;
+
+const unanswered = changeList.filter(
+  (f: any) => f.severity === 'required' && !f.author_response
+).length;
+
+const selfWithdraw =
+  submission && ['draft', 'submitted', 'screening'].includes(submission.state);
+
+const stamp = (value: string | null) =>
+  value
+    ? new Date(value).toLocaleString('en-US', {
+        month: 'long',
+        day: 'numeric',
+        year: 'numeric',
+        hour: 'numeric',
+        minute: '2-digit',
+      })
+    : '';
+
+/* Plain language for a state the author did not choose the name of. */
+const stateLabel: Record<string, string> = {
+  submitted: 'Received',
+  screening: 'Being screened',
+  in_review: 'With reviewers',
+  revisions_requested: 'Back with you for changes',
+  editorial_review: 'With the editor for a decision',
+  accepted: 'Accepted, waiting to be published',
+  scheduled: 'In the publishing queue',
+  exported: 'Being published',
+  published: 'Published',
+};
+
+/* The counter reads its bounds from the rule rather than repeating them, so
+   changing the rule changes what the page says. */
+const abstractRule = rules.find((r) => r.id === 'meta.abstract');
+
+/* Where each checklist item lives. One map, because a row that scrolls to
+   the wrong box is worse than a row that does not scroll at all. */
+const anchors: Record<string, string> = {
+  title: '#f-title',
+  abstract: '#f-abstract',
+  keywords: '#f-keywords',
+  discipline: '#f-discipline',
+  contributions: '#f-contributions',
+  external_url: '#f-external_url',
+  references: '#references',
+  figures: '#figures',
+  pdf: '#paper',
+};
+
+/* Everything still outstanding, in checklist order. Working down a list is
+   the natural way to clear one, and hunting for the next red mark by
+   scrolling is not. */
+const outstandingItems = items.filter((i) => i.status !== 'done');
+
+function nextAfter(key: string) {
+  if (outstandingItems.length === 0) return null;
+  const order = items.map((i) => i.key);
+  const here = order.indexOf(key);
+  const ahead = outstandingItems.find(
+    (i) => i.key !== key && order.indexOf(i.key) > here
+  );
+  /* Wrap, so somebody who started in the middle still reaches the rest. */
+  return ahead ?? outstandingItems.find((i) => i.key !== key) ?? null;
+}
+
+function targetFor(key: string): string | null {
+  if (anchors[key]) return anchors[key];
+  /* Authorship and the competition record are facts about the project rather
+     than fields on this page, so they lead off it. */
+  if (key === 'authors') return `/app/project/${id}/team/`;
+  if (key === 'entries') return `/app/project/${id}/`;
+  /* Everything else is a prose section, and the form already carries its
+     key as an id. */
+  return `#${key}`;
+}
+---
+
+<Base title={`Manuscript · ${project.title}`} noindex={true}>
+  <div class="wrap">
+    <AppShell org={org} account={account} roles={roles} here="/app/" />
+
+    <section class="hero" style="padding-top:0">
+      <p class="t-lbl">Manuscript</p>
+      <h1 class="t-big">{project.title}</h1>
+      <p class="lede">
+        {manuscript
+          ? `${progress.done} of ${progress.total} complete${clear ? ' · nothing is blocking' : ''}`
+          : 'Not started'}
+      </p>
+      <div class="row" style="margin-top:20px">
+        <a class="btn btn-q" href={`/app/project/${id}/`}>Back to the notebook</a>
+        {manuscript && (
+          <a class="btn btn-q" href={`/app/project/${id}/team/`}>Authors and sponsor</a>
+        )}
+      </div>
+    </section>
+
+    {error && <p class="note" role="alert">{error}</p>}
+    {confirmation && !error && (
+      <p class="note done" role="status">
+        <b>{confirmation.what}</b>
+        <span>{confirmation.when}</span>
+        {confirmation.now && <span>Now {confirmation.now.toLowerCase()}</span>}
+      </p>
+    )}
+
+    {!iAuthor && (
+      <p class="note">
+        You are reading this rather than writing it. The manuscript belongs to
+        the authors, because independent work is what a judge asks about and a
+        club member editing a methods section would make that claim untrue in a
+        way nobody could later see.
+      </p>
+    )}
+
+    {!manuscript && (
+      <section class="sec">
+        <div class="sec-h"><b>Nothing written yet</b><span>One per project</span></div>
+        <div class="card pad">
+          <p class="prose">
+            The manuscript is the thing that gets submitted, reviewed, and
+            published. It starts empty and fills up as the work happens, which
+            means the empty page you see on day one is the same page that
+            becomes the published record.
+          </p>
+          {iAuthor ? (
+            <form method="POST" style="margin-top:16px">
+              <input type="hidden" name="action" value="start" />
+              <button class="btn" type="submit">Start the manuscript</button>
+            </form>
+          ) : (
+            <p class="fine">The authors have not started it.</p>
+          )}
+        </div>
+      </section>
+    )}
+
+    {manuscript && (
+      <>
+        <!-- ── Submitting ─────────────────────────────────────────────── -->
+        {submission ? (
+          <section class="sec">
+            <div class="sec-h">
+              <b>Submitted {stamp(submission.submitted_at)}</b>
+              <span>{stateLabel[submission.state] ?? submission.state}</span>
+            </div>
+
+            <div class="subrow">
+              <p>
+                {submission.withdrawal_requested_at
+                  ? 'You have asked to withdraw it, and an editor will confirm.'
+                  : revising
+                    ? 'Back with you. Make the changes below, then send it back.'
+                    : 'Under editorial review. Withdraw the existing submission if you need to make changes.'}
+              </p>
+
+              <div class="row">
+                <a class="btn btn-2" href={`/track/${submission.id}/`}>Track progress</a>
+
+                {iAuthor && submission.state !== 'published' && !submission.withdrawal_requested_at && (
+                  <form method="POST">
+                    <input type="hidden" name="action" value={selfWithdraw ? 'withdraw' : 'ask-withdraw'} />
+                    <input type="hidden" name="submission_id" value={submission.id} />
+                    <button class="btn btn-2" type="submit">
+                      {selfWithdraw ? 'Withdraw' : 'Ask to withdraw'}
+                    </button>
+                  </form>
+                )}
+              </div>
+            </div>
+          </section>
+        ) : (
+          iAuthor && (
+            <section class="sec">
+              <div class="sec-h">
+                <b>Ready to submit</b>
+                <span>{clear ? 'Nothing blocking' : `${blocking.length} to fix first`}</span>
+              </div>
+              <div class="card pad">
+                {clear ? (
+                  <>
+                    <p class="prose">
+                      Everything the system can check has passed. An editor
+                      reads it next, and you will be able to follow it on a
+                      page that needs no login.
+                    </p>
+                    <form method="POST" style="margin-top:16px">
+                      <input type="hidden" name="action" value="submit" />
+                      <input type="hidden" name="manuscript_id" value={manuscript.id} />
+                      <button class="btn" type="submit">
+                        Submit for editorial review
+                      </button>
+                    </form>
+                  </>
+                ) : (
+                  <p class="prose">
+                    {blocking.length} {blocking.length === 1 ? 'thing is' : 'things are'}
+                    {' '}still missing. They are marked below, and the button appears
+                    here when they are done.
+                  </p>
+                )}
+              </div>
+            </section>
+          )
+        )}
+
+        <!-- ── What the editor wrote ──────────────────────────────────── -->
+        {notes.length > 0 && (
+          <section class="sec">
+            <div class="sec-h">
+              <b>From the editor</b>
+              <span>{notes.length === 1 ? '1 note' : `${notes.length} notes`}</span>
+            </div>
+            {notes.map((n: any) => (
+              <article class="fb">
+                <p class="who">
+                  {n.label} ·{' '}
+                  {new Date(n.occurred_at).toLocaleDateString('en-US', {
+                    month: 'long',
+                    day: 'numeric',
+                  })}
+                </p>
+                <p class="prose">{n.note}</p>
+              </article>
+            ))}
+          </section>
+        )}
+
+        <!-- ── Changes asked for ───────────────────────────────────────── -->
+        {revising && (
+          <section class="sec">
+            <div class="sec-h">
+              <b>Changes asked for</b>
+              <span>
+                {changeList.length === 0
+                  ? 'Nothing on the list'
+                  : unanswered === 0
+                    ? 'All answered'
+                    : `${unanswered} still to answer`}
+              </span>
+            </div>
+
+            <p class="aside">
+              One merged list from the editor rather than raw reviewer
+              comments. Answer each required one: say what you changed, or say
+              why you disagree. Either is an answer, and disagreeing in
+              writing is a normal part of this.
+            </p>
+
+            {changeList.length === 0 && (
+              <p class="prose">
+                {notes.length > 0
+                  ? 'Nothing itemized this time. What the editor wrote is above.'
+                  : 'The editor has not put anything on the list, and left no note either. Tell them, because there is nothing here to act on.'}
+              </p>
+            )}
+
+            <ol class="finds">
+              {changeList.map((f: any) => (
+                <li>
+                  <span class:list={['sev', f.severity]}>{f.severity}</span>
+                  <div>
+                    {f.section && <b>{f.section}</b>}
+                    <p>{f.finding}</p>
+                    {iAuthor ? (
+                      <form method="POST" class="answer">
+                        <input type="hidden" name="action" value="respond" />
+                        <input type="hidden" name="finding_id" value={f.id} />
+                        <textarea
+                          class="ta grow"
+                          name="response"
+                          rows="2"
+                          placeholder="What you changed, or why you disagree"
+                        >{f.author_response ?? ''}</textarea>
+                        <button class="btn btn-2" type="submit">Save the answer</button>
+                      </form>
+                    ) : (
+                      f.author_response && <p class="reply">{f.author_response}</p>
+                    )}
+                  </div>
+                </li>
+              ))}
+            </ol>
+
+            {iAuthor && (
+              <form method="POST" style="margin-top:22px">
+                <input type="hidden" name="action" value="resubmit" />
+                <input type="hidden" name="submission_id" value={submission.id} />
+                {/* Only unanswered required changes hold this back. An empty
+                    list is a legitimate state: a screening return sends a
+                    note and no list, and the note is the instruction. */}
+                <button class="btn" type="submit" disabled={unanswered > 0}>
+                  Send it back
+                </button>
+                {unanswered > 0 ? (
+                  <p class="aside" style="margin-top:10px">
+                    {unanswered} required {unanswered === 1 ? 'change is' : 'changes are'} unanswered.
+                  </p>
+                ) : (
+                  <p class="aside" style="margin-top:10px">
+                    {changeList.length === 0
+                      ? 'Make the changes the editor asked for above, then send it back.'
+                      : 'Everything is answered. Send it back when the changes are made.'}
+                  </p>
+                )}
+              </form>
+            )}
+          </section>
+        )}
+
+        <!-- ── What the reviewers said ─────────────────────────────────── -->
+        {feedback.length > 0 && (
+          <section class="sec">
+            <div class="sec-h">
+              <b>What the reviewers said</b>
+              <span>{feedback.length}</span>
+            </div>
+            {feedback.map((r: any) => (
+              <article class="fb">
+                <p class="who">
+                  Round {r.round}
+                  {r.recommendation && ` · ${r.recommendation}`}
+                </p>
+                <p class="prose">{r.comments}</p>
+              </article>
+            ))}
+          </section>
+        )}
+
+        <!-- ── The checklist, all of it ────────────────────────────────── -->
+        <section class="sec" id="checklist">
+          <div class="sec-h">
+            <b>Checklist</b>
+            <span>
+              {progress.done} of {progress.total}
+              {blocking.length === 0 ? ' · nothing blocking' : ''}
+            </span>
+          </div>
+
+          <ul class="ck">
+            {items.map((item) => (
+              <li class:list={['ck-' + item.status]}>
+                <a href={targetFor(item.key)}>
+                  <span class="mark" aria-hidden="true">
+                    {item.status === 'done' ? '✓' : item.status === 'blocking' ? '×' : '!'}
+                  </span>
+                  <b>
+                    {item.label}
+                    <span class="sr">
+                      {item.status === 'done'
+                        ? ' — done'
+                        : item.status === 'blocking'
+                          ? ' — needs fixing'
+                          : ' — worth fixing'}
+                    </span>
+                  </b>
+                  <span class="msg">{item.message}</span>
+                </a>
+              </li>
+            ))}
+          </ul>
+
+        </section>
+
+        <!-- ── The record ──────────────────────────────────────────────── -->
+        <section class="sec">
+          <div class="sec-h">
+            <b>The record</b>
+            <span>{formatCompleted(manuscript.completed_on, manuscript.date_precision)}</span>
+          </div>
+
+          <form method="POST" class="mform">
+            <input type="hidden" name="action" value="meta" />
+            <input type="hidden" name="manuscript_id" value={manuscript.id} />
+            <input type="hidden" name="expected" value={manuscript.updated_at} />
+
+            <label id="f-title">
+              <span>Title</span>
+              <input class="in" name="title" value={manuscript.title} required disabled={!iAuthor || locked} />
+              <small>Sentence case. It becomes the permanent URL, so it is worth getting right before publication rather than after.</small>
+            </label>
+
+            <div class="row-2">
+              <label>
+                <span>What kind of record</span>
+                <select class="se" name="record_kind" disabled={!iAuthor || locked}>
+                  <option value="article" selected={kind === 'article'}>Article, a written paper</option>
+                  <option value="project" selected={kind === 'project'}>Project entry, what the fair produces</option>
+                </select>
+                <small>A project may have one, the other, both, or neither.</small>
+              </label>
+              <label>
+                <span>Where the writing lives</span>
+                <select class="se" name="body_format" disabled={!iAuthor || locked}>
+                  {Object.entries(bodyFormatLabel).map(([value, label]) => (
+                    <option value={value} selected={manuscript.body_format === value}>{label}</option>
+                  ))}
+                </select>
+                <small>Written here means the sections below. A finished PDF skips them.</small>
+              </label>
+            </div>
+
+            {manuscript.body_format === 'link-only' && (
+              <label id="f-external_url">
+                <span>The authoritative version</span>
+                <input
+                  class="in"
+                  name="external_url"
+                  type="url"
+                  value={manuscript.external_url ?? ''}
+                  placeholder="https://"
+                  disabled={!iAuthor || locked}
+                />
+                <small>Where the full text actually lives. This record carries the metadata and points at it.</small>
+              </label>
+            )}
+
+            <label id="f-abstract">
+              <span>
+                Abstract
+                <em id="abstract-count" class="wc">
+                  {words(manuscript.abstract)} words · {abstractRule?.minWords} to {abstractRule?.maxWords}
+                </em>
+              </span>
+              <textarea
+                class="ta grow"
+                name="abstract"
+                rows="8"
+                disabled={!iAuthor || locked}
+                data-count="abstract-count"
+                data-min={abstractRule?.minWords}
+                data-max={abstractRule?.maxWords}
+              >{manuscript.abstract ?? ''}</textarea>
+              <small>The question, what you did, what you found, what it means.</small>
+            </label>
+
+            <div class="row-2">
+              <label id="f-keywords">
+                <span>Keywords</span>
+                <input
+                  class="in"
+                  name="keywords"
+                  value={(manuscript.keywords ?? []).join(', ')}
+                  placeholder="thermal tolerance, intertidal, gastropods"
+                  disabled={!iAuthor || locked}
+                />
+                <small>Three to six, separated however you like.</small>
+              </label>
+              <label id="f-discipline">
+                <span>Discipline</span>
+                <select class="se" name="discipline" disabled={!iAuthor || locked}>
+                  <option value="">Choose one</option>
+                  {disciplines.map((d) => (
+                    <option value={d.slug} selected={manuscript.discipline === d.slug}>{d.label}</option>
+                  ))}
+                  {manuscript.discipline &&
+                    !disciplines.some((d) => d.slug === manuscript.discipline) && (
+                      <option value={manuscript.discipline} selected>
+                        {disciplineLabel(manuscript.discipline)}
+                      </option>
+                    )}
+                </select>
+                <small>The domain of the question. The method is a keyword.</small>
+              </label>
+            </div>
+
+            {writesProse && (
+            <label id="f-contributions">
+              <span>Contributions</span>
+              <textarea class="ta grow" name="contributions" rows="4" disabled={!iAuthor || locked}>{manuscript.contributions ?? ''}</textarea>
+              <small>
+                Name what each author did and what any mentor did. Every listed
+                author is worth naming, though how you write it is yours.
+              </small>
+            </label>
+            )}
+
+            <div class="row-3">
+              <label>
+                <span>Completed</span>
+                <input class="in" type="date" name="completed_on" value={manuscript.completed_on ?? ''} disabled={!iAuthor || locked} />
+                <small>When the work finished, not when you started writing.</small>
+              </label>
+              <label>
+                <span>Date precision</span>
+                <select class="se" name="date_precision" disabled={!iAuthor || locked}>
+                  <option value="month" selected={manuscript.date_precision === 'month'}>To the month</option>
+                  <option value="day" selected={manuscript.date_precision === 'day'}>To the day</option>
+                </select>
+                <small>Month is usually the truth, and the record says so rather than inventing a day.</small>
+              </label>
+              <label>
+                <span>License</span>
+                <select class="se" name="license" disabled={!iAuthor || locked}>
+                  {['CC BY 4.0', 'CC BY-SA 4.0', 'CC BY-NC 4.0', 'All rights reserved'].map((l) => (
+                    <option value={l} selected={manuscript.license === l}>{l}</option>
+                  ))}
+                </select>
+                <small>You keep copyright either way.</small>
+              </label>
+            </div>
+
+            {iAuthor && !locked && (
+              <div class="foot">
+                <button class="btn btn-2" type="submit">Save the record</button>
+                <nav class="jump">
+                  <a href="#checklist">Back to the checklist</a>
+                  {nextAfter('title') && (
+                    <a href={targetFor(nextAfter('title')!.key)}>
+                      Next: {nextAfter('title')!.label.toLowerCase()}
+                    </a>
+                  )}
+                </nav>
+              </div>
+            )}
+          </form>
+        </section>
+
+        <!-- ── The prose ───────────────────────────────────────────────── -->
+        {writesProse && (
+          <section class="sec">
+            <div class="sec-h">
+              <b>The paper</b>
+              <span>{orderedSections.length} sections</span>
+            </div>
+
+            <p class="aside">
+              The order is the judging conversation rather than the shape of a
+              journal: what the question was, what was already known, what you
+              did, what happened, what it means, what comes next. Writing it
+              this way is rehearsal for being asked.
+            </p>
+
+            {orderedSections.map((rule, index) => {
+              const row = bodyByKey.get(rule.key);
+              const body = row?.body ?? '';
+              const count = words(body);
+              const problem = findingFor(rule.key);
+              return (
+                <form method="POST" class="mform section" id={rule.key}>
+                  <input type="hidden" name="action" value="section" />
+                  <input type="hidden" name="manuscript_id" value={manuscript.id} />
+                  <input type="hidden" name="section_key" value={rule.key} />
+                  <input type="hidden" name="sort_order" value={index} />
+                  <input type="hidden" name="expected" value={row?.updated_at ?? ''} />
+
+                  <div class="shead">
+                    <b>{rule.label}</b>
+                    <span
+                      id={`count-${rule.key}`}
+                      class:list={['wc', problem ? 'behind' : count > 0 ? 'ok' : null]}
+                    >
+                      {count === 0
+                        ? `not started · ${rule.minWords} words wanted`
+                        : `${count} of ${rule.minWords} words`}
+                    </span>
+                  </div>
+
+                  <p class="guide">{rule.guidance}</p>
+
+                  <textarea
+                    class="ta grow"
+                    name="body"
+                    rows="10"
+                    disabled={!iAuthor || locked}
+                    data-count={`count-${rule.key}`}
+                    data-min={rule.minWords}
+                  >{body}</textarea>
+
+                  {iAuthor && !locked && (
+                    <div class="foot">
+                      <button type="submit" class="btn btn-2">
+                        Save {rule.label.toLowerCase()}
+                      </button>
+                      <nav class="jump">
+                        <a href="#checklist">Back to the checklist</a>
+                        {nextAfter(rule.key) && (
+                          <a href={targetFor(nextAfter(rule.key)!.key)}>
+                            Next: {nextAfter(rule.key)!.label.toLowerCase()}
+                          </a>
+                        )}
+                      </nav>
+                    </div>
+                  )}
+                </form>
+              );
+            })}
+          </section>
+        )}
+
+        <!-- ── The paper as a file ─────────────────────────────────────── -->
+        {isPdf && (
+          <section class="sec" id="paper">
+            <div class="sec-h">
+              <b>The paper</b>
+              <span>{manuscript.pdf_path ? 'Uploaded' : 'Not uploaded'}</span>
+            </div>
+
+            <p class="aside">
+              Written somewhere else, so nothing here asks you to retype it.
+              The record needs a title, an abstract, keywords, and a discipline,
+              and the paper itself carries the rest.
+            </p>
+
+            {manuscript.pdf_path && (
+              <p class="prose" style="margin-bottom:16px">
+                <a href={`/app/media/${manuscript.pdf_path}`}>Read the uploaded paper</a>
+              </p>
+            )}
+
+            {iAuthor && !locked && (
+              <form method="POST" enctype="multipart/form-data" class="mform">
+                <input type="hidden" name="action" value="paper" />
+                <input type="hidden" name="manuscript_id" value={manuscript.id} />
+                <label>
+                  <span>{manuscript.pdf_path ? 'Replace it' : 'The PDF'}</span>
+                  <input type="file" name="paper" accept="application/pdf" required />
+                  <small>Up to 5 MB.</small>
+                </label>
+                <button class="btn btn-2" type="submit">
+                  {manuscript.pdf_path ? 'Replace the paper' : 'Upload the paper'}
+                </button>
+              </form>
+            )}
+          </section>
+        )}
+
+        <!-- ── Figures ─────────────────────────────────────────────────── -->
+        <section class="sec" id="figures">
+          <div class="sec-h">
+            <b>Figures</b>
+            <span>{figures.length === 0 ? 'None yet' : `${figures.length} numbered`}</span>
+          </div>
+
+          <p class="aside">
+            {human.length} things about figures nobody can check for you: axis
+            labels and units, what the error bars represent, legibility at
+            arm's length, and the display rules for the fair you are entering.
+            <a href="/submit/checklist/">They are on the checklist</a>.
+          </p>
+
+          {figures.length > 0 && (
+            <ul class="figs">
+              {figures.map((f: any) => (
+                <li>
+                  <img src={`/app/media/${f.storage_path}`} alt={f.alt} />
+                  <div>
+                    <b>Figure {f.number}</b>
+                    <p class="cap">{f.caption}</p>
+                    <p class="alt">Alt text: {f.alt}</p>
+                    {iAuthor && !locked && (
+                      <form method="POST">
+                        <input type="hidden" name="action" value="figure-remove" />
+                        <input type="hidden" name="figure_id" value={f.id} />
+                        <button type="submit" class="btn btn-q">Remove</button>
+                      </form>
+                    )}
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+
+          {iAuthor && !locked && (
+            <form method="POST" enctype="multipart/form-data" class="mform">
+              <input type="hidden" name="action" value="figure" />
+              <input type="hidden" name="manuscript_id" value={manuscript.id} />
+
+              <div class="row-2">
+                <label>
+                  <span>Image</span>
+                  <input type="file" name="image" accept="image/*" required />
+                  <small>Up to 5 MB. Numbering is assigned here so it cannot drift from the text.</small>
+                </label>
+                <label>
+                  <span>Caption</span>
+                  <input class="in" name="caption" required placeholder="Survival at 32C by shore height, n = 240" />
+                  <small>What a reader sees.</small>
+                </label>
+              </div>
+
+              <label>
+                <span>Alt text</span>
+                <textarea class="ta" name="alt" rows="3" required placeholder="Bar chart showing survival falling from 88 percent at high shore to 41 percent at low shore."></textarea>
+                <small>
+                  What somebody who cannot see the image needs to know. Required,
+                  and not as a formality: the column will not accept a blank.
+                </small>
+              </label>
+
+              <button class="btn btn-2" type="submit">Add the figure</button>
+            </form>
+          )}
+        </section>
+
+        <!-- ── References ──────────────────────────────────────────────── -->
+        {kind === 'article' && writesProse && (
+          <section class="sec" id="references">
+            <div class="sec-h">
+              <b>References</b>
+              <span>{references.length}</span>
+            </div>
+
+            <form method="POST" class="mform">
+              <input type="hidden" name="action" value="references" />
+              <input type="hidden" name="manuscript_id" value={manuscript.id} />
+
+              <label>
+                <span>One per line</span>
+                <textarea class="ta grow" name="citations" rows="10" disabled={!iAuthor || locked}>{references.map((r: any) => r.citation).join('\n')}</textarea>
+                <small>
+                  Paste them as you have them. Blank lines are ignored, and
+                  saving replaces the whole list.
+                </small>
+              </label>
+
+              {iAuthor && !locked && (
+                <div class="foot">
+                  <button class="btn btn-2" type="submit">Save the references</button>
+                  <nav class="jump">
+                    <a href="#checklist">Back to the checklist</a>
+                    {nextAfter('references') && (
+                      <a href={targetFor(nextAfter('references')!.key)}>
+                        Next: {nextAfter('references')!.label.toLowerCase()}
+                      </a>
+                    )}
+                  </nav>
+                </div>
+              )}
+            </form>
+          </section>
+        )}
+      </>
+    )}
+  </div>
+</Base>
+
+<script>
+  /**
+   * A running word count, using the same rule as the check on the server.
+   * If the two disagreed at the boundary the number on screen would be worse
+   * than no number at all: somebody would sit at 200 of 200 and be told the
+   * section is too short.
+   */
+  const countWords = (text) => text.trim().split(/\s+/).filter(Boolean).length;
+
+  for (const field of document.querySelectorAll('textarea[data-count]')) {
+    const target = document.getElementById(field.dataset.count);
+    if (!target) continue;
+
+    const min = field.dataset.min ? Number(field.dataset.min) : null;
+    const max = field.dataset.max ? Number(field.dataset.max) : null;
+    const original = target.textContent;
+
+    const update = () => {
+      const n = countWords(field.value);
+
+      if (max) {
+        target.textContent = `${n} words · ${min} to ${max}`;
+      } else if (n === 0) {
+        target.textContent = original;
+      } else {
+        target.textContent = `${n} of ${min} words`;
+      }
+
+      /* Below the floor is behind, above a ceiling is only ever advice, so
+         it reads as a note rather than as a failure. */
+      const short = min !== null && n < min;
+      const over = max !== null && n > max;
+      target.classList.toggle('behind', short);
+      target.classList.toggle('over', over && !short);
+      target.classList.toggle('ok', !short && !over && n > 0);
+    };
+
+    field.addEventListener('input', update);
+  }
+
+  /**
+   * Textareas grow to their content.
+   *
+   * A fixed height clips a paragraph mid sentence and makes somebody scroll
+   * inside a box to read what they just wrote, which is the wrong place to
+   * economize on space when the whole page is a form.
+   */
+  /**
+   * Follow a checklist row into the field it names, and put the cursor in it.
+   * Scrolling somebody to a box and leaving them to click it is most of the
+   * work and none of the payoff.
+   */
+  const focusTarget = () => {
+    const hash = window.location.hash;
+    if (!hash || hash.length < 2) return;
+    const target = document.querySelector(hash);
+    if (!target) return;
+    const field = target.matches('input, textarea, select')
+      ? target
+      : target.querySelector('input:not([type=hidden]), textarea, select');
+    if (field && !field.disabled) field.focus({ preventScroll: true });
+  };
+
+  window.addEventListener('hashchange', focusTarget);
+
+  const grow = (field) => {
+    field.style.height = 'auto';
+    field.style.height = `${field.scrollHeight + 2}px`;
+  };
+
+  for (const field of document.querySelectorAll('textarea.grow')) {
+    field.style.overflowY = 'hidden';
+    grow(field);
+    field.addEventListener('input', () => grow(field));
+  }
+</script>
+
+<style>
+  .hero {
+    padding: 34px 0 26px;
+  }
+  /* The save and the two ways onward share a line, because they are the same
+     moment: this is finished, where next. */
+  .foot {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 12px 24px;
+  }
+  .jump {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 20px;
+  }
+  .jump a {
+    font-family: var(--face-ui);
+    font-size: 0.82rem;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+  }
+  .jump a:hover { color: var(--ink); }
+
+  .done {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 6px 16px;
+  }
+  .done span {
+    font-family: var(--face-num);
+    font-size: 0.85rem;
+    color: var(--ink-3);
+  }
+  /* The measure belongs to the block that holds a control and its help text,
+     never to the help text on its own. This escaped it, so a section ran a
+     full-width textarea under a 66ch paragraph and the two described the
+     same thing at two different widths. */
+  [id] {
+    scroll-margin-top: 24px;
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    :global(html) { scroll-behavior: smooth; }
+  }
+  .mform.section {
+    padding: 20px 0 26px;
+    border-bottom: 1px solid var(--rule-fine);
+    gap: 12px;
+  }
+  /* The count sits on the label row, which is where the section headers
+     already put it. Inside the help sentence it read as prose interrupted by
+     a number in a different typeface. */
+  .mform label > span .wc {
+    font-style: normal;
+    letter-spacing: 0;
+    text-transform: none;
+    color: var(--ink-3);
+    /* A count is one phrase. Broken across two lines it reads as a stray
+       "350" under a paragraph, which is what it did when it lived inside the
+       help sentence. nowrap keeps it whole and flex-shrink keeps the label
+       from squeezing it into wrapping anyway. */
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+  .shead {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 16px;
+    flex-wrap: wrap;
+    border-top: 1px solid var(--rule);
+    padding-top: 14px;
+  }
+  .shead b {
+    font-size: 1.05rem;
+  }
+  .shead span {
+    font-family: var(--face-num);
+    font-size: 0.82rem;
+    color: var(--ink-3);
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+  .shead .behind {
+    color: var(--alert);
+  }
+  .shead .ok,
+  .wc.ok {
+    color: var(--stage-comp);
+  }
+  .wc {
+    font-family: var(--face-num);
+    font-variant-numeric: tabular-nums;
+  }
+  .wc.behind {
+    color: var(--alert);
+  }
+  /* Over a ceiling is advice, never a failure, so it must not look like one. */
+  .wc.over {
+    color: var(--stage-ready);
+  }
+  .guide {
+    margin: 0;
+    color: var(--ink-2);
+    font-size: 0.94rem;
+    line-height: 1.55;
+  }
+  .ck {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    border-top: 1px solid var(--rule-fine);
+  }
+  .ck li {
+    border-bottom: 1px solid var(--rule-fine);
+  }
+  /* The whole row is the target, not the words in it. A four pixel link in a
+     list of fourteen is a link nobody finds. */
+  .ck a {
+    display: grid;
+    grid-template-columns: 2.2rem 15rem 1fr;
+    gap: 14px;
+    align-items: baseline;
+    padding: 13px 16px 13px 0;
+    color: inherit;
+    text-decoration: none;
+  }
+  .ck a:hover {
+    background: var(--wash);
+  }
+  .ck a:hover b {
+    text-decoration: underline;
+    text-underline-offset: 3px;
+  }
+  @media (max-width: 760px) {
+    .ck a {
+      grid-template-columns: 2.2rem 1fr;
+      gap: 4px 14px;
+    }
+    .ck .msg {
+      grid-column: 2;
+    }
+  }
+  .ck b {
+    font-family: var(--face-ui);
+    font-size: 0.82rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+  .ck .msg {
+    line-height: 1.55;
+  }
+  .ck .mark {
+    font-family: var(--face-num);
+    font-size: 1.1rem;
+    line-height: 1;
+    justify-self: center;
+  }
+
+  /* Done is quiet on purpose. A page of green ticks shouting is as hard to
+     read as a page of red, and the eye should land on what is left. */
+  .ck-done .mark { color: var(--stage-comp); }
+  .ck-done b,
+  .ck-done .msg { color: var(--ink-3); }
+
+  .ck-blocking { box-shadow: inset 3px 0 0 var(--alert); }
+  .ck-blocking .mark { color: var(--alert); }
+
+  .ck-advisory { box-shadow: inset 3px 0 0 var(--stage-ready); }
+  .ck-advisory .mark { color: var(--stage-ready); }
+
+  .sr {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+  }
+  /* One row rather than a stacked card: the text on the left, the two
+     actions on the right, using width that was otherwise empty and taking
+     roughly half the height. */
+  .subrow {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 20px;
+    padding: 4px 0 6px;
+  }
+  .subrow p {
+    margin: 0;
+    max-width: 46ch;
+    color: var(--ink-2);
+    line-height: 1.55;
+  }
+  .subrow .row {
+    display: flex;
+    gap: 12px;
+  }
+
+  .finds { list-style: none; margin: 0; padding: 0; max-width: var(--measure-form); }
+  .finds li {
+    display: grid;
+    grid-template-columns: 7rem 1fr;
+    gap: 16px;
+    padding: 14px 0;
+    border-bottom: 1px solid var(--rule-fine);
+  }
+  .finds p { margin: 0 0 8px; line-height: 1.55; }
+  .finds .reply { color: var(--ink-3); font-size: 0.92rem; }
+  .finds .answer { display: grid; gap: 8px; justify-items: start; }
+  .sev {
+    font-family: var(--face-ui);
+    font-size: 0.74rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    align-self: start;
+  }
+  .sev.required { color: var(--alert); }
+  .sev.suggested { color: var(--ink-3); }
+
+  .fb {
+    border-top: 1px solid var(--rule-fine);
+    padding: 14px 0;
+    max-width: var(--measure-form);
+  }
+  .fb .who {
+    margin: 0 0 6px;
+    font-family: var(--face-ui);
+    font-size: 0.78rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+  }
+
+  .aside {
+    max-width: var(--measure-form);
+    margin: 0 0 22px;
+    color: var(--ink-3);
+    font-size: 0.9rem;
+    line-height: 1.55;
+  }
+  .figs {
+    list-style: none;
+    margin: 0 0 24px;
+    padding: 0;
+    display: grid;
+    gap: 20px;
+  }
+  .figs li {
+    display: grid;
+    grid-template-columns: 200px 1fr;
+    gap: 20px;
+    align-items: start;
+    border-top: 1px solid var(--rule-fine);
+    padding-top: 20px;
+  }
+  @media (max-width: 700px) {
+    .figs li {
+      grid-template-columns: 1fr;
+    }
+  }
+  .figs img {
+    width: 100%;
+    height: auto;
+    border: 1px solid var(--rule-fine);
+  }
+  .figs .cap {
+    margin: 6px 0;
+    line-height: 1.5;
+  }
+  .figs .alt {
+    margin: 0 0 12px;
+    color: var(--ink-3);
+    font-size: 0.88rem;
+    line-height: 1.5;
+  }
+  .fine {
+    color: var(--ink-3);
+    font-size: 0.9rem;
+  }
+</style>

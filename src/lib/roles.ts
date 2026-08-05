@@ -19,7 +19,7 @@
  * never sign in. If they do sign in, the email match is the grant.
  */
 
-export type ClubRole = 'student' | 'officer' | 'advisor';
+export type ClubRole = 'student' | 'officer' | 'advisor' | 'editor';
 export type Attachment = 'author' | 'officer';
 
 export interface Standing {
@@ -29,6 +29,8 @@ export interface Standing {
   isOfficer: boolean;
   /** The Teacher Club Advisor. One person. */
   isAdvisor: boolean;
+  /** Runs the editorial queue. The advisor always is one, because the advisor decides. */
+  isEditor: boolean;
   /** Either club role: sees every project at the school. */
   runsTheClub: boolean;
 }
@@ -46,7 +48,9 @@ export function standing(
 ): Standing {
   const names = roles
     .map((r) => r.role as ClubRole)
-    .filter((r) => r === 'student' || r === 'officer' || r === 'advisor');
+    .filter(
+      (r) => r === 'student' || r === 'officer' || r === 'advisor' || r === 'editor'
+    );
 
   const isOfficer = names.includes('officer');
   const isAdvisor = names.includes('advisor');
@@ -56,6 +60,7 @@ export function standing(
     isStudent: names.includes('student') || population === 'student',
     isOfficer,
     isAdvisor,
+    isEditor: names.includes('editor') || isAdvisor,
     runsTheClub: isOfficer || isAdvisor,
   };
 }
@@ -68,10 +73,22 @@ export function isAuthorOf(
   return attachments.some((a) => a.role === 'author' && a.users?.id === userId);
 }
 
+/**
+ * The roles the advisor hands out.
+ *
+ * Advisor is absent deliberately: a teacher's standing comes from the school
+ * rather than from this software, so it is set when the organization is
+ * provisioned. A role that can appoint itself only has to be captured once.
+ * Student is absent because it follows from the account rather than being
+ * granted.
+ */
+export const GRANTABLE: ClubRole[] = ['officer', 'editor'];
+
 export const roleLabel: Record<ClubRole, string> = {
   student: 'Student',
   officer: 'Club officer',
   advisor: 'Teacher club advisor',
+  editor: 'Editor',
 };
 
 export const attachmentLabel: Record<string, string> = {

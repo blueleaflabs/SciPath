@@ -14,12 +14,18 @@ import { standing } from '../lib/roles';
 
 const me = standing(roles, account?.population);
 
+/* Editor is a standing fact about a person, unlike reviewing, which is an
+   attachment to one submission and therefore never appears here. */
+const isEditor = me.isEditor;
+
 /* Profile and sign out live in the masthead, top right, where an account
    menu belongs. This bar is for the work. */
 const nav = [
   { href: '/app/', label: 'Overview' },
+  ...(isEditor ? [{ href: '/app/editorial/', label: 'Editorial' }] : []),
   ...(me.runsTheClub ? [{ href: '/app/assign/', label: 'Assign' }] : []),
   ...(me.isAdvisor ? [{ href: '/app/selection/', label: 'Selection' }] : []),
+  ...(me.isAdvisor ? [{ href: '/app/roles/', label: 'Roles' }] : []),
   { href: '/app/fairs/', label: 'Entries' },
 ];
 ---
