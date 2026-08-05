@@ -63,12 +63,14 @@ let checked = 0;
 for (const [index, sql] of sources.entries()) {
   const file = files[index];
 
-  /* insert into public.table (a, b, c) — the parenthesised list only, so an
-     INSERT ... SELECT without a column list is skipped rather than guessed at. */
+  /* insert into public.table (a, b, c) values (...) — the parenthesised list
+     only, so an INSERT ... SELECT without a column list is skipped rather
+     than guessed at. The values are captured too, because a name that exists
+     is only half of what has to be true. */
   for (const stmt of sql.matchAll(
-    /insert into public\.([a-z_]+)\s*\n?\s*\(([^)]*?)\)\s*\n?\s*(?:values|select)/gi
+    /insert into public\.([a-z_]+)\s*\n?\s*\(([^)]*?)\)\s*\n?\s*(values\s*\(|select)/gi
   )) {
-    const [, table, list] = stmt;
+    const [, table, list, opener] = stmt;
     const known = columns.get(table);
     if (!known) {
       problems.push(`${file}: insert into public.${table}, which is never created`);
@@ -82,6 +84,47 @@ for (const [index, sql] of sources.entries()) {
       if (!known.has(name)) {
         problems.push(
           `${file}: insert into public.${table} names "${name}", which that table does not have`
+        );
+      }
+    }
+
+    /* And as many values as columns.
+     
+       A mismatch here is "INSERT has more expressions than target columns",
+       raised by Postgres when somebody presses the button, and it is easy to
+       create: adding a column to one list and forgetting the other is a two
+       line edit where one line silently does not apply. Counting is the whole
+       check, and it has to respect nesting because a value can be a function
+       call with commas of its own. */
+    if (opener.startsWith('values')) {
+      const from = stmt.index + stmt[0].length;
+      let depth = 1;
+      let commas = 1;
+      let at = from;
+
+      for (; at < sql.length && depth > 0; at += 1) {
+        const char = sql[at];
+        if (char === "'") {
+          /* Skip the string, doubled quotes and all. */
+          at += 1;
+          while (at < sql.length && !(sql[at] === "'" && sql[at + 1] !== "'")) {
+            at += sql[at] === "'" ? 2 : 1;
+          }
+          continue;
+        }
+        if (char === '(') depth += 1;
+        else if (char === ')') depth -= 1;
+        else if (char === ',' && depth === 1) commas += 1;
+      }
+
+      const names = list
+        .split(',')
+        .map((n) => n.replace(/--.*$/gm, '').trim())
+        .filter(Boolean).length;
+
+      if (commas !== names) {
+        problems.push(
+          `${file}: insert into public.${table} lists ${names} columns and ${commas} values`
         );
       }
     }
@@ -99,5 +142,5 @@ if (problems.length > 0) {
 }
 
 console.log(
-  `${checked} column references inside SQL inserts checked against ${columns.size} tables. All exist.`
+  `${checked} column references and value counts checked against ${columns.size} tables. All exist.`
 );

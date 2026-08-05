@@ -1,5 +1,12 @@
 ---
 import Base from '../../../../layouts/Base.astro';
+
+/**
+ * A project entry. The same template as an article, because they differ in
+ * what data exists rather than in what layout is right, and 8.9 settled that
+ * designing two is designing twice for one thing. Blocks with no data do not
+ * render, so an entry with an abstract and a result reads as finished.
+ */
 import { getCollection, render } from 'astro:content';
 import { activeOrg } from '../../../../lib/tenant';
 import { siteUrl, disciplineLabel } from '../../../../config/site';
@@ -9,8 +16,8 @@ import { withTenants } from '../../../../lib/tenant-paths';
 const org = activeOrg(Astro);
 
 export const getStaticPaths: GetStaticPaths = withTenants(async () => {
-  const articles = (await getCollection('articles')).filter((a) => a.data.status !== 'archived');
-  return articles.map((article) => ({
+  const projects = (await getCollection('projects')).filter((a) => a.data.status !== 'archived');
+  return projects.map((article) => ({
     params: {
       year: String(article.data.publishedOn.getUTCFullYear()),
       slug: article.data.slug,
@@ -24,7 +31,7 @@ const d = article.data;
 const { Content } = await render(article);
 
 const year = d.publishedOn.getUTCFullYear();
-const url = new URL(`/articles/${year}/${d.slug}/`, siteUrl).href;
+const url = new URL(`/projects/${year}/${d.slug}/`, siteUrl).href;
 const published = d.publishedOn.toISOString().slice(0, 10);
 
 const bylineText = d.authors.map((a) => a.displayName).join(', ');

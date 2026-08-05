@@ -23,6 +23,7 @@ const isEditor = me.isEditor;
 const nav = [
   { href: '/app/', label: 'Overview' },
   ...(isEditor ? [{ href: '/app/editorial/', label: 'Editorial' }] : []),
+  ...(isEditor ? [{ href: '/app/publish/', label: 'Publishing' }] : []),
   ...(me.runsTheClub ? [{ href: '/app/assign/', label: 'Assign' }] : []),
   ...(me.isAdvisor ? [{ href: '/app/selection/', label: 'Selection' }] : []),
   ...(me.isAdvisor ? [{ href: '/app/roles/', label: 'Roles' }] : []),

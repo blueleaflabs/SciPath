@@ -87,7 +87,9 @@ export const onRequest = defineMiddleware(async (context, next) => {
       tenantSlugs.includes(first) ||
       url.pathname.startsWith(`/${slug}/`) ||
       url.pathname.startsWith('/_astro/') ||
-      url.pathname.startsWith('/pagefind/') ||
+      /* Not exempt. Each tenant has its own index at /{org}/pagefind/, so
+         this has to be rewritten like every other public path. Leaving it
+         out was how three schools came to share one index. */
       url.pathname.startsWith('/pdf/') ||
       url.pathname === '/404.html' ||
       url.pathname.startsWith('/sitemap')

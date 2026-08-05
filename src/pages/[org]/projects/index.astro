@@ -1,0 +1,81 @@
+---
+import { orgPaths } from '../../../lib/tenant-paths';
+export const getStaticPaths = orgPaths;
+
+import Base from '../../../layouts/Base.astro';
+import PageHead from '../../../components/PageHead.astro';
+import RecordCard from '../../../components/RecordCard.astro';
+import Empty from '../../../components/Empty.astro';
+import { activeOrg } from '../../../lib/tenant';
+import { getCollection } from 'astro:content';
+
+/**
+ * Project entries: what a fair produces, rather than what somebody writes up
+ * afterward. Most work at a high school fair never becomes a paper, so an
+ * archive of only papers records a minority of the work it exists to hold.
+ */
+const org = activeOrg(Astro);
+
+const projects = (await getCollection('projects'))
+  .filter((p) => p.data.status !== 'archived')
+  .sort((a, b) => b.data.publishedOn.valueOf() - a.data.publishedOn.valueOf());
+
+const byYear = new Map<number, number>();
+for (const p of projects) {
+  const y = p.data.publishedOn.getUTCFullYear();
+  byYear.set(y, (byYear.get(y) ?? 0) + 1);
+}
+const yearRows = [...byYear.entries()].sort((a, b) => b[0] - a[0]);
+---
+
+<Base
+  title="Projects"
+  description="Every project entered, with its abstract, category, and result."
+>
+  <PageHead
+    eyebrow="Project entries"
+    title="Projects"
+    lede="What each project was, what it found, and how it did. A paper is a separate thing and not every project has one."
+  />
+
+  <div class="wrap">
+    {projects.length === 0 ? (
+      <Empty
+        title="No project entries yet"
+        body="A project entry is published when a fair result is recorded and an officer verifies it."
+      />
+    ) : (
+      <>
+        <section class="sec" style="padding-top:0">
+          <div class="sec-h"><b>All projects</b><span>{projects.length}</span></div>
+          {projects.map((p) => <RecordCard record={p} space="projects" />)}
+        </section>
+
+        {yearRows.length > 1 && (
+          <section class="sec">
+            <div class="sec-h"><b>By year</b><span>{yearRows.length}</span></div>
+            <ul class="years">
+              {yearRows.map(([year, n]) => (
+                <li>
+                  <a href={`/projects/${year}/`}>{year}</a>
+                  <span>{n}</span>
+                </li>
+              ))}
+            </ul>
+          </section>
+        )}
+      </>
+    )}
+  </div>
+</Base>
+
+<style>
+  .years { list-style: none; margin: 0; padding: 0; max-width: var(--measure-text); }
+  .years li {
+    display: flex;
+    justify-content: space-between;
+    padding: 11px 0;
+    border-bottom: 1px solid var(--rule-fine);
+  }
+  .years span { font-family: var(--face-num); color: var(--ink-3); }
+</style>

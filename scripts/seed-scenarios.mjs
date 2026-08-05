@@ -19,6 +19,9 @@
  */
 
 import { createClient } from '@supabase/supabase-js';
+import { loadDevVars } from './dev-vars.mjs';
+
+loadDevVars();
 
 const URL = process.env.PUBLIC_SUPABASE_URL ?? '';
 const KEY = process.env.SUPABASE_SECRET_KEY ?? '';
@@ -32,7 +35,12 @@ function fail(message) {
 }
 
 if (!URL || !KEY) {
-  fail('PUBLIC_SUPABASE_URL and SUPABASE_SECRET_KEY must be set.\n  set -a; source .dev.vars; set +a');
+  fail(
+    'PUBLIC_SUPABASE_URL and SUPABASE_SECRET_KEY are missing.\n' +
+      'They normally come from .dev.vars, which this script reads on its own.\n' +
+      'If that file is absent, run npx supabase start and copy the URL and\n' +
+      'secret key it prints into it.'
+  );
 }
 
 if (!/^https?:\/\/(127\.0\.0\.1|localhost)(:|\/|$)/.test(URL) || URL.includes(PRODUCTION_REF)) {

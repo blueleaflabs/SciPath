@@ -18,6 +18,13 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { loadDevVars } from './dev-vars.mjs';
+
+/* wrangler reads this file itself on the way to setting up bindings, so this
+   changes nothing here today. It is here so all four scripts get their
+   configuration the same way, which is what stopped being true and cost an
+   evening. */
+loadDevVars();
 
 const BINDING = 'NOTEBOOK';
 const STATE = '.wrangler/state';

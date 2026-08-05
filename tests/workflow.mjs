@@ -26,6 +26,7 @@ import {
   can,
   isTerminal,
   publicLabel,
+  authorGuidance,
   editorLabel,
   REVIEW_QUESTIONS,
 } from '../src/lib/workflow.ts';
@@ -281,6 +282,20 @@ test('and stays locked once it is decided', () => {
 test('every state answers the edit question', () => {
   for (const state of Object.keys(publicLabel)) {
     assert.equal(typeof authorMayEdit(state), 'boolean', state);
+  }
+});
+
+test('every state tells the authors something true about it', () => {
+  for (const state of Object.keys(publicLabel)) {
+    const line = authorGuidance[state];
+    assert.ok(line, `no guidance for ${state}`);
+    assert.match(line, /^[A-Z]/, state);
+  }
+});
+
+test('an accepted submission is not described as under review', () => {
+  for (const state of ['accepted', 'scheduled', 'exported', 'published']) {
+    assert.doesNotMatch(authorGuidance[state], /review/i, state);
   }
 });
 

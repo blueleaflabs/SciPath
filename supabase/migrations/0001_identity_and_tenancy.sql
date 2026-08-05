@@ -3959,6 +3959,10 @@ create table public.manuscripts (
   external_url  text,
   pdf_path      text,
 
+  -- Lifted out of the PDF for search. Never rendered: the extraction is rough
+  -- and a reader should see the file rather than a flattened approximation.
+  pdf_text      text,
+
   created_by    uuid not null references public.users on delete restrict,
   created_at    timestamptz not null default now(),
   updated_at    timestamptz not null default now(),
@@ -5005,7 +5009,8 @@ grant execute on function public.track_submission(uuid) to anon, authenticated;
 
 create or replace function public.set_manuscript_pdf(
   p_manuscript_id uuid,
-  p_storage_path  text
+  p_storage_path  text,
+  p_text          text default null
 )
 returns void
 language plpgsql
@@ -5025,12 +5030,14 @@ begin
   perform app.require_author(v_project);
 
   update public.manuscripts
-     set pdf_path = nullif(btrim(coalesce(p_storage_path, '')), '')
+     set pdf_path = nullif(btrim(coalesce(p_storage_path, '')), ''),
+         pdf_text = nullif(btrim(coalesce(p_text, '')), '')
    where id = p_manuscript_id;
 end;
 $$;
 
-grant execute on function public.set_manuscript_pdf(uuid, text) to authenticated;
+drop function if exists public.set_manuscript_pdf(uuid, text);
+grant execute on function public.set_manuscript_pdf(uuid, text, text) to authenticated;
 
 notify pgrst, 'reload schema';
 
@@ -5295,7 +5302,7 @@ begin
      set assigned_editor = auth.uid()
    where id = p_submission_id;
 
-  perform app.move_submission(p_submission_id, 'screening', 'Being screened');
+  perform app.move_submission(p_submission_id, 'screening', 'With the editor');
 end;
 $$;
 
@@ -5532,6 +5539,13 @@ begin
 
   if v_org is null then
     raise exception 'no such submission';
+  end if;
+
+  /* Checked here rather than left to the column constraint, because the two
+     buttons on that form share one set of fields and pressing the wrong one
+     with an empty box should say so in words. */
+  if coalesce(btrim(coalesce(p_finding, '')), '') = '' then
+    raise exception 'write the change first, then add it to the list';
   end if;
 
   select coalesce(max(f.sort_order), 0) + 1 into v_next
@@ -6336,5 +6350,365 @@ end;
 $$;
 
 grant execute on function public.drop_role_reservation(uuid) to authenticated;
+
+notify pgrst, 'reload schema';
+
+
+-- ===========================================================================
+-- PUBLICATION
+--
+-- The archive builds from files in the repository and a prerendered route may
+-- never touch the database, so publishing is an export followed by a commit,
+-- and a person performs both. That is the design rather than an interim
+-- measure: nothing in this path should be able to fail because a token
+-- expired or an API changed under a club that has not looked at this code in
+-- eight months.
+--
+-- Two steps, because the halves fail differently. Generating allocates an
+-- identifier, which is permanent. Committing can be forgotten, botched, or
+-- reverted. Collapsing them would produce records marked published that
+-- resolve to nothing, which is worse than an unpublished record and invisible
+-- until somebody follows a link.
+-- ===========================================================================
+
+create table public.record_sequences (
+  org_id   uuid not null references public.organizations on delete restrict,
+  year     int  not null,
+  next_seq int  not null default 1,
+  primary key (org_id, year)
+);
+
+alter table public.record_sequences enable row level security;
+grant select, insert, update on public.record_sequences to authenticated, service_role;
+
+
+create table public.records (
+  id             text primary key,             -- MVRJ-2027-0003
+  org_id         uuid not null references public.organizations on delete restrict,
+  record_kind    text not null check (record_kind in ('article', 'project')),
+
+  submission_id  uuid references public.submissions on delete restrict,
+  project_id     uuid references public.projects on delete restrict,
+  manuscript_id  uuid references public.manuscripts on delete restrict,
+
+  slug           text not null,
+  year           int  not null,
+
+  title          text not null,
+  abstract       text,                          -- two migrated articles have none
+  keywords       text[] not null default '{}',
+  discipline     text not null,
+  contributions  text,
+
+  published_on   date not null,
+  date_precision text not null default 'month',
+
+  source         text not null default 'workbench',
+  reviewed       boolean not null default false,
+  body_format    text not null,
+  external_url   text,
+  pdf_path       text,
+
+  -- A DOI issued elsewhere, by a fair, a preprint server, or an institution.
+  -- We mint none. This is a place to record one so a record that has one can
+  -- be cited by it rather than by a URL that depends on us existing.
+  doi            text,
+  pdf_text       text,
+
+  version        int not null default 1,
+  supersedes     text references public.records on delete restrict,
+  superseded_by  text references public.records on delete restrict,
+  prior_venue    text,
+  license        text not null,
+
+  status         text not null default 'published'
+                   check (status in ('published', 'archived', 'retracted')),
+  retracted_on   date,
+  retraction_reason text,
+
+  generated_by   uuid references public.users on delete restrict,
+  generated_at   timestamptz not null default now(),
+  confirmed_by   uuid references public.users on delete restrict,
+  confirmed_at   timestamptz,
+
+  unique (org_id, year, slug)
+);
+
+create index records_org_idx on public.records (org_id, published_on desc);
+
+
+create table public.record_authors (
+  record_id     text not null references public.records on delete restrict,
+  display_order int  not null,
+
+  -- Stored, never joined. A byline is a historical fact and must not change
+  -- because somebody later edited their display name.
+  display_name  text not null,
+  user_id       uuid references public.users on delete restrict,
+  school        text,
+  grad_year     int,
+  affiliation_verified boolean not null default false,
+
+  -- No author page. For every co-author outside the organization, who never
+  -- agreed to a permanent indexed page and has no way to control one.
+  byline_only   boolean not null default false,
+
+  primary key (record_id, display_order)
+);
+
+alter table public.records        enable row level security;
+alter table public.record_authors enable row level security;
+
+grant select, insert, update on public.records, public.record_authors
+  to authenticated, service_role;
+revoke delete on public.records, public.record_authors
+  from authenticated, anon, service_role;
+
+create policy records_read on public.records
+  for select to authenticated using (org_id = (select app.org_id()));
+
+create policy records_write on public.records
+  for insert to authenticated
+  with check (org_id = (select app.org_id()) and (select app.is_editor()));
+
+create policy records_update on public.records
+  for update to authenticated
+  using (org_id = (select app.org_id()) and (select app.is_editor()));
+
+create policy record_authors_read on public.record_authors
+  for select to authenticated
+  using (
+    exists (select 1 from public.records r
+             where r.id = record_authors.record_id
+               and r.org_id = (select app.org_id()))
+  );
+
+create policy record_authors_write on public.record_authors
+  for insert to authenticated with check ((select app.is_editor()));
+
+
+-- ---------------------------------------------------------------------------
+-- Step one: generate.
+--
+-- One transaction. The identifier comes from a counter rather than from a
+-- count of existing rows, which produces a duplicate the first time two
+-- officers publish in the same minute.
+-- ---------------------------------------------------------------------------
+
+create or replace function public.generate_record(
+  p_submission_id uuid,
+  p_slug          text,
+  /* The prefix is a field on the organization in src/config/orgs.ts, which is
+     the one place org specific strings live. Copying it into the database
+     would make two, and rule 4 exists because two is how they diverge. */
+  p_prefix        text,
+  p_published_on  date default null
+)
+returns text
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_org    uuid;
+  v_state  text;
+  v_mid    uuid;
+  v_pid    uuid;
+  v_kind   text;
+  v_year   int;
+  v_seq    int;
+  v_id     text;
+  v_slug   text;
+  v_n      int := 1;
+  m        record;
+  a        record;
+  v_order  int := 0;
+begin
+  perform app.require_editor();
+
+  select s.org_id, s.state, s.manuscript_id, s.project_id, s.record_kind
+    into v_org, v_state, v_mid, v_pid, v_kind
+    from public.submissions s where s.id = p_submission_id;
+
+  if v_org is null then
+    raise exception 'no such submission';
+  end if;
+
+  if v_state not in ('accepted', 'scheduled') then
+    raise exception 'only an accepted submission is published';
+  end if;
+
+  if exists (select 1 from public.records r where r.submission_id = p_submission_id) then
+    raise exception
+      'this already has a record. Regenerating the files is safe; allocating a second identifier is not.';
+  end if;
+
+  select m2.* into m from public.manuscripts m2 where m2.id = v_mid;
+
+  v_year := extract(year from coalesce(p_published_on, current_date));
+
+  /* Take the number under a row lock so two officers publishing at once get
+     two numbers rather than one. */
+  insert into public.record_sequences (org_id, year, next_seq)
+  values (v_org, v_year, 1)
+  on conflict (org_id, year) do nothing;
+
+  update public.record_sequences
+     set next_seq = next_seq + 1
+   where org_id = v_org and year = v_year
+  returning next_seq - 1 into v_seq;
+
+  if coalesce(btrim(coalesce(p_prefix, '')), '') = '' then
+    raise exception 'no record prefix for this organization';
+  end if;
+
+  v_id := upper(btrim(p_prefix)) || '-' || v_year || '-' || lpad(v_seq::text, 4, '0');
+
+  /* The slug arrives derived. Collisions are resolved here, where the
+     uniqueness lives. */
+  v_slug := p_slug;
+  while exists (
+    select 1 from public.records r
+     where r.org_id = v_org and r.year = v_year and r.slug = v_slug
+  ) loop
+    v_n := v_n + 1;
+    v_slug := p_slug || '-' || v_n;
+  end loop;
+
+  insert into public.records (
+    id, org_id, record_kind, submission_id, project_id, manuscript_id,
+    slug, year, title, abstract, keywords, discipline, contributions,
+    published_on, date_precision, source, reviewed, body_format,
+    external_url, pdf_path, pdf_text, license, generated_by
+  ) values (
+    v_id, v_org, v_kind, p_submission_id, v_pid, v_mid,
+    v_slug, v_year, m.title, m.abstract, m.keywords,
+    coalesce(m.discipline, 'unclassified'), m.contributions,
+    coalesce(p_published_on, current_date), m.date_precision,
+    m.source, true, m.body_format,
+    m.external_url, m.pdf_path, m.pdf_text, m.license, auth.uid()
+  );
+
+  /* Freeze the byline. Display names are copied rather than referenced. */
+  for a in
+    select pa.user_id, u.display_name, u.grad_year, u.affiliation_state, pa.created_at
+      from public.project_authors pa
+      join public.users u on u.id = pa.user_id
+     where pa.project_id = v_pid and pa.role = 'author'
+     order by pa.created_at
+  loop
+    v_order := v_order + 1;
+    insert into public.record_authors
+      (record_id, display_order, display_name, user_id, grad_year,
+       affiliation_verified, byline_only)
+    values (v_id, v_order, a.display_name, a.user_id, a.grad_year,
+            a.affiliation_state = 'verified', false);
+  end loop;
+
+  update public.submissions set state = 'exported' where id = p_submission_id;
+
+  insert into public.state_events
+    (org_id, submission_id, from_state, to_state, actor_id, public_label)
+  values (v_org, p_submission_id, v_state, 'exported', auth.uid(), 'Being published');
+
+  perform app.audit(v_org, 'record.generated', 'records', null, null,
+    jsonb_build_object('record_id', v_id, 'slug', v_slug));
+
+  return v_id;
+end;
+$$;
+
+grant execute on function public.generate_record(uuid, text, text, date) to authenticated;
+
+
+-- ---------------------------------------------------------------------------
+-- Step two: confirm it is live.
+--
+-- After the commit and the deploy. This is what fires the notification, so
+-- the authors are never told about a page that does not exist yet.
+-- ---------------------------------------------------------------------------
+
+create or replace function public.confirm_published(p_submission_id uuid)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_org    uuid;
+  v_state  text;
+  v_id     text;
+  v_author record;
+begin
+  perform app.require_editor();
+
+  select s.org_id, s.state into v_org, v_state
+    from public.submissions s where s.id = p_submission_id;
+
+  if v_state <> 'exported' then
+    raise exception 'generate the files first';
+  end if;
+
+  select r.id into v_id
+    from public.records r where r.submission_id = p_submission_id;
+
+  update public.records
+     set confirmed_by = auth.uid(), confirmed_at = now()
+   where submission_id = p_submission_id;
+
+  update public.submissions set state = 'published' where id = p_submission_id;
+
+  insert into public.state_events
+    (org_id, submission_id, from_state, to_state, actor_id, public_label)
+  values (v_org, p_submission_id, 'exported', 'published', auth.uid(), 'Published');
+
+  for v_author in
+    select a.user_id from public.project_authors a
+     join public.submissions s on s.project_id = a.project_id
+     where s.id = p_submission_id and a.role = 'author'
+  loop
+    insert into public.notifications
+      (org_id, user_id, kind, subject, body, entity_type, entity_id, immediate, queued_at)
+    values (v_org, v_author.user_id, 'published', 'Your work is published',
+      'It is live, and the record is ' || v_id || '.',
+      'submissions', p_submission_id, true, now());
+  end loop;
+
+  perform app.audit(v_org, 'record.published', 'records', null, null,
+    jsonb_build_object('record_id', v_id));
+end;
+$$;
+
+grant execute on function public.confirm_published(uuid) to authenticated;
+
+
+-- A DOI usually arrives after publication, from whoever issued it, so this is
+-- separate from generating the record and can be done at any time.
+create or replace function public.set_record_doi(p_record_id text, p_doi text)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_org uuid;
+begin
+  perform app.require_editor();
+
+  select r.org_id into v_org from public.records r where r.id = p_record_id;
+  if v_org is null then
+    raise exception 'no such record';
+  end if;
+
+  update public.records
+     set doi = nullif(btrim(regexp_replace(coalesce(p_doi, ''), '^https?://doi\.org/', '')), '')
+   where id = p_record_id;
+
+  perform app.audit(v_org, 'record.doi', 'records', null, null,
+    jsonb_build_object('record_id', p_record_id, 'doi', p_doi));
+end;
+$$;
+
+grant execute on function public.set_record_doi(text, text) to authenticated;
 
 notify pgrst, 'reload schema';

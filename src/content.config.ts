@@ -7,9 +7,13 @@ import { glob } from 'astro/loaders';
  *
  * Fields marked [W] are written by the export step from the working surface.
  */
-const articles = defineCollection({
-  loader: glob({ base: './src/content/articles', pattern: '**/*.{md,mdx}' }),
-  schema: z.object({
+/**
+ * Shared by both kinds of published record. An article is a manuscript; a
+ * project entry is what a fair produces. They differ in what they contain,
+ * not in how they are identified, cited, or indexed, so the schema is one
+ * object and `recordKind` says which.
+ */
+const recordSchema = z.object({
     /** Permanent identifier, e.g. SP-2026-0001. Assigned at publication, never reused. */
     recordId: z.string(),
     /** URL segment. Immutable after publication, even to fix a typo in the title. */
@@ -28,6 +32,7 @@ const articles = defineCollection({
         })
       )
       .min(1),
+    /** Empty only on a migrated record that was published without one. */
     abstract: z.string(),
     keywords: z.array(z.string()).max(6).default([]),
     discipline: z.string(),
@@ -47,6 +52,8 @@ const articles = defineCollection({
           program: z.string(),
           season: z.string(),
           category: z.string().optional(),
+          /** The fair's own, e.g. CHEM047. Displayed, never a key: reassigned next season. */
+          entryCode: z.string().optional(),
           placement: z.string().optional(),
           awards: z.array(z.string()).default([]),
           advancedTo: z.string().optional(),
@@ -64,7 +71,57 @@ const articles = defineCollection({
     retractedOn: z.coerce.date().optional(),
     retractionReason: z.string().optional(),
     updatedAt: z.coerce.date().optional(),
-  }),
+
+    /* ── Added with the export step ─────────────────────────────────── */
+
+    recordKind: z.enum(['article', 'project']).default('article'),
+
+    /** Month is usually the truth. Rendering a day nobody recorded invents one. */
+    datePrecision: z.enum(['month', 'day']).default('month'),
+
+    /** Where the writing lives, so a PDF record says what it is. */
+    bodyFormat: z.enum(['full-text', 'pdf-only', 'link-only', 'none']).default('full-text'),
+
+    /** The authoritative version, where somebody else holds it. */
+    externalUrl: z.string().url().optional(),
+
+    /** Which path this arrived by. The page must not claim a process it skipped. */
+    source: z.enum(['workbench', 'external', 'migrated']).default('workbench'),
+
+    /** True only where this record passed review in this system. */
+    reviewed: z.boolean().default(false),
+
+    /**
+     * A DOI, if one exists. We mint none: this is a place to record one issued
+     * elsewhere, by a fair, a preprint server, or an institution, so a record
+     * that has one can be cited by it. Bare, without the https://doi.org
+     * prefix, which the page adds.
+     */
+    doi: z.string().optional(),
+
+    /** A later version of the same record, and the one it replaced. */
+    supersedes: z.string().optional(),
+    supersededBy: z.string().optional(),
+
+    /** Project entries only. The board, which is the artifact a fair produces. */
+    board: z.object({ src: z.string(), alt: z.string() }).optional(),
+
+    /**
+     * Text lifted out of an uploaded PDF, for search only. Never rendered:
+     * extraction is rough and a reader should see the PDF rather than a
+     * flattened approximation of it.
+     */
+    pdfText: z.string().optional(),
+});
+
+const articles = defineCollection({
+  loader: glob({ base: './src/content/articles', pattern: '**/*.{md,mdx}' }),
+  schema: recordSchema,
+});
+
+const projects = defineCollection({
+  loader: glob({ base: './src/content/projects', pattern: '**/*.{md,mdx}' }),
+  schema: recordSchema,
 });
 
 /**
@@ -95,4 +152,4 @@ const guides = defineCollection({
   }),
 });
 
-export const collections = { articles, guides };
+export const collections = { articles, projects, guides };

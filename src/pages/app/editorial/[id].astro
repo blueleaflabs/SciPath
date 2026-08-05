@@ -16,7 +16,7 @@ import {
   REVIEW_QUESTIONS,
   type State,
 } from '../../../lib/workflow';
-import { sectionsFor } from '../../../config/structure';
+import { rulesFor, sectionsFor } from '../../../config/structure';
 import { formatCompleted } from '../../../lib/manuscript';
 
 const { session, account, roles } = Astro.locals;
@@ -203,6 +203,31 @@ const candidates = Array.from(
   ).values()
 ).sort((a: any, b: any) => a.display_name.localeCompare(b.display_name));
 const sectionRules = sectionsFor((manuscript?.record_kind ?? 'article') as any);
+
+/* Where a finding points. Taken from the same rule set the author's checklist
+   renders, so the words the editor picks are the words the author already
+   sees beside their own fields. Typed by hand, "methods" and "Methods" and
+   "the methods section" were three different places. */
+/* A list that has been written and not sent is with nobody. The authors do
+   not see it, which is right while it is being composed and wrong to leave
+   unsaid, because "Add to the list" reads like an act of delivery. */
+const listIsWithAuthors = state === 'revisions_requested';
+const canSendBack = actions.some((a) => a.id === 'request_revisions');
+
+const findingPlaces = rulesFor()
+  .filter(
+    (r) =>
+      r.kind !== 'human' &&
+      r.appliesTo.includes((manuscript?.record_kind ?? 'article') as any) &&
+      (r.kind !== 'section' || manuscript?.body_format === 'full-text') &&
+      /* Authorship and the competition record are conditions on a
+         submission rather than places in it, and they are not on the page
+         the author would be sent to. "Every author has accepted" is not
+         somewhere a change can be made. */
+      !['authors', 'entries'].includes(r.key)
+  )
+  .map((r) => r.label)
+  .concat('Figures');
 const bodyByKey = new Map((sections ?? []).map((s: any) => [s.section_key, s.body]));
 
 const returned = (reviews ?? []).filter((r: any) => r.submitted_at);
@@ -420,7 +445,15 @@ const confirmation = didAction
         <section class="sec">
           <div class="sec-h">
             <b>The list for the authors</b>
-            <span>{roundFindings.length} on round {submission.round}</span>
+            <span>
+              {roundFindings.length} on round {submission.round}
+              {' · '}
+              {listIsWithAuthors
+                ? 'with them now'
+                : roundFindings.length > 0
+                  ? 'not sent yet'
+                  : 'nothing written'}
+            </span>
           </div>
 
           <p class="aside">
@@ -447,16 +480,15 @@ const confirmation = didAction
             </ol>
           )}
 
+          {/* One form, two buttons. Writing a change and sending the list are
+              the same moment at the same desk, and splitting them into two
+              panels put a second heading and a second comment box between
+              somebody and the thing they came to do. */}
           {!['accepted', 'declined', 'withdrawn', 'published'].includes(state) && (
             <form method="POST" class="mform">
-              <input type="hidden" name="action" value="add_finding" />
-
-              {/* The finding is the long field and gets the full width. Two
-                  short ones share the row beneath it, rather than all three
-                  competing and the textarea losing. */}
               <label>
                 <span>What has to change</span>
-                <textarea class="ta" name="finding" rows="3" required></textarea>
+                <textarea class="ta" name="finding" rows="3"></textarea>
                 <small>Your feedback should be specific enough for the authors to act on.</small>
               </label>
 
@@ -471,12 +503,31 @@ const confirmation = didAction
                 </label>
                 <label>
                   <span>Section</span>
-                  <input class="in" name="section" placeholder="Methods" />
+                  <select class="se" name="section">
+                    <option value="">The whole submission</option>
+                    {findingPlaces.map((place) => <option value={place}>{place}</option>)}
+                  </select>
                   <small>Optional, and it helps them find it.</small>
                 </label>
               </div>
 
-              <button class="btn btn-2" type="submit">Add to the list</button>
+              <div class="two">
+                <button class="btn btn-2" type="submit" name="action" value="add_finding">
+                  Add to the list
+                </button>
+
+                {roundFindings.length > 0 && canSendBack && (
+                  <button class="btn" type="submit" name="action" value="request_revisions">
+                    Send {roundFindings.length === 1 ? 'it' : `all ${roundFindings.length}`} to the authors
+                  </button>
+                )}
+              </div>
+
+              {roundFindings.length > 0 && canSendBack && (
+                <p class="fine">
+                  Nothing above has reached them yet. Sending is what delivers it.
+                </p>
+              )}
             </form>
           )}
         </section>
@@ -666,6 +717,17 @@ const confirmation = didAction
   .sev.required { color: var(--alert); }
   .sev.suggested { color: var(--ink-3); }
 
+
+  .two {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+  .fine {
+    margin: 0;
+    color: var(--ink-3);
+    font-size: 0.88rem;
+  }
 
   .ms { max-width: var(--measure-form); }
   .ms h3 {

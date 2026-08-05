@@ -4,6 +4,7 @@ export const prerender = false;
 import Base from '../../layouts/Base.astro';
 import { activeOrg } from '../../lib/tenant';
 import { serverClient } from '../../lib/supabase';
+import { formatDate } from '../../lib/dates';
 
 /**
  * THE PUBLIC TRACKER.
@@ -38,14 +39,11 @@ if (id && /^[0-9a-f-]{36}$/i.test(id)) {
    link and for nobody who went looking. */
 Astro.response.headers.set('X-Robots-Tag', 'noindex, nofollow');
 
-const fmt = (value: string | null) =>
-  value
-    ? new Date(value).toLocaleDateString('en-US', {
-        month: 'long',
-        day: 'numeric',
-        year: 'numeric',
-      })
-    : '';
+/* Six steps on one day is what a real submission looks like on a busy
+   afternoon, and a column of identical dates says nothing about the order or
+   the pace. The time is the information. */
+const fmt = (value: string | null) => formatDate(value, 'long', '');
+const fmtAt = (value: string | null) => formatDate(value, 'withTime', '');
 
 const events = record?.events ?? [];
 
@@ -83,7 +81,7 @@ const latest = events[events.length - 1];
           <p class="state">{latest?.label ?? 'Not submitted'}</p>
           <p class="since">
             {latest?.on
-              ? `Since ${fmt(latest.on)}`
+              ? `Since ${fmtAt(latest.on)}`
               : ''}
           </p>
         </section>
@@ -91,22 +89,21 @@ const latest = events[events.length - 1];
         <section class="sec">
           <div class="sec-h">
             <b>Every step</b>
-            <span>{record.submitted_at ? `Submitted ${fmt(record.submitted_at)}` : ''}</span>
+            <span>{record.submitted_at ? `Submitted ${fmtAt(record.submitted_at)}` : ''}</span>
           </div>
 
           <ol class="steps">
             {events.map((e: any, index: number) => (
               <li class:list={[index === events.length - 1 ? 'now' : 'past']}>
-                <span class="when">{fmt(e.on)}</span>
+                <span class="when">{fmtAt(e.on)}</span>
                 <span class="what">{e.label}</span>
               </li>
             ))}
           </ol>
 
           <p class="fine">
-            This page shows the stages and their dates. It does not show who is
-            reading the work or what they have said, and it never will. The
-            authors see that when they sign in.
+            This page shows the stages and their dates. Login as the author for
+            the detailed view.
           </p>
         </section>
       </>
@@ -141,7 +138,7 @@ const latest = events[events.length - 1];
   }
   .steps li {
     display: grid;
-    grid-template-columns: 12rem 1fr;
+    grid-template-columns: 17rem 1fr;
     gap: 18px;
     padding: 15px 0;
     border-bottom: 1px solid var(--rule-fine);

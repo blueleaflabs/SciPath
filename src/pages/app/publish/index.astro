@@ -1,0 +1,277 @@
+---
+export const prerender = false;
+
+import Base from '../../../layouts/Base.astro';
+import AppShell from '../../../components/AppShell.astro';
+import { activeOrg } from '../../../lib/tenant';
+import { serverClient } from '../../../lib/supabase';
+import { standing } from '../../../lib/roles';
+import { formatDate } from '../../../lib/dates';
+import { slugify, repoPaths } from '../../../lib/publish';
+
+const { session, account, roles } = Astro.locals;
+const org = activeOrg(Astro);
+
+if (!session) return Astro.redirect('/app/');
+if (!account) return Astro.redirect('/app/welcome/');
+
+const me = standing(roles, account?.population);
+const supabase = serverClient(
+  Astro.request,
+  Astro.cookies,
+  (Astro.locals as any).runtime?.env
+);
+
+let error: string | null = null;
+let done: string | null = null;
+let generated: string | null = null;
+
+if (Astro.request.method === 'POST' && me.isEditor) {
+  const form = await Astro.request.formData();
+  const action = String(form.get('action') ?? '');
+  const submissionId = String(form.get('submission_id') ?? '');
+
+  if (action === 'generate') {
+    const { data, error: e } = await supabase.rpc('generate_record', {
+      p_submission_id: submissionId,
+      p_slug: slugify(String(form.get('title') ?? '')),
+      /* From src/config/orgs.ts, which is the one place org strings live. */
+      p_prefix: org.recordPrefix,
+      p_published_on: String(form.get('published_on') ?? '') || null,
+    });
+    if (e) error = e.message;
+    else {
+      generated = data as string;
+      done = `${generated} allocated. Download the bundle and commit it.`;
+    }
+  }
+
+  if (action === 'doi') {
+    const { error: e } = await supabase.rpc('set_record_doi', {
+      p_record_id: String(form.get('record_id') ?? ''),
+      p_doi: String(form.get('doi') ?? ''),
+    });
+    if (e) error = e.message;
+    else done = 'DOI recorded. Regenerate the bundle and commit it again.';
+  }
+
+  if (action === 'confirm') {
+    const { error: e } = await supabase.rpc('confirm_published', {
+      p_submission_id: submissionId,
+    });
+    if (e) error = e.message;
+    else done = 'Published. The authors have been told.';
+  }
+}
+
+const { data: queue } = me.isEditor
+  ? await supabase
+      .from('submissions')
+      .select('id, state, record_kind, decided_at, manuscripts(title), projects(title)')
+      .in('state', ['accepted', 'scheduled', 'exported'])
+      .order('decided_at', { ascending: true })
+  : { data: [] };
+
+const { data: records } = me.isEditor
+  ? await supabase
+      .from('records')
+      .select('id, slug, year, record_kind, title, submission_id, confirmed_at, generated_at, doi')
+      .order('generated_at', { ascending: false })
+  : { data: [] };
+
+const recordFor = new Map((records ?? []).map((r: any) => [r.submission_id, r]));
+const waiting = (queue ?? []).filter((s: any) => s.state !== 'exported');
+const exported = (queue ?? []).filter((s: any) => s.state === 'exported');
+const live = (records ?? []).filter((r: any) => r.confirmed_at);
+
+const today = new Date().toISOString().slice(0, 10);
+---
+
+<Base title="Publishing" noindex={true}>
+  <div class="wrap">
+    <AppShell org={org} account={account} roles={roles} here="/app/publish/" />
+
+    {!me.isEditor ? (
+      <section class="sec">
+        <p class="note">Publishing is for editors and the club advisor.</p>
+      </section>
+    ) : (
+      <>
+        <section class="hero">
+          <p class="t-lbl">Publishing</p>
+          <h1 class="t-big">Accepted and waiting</h1>
+          <p class="lede">
+            {waiting.length + exported.length === 0
+              ? 'Nothing waiting.'
+              : `${waiting.length} to generate · ${exported.length} to commit`}
+          </p>
+        </section>
+
+        {error && <p class="note" role="alert">{error}</p>}
+        {done && !error && <p class="note" role="status">{done}</p>}
+
+        <!-- ── Step one ────────────────────────────────────────────────── -->
+        {waiting.length > 0 && (
+          <section class="sec">
+            <div class="sec-h"><b>Ready to generate</b><span>{waiting.length}</span></div>
+
+            {waiting.map((s: any) => {
+              const title = s.manuscripts?.title ?? s.projects?.title ?? 'Untitled';
+              const slug = slugify(title);
+              return (
+                <form method="POST" class="mform item">
+                  <input type="hidden" name="action" value="generate" />
+                  <input type="hidden" name="submission_id" value={s.id} />
+                  <input type="hidden" name="title" value={title} />
+
+                  <h3>{title}</h3>
+                  <p class="path">
+                    /{s.record_kind === 'project' ? 'projects' : 'articles'}/{new Date().getFullYear()}/{slug}/
+                  </p>
+
+                  <div class="row-2">
+                    <label>
+                      <span>Published on</span>
+                      <input class="in" type="date" name="published_on" value={today} />
+                      <small>The date of record. It becomes part of the URL.</small>
+                    </label>
+                    <label>
+                      <span>Accepted</span>
+                      <input class="in" value={formatDate(s.decided_at, 'long', '')} disabled />
+                      <small>Nothing here can change after you generate.</small>
+                    </label>
+                  </div>
+
+                  <button class="btn" type="submit">Generate the record</button>
+                </form>
+              );
+            })}
+          </section>
+        )}
+
+        <!-- ── Step two ────────────────────────────────────────────────── -->
+        {exported.length > 0 && (
+          <section class="sec">
+            <div class="sec-h"><b>Generated, waiting on a commit</b><span>{exported.length}</span></div>
+
+            {exported.map((s: any) => {
+              const r: any = recordFor.get(s.id);
+              const paths = r ? repoPaths(r) : null;
+              return (
+                <div class="item">
+                  <h3>{r?.title ?? s.manuscripts?.title}</h3>
+                  <p class="path">{r?.id}</p>
+
+                  {paths && (
+                    <ol class="steps">
+                      <li>
+                        <a class="btn btn-2" href={`/app/publish/${s.id}/bundle`}>
+                          Download the bundle
+                        </a>
+                      </li>
+                      <li>Unzip it into the repository root. It writes <code>{paths.markdown}</code> and its assets.</li>
+                      <li>Commit and push. Wait for the deploy.</li>
+                      <li>
+                        Check <code>/{r.record_kind === 'project' ? 'projects' : 'articles'}/{r.year}/{r.slug}/</code> loads.
+                      </li>
+                    </ol>
+                  )}
+
+                  <form method="POST">
+                    <input type="hidden" name="action" value="confirm" />
+                    <input type="hidden" name="submission_id" value={s.id} />
+                    <button class="btn" type="submit">Confirm it is live</button>
+                  </form>
+                  <p class="fine">
+                    This is what tells the authors, so press it after the page
+                    actually loads rather than before.
+                  </p>
+                </div>
+              );
+            })}
+          </section>
+        )}
+
+        {waiting.length === 0 && exported.length === 0 && (
+          <section class="sec">
+            <p class="note">
+              Nothing is accepted and unpublished. This is what the queue looks
+              like when it is up to date.
+            </p>
+          </section>
+        )}
+
+        {live.length > 0 && (
+          <section class="sec">
+            <div class="sec-h"><b>Published</b><span>{live.length}</span></div>
+            <p class="aside">
+              We mint no DOIs. If a fair, a preprint server, or an institution
+              issues one, record it here and the record is cited by it rather
+              than by a URL that depends on this site continuing to exist.
+              Adding one means regenerating the bundle and committing again.
+            </p>
+            <table class="tbl">
+              <thead><tr><th>Record</th><th>Title</th><th>DOI</th><th>When</th></tr></thead>
+              <tbody>
+                {live.map((r: any) => (
+                  <tr>
+                    <td><code>{r.id}</code></td>
+                    <td>
+                      <a href={`/${r.record_kind === 'project' ? 'projects' : 'articles'}/${r.year}/${r.slug}/`}>
+                        {r.title}
+                      </a>
+                    </td>
+                    <td>
+                      <form method="POST" class="doi">
+                        <input type="hidden" name="action" value="doi" />
+                        <input type="hidden" name="record_id" value={r.id} />
+                        <input
+                          class="in"
+                          name="doi"
+                          value={r.doi ?? ''}
+                          placeholder="10.xxxx/yyyy"
+                          aria-label={`DOI for ${r.id}`}
+                        />
+                        <button class="btn btn-q" type="submit">Save</button>
+                      </form>
+                    </td>
+                    <td>{formatDate(r.confirmed_at, 'short', '')}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </section>
+        )}
+      </>
+    )}
+  </div>
+</Base>
+
+<style>
+  .hero { padding: 34px 0 26px; }
+  .item {
+    max-width: var(--measure-form);
+    padding: 22px 0;
+    border-top: 1px solid var(--rule-fine);
+  }
+  .item h3 { margin: 0 0 4px; font-size: 1.15rem; }
+  .path {
+    margin: 0 0 16px;
+    font-family: var(--face-num);
+    font-size: 0.86rem;
+    color: var(--ink-3);
+  }
+  .steps { margin: 0 0 18px; padding-left: 1.3rem; }
+  .steps li { margin-bottom: 10px; line-height: 1.55; }
+  .steps code { font-size: 0.86rem; }
+  .fine { margin: 8px 0 0; color: var(--ink-3); font-size: 0.88rem; }
+  .aside {
+    max-width: var(--measure-form);
+    margin: 0 0 20px;
+    color: var(--ink-3);
+    font-size: 0.9rem;
+    line-height: 1.55;
+  }
+  form.doi { display: flex; gap: 8px; align-items: center; }
+  form.doi .in { max-width: 20ch; }
+</style>

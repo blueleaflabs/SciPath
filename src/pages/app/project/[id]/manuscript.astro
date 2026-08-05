@@ -7,10 +7,11 @@ import { activeOrg } from '../../../../lib/tenant';
 import { serverClient } from '../../../../lib/supabase';
 import { standing, isAuthorOf } from '../../../../lib/roles';
 import { blobStore, figurePath, manuscriptPdfPath, MAX_UPLOAD_BYTES } from '../../../../lib/blob';
+import { extractPdfText, worthIndexing } from '../../../../lib/pdf-text';
 import { disciplines, disciplineLabel } from '../../../../config/site';
 import { rulesFor, sectionsFor } from '../../../../config/structure';
 import { checkStructure, completeness, checklist, maySubmit, words } from '../../../../lib/structure';
-import { doneLabel, publicLabel, authorMayEdit } from '../../../../lib/workflow';
+import { doneLabel, publicLabel, authorGuidance, authorMayEdit } from '../../../../lib/workflow';
 import {
   toSnapshot,
   parseKeywords,
@@ -418,6 +419,16 @@ function nextAfter(key: string) {
   return ahead ?? outstandingItems.find((i) => i.key !== key) ?? null;
 }
 
+/* Findings name a place using the rule set's own label, so the words match
+   what the author sees beside their fields. This turns that label back into
+   somewhere to go. */
+const placeAnchors = new Map<string, string>(
+  rules
+    .filter((r) => r.kind !== 'human')
+    .map((r) => [r.label, r.kind === 'section' ? `#${r.key}` : anchors[r.key] ?? ''])
+);
+placeAnchors.set('Figures', '#figures');
+
 function targetFor(key: string): string | null {
   if (anchors[key]) return anchors[key];
   /* Authorship and the competition record are facts about the project rather
@@ -504,9 +515,7 @@ function targetFor(key: string): string | null {
               <p>
                 {submission.withdrawal_requested_at
                   ? 'You have asked to withdraw it, and an editor will confirm.'
-                  : revising
-                    ? 'Back with you. Make the changes below, then send it back.'
-                    : 'Under editorial review. Withdraw the existing submission if you need to make changes.'}
+                  : authorGuidance[submission.state as keyof typeof authorGuidance]}
               </p>
 
               <div class="row">
@@ -615,7 +624,13 @@ function targetFor(key: string): string | null {
                 <li>
                   <span class:list={['sev', f.severity]}>{f.severity}</span>
                   <div>
-                    {f.section && <b>{f.section}</b>}
+                    {f.section && (
+                      placeAnchors.get(f.section) ? (
+                        <a class="where" href={placeAnchors.get(f.section)}>{f.section}</a>
+                      ) : (
+                        <span class="where">{f.section}</span>
+                      )
+                    )}
                     <p>{f.finding}</p>
                     {iAuthor ? (
                       <form method="POST" class="answer">
@@ -718,13 +733,13 @@ function targetFor(key: string): string | null {
         </section>
 
         <!-- ── The record ──────────────────────────────────────────────── -->
-        <section class="sec">
+        <section class="sec" id="the-record">
           <div class="sec-h">
             <b>The record</b>
             <span>{formatCompleted(manuscript.completed_on, manuscript.date_precision)}</span>
           </div>
 
-          <form method="POST" class="mform">
+          <form method="POST" action="#the-record" class="mform">
             <input type="hidden" name="action" value="meta" />
             <input type="hidden" name="manuscript_id" value={manuscript.id} />
             <input type="hidden" name="expected" value={manuscript.updated_at} />
@@ -892,7 +907,7 @@ function targetFor(key: string): string | null {
               const count = words(body);
               const problem = findingFor(rule.key);
               return (
-                <form method="POST" class="mform section" id={rule.key}>
+                <form method="POST" action={`#${rule.key}`} class="mform section" id={rule.key}>
                   <input type="hidden" name="action" value="section" />
                   <input type="hidden" name="manuscript_id" value={manuscript.id} />
                   <input type="hidden" name="section_key" value={rule.key} />
@@ -1017,7 +1032,7 @@ function targetFor(key: string): string | null {
           )}
 
           {iAuthor && !locked && (
-            <form method="POST" enctype="multipart/form-data" class="mform">
+            <form method="POST" action="#figures" enctype="multipart/form-data" class="mform">
               <input type="hidden" name="action" value="figure" />
               <input type="hidden" name="manuscript_id" value={manuscript.id} />
 
@@ -1056,7 +1071,7 @@ function targetFor(key: string): string | null {
               <span>{references.length}</span>
             </div>
 
-            <form method="POST" class="mform">
+            <form method="POST" action="#references" class="mform">
               <input type="hidden" name="action" value="references" />
               <input type="hidden" name="manuscript_id" value={manuscript.id} />
 
@@ -1155,6 +1170,23 @@ function targetFor(key: string): string | null {
 
   window.addEventListener('hashchange', focusTarget);
 
+  /* Smooth only for a click somebody made. Putting it in CSS on html applied
+     it to the browser's own scroll restoration after a post, which is how
+     saving a section came to slide the whole page. */
+  for (const link of document.querySelectorAll('.jump a, .ck a')) {
+    link.addEventListener('click', (event) => {
+      const href = link.getAttribute('href') ?? '';
+      if (!href.startsWith('#')) return;
+      const target = document.querySelector(href);
+      if (!target) return;
+      event.preventDefault();
+      const motion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      target.scrollIntoView({ behavior: motion ? 'auto' : 'smooth', block: 'start' });
+      history.replaceState(null, '', href);
+      focusTarget();
+    });
+  }
+
   const grow = (field) => {
     field.style.height = 'auto';
     field.style.height = `${field.scrollHeight + 2}px`;
@@ -1164,6 +1196,14 @@ function targetFor(key: string): string | null {
     field.style.overflowY = 'hidden';
     grow(field);
     field.addEventListener('input', () => grow(field));
+  }
+
+  /* Growing the textareas changes the height of everything below them, which
+     happens after the browser has already decided where to sit. Without this,
+     landing on #results after a save puts you near it rather than on it. */
+  if (window.location.hash) {
+    const target = document.querySelector(window.location.hash);
+    if (target) target.scrollIntoView({ behavior: 'auto', block: 'start' });
   }
 </script>
 
@@ -1211,9 +1251,11 @@ function targetFor(key: string): string | null {
   [id] {
     scroll-margin-top: 24px;
   }
-  @media (prefers-reduced-motion: no-preference) {
-    :global(html) { scroll-behavior: smooth; }
-  }
+  /* Deliberately not `scroll-behavior: smooth` on html. That animates the
+     browser's own scroll restoration after a form post, so saving a section
+     slid the whole page instead of leaving it where it was. Smooth belongs on
+     the jump links, which is a click somebody made, and is applied there in
+     script. */
   .mform.section {
     padding: 20px 0 26px;
     border-bottom: 1px solid var(--rule-fine);
@@ -1379,6 +1421,25 @@ function targetFor(key: string): string | null {
     border-bottom: 1px solid var(--rule-fine);
   }
   .finds p { margin: 0 0 8px; line-height: 1.55; }
+  /* A label, not the first line of the finding. It was set in bold directly
+     above the text, which reads as a heading somebody wrote rather than as
+     the place the change belongs. */
+  .where {
+    display: inline-block;
+    margin-bottom: 6px;
+    padding: 2px 9px;
+    border: 1px solid var(--rule);
+    font-family: var(--face-ui);
+    font-size: 0.78rem;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--ink-2);
+    text-decoration: none;
+  }
+  a.where:hover {
+    border-color: var(--ink);
+    color: var(--ink);
+  }
   .finds .reply { color: var(--ink-3); font-size: 0.92rem; }
   .finds .answer { display: grid; gap: 8px; justify-items: start; }
   .sev {

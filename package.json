@@ -5,13 +5,13 @@
   "private": true,
   "scripts": {
     "dev": "astro dev",
-    "build": "astro build && pagefind --site dist",
+    "build": "astro build && node scripts/index-search.mjs",
     "build:public-only": "astro build",
     "preview": "astro preview",
     "check": "astro check",
     "test:contrast": "node tests/contrast.mjs",
     "test:static": "node tests/no-db-in-static.mjs",
-    "test": "npm run test:dates && npm run test:structure && npm run test:workflow && npm run test:roster && npm run test:drift && npm run test:props && npm run test:policy && npm run test:sqlcols && npm run test:embeds && npm run test:contrast && npm run test:static && npm run test:tokens && npm run test:config && npm run test:tenant && npm run test:routes",
+    "test": "npm run test:dates && npm run test:structure && npm run test:workflow && npm run test:roster && npm run test:publish && npm run test:pdftext && npm run test:search && npm run test:devvars && npm run test:drift && npm run test:props && npm run test:policy && npm run test:sqlcols && npm run test:embeds && npm run test:contrast && npm run test:static && npm run test:tokens && npm run test:config && npm run test:tenant && npm run test:routes",
     "test:tokens": "node tests/tokens-only.mjs",
     "test:config": "node tests/config-secrets.mjs",
     "seed:demo": "node scripts/seed-demo.mjs",
@@ -30,7 +30,11 @@
     "test:workflow": "node --experimental-strip-types tests/workflow.mjs",
     "test:sqlcols": "node tests/sql-columns.mjs",
     "test:embeds": "node tests/embeds.mjs",
-    "test:roster": "node --experimental-strip-types tests/roster.mjs"
+    "test:roster": "node --experimental-strip-types tests/roster.mjs",
+    "test:devvars": "node tests/dev-vars.mjs",
+    "test:publish": "node --experimental-strip-types tests/publish.mjs",
+    "test:search": "node tests/search-scope.mjs",
+    "test:pdftext": "node --experimental-strip-types tests/pdf-text.mjs"
   },
   "dependencies": {
     "@astrojs/cloudflare": "^12.6.0",

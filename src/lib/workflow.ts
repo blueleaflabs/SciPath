@@ -47,7 +47,7 @@ export interface Action {
 export const publicLabel: Record<State, string> = {
   draft: 'Not submitted',
   submitted: 'Received',
-  screening: 'Being screened',
+  screening: 'With the editor',
   in_review: 'With reviewers',
   revisions_requested: 'Back with the authors',
   editorial_review: 'With the editor for a decision',
@@ -73,6 +73,30 @@ export const editorLabel: Record<State, string> = {
   published: 'Published',
   declined: 'Declined',
   withdrawn: 'Withdrawn',
+};
+
+/**
+ * What the authors are told, per state.
+ *
+ * This was three branches on the page: withdrawal asked for, back with you,
+ * and everything else. Everything else said "Under editorial review", so an
+ * accepted submission sat under a heading saying Accepted and a sentence
+ * saying it was still being reviewed. A sentence per state, in the same file
+ * as the labels, and a test that none is missing.
+ */
+export const authorGuidance: Record<State, string> = {
+  draft: 'Not submitted yet.',
+  submitted: 'Received. An editor will pick it up.',
+  screening: 'An editor is reading it before it goes to reviewers.',
+  in_review: 'With reviewers. Withdraw the existing submission if you need to make changes.',
+  revisions_requested: 'Back with you. Make the changes below, then send it back.',
+  editorial_review: 'With the editor for a decision.',
+  accepted: 'Accepted. It will be published once an officer prepares the record.',
+  scheduled: 'Accepted and queued for publishing.',
+  exported: 'Being published now.',
+  published: 'Published. Corrections and retractions are handled separately.',
+  declined: 'Not accepted.',
+  withdrawn: 'Withdrawn.',
 };
 
 export const TERMINAL: State[] = ['published', 'declined', 'withdrawn'];

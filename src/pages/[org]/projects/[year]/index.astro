@@ -1,0 +1,34 @@
+---
+import Base from '../../../../layouts/Base.astro';
+import PageHead from '../../../../components/PageHead.astro';
+import RecordCard from '../../../../components/RecordCard.astro';
+import { getCollection } from 'astro:content';
+import type { GetStaticPaths } from 'astro';
+import { withTenants } from '../../../../lib/tenant-paths';
+
+export const getStaticPaths: GetStaticPaths = withTenants(async () => {
+  const projects = (await getCollection('projects')).filter((p) => p.data.status !== 'archived');
+  const years = [...new Set(projects.map((p) => p.data.publishedOn.getUTCFullYear()))];
+
+  return years.map((year) => ({
+    params: { year: String(year) },
+    props: {
+      projects: projects
+        .filter((p) => p.data.publishedOn.getUTCFullYear() === year)
+        .sort((a, b) => b.data.publishedOn.valueOf() - a.data.publishedOn.valueOf()),
+    },
+  }));
+});
+
+const { year } = Astro.params;
+const { projects } = Astro.props;
+---
+
+<Base title={`Projects in ${year}`} description={`Project entries from ${year}.`}>
+  <PageHead eyebrow="Year archive" title={String(year)} lede={`${projects.length} project ${projects.length === 1 ? 'entry' : 'entries'}`} />
+  <div class="wrap">
+    <section class="sec" style="padding-top:0">
+      {projects.map((p) => <RecordCard record={p} space="projects" />)}
+    </section>
+  </div>
+</Base>

@@ -26,6 +26,11 @@
  */
 
 import { createClient } from '@supabase/supabase-js';
+import { loadDevVars } from './dev-vars.mjs';
+
+/* Read the file before reading the environment. A script that needs a file
+   should read the file rather than print instructions for loading it. */
+loadDevVars();
 
 const URL = process.env.PUBLIC_SUPABASE_URL ?? '';
 const KEY = process.env.SUPABASE_SECRET_KEY ?? '';
@@ -50,9 +55,11 @@ const isLoopback = /^https?:\/\/(127\.0\.0\.1|localhost)(:|\/|$)/.test(URL);
 
 if (!URL || !KEY) {
   fail(
-    'PUBLIC_SUPABASE_URL and SUPABASE_SECRET_KEY must be set.\n' +
-      'They live in .dev.vars, which is a file and not an environment:\n' +
-      '  set -a; source .dev.vars; set +a'
+    'PUBLIC_SUPABASE_URL and SUPABASE_SECRET_KEY are missing.\n' +
+      'They normally come from .dev.vars in the project root, which this\n' +
+      'script reads on its own. If that file is absent, run:\n' +
+      '  npx supabase start\n' +
+      'and copy the URL and the secret key it prints into .dev.vars.'
   );
 }
 
