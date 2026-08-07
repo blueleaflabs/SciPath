@@ -51,7 +51,7 @@ export const publicLabel: Record<State, string> = {
   in_review: 'With reviewers',
   revisions_requested: 'Back with the authors',
   editorial_review: 'With the editor for a decision',
-  accepted: 'Accepted',
+  accepted: 'Accepted for publication',
   scheduled: 'In the publishing queue',
   exported: 'Being published',
   published: 'Published',
@@ -67,7 +67,7 @@ export const editorLabel: Record<State, string> = {
   in_review: 'In review',
   revisions_requested: 'With authors',
   editorial_review: 'Decision',
-  accepted: 'Accepted',
+  accepted: 'Accepted for publication',
   scheduled: 'Queued',
   exported: 'Exported',
   published: 'Published',
@@ -91,7 +91,7 @@ export const authorGuidance: Record<State, string> = {
   in_review: 'With reviewers. Withdraw the existing submission if you need to make changes.',
   revisions_requested: 'Back with you. Make the changes below, then send it back.',
   editorial_review: 'With the editor for a decision.',
-  accepted: 'Accepted. It will be published once an officer prepares the record.',
+  accepted: 'Accepted for publication. It goes live once an officer prepares the record.',
   scheduled: 'Accepted and queued for publishing.',
   exported: 'Being published now.',
   published: 'Published. Corrections and retractions are handled separately.',
@@ -128,14 +128,11 @@ export const ACTIONS: Action[] = [
     from: ['screening'],
     to: 'in_review',
   },
-  {
-    id: 'screen_return',
-    label: 'Return to the authors',
-    by: 'editor',
-    from: ['screening'],
-    to: 'revisions_requested',
-    hint: 'For something fixable that does not need a reviewer\u2019s time.',
-  },
+  /* There was a second way to send a submission back from screening, before
+     `request_revisions` was widened to work here too. Two buttons that did
+     the same thing, one of which could also carry the list. Removed rather
+     than renamed: the difference nobody could explain was that there was
+     none. */
   {
     id: 'screen_decline',
     label: 'Decline at screening',
@@ -241,12 +238,11 @@ export const ACTIONS: Action[] = [
 export const actionDone: Record<string, string> = {
   claim_submission: 'Taken off the queue',
   screen_advance: 'Sent to review',
-  screen_return: 'Returned to the authors',
   screen_decline: 'Declined at screening',
   assign_reviewer: 'Reviewer assigned',
   request_revisions: 'Sent back to the authors',
   to_editorial_review: 'Moved to a decision',
-  decide_accepted: 'Accepted',
+  decide_accepted: 'Accepted for publication',
   decide_declined: 'Declined',
   confirm_withdrawal: 'Withdrawal confirmed',
   resubmit: 'Sent back to the editor',
@@ -267,6 +263,8 @@ export const otherDone: Record<string, string> = {
   'figure-remove': 'Figure removed, and the rest renumbered',
   paper: 'Paper uploaded',
   start: 'Manuscript started',
+  glance: 'Research at a glance saved',
+  question: 'The question saved',
 };
 
 export function doneLabel(actionId: string): string {

@@ -1,4 +1,18 @@
 ---
+/**
+ * Prerendered, and it has to stay that way.
+ *
+ * An unmatched path falls back to this route, so making it on demand makes
+ * every unmatched path an on-demand route. The middleware then rewrites
+ * /guides/ onto the prerendered /montavista/guides/, which Astro refuses:
+ * rewriting from on demand to prerendered is forbidden. That took out every
+ * public page at once, which is a steep price for the warning this was
+ * meant to silence.
+ *
+ * The warning is that the layout reads request headers and a prerendered
+ * page has none. It is harmless here: without a request the layout falls
+ * back to the default organization, and this page names no tenant.
+ */
 import Base from '../layouts/Base.astro';
 ---
 

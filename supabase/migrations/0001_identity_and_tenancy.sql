@@ -5334,18 +5334,9 @@ begin
 
   if p_outcome = 'advance' then
     perform app.move_submission(p_submission_id, 'in_review', 'With reviewers', p_note);
-  elsif p_outcome = 'return' then
-    /* Returning at screening skips the findings list entirely, so this note
-       is the only thing the authors receive. Sending it back with nothing
-       attached tells them something is wrong and not what, which is worse
-       than not sending it back at all. */
-    if coalesce(btrim(coalesce(p_note, '')), '') = '' then
-      raise exception
-        'say what needs fixing. Returning a submission at screening sends no list, so this note is all the authors get.';
-    end if;
-
-    perform app.move_submission(p_submission_id, 'revisions_requested',
-      'Back with the authors', p_note);
+  /* There was a 'return' outcome here. `request_revisions` now works from
+     screening as well and does the same thing, with the option of a list
+     attached, so this became a second route to one place. */
   elsif p_outcome = 'decline' then
     update public.submissions
        set decision = 'declined', decided_by = auth.uid(), decided_at = now()
@@ -5789,7 +5780,9 @@ begin
      set decision = p_decision, decided_by = auth.uid(), decided_at = now()
    where id = p_submission_id;
 
-  v_label := case when p_decision = 'accepted' then 'Accepted' else 'Not accepted' end;
+  v_label := case when p_decision = 'accepted'
+                  then 'Accepted for publication'
+                  else 'Not accepted' end;
   perform app.move_submission(p_submission_id, p_decision, v_label, p_note);
 
   for v_author in
@@ -6710,5 +6703,496 @@ end;
 $$;
 
 grant execute on function public.set_record_doi(text, text) to authenticated;
+
+notify pgrst, 'reload schema';
+
+
+-- ===========================================================================
+-- PROJECT ENTRIES ARE SIBLINGS OF PAPERS, NOT ALTERNATIVES TO THEM
+--
+-- `record_kind` was a choice on the manuscript, which quietly turned two
+-- record kinds into one decision: a project could have a paper or a showcase
+-- page and not both. 8.1 says otherwise and always did. Two records sharing a
+-- `project_id` are companions and each page links to the other, and
+-- `supersedes` is deliberately not that relationship, because it would tell a
+-- reader the entry had been replaced when it had not.
+--
+-- So a project entry is generated from the project rather than from a
+-- manuscript, and it does not pass through editorial review. **A fair result
+-- is a fact to record, not a claim to review.** What review exists for it is
+-- an officer verifying the result, which already happens.
+--
+-- Its metadata comes from the manuscript anyway, because that is where a
+-- project's title, abstract, discipline, and keywords live whether or not the
+-- paper was ever written or submitted. A project entry needs those four and
+-- nothing else: no sections, no references, no submission.
+-- ===========================================================================
+
+create or replace function public.generate_project_record(
+  p_project_id   uuid,
+  p_slug         text,
+  p_prefix       text,
+  p_published_on date default null
+)
+returns text
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_org    uuid;
+  v_year   int;
+  v_seq    int;
+  v_id     text;
+  v_slug   text;
+  v_n      int := 1;
+  m        record;
+  a        record;
+  v_order  int := 0;
+  v_result int;
+begin
+  perform app.require_editor();
+
+  select p.org_id into v_org from public.projects p where p.id = p_project_id;
+  if v_org is null then
+    raise exception 'no such project';
+  end if;
+
+  if exists (
+    select 1 from public.records r
+     where r.project_id = p_project_id and r.record_kind = 'project'
+  ) then
+    raise exception
+      'this project already has an entry. Regenerating the files is safe; allocating a second identifier is not.';
+  end if;
+
+  /* Something to show. A page with no result on it is the project page with
+     a permanent URL, which is not worth minting an identifier for. */
+  select count(*) into v_result
+    from public.entries e
+   where e.project_id = p_project_id and e.result_recorded_at is not null;
+
+  if v_result = 0 then
+    raise exception
+      'record a fair result first. A project entry exists to publish what happened at the fair.';
+  end if;
+
+  select m2.* into m
+    from public.manuscripts m2 where m2.project_id = p_project_id;
+
+  if m is null then
+    raise exception 'this project has no record details yet';
+  end if;
+
+  if coalesce(btrim(coalesce(m.abstract, '')), '') = '' then
+    raise exception
+      'the abstract is empty. A project entry is mostly its abstract, so there is nothing to publish without one.';
+  end if;
+
+  if coalesce(btrim(coalesce(m.discipline, '')), '') = '' then
+    raise exception 'set a discipline first';
+  end if;
+
+  v_year := extract(year from coalesce(p_published_on, current_date));
+
+  insert into public.record_sequences (org_id, year, next_seq)
+  values (v_org, v_year, 1)
+  on conflict (org_id, year) do nothing;
+
+  update public.record_sequences
+     set next_seq = next_seq + 1
+   where org_id = v_org and year = v_year
+  returning next_seq - 1 into v_seq;
+
+  v_id := upper(btrim(p_prefix)) || '-' || v_year || '-' || lpad(v_seq::text, 4, '0');
+
+  v_slug := p_slug;
+  while exists (
+    select 1 from public.records r
+     where r.org_id = v_org and r.year = v_year and r.slug = v_slug
+  ) loop
+    v_n := v_n + 1;
+    v_slug := p_slug || '-' || v_n;
+  end loop;
+
+  insert into public.records (
+    id, org_id, record_kind, submission_id, project_id, manuscript_id,
+    slug, year, title, abstract, keywords, discipline, contributions,
+    published_on, date_precision, source, reviewed, body_format,
+    external_url, pdf_path, pdf_text, license, generated_by
+  ) values (
+    v_id, v_org, 'project', null, p_project_id, m.id,
+    v_slug, v_year, m.title, m.abstract, m.keywords,
+    m.discipline, m.contributions,
+    coalesce(p_published_on, current_date), 'day',
+    'workbench',
+    /* Not reviewed, and the page must not claim otherwise: somebody verified
+       a placement and nobody read the work. */
+    false,
+    'none',
+    null, null, null, m.license, auth.uid()
+  );
+
+  for a in
+    select pa.user_id, u.display_name, u.grad_year, u.affiliation_state, pa.created_at
+      from public.project_authors pa
+      join public.users u on u.id = pa.user_id
+     where pa.project_id = p_project_id and pa.role = 'author'
+     order by pa.created_at
+  loop
+    v_order := v_order + 1;
+    insert into public.record_authors
+      (record_id, display_order, display_name, user_id, grad_year,
+       affiliation_verified, byline_only)
+    values (v_id, v_order, a.display_name, a.user_id, a.grad_year,
+            a.affiliation_state = 'verified', false);
+  end loop;
+
+  perform app.audit(v_org, 'record.generated', 'records', null, null,
+    jsonb_build_object('record_id', v_id, 'kind', 'project'));
+
+  return v_id;
+end;
+$$;
+
+grant execute on function public.generate_project_record(uuid, text, text, date) to authenticated;
+
+/* The manuscript is the paper. It was carrying a kind, which is a property of
+   a record rather than of the writing. */
+alter table public.manuscripts
+  alter column record_kind set default 'article';
+
+notify pgrst, 'reload schema';
+
+
+-- A project entry has no submission, so `confirm_published` cannot mark it
+-- live: that function moves a submission through its states and notifies from
+-- them. There is also no ceremony to observe here. Nobody is waiting on a
+-- decision, so writing the files and marking it live are one act.
+create or replace function public.mark_record_live(p_record_id text)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_org uuid;
+begin
+  perform app.require_editor();
+
+  select r.org_id into v_org from public.records r where r.id = p_record_id;
+  if v_org is null then
+    raise exception 'no such record';
+  end if;
+
+  update public.records
+     set confirmed_by = auth.uid(), confirmed_at = now()
+   where id = p_record_id;
+
+  perform app.audit(v_org, 'record.published', 'records', null, null,
+    jsonb_build_object('record_id', p_record_id));
+end;
+$$;
+
+grant execute on function public.mark_record_live(text) to authenticated;
+
+notify pgrst, 'reload schema';
+
+
+-- ===========================================================================
+-- WHAT A RECORD PAGE NEEDS AND THE WORKING SURFACE NEVER ASKED FOR
+--
+-- A published page that opens with a title and an abstract is a page a reader
+-- has to work at. The question the project asked, the methods it used, where
+-- the data came from, and what it produced are the four things somebody
+-- deciding whether to read further actually wants, and three of them had
+-- nowhere to live.
+--
+-- The fourth, `projects.question`, has existed since the first migration and
+-- was editable on no screen and rendered on no page. A column nobody can fill
+-- is the same as a column that is not there.
+-- ===========================================================================
+
+alter table public.manuscripts
+  add column if not exists methods      text[] not null default '{}',
+  add column if not exists data_sources text[] not null default '{}',
+  add column if not exists outputs      text[] not null default '{}';
+
+create or replace function public.save_project_question(
+  p_project_id uuid,
+  p_question   text
+)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_org uuid;
+begin
+  select p.org_id into v_org from public.projects p where p.id = p_project_id;
+  if v_org is null then
+    raise exception 'no such project';
+  end if;
+
+  perform app.require_author(p_project_id);
+
+  update public.projects
+     set question = nullif(btrim(coalesce(p_question, '')), ''),
+         updated_at = now()
+   where id = p_project_id;
+end;
+$$;
+
+grant execute on function public.save_project_question(uuid, text) to authenticated;
+
+notify pgrst, 'reload schema';
+
+
+-- Saving the three list fields. A separate function rather than three more
+-- arguments on `save_manuscript`, which already takes thirteen and is called
+-- from a form that does not touch these.
+create or replace function public.save_at_a_glance(
+  p_manuscript_id uuid,
+  p_methods       text[],
+  p_data_sources  text[],
+  p_outputs       text[]
+)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_project uuid;
+begin
+  select m.project_id into v_project
+    from public.manuscripts m where m.id = p_manuscript_id;
+
+  if v_project is null then
+    raise exception 'no such manuscript';
+  end if;
+
+  perform app.require_author(v_project);
+
+  update public.manuscripts
+     set methods      = coalesce(p_methods, '{}'),
+         data_sources = coalesce(p_data_sources, '{}'),
+         outputs      = coalesce(p_outputs, '{}'),
+         updated_at   = now()
+   where id = p_manuscript_id;
+end;
+$$;
+
+grant execute on function public.save_at_a_glance(uuid, text[], text[], text[]) to authenticated;
+
+notify pgrst, 'reload schema';
+
+
+-- ===========================================================================
+-- SHOWCASE IMAGES AND ONE VIDEO
+--
+-- A figure is evidence: numbered, captioned, referred to from the text. A
+-- showcase image is not. It is the apparatus on a bench, the board at the
+-- fair, the organism being measured, and it exists so somebody arriving at
+-- the page can see what the work looked like before reading a word of it.
+--
+-- Separate from `manuscript_figures` deliberately. Conflating them would put
+-- a photograph of a workbench into the numbered figure sequence of a paper,
+-- and there is no caption that makes "Figure 3" mean both things.
+--
+-- Four, because a cap forces a choice. A gallery of twenty photographs is a
+-- scroll, and the point of these is the first impression.
+-- ===========================================================================
+
+create table public.project_images (
+  id           uuid primary key default gen_random_uuid(),
+  org_id       uuid not null references public.organizations on delete restrict,
+  project_id   uuid not null references public.projects on delete restrict,
+
+  position     int  not null check (position between 1 and 4),
+  storage_path text not null,
+
+  -- Both required, as everywhere else images appear here. An image with no
+  -- alt text is invisible to part of the audience, and a published page is
+  -- permanent.
+  alt          text not null check (length(btrim(alt)) > 0),
+  caption      text not null check (length(btrim(caption)) > 0),
+
+  uploaded_by  uuid not null references public.users on delete restrict,
+  created_at   timestamptz not null default now(),
+  withdrawn_at timestamptz,
+
+  unique (project_id, position) deferrable initially deferred
+);
+
+create index project_images_project_idx
+  on public.project_images (project_id, position) where withdrawn_at is null;
+
+alter table public.project_images enable row level security;
+grant select, insert, update on public.project_images to authenticated, service_role;
+
+create policy project_images_read on public.project_images
+  for select to authenticated
+  using (
+    org_id = (select app.org_id())
+    and (
+      (select app.is_staff())
+      or exists (
+        select 1 from public.project_authors a
+         where a.project_id = project_images.project_id
+           and a.user_id = (select auth.uid())
+      )
+    )
+  );
+
+create policy project_images_write on public.project_images
+  for insert to authenticated
+  with check (
+    org_id = (select app.org_id())
+    and exists (
+      select 1 from public.project_authors a
+       where a.project_id = project_images.project_id
+         and a.user_id = (select auth.uid())
+         and a.role = 'author'
+    )
+  );
+
+create policy project_images_update on public.project_images
+  for update to authenticated
+  using (
+    org_id = (select app.org_id())
+    and exists (
+      select 1 from public.project_authors a
+       where a.project_id = project_images.project_id
+         and a.user_id = (select auth.uid())
+         and a.role = 'author'
+    )
+  );
+
+
+-- One video, held as a string and never fetched by us. 7.4's rule, and the
+-- reason it is one field rather than a list: a page with four videos on it is
+-- a channel, and nobody watches the fourth.
+alter table public.projects
+  add column if not exists video_url text;
+
+
+create or replace function public.add_project_image(
+  p_project_id   uuid,
+  p_storage_path text,
+  p_alt          text,
+  p_caption      text
+)
+returns int
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_org  uuid;
+  v_next int;
+begin
+  perform app.require_author(p_project_id);
+
+  select p.org_id into v_org from public.projects p where p.id = p_project_id;
+
+  select coalesce(max(i.position), 0) + 1 into v_next
+    from public.project_images i
+   where i.project_id = p_project_id and i.withdrawn_at is null;
+
+  if v_next > 4 then
+    raise exception
+      'four is the limit. Remove one first: a gallery of twenty is a scroll, and these exist to be the first thing somebody sees.';
+  end if;
+
+  if coalesce(btrim(coalesce(p_alt, '')), '') = '' then
+    raise exception 'describe the image for somebody who cannot see it';
+  end if;
+
+  if coalesce(btrim(coalesce(p_caption, '')), '') = '' then
+    raise exception 'say what the image shows';
+  end if;
+
+  insert into public.project_images
+    (org_id, project_id, position, storage_path, alt, caption, uploaded_by)
+  values (v_org, p_project_id, v_next, p_storage_path, btrim(p_alt), btrim(p_caption), auth.uid());
+
+  return v_next;
+end;
+$$;
+
+grant execute on function public.add_project_image(uuid, text, text, text) to authenticated;
+
+
+create or replace function public.remove_project_image(p_image_id uuid)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_project uuid;
+  r         record;
+  v_n       int := 0;
+begin
+  select i.project_id into v_project
+    from public.project_images i where i.id = p_image_id;
+
+  if v_project is null then
+    raise exception 'no such image';
+  end if;
+
+  perform app.require_author(v_project);
+
+  update public.project_images set withdrawn_at = now() where id = p_image_id;
+
+  /* Renumber, in two passes, because the unique index would collide halfway
+     through a single one. Same shape as the figure renumbering. */
+  for r in
+    select i.id from public.project_images i
+     where i.project_id = v_project and i.withdrawn_at is null
+     order by i.position
+  loop
+    v_n := v_n + 1;
+    update public.project_images set position = -v_n where id = r.id;
+  end loop;
+
+  update public.project_images
+     set position = -position
+   where project_id = v_project and position < 0;
+end;
+$$;
+
+grant execute on function public.remove_project_image(uuid) to authenticated;
+
+
+create or replace function public.save_project_video(p_project_id uuid, p_url text)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_url text;
+begin
+  perform app.require_author(p_project_id);
+
+  v_url := nullif(btrim(coalesce(p_url, '')), '');
+
+  /* An allowlist rather than validation. We render this inside a frame, so
+     the set of hosts we will frame has to be closed: anything else is an
+     arbitrary page of somebody else's choosing embedded in ours. */
+  if v_url is not null and v_url !~* '^https://(www\.)?(youtube\.com/watch\?v=|youtu\.be/|youtube\.com/embed/|vimeo\.com/)[A-Za-z0-9_\-/?=&.]+$' then
+    raise exception 'YouTube and Vimeo only, and the address has to start with https';
+  end if;
+
+  update public.projects
+     set video_url = v_url, updated_at = now()
+   where id = p_project_id;
+end;
+$$;
+
+grant execute on function public.save_project_video(uuid, text) to authenticated;
 
 notify pgrst, 'reload schema';

@@ -1,0 +1,53 @@
+---
+export const prerender = false;
+
+import Base from '../../layouts/Base.astro';
+import PageHead from '../../components/PageHead.astro';
+import Empty from '../../components/Empty.astro';
+import { openArchive } from '../../lib/archive';
+import { disciplines, disciplineLabel } from '../../config/site';
+
+const archive = await openArchive(Astro);
+
+/* Generated from what has actually been published, unioned with the
+   organization's list, so a discipline nobody anticipated still gets a page
+   rather than an error. */
+const counts = new Map<string, number>();
+for (const record of archive.all) {
+  counts.set(record.discipline, (counts.get(record.discipline) ?? 0) + 1);
+}
+const rows = [...new Set([...counts.keys(), ...disciplines.map((d) => d.slug)])]
+  .map((slug) => ({ slug, label: disciplineLabel(slug), n: counts.get(slug) ?? 0 }))
+  .filter((r) => r.n > 0)
+  .sort((a, b) => b.n - a.n);
+
+Astro.response.headers.set('Cache-Control', 'public, max-age=120, s-maxage=600');
+---
+
+<Base title="Topics" description="Published work by discipline.">
+  <PageHead eyebrow="Browse" title="Topics" lede="Classified by the domain of the question. The method is a keyword." />
+  <div class="wrap">
+    {rows.length === 0 ? (
+      <Empty title="Nothing published yet" body="Topics appear as records are published." />
+    ) : (
+      <section class="sec" style="padding-top:0">
+        <ul class="topics">
+          {rows.map((r) => (
+            <li><a href={`/topics/${r.slug}/`}>{r.label}</a><span>{r.n}</span></li>
+          ))}
+        </ul>
+      </section>
+    )}
+  </div>
+</Base>
+
+<style>
+  .topics { list-style: none; margin: 0; padding: 0; max-width: var(--measure-text); }
+  .topics li {
+    display: flex;
+    justify-content: space-between;
+    padding: 13px 0;
+    border-bottom: 1px solid var(--rule-fine);
+  }
+  .topics span { font-family: var(--face-num); color: var(--ink-3); }
+</style>

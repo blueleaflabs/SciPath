@@ -12,6 +12,10 @@ const org = Astro.props.org ?? activeOrg(Astro);
 
 const nav = [
   { href: '/articles/', label: 'Showcase' },
+  /* Fair entries. A sibling of the papers rather than a subsection of them:
+     most work at a high school fair never becomes a paper, so an archive
+     reachable only through Showcase hides most of what the club did. */
+  { href: '/projects/', label: 'Projects' },
   { href: '/guides/', label: 'Guides' },
   { href: '/deadlines/', label: 'Deadlines' },
   { href: '/mistakes/', label: 'Mistakes' },

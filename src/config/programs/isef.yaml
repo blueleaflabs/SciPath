@@ -1,0 +1,186 @@
+# ISEF: the parent every affiliated fair inherits from.
+#
+# What lives here is what ISEF actually defines and does not vary by region:
+# the category list, the forms, and the one rule that disqualifies more
+# students than any other, which is that certain approvals must exist before
+# experimentation begins rather than before the fair.
+#
+# What does not live here is dates. ISEF's own dates change annually and a
+# regional fair's dates have nothing to do with them. A template that guessed
+# would be wrong every year in a way nobody notices until March.
+#
+# INHERITANCE. A regional fair extends this file and overrides what it needs.
+# A school extends the regional fair and adds its own internal deadlines,
+# which are usually earlier on purpose. Three levels, and a child may add,
+# override by id, or remove by id.
+#
+# DATES. Every date in a child file is either absolute, meaning somebody read
+# it off the fair's page, or relative to a named anchor. Both are accepted
+# everywhere. There is no weekday arithmetic and no attempt to predict next
+# year: a fair picks its date because of a venue booking and a Saturday, and
+# nothing derives that. What relative dates buy is a short job in the autumn
+# and a change that propagates when the fair moves, which it does.
+
+id: isef
+name: International Science and Engineering Fair
+authority: Society for Science
+level: international
+
+# The dates a season needs before anything else can be worked out. A child
+# supplies these as real dates; everything relative points at one of them.
+anchors:
+  - id: fair
+    label: The fair itself
+    required: true
+  - id: registration_opens
+    label: Registration opens
+  - id: registration_closes
+    label: Registration closes
+  - id: src_review
+    label: The review committee meets
+
+# ---------------------------------------------------------------------------
+# Categories.
+#
+# The codes are the fair's own and are displayed rather than used as keys:
+# they are reassigned between seasons. A regional fair that runs a subset
+# removes the rest by id.
+# ---------------------------------------------------------------------------
+categories:
+  - { id: ANIM, name: Animal Sciences }
+  - { id: BEHA, name: Behavioral and Social Sciences }
+  - { id: BCHM, name: Biochemistry }
+  - { id: BMED, name: Biomedical and Health Sciences }
+  - { id: ENBM, name: Biomedical Engineering }
+  - { id: CELL, name: Cellular and Molecular Biology }
+  - { id: CHEM, name: Chemistry }
+  - { id: CBIO, name: Computational Biology and Bioinformatics }
+  - { id: EAEV, name: Earth and Environmental Sciences }
+  - { id: EBED, name: Embedded Systems }
+  - { id: EGSD, name: "Energy: Sustainable Materials and Design" }
+  - { id: ENEV, name: Environmental Engineering }
+  - { id: MATS, name: Materials Science }
+  - { id: MATH, name: Mathematics }
+  - { id: MCRO, name: Microbiology }
+  - { id: PHYS, name: Physics and Astronomy }
+  - { id: PLNT, name: Plant Sciences }
+  - { id: ROBO, name: Robotics and Intelligent Machines }
+  - { id: SOFT, name: Systems Software }
+  - { id: TMED, name: Translational Medical Science }
+
+# ---------------------------------------------------------------------------
+# Forms.
+#
+# `blocks` is the important field and the reason this file exists.
+#
+#   experimentation  the work itself may not begin until this is approved
+#   registration     the entry cannot be submitted without it
+#   competition      the student may not compete without it
+#
+# A form that blocks experimentation is not a deadline. It is a gate, and the
+# difference is that missing a deadline is recoverable and starting work
+# before the gate is not: the data collected is disqualified and cannot be
+# collected again in time.
+# ---------------------------------------------------------------------------
+forms:
+  - id: checklist_1a
+    name: Student Checklist (1A)
+    signed_by: [student]
+    blocks: registration
+
+  - id: research_plan
+    name: Research Plan or Project Summary
+    signed_by: [student]
+    blocks: experimentation
+    note: >-
+      Written before the work starts, and the thing the review committee reads.
+      Everything else in this list describes who signs; this one describes what
+      you intend to do.
+
+  - id: approval_1b
+    name: Approval Form (1B)
+    signed_by: [student, parent, adult_sponsor]
+    blocks: experimentation
+    minor_only: false
+
+  - id: sponsor_1
+    name: Adult Sponsor Checklist (1)
+    signed_by: [adult_sponsor]
+    blocks: experimentation
+
+  - id: regulated_2
+    name: Qualified Scientist Form (2)
+    signed_by: [qualified_scientist]
+    blocks: experimentation
+    when: >-
+      Vertebrate animals, human participants, potentially hazardous biological
+      agents, or regulated substances.
+
+  - id: risk_3
+    name: Risk Assessment Form (3)
+    signed_by: [student, adult_sponsor]
+    blocks: experimentation
+    when: Hazardous chemicals, activities, or devices.
+
+  - id: humans_4
+    name: Human Participants Form (4)
+    signed_by: [student, adult_sponsor]
+    blocks: experimentation
+    when: Any research involving human participants, including surveys.
+
+  - id: vertebrate_5a
+    name: Vertebrate Animal Form (5A)
+    signed_by: [student, adult_sponsor]
+    blocks: experimentation
+    when: Vertebrate animals studied outside a regulated research institution.
+
+  - id: hazardous_6a
+    name: Potentially Hazardous Biological Agents Form (6A)
+    signed_by: [student, adult_sponsor]
+    blocks: experimentation
+    when: Microorganisms, rDNA, tissue, blood, or bodily fluids.
+
+  - id: continuation_7
+    name: Continuation Form (7)
+    signed_by: [student, adult_sponsor]
+    blocks: registration
+    when: The project continues work from a previous year.
+
+  - id: abstract
+    name: Abstract
+    signed_by: [student]
+    blocks: competition
+
+# ---------------------------------------------------------------------------
+# Limits. Checked against the manuscript and the entry rather than trusted.
+# ---------------------------------------------------------------------------
+limits:
+  abstract_words: 250
+  research_plan_pages: null
+  board:
+    width_cm: 122
+    depth_cm: 76
+    height_cm: 274
+    note: Measured with the board standing on the table.
+
+# ---------------------------------------------------------------------------
+# Milestones the season has regardless of which fair it is. A child adds its
+# own and supplies the dates.
+# ---------------------------------------------------------------------------
+milestones:
+  - id: forms_before_work
+    name: Approvals in hand before experimentation
+    gate: experimentation
+    note: >-
+      Not a date to hit. Work done before this is approved does not count, and
+      cannot be redone in the time that remains.
+
+  - id: register
+    name: Register the entry
+    gate: registration
+
+  - id: abstract_due
+    name: Abstract submitted
+    gate: competition
+
+advances_to: []

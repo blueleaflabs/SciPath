@@ -1,0 +1,48 @@
+---
+export const prerender = false;
+
+import Base from '../../layouts/Base.astro';
+import PageHead from '../../components/PageHead.astro';
+import Empty from '../../components/Empty.astro';
+import { openArchive, authorsOf } from '../../lib/archive';
+
+const archive = await openArchive(Astro);
+const people = authorsOf(archive.all);
+
+Astro.response.headers.set('Cache-Control', 'public, max-age=120, s-maxage=600');
+---
+
+<Base title="Authors" description="Everybody with published work here.">
+  <PageHead
+    eyebrow="People"
+    title="Authors"
+    lede="A page per person, listing their published work. Nothing else: a profile that goes stale is worse than none."
+  />
+  <div class="wrap">
+    {people.length === 0 ? (
+      <Empty title="No authors yet" body="An author page appears with a person's first published record." />
+    ) : (
+      <section class="sec" style="padding-top:0">
+        <ul class="people">
+          {people.map((p) => (
+            <li>
+              <a href={`/authors/${p.slug}/`}>{p.name}</a>
+              <span>{p.records.length} {p.records.length === 1 ? 'record' : 'records'}</span>
+            </li>
+          ))}
+        </ul>
+      </section>
+    )}
+  </div>
+</Base>
+
+<style>
+  .people { list-style: none; margin: 0; padding: 0; max-width: var(--measure-text); }
+  .people li {
+    display: flex;
+    justify-content: space-between;
+    padding: 13px 0;
+    border-bottom: 1px solid var(--rule-fine);
+  }
+  .people span { font-family: var(--face-num); font-size: 0.88rem; color: var(--ink-3); }
+</style>

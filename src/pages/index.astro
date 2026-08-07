@@ -1,26 +1,38 @@
 ---
-import { orgPaths } from '../../lib/tenant-paths';
-export const getStaticPaths = orgPaths;
+/**
+ * THE HOME PAGE.
+ *
+ * Outside `[org]/` deliberately. It shows the three most recent published
+ * records, which live in the store rather than the repository, so it renders
+ * on demand and takes its organization from the hostname.
+ *
+ * It cannot live under `[org]/` while doing that. An on-demand `[org]/index`
+ * is a catch-all: a request for /guides/ matches it with org set to "guides",
+ * and the middleware then tries to rewrite an on-demand route onto a
+ * prerendered one, which Astro refuses. Every single-segment public path on
+ * the site broke that way.
+ */
+export const prerender = false;
 
-import Base from '../../layouts/Base.astro';
-import Empty from '../../components/Empty.astro';
-import RecordCard from '../../components/RecordCard.astro';
-import { activeOrg } from '../../lib/tenant';
-import { platform, stages } from '../../config/site';
-import { getCollection } from 'astro:content';
+import Base from '../layouts/Base.astro';
+import Empty from '../components/Empty.astro';
+import RecordCard from '../components/RecordCard.astro';
+import { activeOrg } from '../lib/tenant';
+import { platform, stages } from '../config/site';
+import { openArchive } from '../lib/archive';
 
-const org = activeOrg(Astro);
-
-const published = (await getCollection('articles'))
-  .filter((a) => a.data.status !== 'archived')
-  .sort((a, b) => b.data.publishedOn.valueOf() - a.data.publishedOn.valueOf());
+const archive = await openArchive(Astro);
+const org = archive.org;
+const published = archive.all;
 
 const latest = published.slice(0, 3);
 const authorCount = new Set(
-  published.flatMap((a) => a.data.authors.map((x) => x.displayName))
+  published.flatMap((r) => r.authors.map((x) => x.displayName))
 ).size;
-const years = published.map((a) => a.data.publishedOn.getUTCFullYear());
+const years = published.map((r) => r.year);
 const span = years.length ? `${Math.min(...years)} to ${Math.max(...years)}` : null;
+
+Astro.response.headers.set('Cache-Control', 'public, max-age=120, s-maxage=600');
 ---
 
 <Base
@@ -131,7 +143,7 @@ const span = years.length ? `${Math.min(...years)} to ${Math.max(...years)}` : n
         latest.length ? (
           <div class="stack">
             {latest.map((a) => (
-              <RecordCard article={a} />
+              <RecordCard record={a} />
             ))}
             <div class="row">
               <a class="btn btn-2" href="/articles/">

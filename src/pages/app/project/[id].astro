@@ -8,7 +8,8 @@ import { activeOrg } from '../../../lib/tenant';
 import { serverClient } from '../../../lib/supabase';
 import { standing, isAuthorOf, attachmentLabel } from '../../../lib/roles';
 import { renderNote, linkDomain } from '../../../lib/notes';
-import { blobStore, notePath, MAX_UPLOAD_BYTES } from '../../../lib/blob';
+import { blobStore, notePath, projectImagePath, MAX_UPLOAD_BYTES } from '../../../lib/blob';
+import { parseVideo } from '../../../lib/video';
 
 const { session, account, roles } = Astro.locals;
 const org = activeOrg(Astro);
@@ -75,6 +76,46 @@ if (Astro.request.method === 'POST') {
     }
   }
 
+  if (action === 'image') {
+    const file = form.get('image') as File | null;
+    if (!file || file.size === 0) error = 'Choose an image first.';
+    else if (file.size > MAX_UPLOAD_BYTES) error = 'That file is too large.';
+    else {
+      const blob = blobStore(Astro.locals);
+      if (!blob.available()) error = 'File storage is not configured here.';
+      else {
+        const path = projectImagePath(id, file.name);
+        try {
+          await blob.put(path, await file.arrayBuffer(), file.type || 'image/png');
+          const { error: e } = await supabase.rpc('add_project_image', {
+            p_project_id: id,
+            p_storage_path: path,
+            p_alt: String(form.get('alt') ?? ''),
+            p_caption: String(form.get('caption') ?? ''),
+          });
+          if (e) error = e.message;
+        } catch (e: any) {
+          error = e.message;
+        }
+      }
+    }
+  }
+
+  if (action === 'image_remove') {
+    const { error: e } = await supabase.rpc('remove_project_image', {
+      p_image_id: String(form.get('image_id') ?? ''),
+    });
+    if (e) error = e.message;
+  }
+
+  if (action === 'video') {
+    const { error: e } = await supabase.rpc('save_project_video', {
+      p_project_id: id,
+      p_url: String(form.get('video_url') ?? ''),
+    });
+    if (e) error = e.message;
+  }
+
   if (action === 'link') {
     const { error: e } = await supabase.rpc('add_project_link', {
       p_project_id: id,
@@ -85,9 +126,16 @@ if (Astro.request.method === 'POST') {
   }
 }
 
+const { data: images } = await supabase
+  .from('project_images')
+  .select('id, position, storage_path, alt, caption')
+  .eq('project_id', id)
+  .is('withdrawn_at', null)
+  .order('position');
+
 const { data: project } = await supabase
   .from('projects')
-  .select('id, title, question, stage, started_on, project_authors(role, users(id, display_name))')
+  .select('id, title, question, stage, started_on, video_url, project_authors(role, users(id, display_name))')
   .eq('id', id)
   .maybeSingle();
 
@@ -360,6 +408,87 @@ const fmt = (d: string | null) =>
       )}
     </section>
 
+    <!-- ── Showcase ────────────────────────────────────────────────────── -->
+    <section class="sec">
+      <div class="sec-h">
+        <b>Showcase</b>
+        <span>{(images ?? []).length} of 4</span>
+      </div>
+
+      <p class="aside">
+        What the work looked like. These sit at the top of the published page,
+        above the abstract, so somebody arriving can see the thing before
+        reading about it. Four is the limit, which is a choice rather than a
+        constraint: a gallery of twenty is a scroll.
+      </p>
+
+      {(images ?? []).length > 0 && (
+        <ul class="shots">
+          {(images ?? []).map((img: any) => (
+            <li>
+              <img src={mediaUrl(img.storage_path)} alt={img.alt} loading="lazy" />
+              <p>{img.caption}</p>
+              {iAuthor && (
+                <form method="POST">
+                  <input type="hidden" name="action" value="image_remove" />
+                  <input type="hidden" name="image_id" value={img.id} />
+                  <button class="btn btn-q" type="submit">Remove</button>
+                </form>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {iAuthor && (images ?? []).length < 4 && (
+        <form method="POST" enctype="multipart/form-data" class="mform" style="margin-top:22px">
+          <input type="hidden" name="action" value="image" />
+          <label>
+            <span>Image</span>
+            <input class="in" type="file" name="image" accept="image/*" required />
+          </label>
+          <div class="row-2">
+            <label>
+              <span>Caption</span>
+              <input class="in" name="caption" required />
+              <small>What it shows, in a line.</small>
+            </label>
+            <label>
+              <span>Alt text</span>
+              <input class="in" name="alt" required />
+              <small>
+                For somebody who cannot see it. Describe the content, not the
+                fact that it is a photograph.
+              </small>
+            </label>
+          </div>
+          <button class="btn btn-2" type="submit">Add the image</button>
+        </form>
+      )}
+
+      <h3 class="sub-h">Video</h3>
+      <p class="aside">
+        One, on YouTube or Vimeo. We store the address and never fetch it, and
+        the published page shows a still until somebody presses play, so
+        nothing is requested from a video host on behalf of a reader who did
+        not ask for it.
+      </p>
+
+      {iAuthor ? (
+        <form method="POST" class="mform">
+          <input type="hidden" name="action" value="video" />
+          <label>
+            <span>Address</span>
+            <input class="in" name="video_url" value={project?.video_url ?? ''} placeholder="https://youtu.be/..." />
+            <small>Leave it empty to remove the one that is there.</small>
+          </label>
+          <button class="btn btn-2" type="submit">Save the video</button>
+        </form>
+      ) : (
+        project?.video_url && <p class="prose"><a href={project.video_url} rel="noopener">{project.video_url}</a></p>
+      )}
+    </section>
+
     <section class="sec">
       <div class="sec-h"><b>Linked documents</b><span>{links?.length ?? 0}</span></div>
 
@@ -530,4 +659,27 @@ const fmt = (d: string | null) =>
   .entry figure { margin: 12px 0 0; }
   .entry figure img { max-width: 100%; border: 1px solid var(--rule-fine); }
   .entry figcaption { margin-top: 5px; font-family: var(--face-ui); font-size: 0.86rem; color: var(--ink-3); }
+  .shots {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 20px;
+  }
+  .shots img {
+    width: 100%;
+    aspect-ratio: 4 / 3;
+    object-fit: cover;
+    border: 1px solid var(--rule-fine);
+  }
+  .shots p { margin: 8px 0 6px; font-size: 0.92rem; line-height: 1.45; }
+  .sub-h {
+    margin: 34px 0 10px;
+    font-family: var(--face-ui);
+    font-size: 0.82rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--ink-2);
+  }
 </style>

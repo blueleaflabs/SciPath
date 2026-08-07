@@ -1,0 +1,43 @@
+# Monta Vista's own season, on top of the Championship.
+#
+# A school layer exists because a club's internal deadlines are earlier than
+# the fair's on purpose: the point of a club is that nobody arrives at the
+# fair's deadline having not started. Nothing here is a rule of the fair, and
+# the interface should say so, because a student who confuses the two will
+# treat a real deadline as advisory.
+
+id: mvhs-2027
+family: scvsefa
+extends: scvsefa-2027
+name: Monta Vista, 2027 season
+level: school
+season: 2027
+
+milestones:
+  add:
+    - id: club_topic
+      name: Topic settled with an officer
+      relative: { anchor: src_review, days: -60 }
+      internal: true
+
+    - id: club_plan_draft
+      name: Research plan drafted for review
+      relative: { anchor: src_review, days: -35 }
+      internal: true
+      note: Two weeks before the packet is due, so there is time to fix it.
+
+    - id: club_practice
+      name: Practice judging
+      relative: { anchor: fair, days: -10 }
+      internal: true
+
+    - id: club_board_check
+      name: Board checked against the size limit
+      relative: { anchor: fair, days: -5 }
+      internal: true
+
+  override:
+    # The club wants the packet a week before the fair does.
+    - id: src_packet
+      relative: { anchor: src_review, days: -21 }
+      internal: false

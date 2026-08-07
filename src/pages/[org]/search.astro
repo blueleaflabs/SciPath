@@ -1,24 +1,24 @@
 ---
-import { orgPaths } from '../../lib/tenant-paths';
-export const getStaticPaths = orgPaths;
+/* On demand, because the browse-before-you-search panel lists real records
+   and those live in the store. */
+export const prerender = false;
 
 import Base from '../../layouts/Base.astro';
 import PageHead from '../../components/PageHead.astro';
-import { getCollection } from 'astro:content';
 import { disciplines } from '../../config/site';
+import { openArchive } from '../../lib/archive';
 
-/* The empty state renders from data baked in at build, so this page is
-   useful with zero network fetches and before the index loads. */
-const articles = (await getCollection('articles'))
-  .filter((a) => a.data.status !== 'archived')
-  .sort((a, b) => b.data.publishedOn.valueOf() - a.data.publishedOn.valueOf());
+const archive = await openArchive(Astro);
+const articles = archive.all;
 
 const recent = articles.slice(0, 5);
 const counts = new Map<string, number>();
-for (const a of articles) counts.set(a.data.discipline, (counts.get(a.data.discipline) ?? 0) + 1);
+for (const a of articles) counts.set(a.discipline, (counts.get(a.discipline) ?? 0) + 1);
 const withCounts = disciplines
   .map((d) => ({ ...d, n: counts.get(d.slug) ?? 0 }))
   .filter((d) => d.n > 0);
+
+Astro.response.headers.set('Cache-Control', 'public, max-age=120, s-maxage=600');
 ---
 
 <Base
@@ -50,10 +50,10 @@ const withCounts = disciplines
               <ul class="linklist">
                 {recent.map((a) => (
                   <li>
-                    <a href={`/articles/${a.data.publishedOn.getUTCFullYear()}/${a.data.slug}/`}>
-                      {a.data.title}
+                    <a href={`/${a.recordKind === 'project' ? 'projects' : 'articles'}/${a.year}/${a.slug}/`}>
+                      {a.title}
                     </a>
-                    <p>{a.data.authors.map((x) => x.displayName).join(', ')}</p>
+                    <p>{a.authors.map((x) => x.displayName).join(', ')}</p>
                   </li>
                 ))}
               </ul>
@@ -104,18 +104,62 @@ const withCounts = disciplines
 
   let pagefind: any = null;
 
+  /**
+   * TWO INDEXES, EITHER OF WHICH MAY BE ABSENT.
+   *
+   * The static pages are indexed when the site is built, because they change
+   * when code ships. Published records are indexed when they are published,
+   * because they do not. Both are Pagefind bundles and Pagefind merges them,
+   * so one search box answers from both.
+   *
+   * Neither is guaranteed. In development the site index does not exist at
+   * all, because Pagefind runs after `astro build` and the dev server never
+   * builds. Before anything is published, the records index does not exist
+   * either. Loading the site index first and giving up when it failed meant
+   * search was dead in development even with records indexed and waiting,
+   * which is exactly where somebody is trying it for the first time.
+   *
+   * So: whichever loads first becomes the engine, and the other is merged
+   * into it if it is there.
+   */
   async function loadIndex() {
     if (pagefind) return pagefind;
-    try {
-      /* Built at runtime so the bundler leaves it alone. Pagefind writes this
-         file after the Astro build, so it does not exist at bundle time. */
-      const indexPath = ['', 'pagefind', 'pagefind.js'].join('/');
-      pagefind = await import(/* @vite-ignore */ indexPath);
+
+    /* Built at runtime so the bundler leaves them alone: neither file exists
+       when this is compiled. */
+    const sitePath = ['', 'pagefind', 'pagefind.js'].join('/');
+    const recordsPath = ['', 'records-index', 'pagefind.js'].join('/');
+
+    const load = async (path: string) => {
+      try {
+        return await import(/* @vite-ignore */ path);
+      } catch {
+        return null;
+      }
+    };
+
+    const site = await load(sitePath);
+
+    if (site) {
+      pagefind = site;
+      await pagefind.options({ excerptLength: 30 });
+      try {
+        await pagefind.mergeIndex('/records-index', { excerptLength: 30 });
+      } catch {
+        /* Nothing published yet, or the index has not been rebuilt. The site
+           index still answers, which beats a search box that errors. */
+      }
+      return pagefind;
+    }
+
+    const records = await load(recordsPath);
+    if (records) {
+      pagefind = records;
       await pagefind.options({ excerptLength: 30 });
       return pagefind;
-    } catch {
-      return null;
     }
+
+    return null;
   }
 
   function escapeHtml(value: string) {

@@ -68,6 +68,27 @@ export const onRequest = defineMiddleware(async (context, next) => {
   /* One list, in config/routes.ts, read by this and by test:routes. Keeping
      two copies is how the tracker came to be rewritten into a tenant path
      that matches nothing. */
+  /* One address per page.
+   *
+   * `trailingSlash: 'ignore'` accepts both forms, which is what lets a file
+   * route work at all, and it means /projects and /projects/ both render.
+   * Two addresses for one page splits inbound links and gives a search engine
+   * a duplicate to resolve, so the bare form redirects to the canonical one.
+   *
+   * A path whose last segment carries an extension is a file and keeps its
+   * shape. Only GET and HEAD are redirected: a 308 on a POST would resend the
+   * body, and a form that posts to a path without its slash should fail
+   * loudly rather than submit twice. */
+  const last = url.pathname.split('/').pop() ?? '';
+  if (
+    (request.method === 'GET' || request.method === 'HEAD') &&
+    url.pathname !== '/' &&
+    !url.pathname.endsWith('/') &&
+    !last.includes('.')
+  ) {
+    return Response.redirect(`${url.origin}${url.pathname}/${url.search}`, 308);
+  }
+
   const needsSession = isNonTenantPath(url.pathname);
 
   if (!needsSession) {
@@ -82,6 +103,11 @@ export const onRequest = defineMiddleware(async (context, next) => {
        again produces /scipath/lynbrook/about/, which matches no route and
        writes the 404 page into every tenant's files. Any path that already
        begins with a tenant slug passes through untouched. */
+    /* The root is the home page, which lives outside [org]/ and resolves its
+       organization from the hostname. Rewriting it would look for a tenant
+       home page that no longer exists. */
+    if (url.pathname === '/') return next();
+
     const first = url.pathname.split('/')[1];
     if (
       tenantSlugs.includes(first) ||

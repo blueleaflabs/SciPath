@@ -218,35 +218,47 @@ const toNext = daysUntil(nextOpen?.due_on ?? null);
     <section class="hero" style="padding-top:0">
       <p class="t-lbl">{program?.name} {program?.season_year}</p>
       <h1 class="t-big">{project?.title}</h1>
+      {/* Four cards, one skeleton: label, value, footnote. Each row is its
+          own grid track shared across the row, so the numbers sit on one
+          line and the footnotes on another whether a label wraps or not.
+          Before this, every card was a flex column of its own content and
+          nothing lined up with anything. */}
       <div class="cards">
-        <div class="card today">
+        <div class="card">
           <p class="kicker">Today</p>
-          <p class="weekday">{weekday}</p>
-          <p class="date">{dateLabel}</p>
+          <p class="val"><span class="weekday">{weekday}</span></p>
+          <p class="under">{dateLabel}</p>
         </div>
 
         <div class="card">
           <p class="kicker">Days to fair</p>
-          <p class="num">{toFair !== null ? (toFair >= 0 ? toFair : 0) : '—'}</p>
+          <p class="val"><span class="num">{toFair !== null ? (toFair >= 0 ? toFair : 0) : '—'}</span></p>
           <p class="under">{fmt(program?.fair_date)}</p>
         </div>
 
         <div class="card">
           <p class="kicker">Days to next milestone</p>
-          {nextOpen && toNext !== null ? (
-            <>
-              <p class="what">{nextOpen.name}</p>
-              <p class={toNext < 0 ? 'num late' : 'num'}>{Math.abs(toNext)}</p>
-              {toNext < 0 && <p class="under late">overdue</p>}
-            </>
-          ) : (
-            <p class="under">Nothing open</p>
-          )}
+          <p class="val">
+            {nextOpen && toNext !== null ? (
+              <span class={toNext < 0 ? 'num late' : 'num'}>{Math.abs(toNext)}</span>
+            ) : (
+              <span class="none">—</span>
+            )}
+          </p>
+          <p class:list={['under', toNext !== null && toNext < 0 && 'late']}>
+            {nextOpen && toNext !== null
+              ? toNext < 0
+                ? `${nextOpen.name}, overdue`
+                : nextOpen.name
+              : 'Nothing open'}
+          </p>
         </div>
 
         <div class="card">
           <p class="kicker">Task counter</p>
-          <p class="num">{done}<span class="of"> of {total}</span></p>
+          <p class="val">
+            <span class="num">{done}</span><span class="of">of {total}</span>
+          </p>
           <p class="under">complete</p>
         </div>
       </div>
@@ -423,29 +435,49 @@ const toNext = daysUntil(nextOpen?.due_on ?? null);
   .hero .t-lbl { margin-bottom: 14px; }
   /* Four cards, one line. Each answers one question: what day is it, how
      long to the fair, what is next, and how much is left. */
+  /* Equal columns. The uneven fractions were sized to the content that
+     happened to be in each card, which is why nothing lined up the moment a
+     label ran to two lines. */
   .cards {
     display: grid;
-    grid-template-columns: 0.95fr 0.8fr 1.25fr 0.8fr;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
     gap: 12px;
     margin-top: 28px;
-    align-items: stretch;
   }
 
   @media (max-width: 1020px) {
-    .cards { grid-template-columns: 1fr 1fr; }
+    .cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   }
   @media (max-width: 560px) {
     .cards { grid-template-columns: 1fr; }
   }
 
+  /* Subgrid so the three rows are shared across the row rather than being
+     four independent stacks. Every value sits on one line and every footnote
+     on another, however long a label is. */
   .card {
     border: 1px solid var(--rule);
     border-radius: var(--radius);
     background: var(--card);
     padding: 16px 18px 18px;
-    display: flex;
-    flex-direction: column;
+    display: grid;
+    grid-template-rows: auto 1fr auto;
+    row-gap: 10px;
   }
+
+  .card .kicker { margin: 0; align-self: start; }
+
+  /* The value sits at the bottom of its track, so a wrapped label above it
+     does not push the number down out of line with its neighbours. */
+  .card .val {
+    margin: 0;
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    align-self: end;
+  }
+
+  .card .under { margin: 0; align-self: end; }
 
   .resultf {
     display: grid;
@@ -510,20 +542,30 @@ const toNext = daysUntil(nextOpen?.due_on ?? null);
     font-variant-numeric: tabular-nums;
   }
   .num.late { color: var(--alert); }
-  .num .of {
+  .of {
     font-family: var(--face-ed);
     font-size: 1.1rem;
     font-weight: 400;
     color: var(--ink-3);
   }
+  .none {
+    font-family: var(--face-num);
+    font-size: 2.5rem;
+    line-height: 1;
+    color: var(--ink-3);
+  }
 
-  .under { margin: 8px 0 0; color: var(--ink-3); font-size: 0.95rem; }
+  .under { color: var(--ink-3); font-size: 0.95rem; line-height: 1.35; }
   .under.late { color: var(--alert); }
 
-  .what { margin: 0 0 8px; font-size: 1.05rem; line-height: 1.25; }
-
-  .today .weekday { margin: 0; font-size: 1.3rem; line-height: 1.2; }
-  .today .date { margin: 4px 0 0; color: var(--ink-3); font-size: 0.95rem; }
+  /* Set to the numerals' cap height rather than to its own size, so the day
+     name and the figures beside it sit on one line. */
+  .weekday {
+    font-family: var(--face-ed);
+    font-size: 1.6rem;
+    line-height: 1;
+    font-weight: 600;
+  }
 
   .flag { border-left: 3px solid var(--alert); padding: 16px 20px; background: var(--alert-bg); margin-bottom: 26px; }
   .flag.warn { border-left-color: var(--stage-ready); background: var(--ready-bg); }

@@ -6,12 +6,12 @@
   "scripts": {
     "dev": "astro dev",
     "build": "astro build && node scripts/index-search.mjs",
-    "build:public-only": "astro build",
+    "build:public-only": "astro build && node scripts/index-search.mjs",
     "preview": "astro preview",
     "check": "astro check",
     "test:contrast": "node tests/contrast.mjs",
     "test:static": "node tests/no-db-in-static.mjs",
-    "test": "npm run test:dates && npm run test:structure && npm run test:workflow && npm run test:roster && npm run test:publish && npm run test:pdftext && npm run test:search && npm run test:devvars && npm run test:drift && npm run test:props && npm run test:policy && npm run test:sqlcols && npm run test:embeds && npm run test:contrast && npm run test:static && npm run test:tokens && npm run test:config && npm run test:tenant && npm run test:routes",
+    "test": "npm run test:dates && npm run test:structure && npm run test:workflow && npm run test:roster && npm run test:publish && npm run test:seeds && npm run test:pdftext && npm run test:search && npm run test:devvars && npm run test:drift && npm run test:props && npm run test:policy && npm run test:sqlcols && npm run test:embeds && npm run test:contrast && npm run test:static && npm run test:tokens && npm run test:config && npm run test:tenant && npm run test:programs && npm run test:video && npm run test:paths && npm run test:routes",
     "test:tokens": "node tests/tokens-only.mjs",
     "test:config": "node tests/config-secrets.mjs",
     "seed:demo": "node scripts/seed-demo.mjs",
@@ -34,7 +34,12 @@
     "test:devvars": "node tests/dev-vars.mjs",
     "test:publish": "node --experimental-strip-types tests/publish.mjs",
     "test:search": "node tests/search-scope.mjs",
-    "test:pdftext": "node --experimental-strip-types tests/pdf-text.mjs"
+    "test:pdftext": "node --experimental-strip-types tests/pdf-text.mjs",
+    "index:records": "node scripts/index-records.mjs",
+    "test:seeds": "node --experimental-strip-types tests/seed-manuscripts.mjs",
+    "test:paths": "node --experimental-strip-types tests/paths.mjs",
+    "test:video": "node --experimental-strip-types tests/video.mjs",
+    "test:programs": "node --experimental-strip-types tests/programs.mjs"
   },
   "dependencies": {
     "@astrojs/cloudflare": "^12.6.0",
@@ -47,7 +52,10 @@
     "marked": "^18.0.7"
   },
   "devDependencies": {
+    "@astrojs/check": "^0.9.10",
+    "aws4fetch": "^1.0.20",
     "pagefind": "^1.3.0",
-    "supabase": "^2.111.0"
+    "supabase": "^2.111.0",
+    "typescript": "^5.9.3"
   }
 }

@@ -68,6 +68,13 @@ export function figurePath(manuscriptId: string, filename: string): string {
   return `manuscripts/${manuscriptId}/figures/${Date.now()}-${clean}`;
 }
 
+/** Showcase images live under the project, not the manuscript: they outlast
+ *  any paper and belong to the project whether one is ever written. */
+export function projectImagePath(projectId: string, filename: string): string {
+  const ext = (filename.match(/\.([a-z0-9]+)$/i)?.[1] ?? 'png').toLowerCase();
+  return `projects/${projectId}/images/${crypto.randomUUID()}.${ext}`;
+}
+
 export function manuscriptPdfPath(manuscriptId: string, filename: string): string {
   const clean = filename.replace(/[^\w.-]/g, '_').slice(-80);
   return `manuscripts/${manuscriptId}/paper/${Date.now()}-${clean}`;

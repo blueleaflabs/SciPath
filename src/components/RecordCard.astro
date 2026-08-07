@@ -1,57 +1,82 @@
 ---
 import { disciplineLabel } from '../config/site';
-import type { CollectionEntry } from 'astro:content';
+import type { RecordEntry } from '../lib/records-store';
 
 interface Props {
-  /** Either kind. They are listed together and differ in what they contain. */
-  record?: CollectionEntry<'articles' | 'projects'>;
-  /** Kept so the article pages that already pass `article` go on working. */
-  article?: CollectionEntry<'articles'>;
-  space?: 'articles' | 'projects';
+  record: RecordEntry;
 }
 
-const { record, article, space } = Astro.props;
-const entry = (record ?? article)!;
-const d = entry.data;
-const year = d.publishedOn.getUTCFullYear();
-const where = space ?? (d.recordKind === 'project' ? 'projects' : 'articles');
-const href = `/${where}/${year}/${d.slug}/`;
+const { record: d } = Astro.props;
+const space = d.recordKind === 'project' ? 'projects' : 'articles';
+const href = `/${space}/${d.year}/${d.slug}/`;
 
-/* Every listing carries its full abstract at reading size. No truncation,
-   no "read more". A visitor is reading science within three seconds, and
-   the page makes no claim about quality it cannot support. */
+/* Every listing carries its full abstract at reading size. No truncation and
+   no "read more": a visitor is reading science within three seconds, and the
+   page makes no claim about quality it cannot support. */
 const awards = d.entries.flatMap((e) => e.awards);
 const seq = d.recordId.split('-').pop();
 ---
 
 <article class="record s-pub">
   <div class="record-top">
-    <div class="record-no">
-      {seq}<small>Record</small>
-    </div>
+    <div class="record-no">{seq}<small>Record</small></div>
     <div class="record-main">
       <h3><a href={href}>{d.title}</a></h3>
       <p class="by">
-        {
-          d.authors.map((a, i) => (
-            <>
-              {i > 0 && ', '}
-              {a.authorSlug ? <a href={`/authors/${a.authorSlug}/`}>{a.displayName}</a> : a.displayName}
-            </>
-          ))
-        }
+        {d.authors.map((a, i) => (
+          <>
+            {i > 0 && ', '}
+            {a.authorSlug ? <a href={`/authors/${a.authorSlug}/`}>{a.displayName}</a> : a.displayName}
+          </>
+        ))}
       </p>
     </div>
-    <span class="chip pub"><span class="dot"></span>Published</span>
+    <span class="chip pub">
+      <span class="dot"></span>
+      {d.recordKind === 'project' ? 'Project' : 'Published'}
+    </span>
   </div>
-  <div class="record-body">
-    <p class="abs">{d.abstract}</p>
-    <div class="foot">
-      <span class="chip">{disciplineLabel(d.discipline)}</span>
-      <span class="chip">{d.publishedOn.getUTCFullYear()}</span>
-      {awards.map((a) => <span class="chip comp award">{a}</span>)}
-      {d.status === 'retracted' && <span class="chip alert"><span class="dot"></span>Retracted</span>}
-      {d.corrections.length > 0 && <span class="chip ready">Corrected</span>}
-    </div>
-  </div>
+
+  {d.abstract && <p class="abs">{d.abstract}</p>}
+
+  <p class="meta">
+    <a href={`/topics/${d.discipline}/`}>{disciplineLabel(d.discipline)}</a>
+    <span>·</span>
+    <span>{d.publishedOn.slice(0, 7)}</span>
+    {d.entries.map((e) => (
+      <>
+        <span>·</span>
+        <span>{e.program}{e.season ? ` ${e.season}` : ''}{e.placement ? `, ${e.placement}` : ''}</span>
+      </>
+    ))}
+    {awards.map((a) => (<><span>·</span><span>{a}</span></>))}
+  </p>
 </article>
+
+<style>
+  .record { padding: 24px 0; border-bottom: 1px solid var(--rule-fine); }
+  .record-top { display: flex; gap: 18px; align-items: baseline; }
+  .record-no {
+    font-family: var(--face-num);
+    font-size: 1.3rem;
+    color: var(--ink-3);
+    min-width: 4.5rem;
+  }
+  .record-no small { display: block; font-size: 0.68rem; letter-spacing: 0.08em; text-transform: uppercase; }
+  .record-main { flex: 1; }
+  .record-main h3 { margin: 0; font-size: 1.35rem; line-height: 1.25; }
+  .by { margin: 5px 0 0; color: var(--ink-2); }
+  .abs { margin: 14px 0 0 5.9rem; max-width: var(--measure-text); line-height: 1.6; }
+  .meta {
+    margin: 12px 0 0 5.9rem;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    font-size: 0.88rem;
+    color: var(--ink-3);
+  }
+  @media (max-width: 640px) {
+    .record-top { flex-wrap: wrap; }
+    .abs, .meta { margin-left: 0; }
+  }
+</style>

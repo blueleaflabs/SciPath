@@ -75,7 +75,9 @@ if (Astro.request.method === 'POST' && iAuthor) {
       p_license: String(form.get('license') ?? 'CC BY 4.0'),
       p_completed_on: String(form.get('completed_on') ?? '') || null,
       p_date_precision: String(form.get('date_precision') ?? 'month'),
-      p_record_kind: String(form.get('record_kind') ?? 'article'),
+      /* Always an article. The fair entry is a separate record,
+         published from the project. */
+      p_record_kind: 'article',
       p_body_format: String(form.get('body_format') ?? 'full-text'),
       p_external_url: String(form.get('external_url') ?? ''),
     });
@@ -90,6 +92,32 @@ if (Astro.request.method === 'POST' && iAuthor) {
       p_body: String(form.get('body') ?? ''),
       p_sort_order: Number(form.get('sort_order') ?? 0),
       p_expected: String(form.get('expected') ?? '') || null,
+    });
+    if (e) error = e.message;
+    else didAction = action;
+  }
+
+  if (action === 'glance') {
+    const lines = (field: string) =>
+      String(form.get(field) ?? '')
+        .split('\n')
+        .map((l) => l.trim())
+        .filter(Boolean);
+
+    const { error: e } = await supabase.rpc('save_at_a_glance', {
+      p_manuscript_id: manuscriptId,
+      p_methods: lines('methods'),
+      p_data_sources: lines('data_sources'),
+      p_outputs: lines('outputs'),
+    });
+    if (e) error = e.message;
+    else didAction = action;
+  }
+
+  if (action === 'question') {
+    const { error: e } = await supabase.rpc('save_project_question', {
+      p_project_id: id,
+      p_question: String(form.get('question') ?? ''),
     });
     if (e) error = e.message;
     else didAction = action;
@@ -226,7 +254,7 @@ if (Astro.request.method === 'POST' && iAuthor) {
 const { data: manuscript } = await supabase
   .from('manuscripts')
   .select(
-    'id, record_kind, source, title, abstract, keywords, discipline, contributions, license, completed_on, date_precision, body_format, external_url, pdf_path, updated_at'
+    'id, record_kind, source, title, abstract, keywords, discipline, contributions, license, completed_on, date_precision, body_format, external_url, pdf_path, methods, data_sources, outputs, updated_at'
   )
   .eq('project_id', id)
   .maybeSingle();
@@ -271,6 +299,12 @@ const { data: submission } = manuscript
    on a subquery over two other tables, each with its own row level security,
    can return nothing for a reason two joins away, and an empty list looks
    exactly like a list with nothing on it. */
+const { data: projectRow } = await supabase
+  .from('projects')
+  .select('question')
+  .eq('id', id)
+  .maybeSingle();
+
 const [changes, reviewerNotes, editorNotes] = submission
   ? await Promise.all([
       supabase.rpc('author_changes', { p_submission_id: submission.id }),
@@ -750,15 +784,13 @@ function targetFor(key: string): string | null {
               <small>Sentence case. It becomes the permanent URL, so it is worth getting right before publication rather than after.</small>
             </label>
 
+            {/* There was a record kind here. It made the paper and the fair
+                entry alternatives, when 8.1 has always had them as siblings:
+                a project can have both, and each page links to the other. The
+                kind belongs to a record rather than to the writing, so the
+                entry is published from the project and this page is only ever
+                about the paper. */}
             <div class="row-2">
-              <label>
-                <span>What kind of record</span>
-                <select class="se" name="record_kind" disabled={!iAuthor || locked}>
-                  <option value="article" selected={kind === 'article'}>Article, a written paper</option>
-                  <option value="project" selected={kind === 'project'}>Project entry, what the fair produces</option>
-                </select>
-                <small>A project may have one, the other, both, or neither.</small>
-              </label>
               <label>
                 <span>Where the writing lives</span>
                 <select class="se" name="body_format" disabled={!iAuthor || locked}>
@@ -994,6 +1026,64 @@ function targetFor(key: string): string | null {
             )}
           </section>
         )}
+
+        <!-- ── The question, and research at a glance ──────────────────── -->
+        <section class="sec" id="glance">
+          <div class="sec-h">
+            <b>Research at a glance</b>
+            <span>{[...(manuscript.methods ?? []), ...(manuscript.data_sources ?? []), ...(manuscript.outputs ?? [])].length} lines</span>
+          </div>
+
+          <p class="aside">
+            The four things somebody deciding whether to read further actually
+            wants. They sit at the top of the published page, above the
+            abstract, so a reader can tell in ten seconds what was asked, how,
+            with what, and what came out.
+          </p>
+
+          <form method="POST" action="#glance" class="mform">
+            <input type="hidden" name="action" value="question" />
+            <label>
+              <span>The question</span>
+              <textarea class="ta" name="question" rows="2" disabled={!iAuthor}>{projectRow?.question ?? ''}</textarea>
+              <small>
+                One sentence, ending in a question mark. It runs under the
+                title on the published page and is the first thing anybody
+                reads after it.
+              </small>
+            </label>
+            {iAuthor && <button class="btn btn-2" type="submit">Save the question</button>}
+          </form>
+
+          <form method="POST" action="#glance" class="mform" style="margin-top:26px">
+            <input type="hidden" name="action" value="glance" />
+            <div class="row-2">
+              <label>
+                <span>Methods</span>
+                <textarea class="ta" name="methods" rows="4" disabled={!iAuthor || locked}>{(manuscript.methods ?? []).join('\n')}</textarea>
+                <small>One per line. What you actually did, not what field it belongs to.</small>
+              </label>
+              <label>
+                <span>Data sources</span>
+                <textarea class="ta" name="data_sources" rows="4" disabled={!iAuthor || locked}>{(manuscript.data_sources ?? []).join('\n')}</textarea>
+                <small>One per line. Where the numbers came from, including your own measurements.</small>
+              </label>
+            </div>
+            <label>
+              <span>Outputs</span>
+              <textarea class="ta" name="outputs" rows="3" disabled={!iAuthor || locked}>{(manuscript.outputs ?? []).join('\n')}</textarea>
+              <small>One per line. What exists now that did not before: a dataset, a prototype, a model, a set of curves.</small>
+            </label>
+            {iAuthor && !locked && (
+              <div class="foot">
+                <button class="btn btn-2" type="submit">Save research at a glance</button>
+                <nav class="jump">
+                  <a href="#checklist">Back to the checklist</a>
+                </nav>
+              </div>
+            )}
+          </form>
+        </section>
 
         <!-- ── Figures ─────────────────────────────────────────────────── -->
         <section class="sec" id="figures">

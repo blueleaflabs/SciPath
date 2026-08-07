@@ -16,7 +16,19 @@ export default defineConfig({
     // R2 on disk. Same code path as production, deliberately.
     platformProxy: { enabled: true },
   }),
-  trailingSlash: 'always',
+  /* 'ignore' rather than 'always'.
+   *
+   * 'always' compiles every route to a pattern ending in a slash, which is
+   * right for pages and wrong for anything that serves a file. A request for
+   * /records-index/pagefind.js matched no route at all and fell through to
+   * the 404 page, so search could never load its index and published PDFs and
+   * figures would have failed the same way.
+   *
+   * Page URLs are unaffected: `build.format: 'directory'` still emits
+   * directory-style paths, every link written here still carries its slash,
+   * and the canonical tag on each page settles which form is authoritative.
+   * What changes is only that a path without one is no longer a miss. */
+  trailingSlash: 'ignore',
   integrations: [
     sitemap({
       // Bearer-token URLs and the working surface never enter a sitemap.

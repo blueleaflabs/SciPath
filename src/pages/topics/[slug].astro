@@ -1,0 +1,30 @@
+---
+export const prerender = false;
+
+import Base from '../../layouts/Base.astro';
+import PageHead from '../../components/PageHead.astro';
+import RecordCard from '../../components/RecordCard.astro';
+import { openArchive } from '../../lib/archive';
+import { disciplineLabel } from '../../config/site';
+
+const archive = await openArchive(Astro);
+const slug = String(Astro.params.slug ?? '');
+const records = archive.all.filter((r) => r.discipline === slug);
+
+if (records.length === 0) return new Response('Not found', { status: 404 });
+
+Astro.response.headers.set('Cache-Control', 'public, max-age=120, s-maxage=600');
+---
+
+<Base title={disciplineLabel(slug)} description={`Work in ${disciplineLabel(slug)}.`}>
+  <PageHead
+    eyebrow="Discipline"
+    title={disciplineLabel(slug)}
+    lede={`${records.length} ${records.length === 1 ? 'record' : 'records'}`}
+  />
+  <div class="wrap">
+    <section class="sec" style="padding-top:0">
+      {records.map((r) => <RecordCard record={r} />)}
+    </section>
+  </div>
+</Base>

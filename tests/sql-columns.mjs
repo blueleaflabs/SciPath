@@ -104,6 +104,22 @@ for (const [index, sql] of sources.entries()) {
 
       for (; at < sql.length && depth > 0; at += 1) {
         const char = sql[at];
+
+        /* A block comment can contain commas, and one did: the count came out
+           right while Postgres disagreed, which is worse than no check at
+           all because it reads as a pass. */
+        if (char === '/' && sql[at + 1] === '*') {
+          const close = sql.indexOf('*/', at + 2);
+          at = close < 0 ? sql.length : close + 1;
+          continue;
+        }
+
+        if (char === '-' && sql[at + 1] === '-') {
+          const eol = sql.indexOf('\n', at);
+          at = eol < 0 ? sql.length : eol;
+          continue;
+        }
+
         if (char === "'") {
           /* Skip the string, doubled quotes and all. */
           at += 1;
@@ -118,8 +134,10 @@ for (const [index, sql] of sources.entries()) {
       }
 
       const names = list
+        .replace(/\/\*[\s\S]*?\*\//g, '')
+        .replace(/--.*$/gm, '')
         .split(',')
-        .map((n) => n.replace(/--.*$/gm, '').trim())
+        .map((n) => n.trim())
         .filter(Boolean).length;
 
       if (commas !== names) {

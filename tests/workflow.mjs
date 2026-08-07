@@ -50,14 +50,28 @@ test('a new submission offers exactly one editor action', () => {
   assert.deepEqual(ids(actionsFor('submitted', 'editor')), ['claim_submission']);
 });
 
-test('screening offers the three outcomes, assignment, and a send back', () => {
+test('screening offers one way to send back, not two', () => {
   assert.deepEqual(ids(actionsFor('screening', 'editor')), [
     'assign_reviewer',
     'request_revisions',
     'screen_advance',
     'screen_decline',
-    'screen_return',
   ]);
+});
+
+test('no two actions from the same state do the same thing', () => {
+  /* Two buttons that both send a submission back, differing only in whether
+     one could also carry the list, is a choice nobody can make correctly. */
+  for (const state of QUEUE_ORDER) {
+    const destinations = actionsFor(state, 'editor')
+      .filter((a) => a.to)
+      .map((a) => a.to);
+    assert.equal(
+      new Set(destinations).size,
+      destinations.length,
+      `${state} offers two actions with the same outcome`
+    );
+  }
 });
 
 test('an editor holding a submission can always send it back', () => {
@@ -204,7 +218,6 @@ test('every action has a function behind it in the migration', () => {
      action without a function still fails. */
   const viaArgument = {
     screen_advance: 'screen_submission',
-    screen_return: 'screen_submission',
     screen_decline: 'screen_submission',
     decide_accepted: 'decide_submission',
     decide_declined: 'decide_submission',

@@ -1,28 +1,25 @@
-import { orgPaths } from '../../lib/tenant-paths';
-export const getStaticPaths = orgPaths;
+export const prerender = false;
 
 import rss from '@astrojs/rss';
 import type { APIRoute } from 'astro';
-import { getCollection } from 'astro:content';
-import { activeOrg } from '../../lib/tenant';
 import { siteUrl } from '../../config/site';
+import { openArchive } from '../../lib/archive';
 
 export const GET: APIRoute = async (context) => {
-  const org = activeOrg(context);
-  const articles = (await getCollection('articles'))
-    .filter((a) => a.data.status !== 'archived')
-    .sort((a, b) => b.data.publishedOn.valueOf() - a.data.publishedOn.valueOf());
+  const archive = await openArchive(context);
+  const org = archive.org;
+  const articles = archive.all;
 
   return rss({
     title: org.name,
     description: org.showcaseNote,
     site: context.site ?? siteUrl,
     items: articles.map((a) => ({
-      title: a.data.title,
-      pubDate: a.data.publishedOn,
-      description: a.data.abstract,
-      link: `/articles/${a.data.publishedOn.getUTCFullYear()}/${a.data.slug}/`,
-      author: a.data.authors.map((x) => x.displayName).join(', '),
+      title: a.title,
+      pubDate: new Date(`${a.publishedOn}T00:00:00Z`),
+      description: a.abstract,
+      link: `/${a.recordKind === 'project' ? 'projects' : 'articles'}/${a.year}/${a.slug}/`,
+      author: a.authors.map((x) => x.displayName).join(', '),
     })),
   });
 };

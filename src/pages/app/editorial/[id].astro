@@ -315,56 +315,57 @@ const confirmation = didAction
                   <form method="POST">
                     <input type="hidden" name="action" value={action.id} />
 
-                    {action.id === 'assign_reviewer' ? (
-                      <div class="assign">
-                        <select class="se" name="reviewer_id" required aria-label="Reviewer">
-                          <option value="">
-                            {candidates.length === 0
-                              ? 'Nobody is eligible yet'
-                              : 'Choose somebody'}
-                          </option>
-                          {candidates.map((p: any) => (
-                            <option value={p.id}>{p.display_name}</option>
-                          ))}
-                        </select>
+                    {/* Controls on the left, the button on the right, so every
+                        button on this page shares one edge and the eye can
+                        run down them. An action with nothing to fill in
+                        leaves the left column empty rather than sliding its
+                        button over to meet the text. */}
+                    <div class="fields">
+                      {action.id === 'assign_reviewer' && (
+                        <>
+                          <select class="se" name="reviewer_id" required aria-label="Reviewer">
+                            <option value="">
+                              {candidates.length === 0
+                                ? 'Nobody is eligible yet'
+                                : 'Choose somebody'}
+                            </option>
+                            {candidates.map((p: any) => (
+                              <option value={p.id}>{p.display_name}</option>
+                            ))}
+                          </select>
+                          <input
+                            class="in due"
+                            type="date"
+                            name="due_at"
+                            value={defaultDue}
+                            required
+                            aria-label="Due"
+                          />
+                        </>
+                      )}
+
+                      {['screen_decline', 'request_revisions', 'decide_declined', 'decide_accepted'].includes(
+                        action.id
+                      ) && (
                         <input
                           class="in"
-                          type="date"
-                          name="due_at"
-                          value={defaultDue}
-                          required
-                          aria-label="Due"
+                          name="note"
+                          placeholder={
+                            action.id === 'request_revisions' && roundFindings.length === 0
+                              ? 'What needs doing, since the list is empty'
+                              : 'A line for the authors, optional'
+                          }
+                          aria-label="Note to the authors"
                         />
-                        <button class="btn btn-2" type="submit">{action.label}</button>
-                      </div>
-                    ) : (
-                      <>
-                        {[
-                          'screen_return',
-                          'screen_decline',
-                          'request_revisions',
-                          'decide_declined',
-                          'decide_accepted',
-                        ].includes(action.id) && (
-                          <input
-                            class="in"
-                            name="note"
-                            placeholder={
-                              action.id === 'request_revisions' && roundFindings.length === 0
-                                ? 'What needs doing, since the list is empty'
-                                : 'A line for the authors, optional'
-                            }
-                            aria-label="Note to the authors"
-                          />
-                        )}
-                        <button
-                          class:list={['btn', action.grave ? 'btn-q' : 'btn-2']}
-                          type="submit"
-                        >
-                          {action.label}
-                        </button>
-                      </>
-                    )}
+                      )}
+                    </div>
+
+                    <button
+                      class:list={['btn', action.grave ? 'btn-q' : 'btn-2']}
+                      type="submit"
+                    >
+                      {action.label}
+                    </button>
                   </form>
                   {action.hint && <p class="hint">{action.hint}</p>}
                 </li>
@@ -644,19 +645,42 @@ const confirmation = didAction
   }
   .actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 20px; }
 
-  .acts { list-style: none; margin: 0; padding: 0; display: grid; gap: 18px; }
-  .acts form { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
-  .acts .in { max-width: 34ch; }
-  .acts .hint {
-    margin: 5px 0 0;
+  .acts {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    gap: 20px;
     max-width: var(--measure-form);
+  }
+  /* Two columns: what you fill in, then what you press. Every button lines up
+     on the right edge whether its action takes an input or not. */
+  .acts form {
+    display: grid;
+    grid-template-columns: 1fr 14rem;
+    gap: 12px;
+    align-items: center;
+  }
+  .acts .fields {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    align-items: center;
+  }
+  .acts .fields .se { flex: 1 1 14ch; min-width: 0; }
+  .acts .fields .in { flex: 1 1 18ch; min-width: 0; }
+  .acts .fields .due { flex: 0 0 13ch; }
+  .acts .btn { width: 100%; justify-content: center; text-align: center; }
+  .acts .hint {
+    margin: 6px 0 0;
     color: var(--ink-3);
     font-size: 0.88rem;
     line-height: 1.5;
   }
-  .assign { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
-  .assign .se { max-width: 24ch; }
-  .assign .in { max-width: 18ch; }
+  @media (max-width: 640px) {
+    .acts form { grid-template-columns: 1fr; }
+    .acts .btn { width: auto; justify-self: start; }
+  }
 
   .out { list-style: none; margin: 0 0 22px; padding: 0; }
   .out li {

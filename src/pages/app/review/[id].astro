@@ -265,7 +265,6 @@ const due = new Date(review.due_at).toLocaleDateString('en-US', {
               <option value="">Choose one</option>
               {RECOMMENDATIONS.map((r) => <option value={r.value}>{r.label}</option>)}
             </select>
-            <small>The editor decides. This is your advice to them.</small>
           </label>
 
           <button class="btn btn-2" type="submit">Send the review</button>

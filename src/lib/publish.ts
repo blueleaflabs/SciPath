@@ -73,6 +73,10 @@ export interface RecordForExport {
   prior_venue?: string | null;
   doi?: string | null;
   pdf_text?: string | null;
+  methods?: string[];
+  data_sources?: string[];
+  outputs?: string[];
+  question?: string | null;
 }
 
 export interface ExportInput {
@@ -161,6 +165,15 @@ export function toMarkdown(input: ExportInput): string {
   }
 
   if (r.contributions) lines.push(`contributions: ${yamlBlock(r.contributions)}`);
+  if (r.question) lines.push(`question: ${yamlString(r.question)}`);
+
+  for (const [key, values] of [
+    ['methods', r.methods],
+    ['dataSources', r.data_sources],
+    ['outputs', r.outputs],
+  ] as const) {
+    if (values?.length) lines.push(`${key}: [${values.map(yamlString).join(', ')}]`);
+  }
 
   if (entries.length) {
     lines.push('entries:');

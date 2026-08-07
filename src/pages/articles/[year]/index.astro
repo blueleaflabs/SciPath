@@ -1,0 +1,23 @@
+---
+export const prerender = false;
+
+import Base from '../../../layouts/Base.astro';
+import PageHead from '../../../components/PageHead.astro';
+import RecordCard from '../../../components/RecordCard.astro';
+import { openArchive } from '../../../lib/archive';
+
+const archive = await openArchive(Astro);
+const year = Number(Astro.params.year);
+const records = archive.articles.filter((r) => r.year === year);
+
+Astro.response.headers.set('Cache-Control', 'public, max-age=120, s-maxage=600');
+---
+
+<Base title={`Showcase ${year}`} description={`Every published record, newest first, each with its full abstract. ${year}.`}>
+  <PageHead eyebrow="Year archive" title={String(year)} lede={`${records.length} ${records.length === 1 ? 'record' : 'records'}`} />
+  <div class="wrap">
+    <section class="sec" style="padding-top:0">
+      {records.map((r) => <RecordCard record={r} />)}
+    </section>
+  </div>
+</Base>

@@ -20,6 +20,7 @@
 
 import { createClient } from '@supabase/supabase-js';
 import { loadDevVars } from './dev-vars.mjs';
+import { placeholderSvg, PLACEHOLDER_CAPTIONS } from './placeholder-image.mjs';
 
 loadDevVars();
 
@@ -75,10 +76,30 @@ const SCENARIOS = [
     complete: 4,
     notes: 5,
     selection: 'selected',
+    images: 4,
+    /* A real Creative Commons film, so the facade has something to load if
+       somebody presses play. Nothing is fetched until they do. */
+    video: 'https://vimeo.com/76979871',
     /* Finished, and the check should find nothing blocking. */
     manuscript: {
       write: 7,
       references: 5,
+      methods: [
+        'Field collection across three shore bands',
+        'Continuous temperature logging',
+        'Ramped thermal challenge to reattachment failure',
+        'Twenty four hour survival scoring',
+      ],
+      dataSources: [
+        'Loggers deployed in each band for six weeks',
+        'Two hundred and forty animals collected across four dates',
+        'Published thermal limits for the same genus',
+      ],
+      outputs: [
+        'Reattachment failure temperatures by shore height',
+        'A survival curve at thirty two degrees',
+        'A within band variance estimate',
+      ],
       keywords: ['thermal tolerance', 'intertidal', 'gastropods'],
       discipline: 'biology-biomedicine',
       abstract:
@@ -186,7 +207,40 @@ const SCENARIOS = [
     startedDaysAgo: 10,
     complete: 3,
     notes: 3,
+    images: 2,
     selection: 'candidate',
+    /* The second finished manuscript, so two can run through review at once
+       and an editor sees a queue rather than a single item. Different prose
+       from the first, deliberately: reading the same words twice tells you
+       nothing about whether the screens work. */
+    manuscript: {
+      write: 7,
+      references: 5,
+      bank: 'b',
+      keywords: ['cover crops', 'nitrogen', 'raised beds'],
+      discipline: 'biology-biomedicine',
+      abstract:
+        'Legume cover crops are recommended to home gardeners on the strength of field trials that measure total nitrogen fixed, which is not the same as nitrogen the next crop can use. This study compared hairy vetch and crimson clover across twelve identically built raised beds, four per treatment plus four fallow, measuring plant available nitrogen at termination and at two week intervals for eight weeks afterward. Vetch produced roughly forty percent more dry biomass, matching the field literature, and yet clover beds held more available nitrogen at two and four weeks. The two converged at six weeks and vetch was higher at eight. The practical recommendation therefore depends on when the following crop needs the nitrogen, which is a question the usual advice does not ask. One season and twelve beds bound how far this generalizes.',
+      methods: [
+        'Randomized block field trial',
+        'Potassium chloride extraction',
+        'Spectrophotometry against a same-day standard curve',
+        'Dry mass to constant weight',
+      ],
+      dataSources: [
+        'Soil cores from twelve raised beds at five time points',
+        'Aboveground biomass, dried and weighed',
+        'Supplier seeding rates',
+      ],
+      outputs: [
+        'Plant available nitrogen curves for two legume treatments',
+        'A biomass to availability comparison',
+        'A planting date recommendation that inverts the usual advice',
+      ],
+      contributions:
+        'P. Osei designed the trial, built and planted the beds, ran every extraction and measurement, analyzed the data, and wrote the paper. M. Lindqvist reviewed the protocol and supervised use of the spectrophotometer.',
+    },
+    note: 'Self managed, and a second paper ready to submit.',
   },
   {
     key: 'co-authored',
@@ -257,14 +311,42 @@ const SECTION_TEXT = {
   methods:
     'Animals were collected from a single rocky shore across three bands defined by height above mean lower low water: high, at 1.8 to 2.1 meters, mid at 1.2 to 1.5 meters, and low at 0.4 to 0.7 meters. Twenty animals were taken from each band on each of four collection dates, giving 240 animals in total. Height was measured with a surveyor level against a tide staff rather than estimated by eye, because a twenty centimeter error spans most of the difference between bands. Temperature loggers were epoxied to the rock at each band and recorded at thirty second intervals for the six weeks preceding collection, so that each animal carries an exposure history rather than an assumed one. Animals were transported in chilled seawater and held at fourteen degrees for twenty four hours before testing to standardize handling stress. Thermal tolerance was assessed by ramping a water bath at one degree every fifteen minutes and recording the temperature at which an animal failed to reattach after being dislodged, tested blind to collection band by having a second person code the containers. Survival was scored again at twenty four hours. All analysis was done in R and the scripts are linked below.',
   results:
-    'Survival at thirty two degrees fell from eighty eight percent in the high shore group to forty one percent in the low shore group, with the mid shore group intermediate at sixty seven percent. The relationship between logged exposure above twenty five degrees and the temperature of reattachment failure was positive and approximately linear across the range sampled. The upper asymptote sat roughly two degrees below the figure reported in the most cited comparable study, a difference discussed below. Variation within bands was substantial: the interquartile range within the high shore group overlapped the median of the mid shore group, so shore height predicts a population mean much better than it predicts any individual animal.',
+    'Survival at thirty two degrees fell from eighty eight percent in the high shore group to forty one percent in the low shore group, with the mid shore group intermediate at sixty seven percent. The relationship between logged exposure above twenty five degrees and the temperature of reattachment failure was positive and approximately linear across the range sampled, with no evidence of a plateau at either end. The upper asymptote sat roughly two degrees below the figure reported in the most cited comparable study, a difference discussed below. Variation within bands was substantial: the interquartile range within the high shore group overlapped the median of the mid shore group, so shore height predicts a population mean much better than it predicts any individual animal. Collection date accounted for less of the variance than band did, though the two are partly confounded because the low shore loggers were submerged more often and therefore recorded fewer hours above twenty five degrees. Twenty four hour survival tracked the reattachment endpoint closely, which supports treating the behavioral measure as a reasonable stand in for the physiological limit rather than as a separate result.',
   discussion:
-    'The direction of the result matches the prediction and the size of it is large enough to matter, but three limitations bound what can be claimed. The design is correlational: animals were not moved between bands, so acclimation and selection cannot be separated, and either would produce this pattern. Collection happened across four dates spanning six weeks, and although exposure was logged continuously, the animals collected last had experienced a warmer period overall, which is partially confounded with band because the low shore loggers were submerged more often. And the reattachment endpoint is a behavioral proxy for a physiological limit, which is standard practice and still a proxy. The two degree offset from the published figure is most likely a population difference or a ramp rate difference rather than a measurement error, since the loggers were calibrated against an ice bath and agreed within three tenths of a degree.',
+    'The direction of the result matches the prediction and the size of it is large enough to matter, but three limitations bound what can be claimed. The design is correlational: animals were not moved between bands, so acclimation and selection cannot be separated, and either would produce this pattern. Collection happened across four dates spanning six weeks, and although exposure was logged continuously, the animals collected last had experienced a warmer period overall, which is partially confounded with band because the low shore loggers were submerged more often. And the reattachment endpoint is a behavioral proxy for a physiological limit, which is standard practice and still a proxy. The two degree offset from the published figure is most likely a population difference or a ramp rate difference rather than a measurement error, since the loggers were calibrated against an ice bath and agreed within three tenths of a degree. The within band variation is the finding with the most practical weight and the least attention in the literature: a prediction that is accurate for a population and poor for an individual is exactly the kind of result that gets misapplied when it is summarized as a single number. Anybody using shore height as a proxy for thermal vulnerability should treat it as describing a distribution rather than a threshold.',
   conclusion:
     'Shore height, measured properly rather than estimated, predicts population level thermal tolerance on this shore well enough to be worth using. It does not predict individual tolerance, and any application that treats it as though it does will be wrong about specific animals a great deal of the time. The relationship with directly logged exposure is stronger than the relationship with height alone, which suggests that exposure is the thing doing the work and height is a proxy for it.',
   future_work:
     'The obvious next step is a transplant: move animals between bands, hold them for six weeks, and test them, which separates acclimation from selection in a way this design cannot. A second season would also address the confound between collection date and band. Extending the logger deployment through a full summer would show whether the relationship holds through the hottest part of the year or saturates.',
 };
+
+/* A second body, so the two submit-ready papers do not read identically. An
+   editor working through a queue of two should not see the same words twice,
+   and neither should anybody testing the review screens. */
+const SECTION_TEXT_B = {
+  background:
+    'Cover crops are grown between cash crops to hold soil and, in the case of legumes, to fix atmospheric nitrogen into a form the next crop can use. How much nitrogen actually becomes available, and how quickly, depends on the species, the termination method, and the soil biology already present, which is why recommendations vary so widely between extension services. Raised beds complicate the picture further: they warm faster in spring, drain differently, and are usually built on imported soil with a shorter history than a field, so the microbial community doing the mineralizing may be younger and less established than the one a field trial measured. The question here is whether hairy vetch, the legume most often recommended for a home garden, actually outperforms crimson clover on plant available nitrogen eight weeks after termination in a raised bed, and whether the difference is large enough to matter to somebody deciding what to sow in October. That decision is made once a year by a great many people on the strength of a recommendation almost none of them can check, which is reason enough to check it once in the setting where it is actually applied.',
+  prior_work:
+    'Field trials consistently report higher total nitrogen fixation from vetch than from clover, often by a wide margin, and the figure most frequently quoted to gardeners comes from those trials. What field trials measure is total biomass nitrogen rather than what is available to the following crop, and the two are not the same: nitrogen locked in slowly decomposing stems is not nitrogen a seedling can use in April. Work on decomposition rates suggests the gap narrows considerably once carbon to nitrogen ratio is taken into account, and clover, with the softer tissue, mineralizes faster. Almost none of this work has been done in raised beds, which is the setting most of the people reading the recommendation are actually planting in.',
+  methods:
+    'Twelve raised beds of identical construction, each 1.2 by 2.4 meters, were filled from a single delivery of the same soil blend and randomly assigned to one of three treatments: hairy vetch, crimson clover, or bare fallow, four beds each. Randomization was by drawing lots rather than by position, so no treatment sits preferentially at the sunnier end of the plot. Seed was broadcast at the rate printed on the supplier packet in the first week of October and lightly raked in. Beds were not irrigated after establishment, which matches ordinary practice and means the trial reflects a normal wet season rather than a controlled one. Termination was by crimping in the third week of March, with all residue left on the surface rather than incorporated, which is what a gardener without a tiller would do. Plant available nitrogen was measured as nitrate plus ammonium from cores taken at 0 to 15 centimeters, four cores per bed composited, at termination and at two, four, six, and eight weeks after. Cores were taken at fixed marked positions so that repeated sampling did not progressively disturb one part of a bed. Samples were extracted in potassium chloride and read on a spectrophotometer against a standard curve prepared the same day, with a blank and a check standard run every twelfth sample. Aboveground biomass was cut, dried at sixty degrees to constant mass, and weighed before termination so that nitrogen availability could be expressed per unit of biomass as well as per bed.',
+  results:
+    'Vetch produced substantially more biomass than clover, roughly forty percent more dry mass per bed, which matches what the field literature reports and confirms that establishment was not the limiting factor for either species. Plant available nitrogen told a different story. At two weeks the clover beds were already higher than the vetch beds, and they stayed higher through week four. The two converged by week six, and at week eight the vetch beds were higher, though the difference was smaller than the biomass difference would suggest. Expressed per unit of dry mass rather than per bed, clover released more nitrogen at every time point, which is the clearest statement of the result. Both treatments were well above the fallow beds at every point after week two, so neither is in doubt as a source of nitrogen; the question is only one of timing. Variation between beds within a treatment was larger than expected given identical construction and a single soil source, and larger in the vetch beds than the clover beds, which limits how confidently any single time point can be read.',
+  discussion:
+    'The practical answer depends entirely on when the next crop needs the nitrogen. For an early planting, clover made more available sooner, which is the opposite of the recommendation a gardener is most likely to encounter. For a later planting, vetch caught up and passed it. The most likely mechanism is decomposition rate rather than fixation: clover tissue is softer and has a lower carbon to nitrogen ratio, so it mineralizes faster even though there is less of it. Three limitations bound this. One season, so nothing here separates treatment from weather, and a colder or wetter spring would change decomposition for both. Twelve beds is a small number for the variance actually observed, and a larger trial might not reproduce the crossover at all. And surface residue was left rather than incorporated, which slows mineralization for both treatments and probably widens the early gap in favor of the faster decomposing clover; a gardener who tills would likely see something different, possibly the ordering the recommendation predicts.',
+  conclusion:
+    'Biomass is not availability, and the recommendation most often given to home gardeners is based on the first. For a bed that needs nitrogen in April, crimson clover made more of it available than hairy vetch did, despite producing considerably less material. For a bed planted in June the ordering reverses, and vetch is the better choice. Either species is a reasonable one; which is better depends on a question the recommendation does not ask, and the answer a gardener needs is a planting date rather than a species name.',
+  future_work:
+    'The obvious next step is a second season, which would separate the treatment effect from a single spring. Incorporating residue in half the beds would test the decomposition explanation directly rather than inferring it. And measuring the following crop rather than the soil would answer the question a gardener actually has, which is not how much nitrogen is present but how much of it ends up in the tomatoes.',
+};
+
+const REFERENCES_B = [
+  'Clark, A. (Ed.). (2007). Managing Cover Crops Profitably (3rd ed.). SARE Outreach.',
+  'Parr, M., et al. (2011). Nitrogen delivery from legume cover crops. Agronomy Journal, 103(6), 1578-1590.',
+  'Wagger, M. G. (1989). Time of desiccation effects on plant composition and subsequent nitrogen release. Agronomy Journal, 81(2), 236-241.',
+  'Ruffo, M. L., & Bollero, G. A. (2003). Modeling rye and hairy vetch residue decomposition. Agronomy Journal, 95(4), 900-907.',
+  'Finney, D. M., et al. (2016). Living cover crops have immediate impacts on soil microbial community structure. Agriculture, Ecosystems and Environment, 232, 175-184.',
+];
 
 const REFERENCES = [
   'Somero, G. N. (2010). The physiology of climate change. Journal of Experimental Biology, 213(6), 912-920.',
@@ -383,6 +465,15 @@ async function main() {
         role: 'author',
         accepted_at: new Date().toISOString(),
       });
+    }
+
+    /* Pictures, where the scenario asks for them. */
+    if (scene.images) {
+      await seedImages(org.id, project.id, authors[0].id, scene.key, scene.images);
+    }
+
+    if (scene.video) {
+      await db.from('projects').update({ video_url: scene.video }).eq('id', project.id);
     }
 
     /* An officer, or the author looking after it herself. */
@@ -563,19 +654,33 @@ async function main() {
           'future_work',
         ];
 
+        const bank = spec.bank === 'b' ? SECTION_TEXT_B : SECTION_TEXT;
+        const citations = spec.bank === 'b' ? REFERENCES_B : REFERENCES;
+
+        if (spec.methods || spec.dataSources || spec.outputs) {
+          await db
+            .from('manuscripts')
+            .update({
+              methods: spec.methods ?? [],
+              data_sources: spec.dataSources ?? [],
+              outputs: spec.outputs ?? [],
+            })
+            .eq('id', manuscript.id);
+        }
+
         for (const [index, key] of order.entries()) {
           if (index >= (spec.write ?? 0)) break;
           await db.from('manuscript_sections').insert({
             org_id: org.id,
             manuscript_id: manuscript.id,
             section_key: key,
-            body: SECTION_TEXT[key],
+            body: bank[key],
             sort_order: index,
             updated_by: authors[0].id,
           });
         }
 
-        for (const [index, citation] of REFERENCES.slice(0, spec.references ?? 0).entries()) {
+        for (const [index, citation] of citations.slice(0, spec.references ?? 0).entries()) {
           await db.from('manuscript_references').insert({
             org_id: org.id,
             manuscript_id: manuscript.id,
