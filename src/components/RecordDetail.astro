@@ -28,6 +28,12 @@ const url = new URL(`/${space}/${d.year}/${d.slug}/`, siteUrl).href;
 
 const video = parseVideo(d.video);
 
+/* The still stored with the record, which is our own file. Preferred over
+   the one on the host's CDN even for YouTube: a published page should ask
+   nobody anything until a reader presses play, and `i.ytimg.com` is
+   somebody else. */
+const poster = d.videoPoster ?? video?.poster ?? null;
+
 const doi = d.doi ? `https://doi.org/${d.doi.replace(/^https?:\/\/doi\.org\//, '')}` : null;
 
 const citationNames = d.authors
@@ -129,17 +135,28 @@ const html = body ? marked.parse(body) : '';
 
     {video && (
       <div class="video" data-embed={video.embed}>
-        {video.poster ? (
-          <img class="poster" src={video.poster} alt="" loading="lazy" />
+        {poster ? (
+          <img class="poster" src={poster} alt="" loading="lazy" />
         ) : (
-          <div class="poster blank"></div>
+          /* Drawn here rather than fetched.
+           
+             YouTube publishes a still at a predictable address; Vimeo's needs
+             an API call, which is a request made on a reader's behalf for
+             something they have not asked for. So this is a placeholder, and
+             an empty box read as a broken page rather than as a video
+             waiting to be played. It says which host it is, so somebody can
+             decide before pressing anything. */
+          <div class="poster drawn">
+            <span class="host">{video.host === 'vimeo' ? 'Vimeo' : 'YouTube'}</span>
+            <span class="quiet">Nothing loaded yet</span>
+          </div>
         )}
         <button type="button" class="play" aria-label="Play the video">
           <span></span>
         </button>
         <p class="vnote">
           Nothing is requested from {video.host === 'vimeo' ? 'Vimeo' : 'YouTube'} until
-          you press play. <a href={video.watch} rel="noopener">Watch it there instead</a>.
+          you press play. <a href={video.watch} target="_blank" rel="noopener noreferrer">Watch it there instead</a>.
         </p>
       </div>
     )}
@@ -152,13 +169,13 @@ const html = body ? marked.parse(body) : '';
     )}
 
     {d.pdf && (
-      <p class="row"><a class="btn btn-2" href={d.pdf}>Read the paper as a PDF</a></p>
+      <p class="row"><a class="btn" href={d.pdf}>Read the paper as a PDF</a></p>
     )}
 
     {d.externalUrl && (
       <p class="prose">
         The version of record is held elsewhere:
-        {' '}<a href={d.externalUrl} rel="noopener">{d.externalUrl}</a>
+        {' '}<a href={d.externalUrl} target="_blank" rel="noopener noreferrer">{d.externalUrl}</a>
       </p>
     )}
 
@@ -212,7 +229,7 @@ const html = body ? marked.parse(body) : '';
         </p>
         <p class="row">
           <a
-            class="btn btn-2"
+            class="btn"
             href={`/${companion.recordKind === 'project' ? 'projects' : 'articles'}/${companion.year}/${companion.slug}/`}
           >
             {companion.title}
@@ -248,7 +265,7 @@ const html = body ? marked.parse(body) : '';
               <p class="g-lbl">Data and code</p>
               <ul>
                 {d.dataLinks.map((l) => (
-                  <li><a href={l.url} rel="noopener">{l.label}</a></li>
+                  <li><a href={l.url} target="_blank" rel="noopener noreferrer">{l.label}</a></li>
                 ))}
               </ul>
             </div>
@@ -276,9 +293,9 @@ const html = body ? marked.parse(body) : '';
     <div class="sec-h"><b>Cite this record</b><span>{d.recordId}</span></div>
     <div class="card pad">
       <p class="cite-text" id="citation-text">{citation}</p>
-      {doi && <p class="doi"><a href={doi} rel="noopener">{doi}</a></p>}
+      {doi && <p class="doi"><a href={doi} target="_blank" rel="noopener noreferrer">{doi}</a></p>}
       <div class="row" style="margin-top:14px">
-        <button class="btn btn-2" type="button" data-copy="citation-text">Copy citation</button>
+        <button class="btn" type="button" data-copy="citation-text">Copy citation</button>
         <button class="btn btn-q" type="button" data-copy="bibtex-text">Copy BibTeX</button>
       </div>
       <pre id="bibtex-text" hidden>{bibtex}</pre>
@@ -432,6 +449,28 @@ const html = body ? marked.parse(body) : '';
     object-fit: cover;
   }
   .video .blank { background: var(--wash); }
+
+  /* Drawn rather than fetched, so it has to look deliberate. An empty box
+     reads as a page that failed; this reads as a video that has not been
+     asked for yet. */
+  .video .drawn {
+    display: grid;
+    place-content: center;
+    justify-items: center;
+    gap: 6px;
+    background: var(--sunk);
+  }
+  .video .drawn .host {
+    font-family: var(--face-ui);
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: var(--ink-2);
+  }
+  .video .drawn .quiet {
+    font-family: var(--face-mono);
+    font-size: 0.76rem;
+    color: var(--ink-3);
+  }
   .play {
     position: absolute;
     inset: 0;

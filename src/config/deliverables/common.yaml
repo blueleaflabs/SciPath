@@ -1,0 +1,169 @@
+# The deliverable library.
+#
+# A deliverable is the thing handed over. Programs reference these by id and
+# add their own constraints, which is how one research plan satisfies IRPD's
+# October step and SCVSEFA's November one.
+#
+# **We do not hold the artifact.** A deliverable is a link to wherever the
+# student keeps it, and links rot when somebody graduates and empties their
+# Drive. That is accepted: work that should outlast a student is work they
+# push through to publication, where it is copied into the record store and
+# becomes permanent.
+#
+# Three fields do the real work.
+#
+# `requirement` is required, optional, or conditional. Optional means its
+# absence is not a fault, so a project at twelve of fourteen with two optional
+# missing reads as done rather than 86 percent.
+#
+# `constraints` are checkable: words, pages, dimensions. **We check nothing,
+# because we do not hold the file.** What we do is say the limit loudly at the
+# moment somebody is working on it, because most fairs refuse an abstract over
+# the limit and nobody reads the rules page twice.
+#
+# `guidance` is the sentence a club officer knows and a first-year student
+# does not. It is the most valuable field in this file and the hardest to
+# write.
+
+id: deliverables-common
+
+deliverables:
+  # ── The research itself ───────────────────────────────────────────────────
+  - id: question
+    name: The research question
+    kind: text
+    owner: student
+    requirement: required
+    guidance: >-
+      One sentence ending in a question mark. If it cannot be answered with
+      the time and equipment you actually have, it is a topic rather than a
+      question.
+
+  - id: literature_review
+    name: Literature review
+    kind: link
+    owner: student
+    requirement: required
+    guidance: >-
+      What is known and where the gap is. Five sources is a floor, not a
+      target, and work with no prior art behind it is either a first in the
+      field or a search that did not happen.
+
+  - id: research_plan
+    name: Research plan
+    kind: link
+    owner: student
+    requirement: required
+    guidance: >-
+      What you will do, with what, and how you will know whether it worked.
+      At a fair this is what the review committee reads, so it is written
+      before the work rather than describing it afterwards.
+
+  - id: hypothesis
+    name: The hypothesis
+    kind: text
+    owner: student
+    requirement: required
+    guidance: >-
+      What you expect to happen and why, written before the data exists. A
+      hypothesis fitted to a result afterwards is a conclusion wearing a
+      disguise, and a judge asking how you arrived at it will find out.
+
+  - id: design_criteria
+    name: Design criteria
+    kind: text
+    owner: student
+    requirement: required
+    guidance: >-
+      The numbers the thing has to hit: cost, accuracy, weight, whatever the
+      problem cares about. Without them, testing has nothing to report and
+      revision has nothing to aim at.
+
+  - id: notebook
+    name: Project notebook
+    kind: internal
+    owner: student
+    requirement: required
+    guidance: >-
+      Written at the time, not reconstructed. What makes a result defensible
+      is that somebody wrote down the conditions on the day.
+
+  - id: figures
+    name: Figures
+    kind: link
+    owner: student
+    requirement: optional
+    guidance: Every figure needs a caption and alt text, whatever the venue asks for.
+
+  - id: manuscript
+    name: The write-up
+    kind: link
+    owner: student
+    requirement: optional
+    shape: imrad
+    guidance: >-
+      Optional at most fairs and required by none of them, which is why most
+      students never write one. It is also the only artifact that outlives the
+      season.
+
+  # ── At the fair ───────────────────────────────────────────────────────────
+  - id: abstract
+    name: Abstract
+    kind: text
+    owner: student
+    requirement: required
+    shape: abstract
+    constraints:
+      words: { max: 250, counting: whole_text }
+    guidance: >-
+      Judges read this before they see your board. Over the limit is usually
+      refused outright rather than trimmed for you.
+
+  - id: board
+    name: The board
+    kind: physical
+    owner: student
+    requirement: required
+    constraints:
+      width_cm: { max: 122 }
+      depth_cm: { max: 76 }
+      height_cm: { max: 274, counting: standing_on_the_table }
+    guidance: >-
+      Measured standing on the table, which catches people who measured the
+      board alone. Check it before the day: there is no fixing it at check-in.
+
+  - id: quad_chart
+    name: Quad chart
+    kind: link
+    owner: student
+    requirement: conditional
+    applies_when: program_requires_quad_chart
+    shape: quad_chart
+    guidance: >-
+      Required by some fairs and by none of the ones here yet. Kept in the
+      library because Genius Olympiad asks for one and defining it twice is
+      how two slightly different quad charts appear.
+
+  # ── Around it ─────────────────────────────────────────────────────────────
+  - id: project_site
+    name: Project site
+    kind: link
+    owner: student
+    requirement: optional
+    guidance: >-
+      A public page presenting the project, built wherever you like. We keep
+      the address and never fetch it.
+
+  - id: sponsor_agreed
+    name: A sponsor who has agreed
+    kind: text
+    owner: student
+    requirement: required
+    guidance: >-
+      Ask before the plan is finished, not after: they have to read it. A week
+      of silence is normal and not a refusal. Two weeks means ask somebody
+      else.
+
+# Facts these deliverables key off, beyond the ones ISEF declares.
+facts:
+  - { id: program_requires_quad_chart, question: "Does this fair ask for a quad chart?" }

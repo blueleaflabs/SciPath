@@ -104,20 +104,69 @@ const YEAR = new Date().getFullYear();
    same set of people as officer: running the queue and chasing deadlines are
    different jobs, and a club may hand them to different students. The
    advisor is always an editor because the advisor decides. */
-const PEOPLE = [
-  { handle: 'advisor',   name: 'S. Halvorsen', role: 'advisor', population: 'staff',   grad: null,     age: '18_plus' },
-  { handle: 'officer.a', name: 'T. Marchetti', role: 'officer', population: 'student', grad: YEAR + 1, age: '13_17', alsoEditor: true },
-  { handle: 'officer.b', name: 'R. Calloway',  role: 'officer', population: 'student', grad: YEAR + 1, age: '13_17' },
-  { handle: 'officer.c', name: 'P. Osei',      role: 'officer', population: 'student', grad: YEAR + 1, age: '13_17' },
-  { handle: 'student.a', name: 'B. Adeyemi',  role: 'student', population: 'student', grad: YEAR + 2, age: '13_17' },
-  { handle: 'student.b', name: 'K. Solheim',  role: 'student', population: 'student', grad: YEAR + 2, age: '13_17' },
-  { handle: 'student.c', name: 'M. Ferreira', role: 'student', population: 'student', grad: YEAR + 1, age: '13_17' },
-  { handle: 'student.d', name: 'D. Ainsworth',role: 'student', population: 'student', grad: YEAR + 3, age: '13_17' },
-  { handle: 'student.e', name: 'V. Rasmussen',role: 'student', population: 'student', grad: YEAR,     age: '18_plus' },
-  { handle: 'student.f', name: 'N. Petrossian',role:'student', population: 'student', grad: YEAR,     age: '18_plus' },
-  { handle: 'student.g', name: 'L. Nakamura', role: 'student', population: 'student', grad: YEAR + 2, age: '13_17' },
-  { handle: 'student.h', name: 'C. Duarte',   role: 'student', population: 'student', grad: YEAR + 1, age: '13_17' },
+const ROLES = [
+  /* Two teachers. One advises the club, one advises the class, and neither
+     sees the other's approval queue: a role scoped to a program means that
+     program. A school with a single advisor leaves the role unscoped and
+     they see everything, which `advisor` here does. */
+  { handle: 'advisor',   role: 'advisor', population: 'staff',   grad: null,     age: '18_plus' },
+  { handle: 'advisor.b', role: null,      population: 'staff',   grad: null,     age: '18_plus' },
+  { handle: 'officer.a', role: 'officer', population: 'student', grad: YEAR + 1, age: '13_17', alsoEditor: true },
+  { handle: 'officer.b', role: 'officer', population: 'student', grad: YEAR + 1, age: '13_17' },
+  { handle: 'officer.c', role: 'officer', population: 'student', grad: YEAR + 1, age: '13_17' },
+  { handle: 'officer.d', role: 'officer', population: 'student', grad: YEAR + 1, age: '13_17' },
+  { handle: 'student.a', role: 'student', population: 'student', grad: YEAR + 2, age: '13_17' },
+  { handle: 'student.b', role: 'student', population: 'student', grad: YEAR + 2, age: '13_17' },
+  { handle: 'student.c', role: 'student', population: 'student', grad: YEAR + 1, age: '13_17' },
+  { handle: 'student.d', role: 'student', population: 'student', grad: YEAR + 3, age: '13_17' },
+  { handle: 'student.e', role: 'student', population: 'student', grad: YEAR,     age: '18_plus' },
+  { handle: 'student.f', role: 'student', population: 'student', grad: YEAR,     age: '18_plus' },
+  { handle: 'student.g', role: 'student', population: 'student', grad: YEAR + 2, age: '13_17' },
+  { handle: 'student.h', role: 'student', population: 'student', grad: YEAR + 1, age: '13_17' },
 ];
+
+/**
+ * Names are built from the handle, not chosen.
+ *
+ * They used to be invented people — S. Halvorsen, T. Marchetti — a different
+ * fourteen at each school, so that a name on a page told you which tenant it
+ * belonged to. That solved a leak-spotting problem and created a worse
+ * testing one: reading a screen meant holding a cast list in your head and
+ * remembering that T. Marchetti is the officer who is also an editor while
+ * R. Calloway runs the class.
+ *
+ * So a fixture is now named for what it is. `mv_officer1` on a page tells
+ * you the tenant, the role and which one, without looking anything up, and
+ * the leak test is stronger than it ever was with invented names: a `lyn_`
+ * anywhere on a Monta Vista page is wrong on sight.
+ *
+ * Every name is still obviously fictional, which is what 12.11 asks for, and
+ * more obviously so than a plausible invented person was.
+ */
+const PREFIX = {
+  montavista: 'mv',
+  lynbrook: 'lyn',
+  blueleaflabs: 'open',
+};
+
+/* `advisor` is bare and the rest carry a letter. Both become a number, so
+   the handles keep their shape and the names read in order. */
+function numberOf(handle) {
+  const [, suffix] = handle.split('.');
+  if (!suffix) return 1;
+  return suffix.charCodeAt(0) - 96;
+}
+
+/** The fourteen for one school, named from their handles. */
+function castFor(slug) {
+  const prefix = PREFIX[slug];
+  if (!prefix) fail(`No prefix for "${slug}". Add one to PREFIX in this file.`);
+
+  return ROLES.map((role) => {
+    const kind = role.handle.split('.')[0];
+    return { ...role, name: `${prefix}_${kind}${numberOf(role.handle)}` };
+  });
+}
 
 const db = createClient(URL, KEY, {
   auth: { persistSession: false, autoRefreshToken: false },
@@ -163,9 +212,10 @@ async function seedOrg(slug) {
 
   console.log(`\n${org.lockup_name}  ->  http://${org.hostname}:4321/app/`);
 
-  for (const person of PEOPLE) {
-    /* Namespaced per tenant, so the same fixture cast exists at every school
-       and an account can never be reused across two of them. */
+  for (const person of castFor(slug)) {
+    /* Namespaced per tenant. The handle is the same at every school and the
+       person behind it is not, so an account can never be reused across two
+       of them and a name on a page says which school it belongs to. */
     const email = `${slug}.${person.handle}@${FIXTURE_DOMAIN}`;
 
     /* Guard 2, asserted rather than assumed. */
@@ -186,7 +236,11 @@ async function seedOrg(slug) {
       if (!/already/i.test(createError.message)) {
         fail(`${email}: ${createError.message}`);
       }
-      const { data: list } = await db.auth.admin.listUsers({ perPage: 200 });
+      const { data: list, error: listError } = await db.auth.admin.listUsers({ perPage: 200 });
+
+  if (listError) {
+    fail(`Could not read the accounts: ${listError.message}`);
+  }
       id = list?.users.find((u) => u.email === email)?.id;
       if (!id) fail(`${email} exists but could not be read back.`);
     }
@@ -214,23 +268,38 @@ async function seedOrg(slug) {
     /* An officer is a student who also runs the club, so they hold both.
        Only the advisor, who is a teacher, holds one. */
     const roles =
-      person.role === 'officer' ? ['student', 'officer'] : [person.role];
+      person.role === 'officer'
+        ? ['student', 'officer']
+        /* A null role is granted elsewhere: the second teacher advises one
+           program, and programs do not exist when this runs. */
+        : person.role
+          ? [person.role]
+          : [];
 
     /* One officer also runs the queue, so there is somebody to sign in as
        who is an editor and not the advisor. Testing the whole flow as the
        advisor would hide every place the two are wrongly conflated. */
     if (person.alsoEditor) roles.push('editor');
 
-    for (const role of roles) {
+    /* An officer's role belongs to a program, and programs are created after
+       this script runs. `seed-programs.mjs` grants those, which is also the
+       only place that knows which officer runs which. */
+    const here = roles.filter((r) => r !== 'officer');
+
+    for (const role of here) {
       /* Not an upsert. The uniqueness on user_roles comes from two partial
          indexes, and ON CONFLICT cannot infer a target from those. */
-      const { data: held } = await db
+      const { data: held, error: heldError } = await db
         .from('user_roles')
         .select('id')
         .eq('user_id', id)
         .eq('role', role)
         .is('revoked_at', null)
         .maybeSingle();
+
+      /* Without this, a failed read looks like "no role held" and the grant
+         is attempted again every reset. */
+      if (heldError) fail(`Could not read the roles: ${heldError.message}`);
 
       if (!held) {
         const { error: roleError } = await db
@@ -240,7 +309,7 @@ async function seedOrg(slug) {
       }
     }
 
-    console.log(`  ${person.role.padEnd(8)} ${person.name.padEnd(14)} ${email}`);
+    console.log(`  ${(person.role ?? 'advisor').padEnd(8)} ${person.name.padEnd(14)} ${email}`);
   }
 }
 
@@ -248,7 +317,7 @@ async function main() {
   for (const slug of ORG_SLUGS) await seedOrg(slug);
 
   console.log(
-    `\n${PEOPLE.length * ORG_SLUGS.length} fixtures across ${ORG_SLUGS.length} tenants.` +
+    `\n${ROLES.length * ORG_SLUGS.length} fixtures across ${ORG_SLUGS.length} tenants, no name shared.` +
       `\nPassword for all of them: ${PASSWORD}` +
       '\nSign in with email and password. Google sign-in is for real accounts.' +
       '\n\nEvery name here is invented. No real advisor appears in any fixture.'

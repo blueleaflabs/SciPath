@@ -1,0 +1,127 @@
+# Applying for funding.
+#
+# A process rather than a program: the steps are the same at every funder and
+# only the dates and the limits change. `grant-mvhs-micro-2027.yaml` is one
+# instance of it.
+#
+# Two things here that no other process in this repository has.
+#
+# **It starts before the application.** Most students never apply for
+# anything because they do not know these exist, so "find out what you can
+# apply for" is a step rather than an assumption.
+#
+# **It does not end at the decision.** A fair ends at judging. A grant has a
+# report and a reconciliation months later, and a school that misses those is
+# a school that does not get the next one.
+
+id: process-grant
+kind: process
+name: Applying for funding
+
+# ── When a step starts being mentioned ────────────────────────────────────
+#
+# A grant closes and does not reopen, so a missed deadline is a season
+# without money rather than a late form. Longer than the floor, and it goes
+# urgent early.
+notify_default:
+  blocks_submission: { from: 30, urgent: 7 }
+
+phases:
+  - { id: find,     name: Finding it }
+  - { id: write,    name: Writing it }
+  - { id: submit,   name: Submitting }
+  - { id: decision, name: The decision }
+  - { id: after,    name: After the money }
+
+steps:
+  - id: find_grants
+    name: Find out what you can apply for
+    phase: find
+    order: 10
+    owner: student
+    deliverables: []
+    note: >-
+      The step most students skip, because they do not know it exists. A
+      school with a list has students who apply and a school without one has
+      students who assume they cannot.
+
+  - id: check_eligibility
+    name: Check you are eligible
+    phase: find
+    order: 20
+    owner: student
+    requires: [find_grants]
+    deliverables: []
+    risk: >-
+      Grade, school, and citizenship are the three that catch people, and all
+      three are checkable in a minute before writing anything.
+
+  - id: ask_sponsor
+    name: Ask your sponsor for a letter
+    phase: write
+    order: 30
+    owner: student
+    deliverables:
+      - { ref: grant_letter }
+    risk: >-
+      First, not last. A teacher asked in the final week writes a letter that
+      reads like one, and a reviewer has read hundreds of them.
+
+  - id: draft_proposal
+    name: Write the proposal
+    phase: write
+    order: 40
+    owner: student
+    requires: [check_eligibility]
+    deliverables:
+      - { ref: grant_narrative }
+
+  - id: draft_budget
+    name: Work out what the money is for
+    phase: write
+    order: 50
+    owner: student
+    requires: [draft_proposal]
+    deliverables:
+      - { ref: grant_budget }
+
+  - id: submit
+    name: Submit it
+    phase: submit
+    order: 60
+    owner: student
+    requires: [draft_proposal, draft_budget, ask_sponsor]
+    consequence: blocks_submission
+    deliverables:
+      - { ref: grant_transcript }
+    note: >-
+      Late is not late at most funders. It is refused, in the same way a fair
+      refuses a human participants project after its date.
+
+  - id: decision
+    name: The decision
+    phase: decision
+    order: 70
+    owner: program
+    deliverables: []
+
+  - id: spend
+    name: Spend it on what you said
+    phase: after
+    order: 80
+    owner: student
+    applies_when: awarded
+    deliverables:
+      - { ref: grant_receipts }
+    note: >-
+      Spending it on something else is the fastest way to end a school's
+      relationship with a funder, and the next student is the one who pays.
+
+  - id: report
+    name: Write the final report
+    phase: after
+    order: 90
+    owner: student
+    applies_when: awarded
+    deliverables:
+      - { ref: grant_report }

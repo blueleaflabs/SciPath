@@ -4,10 +4,61 @@ export const getStaticPaths = orgPaths;
 
 import Base from '../../layouts/Base.astro';
 import PageHead from '../../components/PageHead.astro';
-import { questionBank, stageLabel } from '../../lib/questionBank';
+import { activeOrg } from '../../lib/tenant';
+import { resolveProgram } from '../../lib/templates';
 
-const bank = questionBank();
-const groups = bank.mistakes;
+/**
+ * What goes wrong, at the level that is true everywhere.
+ *
+ * Three layers hold this. The research process knows the universal ones; an
+ * institution knows its own; a club knows things about its own teachers and
+ * its own seasons. The first two are safe to show anybody and the third is
+ * not, because it names people, so this page carries the first two and the
+ * club's own knowledge stays behind the door on the step it belongs to.
+ *
+ * It read a hand-written list and claimed it was collected from judges each
+ * March, which nobody was doing. These come from the templates the software
+ * actually runs on, so a warning read here is the warning met later at the
+ * moment it matters.
+ */
+const org = activeOrg(Astro);
+
+const groups = (() => {
+  const seen = new Set<string>();
+  const byPhase = new Map<string, { name: string; items: any[] }>();
+
+  for (const id of org.programs ?? []) {
+    let program: any;
+    try {
+      program = resolveProgram(id);
+    } catch {
+      continue;
+    }
+
+    const phases = new Map((program.phases ?? []).map((p: any) => [p.id, p.name ?? p.id]));
+
+    for (const step of program.steps) {
+      /* Not the club's layer. It names teachers. */
+      if (step.source === 'school') continue;
+      if (!step.risk) continue;
+
+      const key = `${step.phase}:${step.risk}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+
+      const bucket = byPhase.get(step.phase) ?? {
+        name: phases.get(step.phase) ?? step.phase,
+        items: [] as any[],
+      };
+
+      bucket.items.push({ step: step.name, risk: step.risk });
+      byPhase.set(step.phase, bucket);
+    }
+  }
+
+  return [...byPhase.entries()].map(([id, g]) => ({ id, ...g }));
+})();
+
 const total = groups.reduce((n, g) => n + g.items.length, 0);
 ---
 
@@ -18,7 +69,7 @@ const total = groups.reduce((n, g) => n + g.items.length, 0);
   <PageHead
     eyebrow="Institutional memory"
     title="Common mistakes"
-    lede="Collected from mentors and judges after each season, organized by the stage where the mistake is still cheap to fix. Reading this needs no account, and none of it is specific to any one school."
+    lede="Organized by the stage where the mistake is still cheap to fix, and taken from the same rules the software checks. Reading this needs no account."
   >
     <div class="row" style="margin-top:18px">
       <span class="chip solid">{total} entries</span>
@@ -28,22 +79,25 @@ const total = groups.reduce((n, g) => n + g.items.length, 0);
 
   <div class="wrap" data-pagefind-body>
     <nav class="jump" aria-label="Stages">
-      {groups.map((g) => <a class="chip" href={`#${g.stage}`}>{stageLabel(g.stage)}</a>)}
+      {groups.map((g) => <a class="chip" href={`#${g.id}`}>{g.name}</a>)}
     </nav>
 
     <div class="stack" style="margin-top:26px">
       {
         groups.map((g, i) => (
-          <section id={g.stage} class="card pad">
+          <section id={g.id} class="card pad">
             <div class="sec-h" style="margin-top:0">
               <b>
-                {String(i + 1).padStart(2, '0')} · {stageLabel(g.stage)}
+                {String(i + 1).padStart(2, '0')} · {g.name}
               </b>
               <span>{g.items.length}</span>
             </div>
             <ul class="mistakes">
-              {g.items.map((item) => (
-                <li>{item}</li>
+              {g.items.map((item: any) => (
+                <li>
+                  <b class="on">{item.step}</b>
+                  {item.risk}
+                </li>
               ))}
             </ul>
           </section>
@@ -54,14 +108,57 @@ const total = groups.reduce((n, g) => n + g.items.length, 0);
     <div class="note" style="margin-top:28px">
       <h4>Where this comes from</h4>
       <p>
-        Every entry was written down by someone who watched it happen. The list grows each
-        March, right after judging, which is the only time anyone remembers this clearly.
+        The research process and the rules each program publishes. Every one
+        of these is attached to a step, and a student working here meets it on
+        the day they are doing that step rather than on a page they read once
+        in August.
+      </p>
+      <p>
+        A club keeps its own list as well, about its own teachers and its own
+        seasons, written by officers who watched something go wrong. That one
+        is not public, because it names people.
+      </p>
+    </div>
+
+    {/* Reading the list is worth something. Meeting the right item on the
+        right day is worth considerably more, and that needs an account. */}
+    <div class="sec cta">
+      <h2 class="t-h2">Knowing these is not the same as remembering them in March.</h2>
+      <p>
+        Signing in attaches each of these to the thing you are actually doing:
+        the warning about a literature review arrives while you are writing
+        one, and the one about signature order arrives before it can no longer
+        be fixed.
+      </p>
+      <p class="go">
+        <a class="btn" href="/app/">Start a project</a>
+        <a class="btn btn-2" href="/deadlines/">This season's dates</a>
       </p>
     </div>
   </div>
 </Base>
 
 <style>
+  /* The step a warning belongs to, in front of it. */
+  .on {
+    display: block;
+    font-family: var(--face-ui);
+    font-size: 0.84rem;
+    color: var(--ink-3);
+    margin-bottom: 2px;
+  }
+
+  /* The way in, at the foot of the page. Same shape as the one on the
+     calendar, which is the other page somebody reads before signing up. */
+  .cta {
+    border-top: 2px solid var(--ink);
+    padding-top: 24px;
+    margin-top: 32px;
+    max-width: 74ch;
+  }
+  .cta p { margin-top: 12px; }
+  .go { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 20px; }
+
   .jump {
     display: flex;
     flex-wrap: wrap;

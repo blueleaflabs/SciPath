@@ -15,6 +15,11 @@
 
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import { assess } from '../src/lib/attention.ts';
+import { loadLibrary } from '../scripts/template-library.mjs';
+import { resolveProgram, deliverablesFor, datesFor } from '../src/lib/template-resolve.ts';
+
+const library = loadLibrary();
 import {
   ACTIONS,
   actionDone,
@@ -310,6 +315,158 @@ test('an accepted submission is not described as under review', () => {
   for (const state of ['accepted', 'scheduled', 'exported', 'published']) {
     assert.doesNotMatch(authorGuidance[state], /review/i, state);
   }
+});
+
+
+/* ── A deadline is met by what it asked for ──────────────────────────────── */
+
+test('a shared deliverable is not tied to one step', () => {
+  /* A student recorded the research question against "Settle the question
+     with an officer" and the row went on saying "Record it below", with the
+     phase still reading 0 of 1.
+   
+     Two causes. The deliverable is wanted by two steps — 6.8's whole point,
+     that a shared id is how one artifact satisfies two calendars — and the
+     form carried the id of the first. And that first step, `topic`, carries
+     no date, so it is never seeded as a milestone at all: the form posted an
+     empty id and nothing anywhere was marked.
+   
+     This asserts the shape that produced it, so a template edit that quietly
+     removes the sharing does not silently remove the reason this is derived
+     rather than stored. */
+  const program = resolveProgram('mvhs-scvsefa-2027', library);
+
+  const wanting = program.steps.filter((s) =>
+    deliverablesFor(program, s, {}).some((d) => d.id === 'question')
+  );
+
+  assert.ok(
+    wanting.length > 1,
+    'the research question is wanted by one step only, so this no longer covers the case it was written for'
+  );
+
+  const dated = datesFor(program);
+  const undated = wanting.filter((s) => !dated.find((d) => d.step.id === s.id)?.date);
+
+  assert.ok(
+    undated.length > 0,
+    'every step wanting it now has a date, so nothing tests the missing milestone case'
+  );
+});
+
+test('the entry page derives doneness rather than reading it', () => {
+  /* The fix, in the place it has to hold. Reading `completed_on` for a step
+     that hands something over puts the answer in a row that recording may
+     never have touched. */
+  const page = fs.readFileSync('src/pages/app/entry/[id].astro', 'utf8');
+
+  assert.match(page, /const satisfied = /, 'the derivation is gone');
+  assert.match(
+    page,
+    /done: rows\.filter\(\(m: any\) => satisfied\(m\)\)\.length/,
+    'the phase count reads the row again'
+  );
+  assert.doesNotMatch(
+    page,
+    /\{m\.completed_on \? 'Recorded' : 'Record it below'\}/,
+    'the deadline row reads the row again'
+  );
+});
+
+/* ── Everything wrong with a project, not the first thing ────────────────── */
+
+test('assess reports every reason', () => {
+  /* It returned at the first thing it found, so a project with no sponsor
+     *and* no officer read as "No teacher sponsor". Somebody who fixed that
+     came back to a row still saying something was wrong, having been told
+     about one of two problems and left to find the other. */
+  const state = {
+    worst: null,
+    hasOfficer: false,
+    hasSponsor: false,
+    startedOn: null,
+    obligationsDone: 0,
+    obligationsTotal: 0,
+  };
+
+  const v = assess(state);
+  assert.equal(v.level, 'attention');
+  assert.deepEqual(v.reasons, ['No teacher sponsor', 'No club officer', 'No start date']);
+  assert.equal(v.reason, v.reasons[0], 'reason is still the first of them');
+});
+
+test('a disqualification is the whole answer', () => {
+  /* It cannot be undone, so what else is missing is not the next thing
+     anybody does. */
+  const v = assess({
+    worst: { severity: 'disqualifying', name: 'Work began before an approval' },
+    hasOfficer: false,
+    hasSponsor: false,
+    startedOn: null,
+    obligationsDone: 0,
+    obligationsTotal: 0,
+  });
+
+  assert.equal(v.level, 'disqualifying');
+  assert.deepEqual(v.reasons, ['Work began before an approval']);
+});
+
+test('a project in order has nothing to say', () => {
+  const v = assess({
+    worst: null,
+    hasOfficer: true,
+    hasSponsor: true,
+    startedOn: '2026-09-01',
+    obligationsDone: 2,
+    obligationsTotal: 2,
+  });
+
+  assert.equal(v.level, 'ok');
+  assert.equal(v.reason, null);
+  assert.deepEqual(v.reasons, []);
+});
+
+
+/* ── An unsent list and an acceptance are a contradiction ────────────────── */
+
+test('accept is withheld while a list is unsent', () => {
+  /* An editor wrote the changes the authors should make, did not send them,
+     and accepted. The list stayed "not sent yet" forever: the authors never
+     saw it, the tracker never mentioned it, and writing it was thrown away
+     by a click that said nothing about it. */
+  assert.equal(
+    can('editorial_review', 'decide_accepted', 'editor', { findingCount: 1 }),
+    false
+  );
+});
+
+test('and offered once the list is empty or gone', () => {
+  assert.equal(
+    can('editorial_review', 'decide_accepted', 'editor', { findingCount: 0 }),
+    true,
+    'an editor with nothing outstanding cannot accept'
+  );
+  assert.equal(
+    can('editorial_review', 'decide_accepted', 'editor'),
+    true,
+    'a caller that passes no facts is not blocked'
+  );
+});
+
+test('sending the list stays available, because it is the way out', () => {
+  assert.equal(
+    can('editorial_review', 'request_revisions', 'editor', { findingCount: 3 }),
+    true
+  );
+});
+
+test('declining is not guarded', () => {
+  /* A refused paper makes the list moot, and blocking that too would trap an
+     editor between two doors. */
+  assert.equal(
+    can('editorial_review', 'decide_declined', 'editor', { findingCount: 3 }),
+    true
+  );
 });
 
 console.log(`${passed} workflow assertions passed.`);

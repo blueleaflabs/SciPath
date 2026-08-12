@@ -65,6 +65,27 @@
   padding: 44px 0 0;
 }
 
+/* A hero directly after the working surface's tabs.
+ *
+ * Eight pages carried `style="padding-top:0"` on their hero, all of them
+ * under AppShell, which is the markup saying the default is wrong here: the
+ * tabs already provide the separation, and the hero's own padding pushed
+ * every page's title a screen below its navigation.
+ */
+.appnav + .hero {
+  padding-top: 0;
+}
+
+/* The first section after a hero, where two paddings stack.
+ *
+ * A hero already ends with space below it, so the full gap put the content
+ * of a page a screen down from its title. This is the same reasoning
+ * everywhere it applies, which is why it is here rather than in one page.
+ */
+.hero + .sec {
+  padding-top: 26px;
+}
+
 .sec-h {
   display: flex;
   justify-content: space-between;
@@ -499,6 +520,110 @@ a.btn-q:visited {
   color: var(--ink);
 }
 
+/* The file input's own button.
+ *
+ * It is the browser's until you say otherwise: grey, system font, and on a
+ * page where every other control carries the school's styling, the one that
+ * does not reads as broken. There are four of these across the app and they
+ * should not each decide for themselves.
+ */
+input[type='file'] {
+  padding: 6px;
+  font-size: 0.92rem;
+}
+
+input[type='file']::file-selector-button {
+  font-family: var(--face-ui);
+  font-weight: 600;
+  font-size: 0.9rem;
+  padding: 7px 14px;
+  margin-right: 10px;
+  border: 1.5px solid var(--ink);
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--ink);
+  cursor: pointer;
+}
+
+input[type='file']::file-selector-button:hover {
+  background: var(--sunk);
+}
+
+/* A button that reads as a link.
+ *
+ * For a secondary action inside a table row, where a bordered button on
+ * every line would turn the table into a wall of boxes: Verify, Remove.
+ * Still a button, and still the tenant's ink and face.
+ *
+ * It was defined three times in three files, one of them with `!important`
+ * to beat a rule in its own stylesheet, and the three had drifted to three
+ * different sizes.
+ */
+.linkish {
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  font-family: var(--face-ui);
+  font-size: 0.88rem;
+  color: var(--ink-3);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.linkish:hover {
+  color: var(--ink);
+}
+
+/* A text input, anywhere.
+ *
+ * Twenty-six pages set `class="in"` on an input and nothing defined it. They
+ * looked plausible because a browser's default input is not hideous, and
+ * beside a styled button on the same row the difference is obvious.
+ */
+.in {
+  font-family: inherit;
+  font-size: 0.94rem;
+  padding: 8px 10px;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background: var(--card);
+  color: var(--ink);
+  min-width: 0;
+}
+
+.in:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 1px;
+}
+
+/* Read aloud, never drawn.
+ *
+ * Four pages label a control this way and nothing defined it, so the label
+ * rendered as ordinary text — which is how "Reason, optional" appeared above
+ * an input instead of beside it, pushing a row out of alignment.
+ *
+ * Clipped rather than `display: none`, which would take it out of the
+ * accessibility tree along with the layout.
+ */
+.sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Inside a table row, where the full size turns one line into two. */
+.btn-sm {
+  padding: 7px 14px;
+  font-size: 0.9rem;
+}
+
 .btn-2:hover {
   background: var(--sunk);
   color: var(--ink);
@@ -580,6 +705,18 @@ a.btn-q:visited {
   border-left: 5px solid var(--stage-work);
   padding: 15px 18px;
   background: var(--card);
+}
+
+/* A failure looks like one.
+ *
+ * Every outcome on the working surface rendered in the same blue-barred
+ * panel, so "Recorded." and "That email and password did not match" were
+ * the same object in the same color, and the bar carried no information at
+ * all. The role is already on the element, because a screen reader has to
+ * be told the difference; this tells everybody else. */
+.note[role='alert'] {
+  border-left-color: var(--alert);
+  background: var(--alert-bg);
 }
 
 /* TEXT PANELS CARRY THE MEASURE, AND THE TEXT INSIDE FILLS THEM.
@@ -945,5 +1082,135 @@ mark {
   .mform .row-2,
   .mform .row-3 {
     grid-template-columns: 1fr;
+  }
+}
+
+/* ═══ THE ACTION SCREENS ═══════════════════════════════════════════════════
+ *
+ * Assign, Editorial and Publish are the same kind of screen: a queue, where
+ * something arrives, somebody holding a role acts on it, and it moves on.
+ * The overview is the other kind, a register — everything, with its state.
+ *
+ * They had grown three vocabularies for one shape. Three grammars in the
+ * headings alone, an eyebrow that repeated the nav label above it on two of
+ * the three, and three different row primitives: four tables, a bare list,
+ * and a set of hand-styled blocks. Somebody moving between them was learning
+ * the same page three times.
+ *
+ * These are the shared parts, here rather than repeated per page, so a
+ * fourth action screen inherits the vocabulary instead of inventing one.
+ * Added to the component inventory in 15.7.
+ */
+
+/* One line of figures under the heading. A stacked label under each number
+   made a five item row three lines tall at the top of the page a teacher
+   opens first. */
+.counts {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 26px;
+  margin: 16px 0 0;
+  padding: 10px 0;
+  border-top: 1px solid var(--rule);
+  border-bottom: 1px solid var(--rule);
+  font-family: var(--face-ui);
+  font-size: 0.88rem;
+  color: var(--ink-3);
+}
+
+.counts li {
+  white-space: nowrap;
+}
+
+.counts b {
+  font-family: var(--face-num);
+  font-size: 1rem;
+  color: var(--ink);
+  margin-right: 5px;
+}
+
+/* Nothing wrong reads as nothing wrong: the alert tone only appears when
+   there is something in the count. */
+.counts li.bad b {
+  color: var(--alert);
+}
+
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 18px;
+  margin: 18px 0 6px;
+  font-family: var(--face-ui);
+  font-size: 0.88rem;
+}
+
+.filters a {
+  color: var(--ink-3);
+  text-decoration: none;
+}
+
+.filters a.on {
+  color: var(--ink);
+  font-weight: 600;
+  text-decoration: underline;
+}
+
+/* A queue: one thing, its state, and the single action available on it.
+ *
+ * The rule that decides between this and `.tbl` is not cosmetic. **A table
+ * is for comparing across rows; a list is for acting on one.** An advisor
+ * scanning who has a sponsor is comparing, and wants columns. An editor
+ * taking the next submission is acting, and columns make them read six
+ * cells to find the one button. */
+.queue {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border-top: 1px solid var(--rule-fine);
+}
+
+.queue > li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 4px 20px;
+  align-items: center;
+  padding: 14px 0;
+  border-bottom: 1px solid var(--rule-fine);
+}
+
+.q-title {
+  grid-column: 1;
+  font-size: 1.05rem;
+}
+
+/* Whatever the row needs said about itself: who is on it, when it arrived,
+   what it is waiting for. */
+.q-sub {
+  grid-column: 1;
+  font-family: var(--face-ui);
+  font-size: 0.86rem;
+  color: var(--ink-3);
+}
+
+/* The action, right and vertically centred against the whole row, so a
+   column of them is a column whatever each row says. */
+.q-do {
+  grid-column: 2;
+  grid-row: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+@media (max-width: 640px) {
+  .queue > li {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .q-do {
+    grid-column: 1;
+    grid-row: auto;
+    margin-top: 8px;
   }
 }

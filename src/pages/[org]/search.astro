@@ -4,6 +4,7 @@
 export const prerender = false;
 
 import Base from '../../layouts/Base.astro';
+import { cachePublicPage } from '../../lib/caching';
 import PageHead from '../../components/PageHead.astro';
 import { disciplines } from '../../config/site';
 import { openArchive } from '../../lib/archive';
@@ -18,7 +19,7 @@ const withCounts = disciplines
   .map((d) => ({ ...d, n: counts.get(d.slug) ?? 0 }))
   .filter((d) => d.n > 0);
 
-Astro.response.headers.set('Cache-Control', 'public, max-age=120, s-maxage=600');
+cachePublicPage(Astro);
 ---
 
 <Base
@@ -35,7 +36,7 @@ Astro.response.headers.set('Cache-Control', 'public, max-age=120, s-maxage=600')
     <div class="card pad stack">
       <form class="sbar" id="search-form" role="search">
         <label class="skip" for="q">Search records</label>
-        <input class="in" type="search" id="q" name="q" placeholder="flood mapping" autocomplete="off" />
+        <input class="in" type="search" id="q" name="q" autocomplete="off" />
         <button class="btn" type="submit">Search</button>
       </form>
 

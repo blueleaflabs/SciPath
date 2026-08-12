@@ -10,7 +10,26 @@
 
 import assert from 'node:assert/strict';
 import { checkStructure, maySubmit, completeness, checklist, applicableRules, words } from '../src/lib/structure.ts';
-import { defaultRules, sectionsFor } from '../src/config/structure.ts';
+import { sectionsFor, allRules } from '../src/config/structure.ts';
+import fs from 'node:fs';
+import yaml from 'js-yaml';
+
+/**
+ * The shape is loaded here rather than imported by the rules.
+ *
+ * Sections used to be seven literals in structure.ts. They come from a shape
+ * now, which is passed in: that file knows how a completeness check works and
+ * has no business knowing where document shapes are kept. It also means these
+ * tests run under plain Node, where Vite's bundling of the YAML is absent.
+ */
+const shapeOf = (id) =>
+  yaml.load(fs.readFileSync(`src/config/shapes/${id}.yaml`, 'utf8'));
+
+const imrad = shapeOf('imrad');
+
+/* What every check in this file runs against: the record fields, the seven
+   sections the shape supplies, and the human checks. */
+const defaultRules = allRules(imrad);
 
 let passed = 0;
 function test(name, fn) {
@@ -357,8 +376,8 @@ test('a project entry has fewer things to complete than an article', () => {
 });
 
 test('the section list matches what the rules declare', () => {
-  assert.equal(sectionsFor('article').length, 7);
-  assert.equal(sectionsFor('project').length, 0);
+  assert.equal(sectionsFor('article', imrad).length, 7);
+  assert.equal(sectionsFor('project', imrad).length, 0);
 });
 
 test('every rule id is unique', () => {
@@ -466,6 +485,44 @@ test('every caller agrees on how many things there are', () => {
     const f = checkStructure({ rules: defaultRules, manuscript: m });
     assert.equal(checklist(defaultRules, m, f).length, completeness(defaultRules, m, f).total);
   }
+});
+
+/* ── The sections come from a shape ──────────────────────────────────────── */
+
+test('the section rules are built from the shape, not written here', () => {
+  const rules = sectionsFor('article', imrad);
+  assert.equal(rules.length, imrad.parts.length);
+  for (const [i, rule] of rules.entries()) {
+    assert.equal(rule.key, imrad.parts[i].id);
+    assert.equal(rule.label, imrad.parts[i].name);
+    assert.equal(rule.minWords, imrad.parts[i].min_words ?? 0);
+  }
+});
+
+test('a different shape gives different sections', () => {
+  /* Design research has no Methods and Results, and forcing IMRaD onto it
+     would produce a checklist a student cannot honestly satisfy. */
+  const design = sectionsFor('article', shapeOf('design-research'));
+  const keys = design.map((r) => r.key);
+  assert.ok(keys.includes('empathy'));
+  for (const scientific of ['methods', 'results', 'discussion']) {
+    assert.ok(!keys.includes(scientific), scientific);
+  }
+});
+
+test('no shape means no section rules rather than a crash', () => {
+  assert.deepEqual(sectionsFor('article', null), []);
+  assert.deepEqual(sectionsFor('article', {}), []);
+});
+
+test('allRules puts the sections between the record and the human checks', () => {
+  const rules = allRules(imrad);
+  const kinds = rules.map((r) => r.kind);
+  const lastMeta = kinds.lastIndexOf('meta');
+  const firstSection = kinds.indexOf('section');
+  const firstHuman = kinds.indexOf('human');
+  assert.ok(firstSection > lastMeta, 'sections should follow the record fields');
+  assert.ok(firstHuman > firstSection, 'human checks should come last');
 });
 
 console.log(`${passed} structural check assertions passed.`);

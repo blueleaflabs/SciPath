@@ -10,6 +10,7 @@
 
 import assert from 'node:assert/strict';
 import { checkDateOrder, worstFinding } from '../src/lib/dateOrder.ts';
+import { arrivedAt } from '../src/lib/dates.ts';
 
 let passed = 0;
 function test(name, fn) {
@@ -215,6 +216,49 @@ test('no obligations means nothing to say', () => {
     checkDateOrder({ startedOn: '2026-09-01', obligations: [], today: '2026-10-30' }).length,
     0
   );
+});
+
+/* ── When something arrived ─────────────────────────────────────────────── */
+
+/** A time on a day relative to today, in the machine's own zone. */
+const at = (hour, minute, dayOffset = 0) => {
+  const d = new Date();
+  d.setDate(d.getDate() + dayOffset);
+  d.setHours(hour, minute, 0, 0);
+  return d.toISOString();
+};
+
+test('today carries a clock', () => {
+  /* The hour is the part that distinguishes two submissions on one morning,
+     and "today" alone hid it.
+   
+     The space before AM is `\s` rather than a literal, because `toLocaleTimeString`
+     puts a narrow no-break space there in a browser and an ordinary space
+     under node's ICU build. Pinning either one makes this pass in the place
+     it runs and describe something the reader never sees. */
+  assert.match(arrivedAt(at(9, 5)), /^today, 9:05\sAM$/);
+  assert.match(arrivedAt(at(17, 32)), /^today, 5:32\sPM$/);
+});
+
+test('today means the calendar day, not the last 24 hours', () => {
+  /* The boundaries are where this goes wrong. One minute past midnight is
+     today; one minute to midnight is today; eleven last night is not, even
+     though it is well within a rolling day. */
+  assert.match(arrivedAt(at(0, 1)), /^today, /);
+  assert.match(arrivedAt(at(23, 59)), /^today, /);
+  assert.doesNotMatch(arrivedAt(at(23, 0, -1)), /today/);
+});
+
+test('any other day is a date, not a duration', () => {
+  /* "3 days" told an editor how long it had waited rather than when it
+     landed. By then the hour has stopped mattering. */
+  assert.match(arrivedAt(at(14, 0, -3)), /^[A-Z][a-z]{2} \d{1,2}, \d{4}$/);
+  assert.match(arrivedAt(at(0, 30, 1)), /^[A-Z][a-z]{2} \d{1,2}, \d{4}$/);
+});
+
+test('nothing renders as nothing', () => {
+  assert.equal(arrivedAt(null), '');
+  assert.equal(arrivedAt(undefined), '');
 });
 
 console.log(`${passed} date ordering assertions passed.`);

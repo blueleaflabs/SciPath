@@ -1,0 +1,191 @@
+# Monta Vista IRPD 2026-27
+# This file contains the IRPD project design process, complete with six milestones and several deliverables that come out of those milestones.
+# Contains every step from creating the HMW question all the way to presenting at the end-of-year showcase.
+
+id: irpd-mvhs-2027
+family: irpd
+kind: course
+
+# A class. A teacher, student elders, a roster, its own process
+# and its own anchors. What it prepares for is its own showcase.
+role: cohort
+
+# The class's own showcase, which is an opportunity rather than a milestone:
+# a student can say "I presented at the IRPD Community Showcase" two years
+# later, and that is a claim about the project which outlives the class. The
+# test is whether it produces something the project carries afterwards.
+prepares_for: irpd-showcase-2027
+
+name: Independent Research and Project Design
+short_name: IRPD
+authority: Monta Vista High School
+level: school
+season: 2027
+version: 1
+
+uses:
+  deliverables: [deliverables-common]
+url: https://irpdelders.wixsite.com/irpd/
+location: Room A112
+publishes_to: mvrj
+
+teachers:
+  - { name: Kavita Gupta }
+  - { name: Sushma Bana }
+
+roles:
+  staff: { singular: Elder, plural: Elders }
+  member: { singular: Student, plural: Students }
+  staff_note: Returning student leaders selected by the instructors.
+
+has:
+  entries: false
+  categories: false
+  awards: false
+  advancement: false
+
+process: own
+
+facts:
+  - { id: humans, question: "Will you interview or survey anybody?" }
+  - { id: minors, question: "Are any of them under 18?" }
+
+# These are the phases of the IRPD class, in accordance with the d.school framework.
+phases:
+  - { id: understand, name: Project ideation,             window: { from: august,    to: september } }
+  - { id: empathize,  name: User interviews,              window: { from: september, to: october } }
+  - { id: define,     name: Defining the problem,         window: { from: october,   to: december } }
+  - { id: ideate,     name: Ideation and journey mapping, window: { from: january,   to: february } }
+  - { id: showcase,   name: Community showcase,           window: { from: february,  to: may } }
+
+
+joining: approval
+places: 30
+
+# ── When a milestone starts being mentioned ────────────────────────────────
+#
+# A window, not a schedule: nothing is queued, so there is nothing to cancel
+# when a milestone is met. The step simply stops appearing in the digest.
+#
+# These override the platform floor in src/lib/template-resolve.ts, which is
+# five days for a step with no consequence. Five days is right for a fair
+# deadline that mostly confirms paperwork and wrong for a class milestone
+# with weeks of work behind it: nobody chooses a research question in a week.
+#
+# Seventy five days is deliberately long while this is being tested, so a
+# digest has something to say from the first day of the course.
+notify_default:
+  none:                      { from: 75, urgent: 7 }
+  blocks_human_participants: { from: 75, urgent: 14 }
+
+anchors:
+  course_start: 2026-08-17
+  feedback_session: 2026-11-06
+  community_showcase: 2027-04-25
+
+anchor_specs:
+  - { id: course_start, label: First day of the course, required: true }
+  - { id: feedback_session, label: MV feedback session }
+  - { id: community_showcase, label: MV community showcase }
+
+deliverables:
+  - { id: question, name: HMW Question, kind: text, owner: student, requirement: required }
+  - { id: literature_review, name: Literature review, kind: link, owner: student, requirement: required }
+  - { id: interview_protocol, name: Interview questions, kind: link, owner: student, requirement: required }
+  - { id: interview_consent, name: Consent to be interviewed, kind: form, owner: student, per: participant, requirement: conditional, applies_when: humans, before_work: true }
+  - { id: interview_synthesis, name: Interview results, kind: link, owner: student, requirement: required }
+  - { id: journey_map_1, name: Journey map 1, kind: link, owner: student, requirement: required }
+  - { id: journey_map_2, name: Journey map 2, kind: link, owner: student, requirement: required }
+  - { id: project_site, name: Researcher profile, kind: link, owner: student, requirement: optional }
+  - { id: showcase_presentation, name: Showcase trifold, kind: link, owner: student, requirement: required }
+  - id: manuscript
+    name: The write-up
+    kind: link
+    owner: student
+    requirement: required
+    shape: design-research
+
+steps:
+  - id: m1_topic
+    name: "Milestone 1: Understanding the research process and choosing a topic"
+    phase: understand
+    order: 10
+    owner: student
+    deliverables:
+      - { ref: question }
+      - { ref: literature_review }
+
+  - id: m2_empathy
+    name: "Milestone 2: Empathy interviews"
+    phase: empathize
+    order: 20
+    owner: student
+    requires: [m1_topic]
+    consequence: blocks_human_participants
+    applies_when: humans
+    deliverables:
+      - { ref: interview_protocol }
+      - { ref: interview_consent }
+      - { ref: interview_synthesis }
+    risk: >-
+      You must make sure to recieve consent **before** interviewing your users.
+
+  - id: m3_plan
+    name: "Milestone 3: Journey map"
+    phase: define
+    order: 30
+    owner: student
+    requires: [m2_empathy]
+    deliverables:
+      # A shared id is how one artifact can satisfy two calendars, which is
+      # what `ref` is for. Nothing outside this class asks for these two
+      # today; if the fair ever wants a journey map, it references this id
+      # rather than declaring its own.
+      - { ref: journey_map_1 }
+      - { ref: journey_map_2 }
+    note: >-
+      Formulate your project implementation journey.
+
+  - id: m4_project_implementation
+    name: "Milestone 4: Project Implementation"
+    phase: define
+    order: 40
+    owner: student
+    requires: [m3_plan]
+    consequence: blocks_human_participants
+    applies_when: humans
+    deliverables: []
+
+  - id: m5_journey_map
+    name: "Milestone 5: Researcher Profile"
+    phase: ideate
+    order: 50
+    owner: student
+    requires: [m4_project_implementation]
+    deliverables:
+      - { ref: project_site }
+
+  - id: m6_community_showcase
+    name: "Milestone 6: MV Community Showcase"
+    phase: showcase
+    order: 60
+    owner: student
+    due: { anchor: community_showcase, days: 0 }
+    review: formative
+    deliverables:
+      - { ref: showcase_presentation }
+    note: >-
+      A checkpoint, not a decision. Nothing is accepted or declined; the
+      outcome is feedback and a record that progress was shown.
+
+  - id: notebook
+    name: Keep the research journal current
+    phase: understand
+    order: 15
+    owner: student
+    repeats: { every: week }
+
+
+presents_at:
+  - { name: Junior Science and Humanities Symposium}
+  - { name: National Science Teaching Association conference }

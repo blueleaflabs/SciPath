@@ -2,6 +2,7 @@
 export const prerender = false;
 
 import Base from '../../layouts/Base.astro';
+import { cachePublicPage } from '../../lib/caching';
 import PageHead from '../../components/PageHead.astro';
 import Empty from '../../components/Empty.astro';
 import { openArchive } from '../../lib/archive';
@@ -21,7 +22,7 @@ const rows = [...new Set([...counts.keys(), ...disciplines.map((d) => d.slug)])]
   .filter((r) => r.n > 0)
   .sort((a, b) => b.n - a.n);
 
-Astro.response.headers.set('Cache-Control', 'public, max-age=120, s-maxage=600');
+cachePublicPage(Astro);
 ---
 
 <Base title="Topics" description="Published work by discipline.">

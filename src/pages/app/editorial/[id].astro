@@ -16,14 +16,19 @@ import {
   REVIEW_QUESTIONS,
   type State,
 } from '../../../lib/workflow';
-import { rulesFor, sectionsFor } from '../../../config/structure';
+import { allRules, sectionsFor } from '../../../config/structure';
+import { shape } from '../../../lib/templates';
 import { formatCompleted } from '../../../lib/manuscript';
+import { afterPost, outcomeFrom } from '../../../lib/post-redirect';
+import { signInWith } from '../../../lib/next-path';
 
 const { session, account, roles } = Astro.locals;
 const org = activeOrg(Astro);
 const { id } = Astro.params;
 
-if (!session) return Astro.redirect('/app/');
+/* Remembering where they were headed, so a link from a notification
+   survives the sign in it triggers (20.10). */
+if (!session) return Astro.redirect(signInWith(Astro.url));
 if (!account) return Astro.redirect('/app/welcome/');
 
 const me = standing(roles, account?.population);
@@ -35,7 +40,9 @@ const supabase = serverClient(
   (Astro.locals as any).runtime?.env
 );
 
-let error: string | null = null;
+/* Seeded from the redirect a POST answers with. See
+   src/lib/post-redirect.ts. */
+let { error: error } = outcomeFrom(Astro.url);
 /* Which action succeeded, not whether one did. The confirmation is built
    after the reads below, so it can name the state the submission actually
    landed in rather than the one we assumed. */
@@ -92,6 +99,9 @@ if (Astro.request.method === 'POST' && isEditor) {
       p_note: note,
     });
   }
+
+  /* A refresh should re-read this page, not send the form again. */
+  return afterPost(Astro.url, { error: error });
 }
 
 const { data: submission } = await supabase
@@ -202,7 +212,7 @@ const candidates = Array.from(
       .map((r: any) => [r.users.id, { id: r.users.id, display_name: r.users.display_name }])
   ).values()
 ).sort((a: any, b: any) => a.display_name.localeCompare(b.display_name));
-const sectionRules = sectionsFor((manuscript?.record_kind ?? 'article') as any);
+const sectionRules = sectionsFor((manuscript?.record_kind ?? 'article') as any, shape('imrad'));
 
 /* Where a finding points. Taken from the same rule set the author's checklist
    renders, so the words the editor picks are the words the author already
@@ -214,7 +224,7 @@ const sectionRules = sectionsFor((manuscript?.record_kind ?? 'article') as any);
 const listIsWithAuthors = state === 'revisions_requested';
 const canSendBack = actions.some((a) => a.id === 'request_revisions');
 
-const findingPlaces = rulesFor()
+const findingPlaces = allRules(shape('imrad'))
   .filter(
     (r) =>
       r.kind !== 'human' &&
@@ -275,11 +285,15 @@ const confirmation = didAction
             {(authors ?? []).map((a: any) => a.users?.display_name).join(', ')}
           </p>
           <div class="actions">
-            <a class="btn btn-2" href="/app/editorial/">Back to the queue</a>
-            <a class="btn btn-2" href={`/track/${submission.id}/`}>What the authors see</a>
+            <a class="btn" href="/app/editorial/">Back to the queue</a>
+            <a class="btn" href={`/track/${submission.id}/`}>What the authors see</a>
           </div>
         </section>
 
+        {/* Anchored, and every form on this page posts to it. These pages
+            run to several screens, and an outcome rendered at the top after
+            a click three screens down reads as nothing having happened. */}
+        <div id="outcome" tabindex="-1">
         {error && <p class="note" role="alert">{error}</p>}
         {confirmation && !error && (
           <p class="note done" role="status">
@@ -288,6 +302,7 @@ const confirmation = didAction
             <span>Now {confirmation.now.toLowerCase()}</span>
           </p>
         )}
+        </div>
 
         {submission.withdrawal_requested_at && state !== 'withdrawn' && (
           <p class="note" role="alert">
@@ -304,6 +319,24 @@ const confirmation = didAction
             <span>{submission.users?.display_name ?? 'Unclaimed'}</span>
           </div>
 
+          {/* Why Accept is not here.
+          
+              A missing button is indistinguishable from a bug unless the
+              page says what would bring it back. This is the one action
+              withheld for a reason the editor can act on rather than for a
+              reason of state. */}
+          {state === 'editorial_review' && roundFindings.length > 0 && (
+            <p class="prose">
+              <b>Accept is not offered while the list is unsent.</b> Accepting
+              says nothing further is needed, and{' '}
+              {roundFindings.length === 1
+                ? 'there is a change'
+                : `there are ${roundFindings.length} changes`}{' '}
+              written below that the authors have never seen. Send the list,
+              or remove the findings if they turned out not to matter.
+            </p>
+          )}
+
           {actions.length === 0 ? (
             <p class="prose">
               Nothing, from here. {publicLabel[state]}.
@@ -312,7 +345,7 @@ const confirmation = didAction
             <ul class="acts">
               {actions.map((action) => (
                 <li>
-                  <form method="POST">
+                  <form method="POST" action="#outcome">
                     <input type="hidden" name="action" value={action.id} />
 
                     {/* Controls on the left, the button on the right, so every
@@ -347,21 +380,21 @@ const confirmation = didAction
                       {['screen_decline', 'request_revisions', 'decide_declined', 'decide_accepted'].includes(
                         action.id
                       ) && (
-                        <input
-                          class="in"
-                          name="note"
-                          placeholder={
-                            action.id === 'request_revisions' && roundFindings.length === 0
-                              ? 'What needs doing, since the list is empty'
-                              : 'A line for the authors, optional'
-                          }
-                          aria-label="Note to the authors"
-                        />
+                        <label class="notefield">
+                          {/* A blank box beside a Decline button, with its
+                              only name in an aria-label. A screen reader
+                              heard it and nobody else did. */}
+                          <span>What to tell the authors</span>
+                          <input class="in" name="note" />
+                          <small>They see this, so write it to them.</small>
+                        </label>
                       )}
                     </div>
 
                     <button
-                      class:list={['btn', action.grave ? 'btn-q' : 'btn-2']}
+                      {/* A grave action stays quiet. Everything else is a
+                          button and looks like one. */}
+                      class:list={['btn', action.grave && 'btn-q']}
                       type="submit"
                     >
                       {action.label}
@@ -486,7 +519,7 @@ const confirmation = didAction
               panels put a second heading and a second comment box between
               somebody and the thing they came to do. */}
           {!['accepted', 'declined', 'withdrawn', 'published'].includes(state) && (
-            <form method="POST" class="mform">
+            <form method="POST" action="#outcome" class="mform">
               <label>
                 <span>What has to change</span>
                 <textarea class="ta" name="finding" rows="3"></textarea>
@@ -513,7 +546,7 @@ const confirmation = didAction
               </div>
 
               <div class="two">
-                <button class="btn btn-2" type="submit" name="action" value="add_finding">
+                <button class="btn" type="submit" name="action" value="add_finding">
                   Add to the list
                 </button>
 
@@ -569,7 +602,7 @@ const confirmation = didAction
 
             {manuscript?.external_url && (
               <p class="prose">
-                Published elsewhere: <a href={manuscript.external_url}>{manuscript.external_url}</a>
+                Published elsewhere: <a href={manuscript.external_url} target="_blank" rel="noopener noreferrer">{manuscript.external_url}</a>
               </p>
             )}
 
@@ -669,7 +702,10 @@ const confirmation = didAction
   }
   .acts .fields .se { flex: 1 1 14ch; min-width: 0; }
   .acts .fields .in { flex: 1 1 18ch; min-width: 0; }
-  .acts .fields .due { flex: 0 0 13ch; }
+  /* A date input carries a calendar button inside it, and 13ch measured the
+     text alone: the year was clipped behind the picker. Sized to its own
+     content instead, with a floor for the browsers that report none. */
+  .acts .fields .due { flex: 0 0 auto; min-width: 11rem; width: auto; }
   .acts .btn { width: 100%; justify-content: center; text-align: center; }
   .acts .hint {
     margin: 6px 0 0;
@@ -780,4 +816,17 @@ const confirmation = didAction
   }
   .hist .when { font-family: var(--face-num); font-size: 0.85rem; color: var(--ink-3); }
   .hist i { color: var(--ink-3); font-style: normal; }
+  .notefield { display: block; }
+  .notefield > span {
+    display: block;
+    margin-bottom: 5px;
+    font-family: var(--face-ui);
+    font-size: 0.88rem;
+  }
+  .notefield small {
+    display: block;
+    margin-top: 4px;
+    color: var(--ink-3);
+    font-size: 0.84rem;
+  }
 </style>

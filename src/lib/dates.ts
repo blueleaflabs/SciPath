@@ -70,3 +70,31 @@ export function isPast(value: string | Date | null | undefined): boolean {
   const date = toDate(value);
   return date ? date.getTime() < Date.now() : false;
 }
+
+/**
+ * When something arrived, as somebody would say it.
+ *
+ * "3 days" told an editor how long a submission had waited and not when it
+ * landed, so two an hour apart on the same morning read identically, and
+ * "today" hid the difference between nine o'clock and five minutes ago.
+ *
+ * Today gets a clock, because the hour is what distinguishes one from
+ * another. Any other day gets its date, because by then the hour has stopped
+ * mattering and what somebody wants is which day it was.
+ *
+ * **Today means the same calendar day**, not "within twenty-four hours".
+ * `daysFrom` compares midnights, so something submitted at eleven last night
+ * is yesterday at one this morning, which is what a person would say and
+ * what a rolling window would get wrong.
+ */
+export function arrivedAt(value: string | Date | null | undefined): string {
+  const days = daysFrom(value);
+  if (days === null) return '';
+
+  if (days !== 0) return formatDate(value, 'short');
+
+  const at = toDate(value);
+  return at
+    ? `today, ${at.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}`
+    : 'today';
+}

@@ -8,11 +8,15 @@ import { serverClient } from '../../lib/supabase';
 import { standing, roleLabel, GRANTABLE } from '../../lib/roles';
 import { formatDate } from '../../lib/dates';
 import { parseRoster, ROSTER_EXAMPLE } from '../../lib/roster';
+import { afterPost, outcomeFrom } from '../../lib/post-redirect';
+import { signInWith } from '../../lib/next-path';
 
 const { session, account, roles } = Astro.locals;
 const org = activeOrg(Astro);
 
-if (!session) return Astro.redirect('/app/');
+/* Remembering where they were headed, so a link from a notification
+   survives the sign in it triggers (20.10). */
+if (!session) return Astro.redirect(signInWith(Astro.url));
 if (!account) return Astro.redirect('/app/welcome/');
 
 const me = standing(roles, account?.population);
@@ -22,8 +26,9 @@ const supabase = serverClient(
   (Astro.locals as any).runtime?.env
 );
 
-let error: string | null = null;
-let done: string | null = null;
+/* Seeded from the redirect a POST answers with, not from the POST
+   itself. See src/lib/post-redirect.ts. */
+let { error: error, note: done } = outcomeFrom(Astro.url);
 let outcomes: any[] = [];
 let rejected: any[] = [];
 
@@ -70,6 +75,9 @@ if (Astro.request.method === 'POST' && me.isAdvisor) {
     if (e) error = e.message;
     else done = action === 'grant' ? `${roleLabel[role]} granted.` : `${roleLabel[role]} taken back.`;
   }
+
+  /* A refresh should re-read this page, not send the form again. */
+  return afterPost(Astro.url, { error: error, note: done });
 }
 
 const [{ data: people }, { data: held }, { data: waiting }] = await Promise.all([
@@ -137,8 +145,13 @@ const counts = GRANTABLE.map((role) => ({
           </p>
         </section>
 
+        {/* Anchored, and every form on this page posts to it. These pages
+            run to several screens, and an outcome rendered at the top after
+            a click three screens down reads as nothing having happened. */}
+        <div id="outcome" tabindex="-1">
         {error && <p class="note" role="alert">{error}</p>}
         {done && !error && <p class="note" role="status">{done}</p>}
+        </div>
 
         <section class="sec">
           <div class="sec-h"><b>The roster</b><span>{roster.length}</span></div>
@@ -179,7 +192,7 @@ const counts = GRANTABLE.map((role) => ({
                         {isAdvisor ? (
                           <span class="na">holds everything</span>
                         ) : has.has(role) ? (
-                          <form method="POST">
+                          <form method="POST" action="#outcome">
                             <input type="hidden" name="action" value="revoke" />
                             <input type="hidden" name="user_id" value={p.id} />
                             <input type="hidden" name="role" value={role} />
@@ -189,11 +202,11 @@ const counts = GRANTABLE.map((role) => ({
                             </span>
                           </form>
                         ) : (
-                          <form method="POST">
+                          <form method="POST" action="#outcome">
                             <input type="hidden" name="action" value="grant" />
                             <input type="hidden" name="user_id" value={p.id} />
                             <input type="hidden" name="role" value={role} />
-                            <button class="btn btn-2" type="submit">Make {roleLabel[role].toLowerCase()}</button>
+                            <button class="btn" type="submit">Make {roleLabel[role].toLowerCase()}</button>
                           </form>
                         )}
                       </td>
@@ -221,17 +234,17 @@ const counts = GRANTABLE.map((role) => ({
             they do. Somebody who already has an account gets it immediately.
           </p>
 
-          <form method="POST" class="mform">
+          <form method="POST" action="#outcome" class="mform">
             <input type="hidden" name="action" value="roster" />
             <label>
               <span>The list</span>
-              <textarea class="ta" name="csv" rows="6" placeholder={ROSTER_EXAMPLE}></textarea>
+              <textarea class="ta" name="csv" rows="6"></textarea>
               <small>
                 Comma separated. A header row is optional and the column order
                 does not matter. Officer and editor only.
               </small>
             </label>
-            <button class="btn btn-2" type="submit">Add them</button>
+            <button class="btn" type="submit">Add them</button>
           </form>
 
           {outcomes.length > 0 && (
@@ -280,7 +293,7 @@ const counts = GRANTABLE.map((role) => ({
                       <td>{roleLabel[r.role] ?? r.role}</td>
                       <td>{formatDate(r.created_at, 'short', '')}</td>
                       <td>
-                        <form method="POST">
+                        <form method="POST" action="#outcome">
                           <input type="hidden" name="action" value="drop" />
                           <input type="hidden" name="reservation_id" value={r.id} />
                           <button class="btn btn-q" type="submit">Remove</button>

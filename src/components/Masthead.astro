@@ -2,6 +2,7 @@
 import type { Org } from '../config/orgs';
 import { activeOrg } from '../lib/tenant';
 import { platform } from '../config/site';
+import { SESSION_HINT } from '../lib/session-hint';
 
 interface Props {
   /** Passed down by the layout, which resolved it from the hostname. */
@@ -10,15 +11,31 @@ interface Props {
 
 const org = Astro.props.org ?? activeOrg(Astro);
 
+/**
+ * Five items, down from seven.
+ *
+ * **Showcase holds both kinds.** Papers and fair entries were two items, and
+ * two items rank them: most work at a high school fair never becomes a
+ * paper, so the second label is where the student who did real work and did
+ * not write it up ends up. Every other reading surface already mixes them —
+ * author pages, topic listings, search — so this is the index catching up
+ * rather than a new idea. `/articles/` and `/projects/` are unchanged and
+ * are the filtered views.
+ *
+ * **Mistakes is gone from here.** 7.11 decided that a wall of things that
+ * can go wrong, read by somebody who has not started, is paralyzing or
+ * forgettable, and 9.3 removed it from the page inventory. It shipped
+ * anyway and stayed in the nav for four versions. The page remains and
+ * Guides links to it; what it stops being is a destination.
+ *
+ * About, contact, policies and the schools page live in the footer, which
+ * is where a reader looks for them and where they stop competing with the
+ * archive for a glance.
+ */
 const nav = [
-  { href: '/articles/', label: 'Showcase' },
-  /* Fair entries. A sibling of the papers rather than a subsection of them:
-     most work at a high school fair never becomes a paper, so an archive
-     reachable only through Showcase hides most of what the club did. */
-  { href: '/projects/', label: 'Projects' },
+  { href: '/showcase/', label: 'Showcase' },
   { href: '/guides/', label: 'Guides' },
   { href: '/deadlines/', label: 'Deadlines' },
-  { href: '/mistakes/', label: 'Mistakes' },
   { href: '/submit/', label: 'Publish' },
   { href: '/search/', label: 'Search' },
 ];
@@ -85,17 +102,67 @@ const isCurrent = (href: string) => here === href || (href !== '/' && here.start
               </li>
             </>
           ) : (
-            <li class="mnav-cta">
-              <a href="/app/" aria-current={here.startsWith('/app/') ? 'page' : undefined}>
-                {signedIn ? 'Workbench' : 'Sign in'}
-              </a>
-            </li>
+            <>
+              {/* A prerendered page cannot ask who is here, so it renders
+                  both answers and the script below picks. The signed in one
+                  is hidden rather than built by script, because a sign out
+                  is a POST form and markup is the honest place for it. */}
+              <li class="mnav-cta" data-anon>
+                <a href="/app/" aria-current={here.startsWith('/app/') ? 'page' : undefined}>
+                  Workbench
+                </a>
+              </li>
+
+              <li class="mnav-who" data-known hidden>
+                <a href="/app/" data-name></a>
+              </li>
+              <li data-known hidden>
+                <form method="POST" action="/auth/signout/">
+                  <button type="submit" class="mnav-out">Sign out</button>
+                </form>
+              </li>
+            </>
           )}
         </ul>
       </nav>
     </div>
   </div>
 </header>
+
+{/* Which of the two answers above is right.
+ 
+    A prerendered page has no session, so it greeted somebody who had signed
+    in a minute earlier as though they had not. The hint cookie carries their
+    display name; this reads it and shows the cluster the rest of the site
+    shows, rather than a bare link that reads as *not you*.
+ 
+    Only where the server could not know. Where it rendered the account
+    cluster there is nothing to correct, and running this there would be a
+    second opinion about a fact the page already has. */}
+{!signedIn && (
+  <script is:inline define:vars={{ hint: SESSION_HINT }}>
+    (() => {
+      const raw = document.cookie
+        .split('; ')
+        .find((c) => c.startsWith(hint + '='));
+      if (!raw) return;
+
+      let name = '';
+      try {
+        name = decodeURIComponent(raw.slice(hint.length + 1));
+      } catch {
+        return;
+      }
+      if (!name) return;
+
+      const who = document.querySelector('[data-name]');
+      if (who) who.textContent = name;
+
+      document.querySelectorAll('[data-anon]').forEach((el) => el.setAttribute('hidden', ''));
+      document.querySelectorAll('[data-known]').forEach((el) => el.removeAttribute('hidden'));
+    })();
+  </script>
+)}
 
 <style>
   .mnav-bar {

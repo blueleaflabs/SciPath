@@ -1,0 +1,72 @@
+# The Monta Vista Research Journal, 2027. A program of kind `publication`.
+#
+# It has editors, an annual turnover, and a confidentiality boundary, which is
+# what a program already is. Making it a separate mechanism would mean a
+# second place roles are granted and a second thing that lapses in June.
+#
+# **No steps and no phases.** A submission is a state machine — screened,
+# reviewed, revised, decided, published — with actors and permitted
+# transitions, and merging that into a checklist would damage both. The model
+# has to tolerate a participation that copies nothing.
+
+id: mvrj-2027
+family: mvrj
+kind: publication
+
+# A venue. A project submits a manuscript and comes away with a
+# published record.
+role: opportunity
+name: Monta Vista Research Journal
+level: school
+season: 2027
+version: 1
+
+uses:
+  deliverables: [deliverables-common]
+
+has:
+  entries: false
+  categories: false
+  awards: false
+  advancement: false
+  steps: false
+
+# Staff of any program in these families are editors here, resolved against
+# whichever edition is CURRENT rather than the one a paper's work was done in.
+# Papers arrive the summer after the competition and the officers who ran that
+# season have graduated.
+#
+# **[DECIDE]** whether to add irpd. Doing so puts elders and officers inside
+# one editorial boundary: fair officers would see IRPD's review comments and
+# the reverse. Right for a small shared board, and a decision either way.
+staff_from: [scvsefa]
+allow_explicit_staff: true
+
+accepts_from: [scvsefa, irpd]
+
+roles:
+  staff: { singular: Editor, plural: Editors }
+  member: { singular: Author, plural: Authors }
+
+review:
+  rounds: unlimited
+  blind: single
+  scale: [no, partly, mostly, yes]
+  questions:
+    - { id: question_clear, text: "Is the question clear enough to answer?" }
+    - { id: methods_repeatable, text: "Could somebody else repeat this from the methods alone?" }
+    - { id: results_supported, text: "Do the results follow from the data shown?" }
+    - { id: limits_honest, text: "Are the limitations stated honestly?" }
+    - { id: prior_work, text: "Is the prior work represented fairly?" }
+    - { id: writing_clear, text: "Is it written clearly enough for somebody outside the field?" }
+  recommendations:
+    - { id: accept, label: Accept }
+    - { id: minor, label: Accept after minor revisions }
+    - { id: major, label: Major revisions needed }
+    - { id: decline, label: Decline }
+
+publishes:
+  record_kind: article
+  prefix: MVRJ
+  license_default: CC BY 4.0
+  structure: scientific-paper

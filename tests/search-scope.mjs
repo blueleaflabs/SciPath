@@ -125,7 +125,6 @@ test('routes that serve files do not require a trailing slash', () => {
   }
 });
 
-console.log(`${passed} search scoping assertions passed.`);
 
 /* ── The 404 must stay prerendered ───────────────────────────────────────── */
 
@@ -151,3 +150,5 @@ if (fs.existsSync('dist')) {
 }
 
 console.log('404 rendering checked.');
+
+console.log(`${passed} search scoping assertions passed.`);

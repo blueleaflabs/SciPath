@@ -1,0 +1,71 @@
+# Monta Vista IRPD Community Showcase 2027
+#
+# Lifted out of the IRPD class template, because it is an opportunity rather
+# than a milestone (22.2).
+#
+# The test: does it produce something the project carries afterwards? A
+# student can say "I presented at the IRPD Community Showcase" two years
+# later, and that is a claim about the project which outlives the class.
+# Milestones 1 to 5 are curriculum and stay in the cohort: they exist whether
+# or not anybody presents anywhere.
+#
+# It remains what the class always said it was — a checkpoint rather than a
+# decision — and that is expressed by what it does not have: no categories,
+# no awards, nowhere to advance to. Nothing is accepted or declined. What it
+# produces is a record that the work was shown.
+
+id: irpd-showcase-2027
+family: irpd-showcase
+kind: showcase
+role: opportunity
+
+name: IRPD Community Showcase
+short_name: IRPD Showcase
+authority: Monta Vista High School
+level: school
+season: 2027
+version: 1
+
+uses:
+  deliverables: [deliverables-common]
+
+# Set by the class that runs it, and the same day the cohort anchors on.
+anchors:
+  community_showcase: 2027-04-25
+
+anchor_specs:
+  - { id: community_showcase, label: MV community showcase, required: true }
+
+has:
+  entries: true
+  # A checkpoint. Nobody places, nobody wins, and there is nowhere to go
+  # next: the outcome is feedback and a record that progress was shown.
+  categories: false
+  awards: false
+  advancement: false
+
+joining: open
+
+deliverables:
+  - id: showcase_presentation
+    name: Showcase trifold
+    kind: link
+    owner: student
+    requirement: required
+
+steps:
+  - id: showcase_present
+    name: Present at the Community Showcase
+    phase: showcase
+    order: 10
+    owner: student
+    due: { anchor: community_showcase, days: 0 }
+    review: formative
+    deliverables:
+      - { ref: showcase_presentation }
+    note: >-
+      A checkpoint, not a decision. Nothing is accepted or declined; the
+      outcome is feedback and a record that progress was shown.
+
+phases:
+  - { id: showcase, name: Community showcase, window: { from: february, to: may } }

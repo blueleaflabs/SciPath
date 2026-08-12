@@ -6,22 +6,60 @@ import Base from '../../layouts/Base.astro';
 import PageHead from '../../components/PageHead.astro';
 import Empty from '../../components/Empty.astro';
 import { activeOrg } from '../../lib/tenant';
+import { resolveProgram, datesFor } from '../../lib/templates';
+import { formatDate } from '../../lib/dates';
 
 const org = activeOrg(Astro);
 
 /**
- * Programs and their dates come from the organization's program templates.
- * Nothing is provisioned yet, so this page shows the shape and says so.
- * A guessed date is worse than a missing one: a student trusting a wrong
- * deadline is a failure the software caused.
+ * The season, for somebody without an account.
+ *
+ * Read from the same templates the working surface resolves, so the dates a
+ * student sees before signing up are the dates they will be held to. This
+ * page rendered an empty state for months because the programs it needed did
+ * not exist yet; they do now.
+ *
+ * The signed-in version of this shows progress against these dates. This one
+ * shows the dates, which is what somebody deciding whether to sign up needs.
  */
-const programs: Array<{
-  name: string;
-  season: string;
-  rulesVersion: string;
-  verifiedOn: string;
-  milestones: Array<{ label: string; due: string | null; source: 'external' | 'internal' }>;
-}> = [];
+const programs = (org.programs ?? [])
+  .map((id: string) => {
+    try {
+      const resolved = resolveProgram(id);
+      const phases = resolved.phases ?? [];
+      const dated = datesFor(resolved).filter((d) => d.date);
+
+      /* Grouped the way the working surface groups them, so the calendar a
+         student reads here is the calendar they meet later. */
+      const groups = phases
+        .map((phase: any) => ({
+          name: phase.name ?? phase.id,
+          window: phase.window ?? null,
+          rows: dated
+            .filter((d) => d.step.phase === phase.id)
+            .sort((a, b) => (a.date ?? '').localeCompare(b.date ?? '')),
+        }))
+        .filter((g) => g.rows.length > 0);
+
+      return {
+        id,
+        name: resolved.name,
+        kind: resolved.kind,
+        version: resolved.version,
+        groups,
+        count: dated.length,
+      };
+    } catch {
+      /* A template named by an organization and not present. Skipped rather
+         than rendering a program with no contents. */
+      return null;
+    }
+  })
+  .filter(Boolean)
+  /* Anything with no published dates is not a calendar. Independent research
+     has none by design and belongs on this page as an option rather than as
+     an empty table. */
+  .filter((p: any) => p.count > 0);
 ---
 
 <Base
@@ -45,70 +83,87 @@ const programs: Array<{
       </p>
     </div>
 
-    <div class="sec">
-      <div class="sec-h">
-        <b>Programs</b><span>{programs.length ? `${programs.length} tracked` : 'none provisioned'}</span>
-      </div>
-      {
-        programs.length ? (
-          <div class="stack">
-            {programs.map((p) => (
-              <div class="card">
-                <div class="pad">
-                  <h2 class="t-h2">{p.name}</h2>
-                  <p class="t-num" style="margin-top:6px">
-                    {p.season} · rules {p.rulesVersion} · checked {p.verifiedOn}
-                  </p>
-                </div>
-                <table class="tbl">
-                  <thead>
-                    <tr>
-                      <th scope="col">Milestone</th>
-                      <th scope="col">Due</th>
-                      <th scope="col">Set by</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {p.milestones.map((m) => (
-                      <tr>
-                        <td>{m.label}</td>
-                        <td class="n">{m.due ?? 'not yet published'}</td>
-                        <td>{m.source === 'external' ? 'the program' : 'this organization'}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            ))}
-          </div>
-        ) : (
-          <Empty
-            title="No programs are set up yet"
-            body="Each program appears here with its own milestones, the version of the rules those dates came from, and the date a person last checked them against the source. A milestone whose date the program has not published yet says so rather than showing a guess."
-          >
-            <div class="row" style="justify-content:center">
-              <a class="btn btn-2" href="/guides/">Read the guides</a>
-              <a class="btn btn-q" href="/contact/">Ask {org.name}</a>
-            </div>
-          </Empty>
-        )
-      }
-    </div>
+    {programs.map((program: any) => (
+      <div class="sec">
+        <div class="sec-h">
+          <b>{program.name}</b>
+          <span>{program.count} dated</span>
+        </div>
 
-    <div class="sec">
-      <div class="sec-h"><b>How these dates behave</b><span>Two kinds</span></div>
-      <table class="tbl">
-        <tbody>
-          <tr>
-            <th scope="row" style="text-align:left; width:34%">Set by the program</th>
-            <td>Published by whoever runs the competition. We copy them and record which version of the rules they came from, so a stale calendar is visible rather than silent.</td>
-          </tr>
-          <tr>
-            <th scope="row" style="text-align:left">Set by this organization</th>
-            <td>Internal drafts and check-ins, defined as an offset from a program date. When the program moves a date, everything anchored to it moves with it.</td>
-          </tr>
-        </tbody>
-      </table>
+        {program.groups.map((group: any) => (
+          <div class="phase">
+            <h2 class="t-h2">
+              {group.name}
+              {group.window && (
+                <span class="when"> · {group.window.from} to {group.window.to}</span>
+              )}
+            </h2>
+
+            <table class="tbl">
+              <tbody>
+                {group.rows.map((row: any) => (
+                  <tr>
+                    <td class="n">{formatDate(row.date, 'short')}</td>
+                    <td>
+                      {row.step.name}
+                      {row.step.consequence === 'blocks_experimentation' && (
+                        <span class="gate">must precede work</span>
+                      )}
+                    </td>
+                    <td class="by">
+                      {row.step.source === 'school'
+                        ? 'this school'
+                        : row.step.source === 'process'
+                          ? 'the research itself'
+                          : 'the program'}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ))}
+      </div>
+    ))}
+
+    {programs.length === 0 && (
+      <Empty
+        title="No dates published yet"
+        body="Each program appears here with its own calendar, taken from the rules the program published. A date the program has not published yet says so rather than showing a guess."
+      />
+    )}
+
+    {/* Everything above is readable by anybody. What an account adds is the
+        other half: which of these apply to your project, what you still owe,
+        and a warning while a mistake is still fixable. */}
+    <div class="sec cta">
+      <h2 class="t-h2">These are the dates. The rest is knowing where you are in them.</h2>
+      <p>
+        Signing in puts your own project against this calendar: what is next,
+        what is late, what each deadline actually wants handed in, and the
+        ordering rule above checked for you while it can still be fixed.
+      </p>
+      <p class="go">
+        <a class="btn" href="/app/">Start a project</a>
+        <a class="btn btn-2" href="/mistakes/">What usually goes wrong</a>
+      </p>
     </div>
   </div>
 </Base>
+
+<style>
+  .phase { margin-bottom: 26px; }
+  .phase .t-h2 { margin-bottom: 8px; }
+  .when {
+    font-family: var(--face-mono);
+    font-size: 0.8rem;
+    font-weight: 400;
+    color: var(--ink-3);
+    text-transform: none;
+    letter-spacing: 0;
+  }
+  .by { font-family: var(--face-ui); font-size: 0.86rem; color: var(--ink-3); }
+  .cta { border-top: 2px solid var(--ink); padding-top: 22px; max-width: 74ch; }
+  .cta p { margin-top: 10px; }
+  .go { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 18px; }
+</style>

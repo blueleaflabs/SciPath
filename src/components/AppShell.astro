@@ -19,15 +19,29 @@ const me = standing(roles, account?.population);
 const isEditor = me.isEditor;
 
 /* Profile and sign out live in the masthead, top right, where an account
-   menu belongs. This bar is for the work. */
+   menu belongs. This bar is for the work.
+ 
+   Assign, Editorial, Publish. Two are the verb of the job and the third is
+   deliberately not: an editor screens, consolidates and decides, and
+   "Review" is what the *reviewers* do at /app/review/{id}. One word sending
+   two roles to two different places is worse than one label that names a
+   role rather than an act.
+ 
+   `Entries` and `Selection` are both gone, for one reason: each held the
+   same list the overview holds. Entries listed a student's participations
+   beside the overview's own list of them, and Selection listed the school's
+   projects beside the overview's, differing by one column. A student's nav
+   is one item now, which is right, because a student navigates from their
+   project rather than from a bar. */
 const nav = [
   { href: '/app/', label: 'Overview' },
   ...(isEditor ? [{ href: '/app/editorial/', label: 'Editorial' }] : []),
-  ...(isEditor ? [{ href: '/app/publish/', label: 'Publishing' }] : []),
+  ...(isEditor ? [{ href: '/app/publish/', label: 'Publish' }] : []),
   ...(me.runsTheClub ? [{ href: '/app/assign/', label: 'Assign' }] : []),
-  ...(me.isAdvisor ? [{ href: '/app/selection/', label: 'Selection' }] : []),
+  /* Everybody, not just officers: reading what the club has learned is the
+     point, and writing it is the part that is restricted. */
+  { href: '/app/warnings/', label: 'What goes wrong' },
   ...(me.isAdvisor ? [{ href: '/app/roles/', label: 'Roles' }] : []),
-  { href: '/app/fairs/', label: 'Entries' },
 ];
 ---
 
@@ -70,16 +84,5 @@ const nav = [
   .appnav a[aria-current='page'] {
     color: var(--ink);
     box-shadow: inset 0 -2px 0 var(--brand-mark);
-  }
-  .linkish {
-    background: none;
-    border: 0;
-    padding: 0;
-    cursor: pointer;
-    font-family: var(--face-ui);
-    font-size: 0.88rem;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
-    color: var(--ink-3);
   }
 </style>

@@ -70,8 +70,10 @@ export function parseVideo(url: string | null | undefined): Video | null {
       /* dnt asks Vimeo not to track the session. */
       embed: `https://player.vimeo.com/video/${id}?dnt=1&title=0&byline=0`,
       watch: `https://vimeo.com/${id}`,
-      /* Vimeo's thumbnail needs an API call, which is a fetch we have said we
-         will not make. The page shows its own placeholder instead. */
+      /* Vimeo's still needs an API call. See `posterFor` below: it is
+         fetched once when a record is published, by us, and stored with the
+         record — so a reader's browser still requests nothing from Vimeo
+         until they press play. Null here means "not resolved yet". */
       poster: null,
     };
   }
@@ -88,4 +90,58 @@ function youtube(id: string): Video {
     watch: `https://www.youtube.com/watch?v=${id}`,
     poster: `https://i.ytimg.com/vi/${id}/hqdefault.jpg`,
   };
+}
+
+
+/**
+ * The still for a video, resolved once at publish time.
+ *
+ * YouTube publishes one at a predictable address and needs no call. Vimeo
+ * does not, and its oEmbed endpoint answers with a thumbnail URL.
+ *
+ * The distinction that matters is who makes the request. A reader's browser
+ * asking Vimeo for a thumbnail is a third party learning that somebody
+ * opened this page; a server asking once, at the moment of publishing, on
+ * behalf of the person publishing, is not. The stored file is served from
+ * our own record store afterwards.
+ *
+ * **[VERIFY]** The oEmbed address below is Vimeo's documented endpoint as I
+ * understand it, and it has not been checked against their current
+ * documentation. If it changes, this returns null and the page falls back to
+ * a drawn panel, which is the right failure: a missing still is a cosmetic
+ * loss and a wrong fetch is not.
+ */
+export async function posterFor(
+  video: Video,
+  fetcher: typeof fetch = fetch
+): Promise<string | null> {
+  if (video.poster) return video.poster;
+  if (video.host !== 'vimeo') return null;
+
+  try {
+    const answer = await fetcher(
+      `https://vimeo.com/api/oembed.json?url=${encodeURIComponent(video.watch)}`,
+      { headers: { accept: 'application/json' } }
+    );
+
+    if (!answer.ok) return null;
+
+    const body = (await answer.json()) as { thumbnail_url?: unknown };
+    const url = typeof body.thumbnail_url === 'string' ? body.thumbnail_url : null;
+
+    /* Only from Vimeo's own image host, and only over https. An oEmbed
+       response is somebody else's JSON, and a URL taken from it and rendered
+       in an <img> is a request we would be making on a reader's behalf to
+       wherever it points. */
+    if (!url) return null;
+
+    const parsed = new URL(url);
+    const allowed = parsed.protocol === 'https:' && /(^|\.)vimeocdn\.com$/.test(parsed.hostname);
+
+    return allowed ? url : null;
+  } catch {
+    /* No network, a changed endpoint, a video that has been removed. The
+       page draws its own panel. */
+    return null;
+  }
 }

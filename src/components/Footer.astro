@@ -11,11 +11,16 @@ interface Props {
 const org = Astro.props.org ?? activeOrg(Astro);
 
 const columns = [
+  /* The footer is where the two kinds are still named separately, and that
+     is deliberate. The nav is a glance and must not rank them; a footer is a
+     directory, and somebody looking specifically for fair entries should be
+     able to say so. */
   {
     label: 'Read',
     links: [
-      { href: '/articles/', label: 'Showcase' },
-      { href: '/projects/', label: 'Projects' },
+      { href: '/showcase/', label: 'Showcase' },
+      { href: '/showcase/?kind=article', label: 'Papers' },
+      { href: '/showcase/?kind=project', label: 'Fair entries' },
       { href: '/authors/', label: 'Authors' },
       { href: '/topics/', label: 'Topics' },
       { href: '/search/', label: 'Search' },
@@ -40,11 +45,15 @@ const columns = [
     ],
   },
   {
-    label: 'Build',
+    label: 'About',
     links: [
-      { href: platform.repoUrl, label: 'Source code' },
       { href: '/about/', label: 'About' },
       { href: '/contact/', label: 'Contact' },
+      /* Written for a school deciding whether to adopt this, which is a
+         different reader from a student and does not belong in a nav aimed
+         at students. */
+      { href: '/for-schools/', label: 'For schools' },
+      { href: platform.repoUrl, label: 'Source code' },
     ],
   },
 ];

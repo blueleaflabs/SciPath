@@ -34,32 +34,42 @@ export type Attention = 'disqualifying' | 'attention' | 'ok';
 
 export interface Verdict {
   level: Attention;
-  /** The single most useful thing to say about it, or null when in order. */
+  /** The most useful thing to say, or null when in order. */
   reason: string | null;
+  /** Everything true of it, worst first. `reason` is the first of these. */
+  reasons: string[];
 }
 
+/**
+ * Every reason, not the first one.
+ *
+ * This returned at the first thing it found, so a project with no sponsor
+ * *and* no officer read as "No teacher sponsor" — and somebody who fixed
+ * that came back to a row that still said something was wrong, having been
+ * told about one of two problems and left to discover the other.
+ *
+ * A disqualification is still the whole answer on its own. It cannot be
+ * undone, so what else is missing is not the next thing anybody does.
+ */
 export function assess(p: ProjectState): Verdict {
   if (p.worst?.severity === 'disqualifying') {
-    return { level: 'disqualifying', reason: p.worst.name };
+    return {
+      level: 'disqualifying',
+      reason: p.worst.name,
+      reasons: [p.worst.name],
+    };
   }
 
-  if (!p.hasSponsor) {
-    return { level: 'attention', reason: 'No teacher sponsor' };
-  }
+  const reasons: string[] = [];
 
-  if (!p.hasOfficer) {
-    return { level: 'attention', reason: 'No club officer' };
-  }
+  if (!p.hasSponsor) reasons.push('No teacher sponsor');
+  if (!p.hasOfficer) reasons.push('No club officer');
+  if (!p.startedOn) reasons.push('No start date');
+  if (p.worst) reasons.push(p.worst.name);
 
-  if (!p.startedOn) {
-    return { level: 'attention', reason: 'No start date' };
-  }
+  if (reasons.length === 0) return { level: 'ok', reason: null, reasons: [] };
 
-  if (p.worst) {
-    return { level: 'attention', reason: p.worst.name };
-  }
-
-  return { level: 'ok', reason: null };
+  return { level: 'attention', reason: reasons[0], reasons };
 }
 
 export function tally(verdicts: Verdict[]) {

@@ -43,6 +43,24 @@ export interface Org {
   isPlatform?: boolean;
   /** Prefix for permanent record identifiers, e.g. SP-2026-0001. */
   recordPrefix: string;
+  /**
+   * Where the school is, as an IANA zone.
+   *
+   * Cron runs in UTC and nothing else in the system has needed a zone,
+   * because a due date is a date rather than a moment. A digest meant to
+   * arrive before school is the first thing that does: without this, seven
+   * in the morning is eleven the previous night somewhere (20.10).
+   */
+  timezone: string;
+
+  /**
+   * The programs this organization runs, by template id.
+   *
+   * Here rather than in the seed script, which held its own copy: the public
+   * calendar is prerendered and cannot ask a database, and two lists of the
+   * same fact drift the moment somebody adds a program to one of them.
+   */
+  programs: string[];
   /** Where a reader writes to. Never an individual student address. */
   contactEmail: string;
   /** Domains whose sign-in confirms affiliation without a club mentor. */
@@ -61,6 +79,8 @@ export const orgs: Record<string, Org> = {
     theme: 'entry',
     isPlatform: true,
     recordPrefix: 'SP',
+    timezone: 'America/Los_Angeles',
+    programs: [],
     contactEmail: 'hello@example.org',
     verifiedDomains: [],
     editorialReview: true,
@@ -87,6 +107,8 @@ export const orgs: Record<string, Org> = {
     mark: 'MVHS',
     theme: 'proceedings',
     recordPrefix: 'MVRJ',
+    timezone: 'America/Los_Angeles',
+    programs: ['mvhs-scvsefa-2027', 'irpd-mvhs-2027', 'grant-mvhs-micro-2027', 'mvrj-2027', 'independent-research'],
     contactEmail: 'hello@example.org',
     verifiedDomains: ['student.fuhsd.org', 'fuhsd.org'],
     editorialReview: true,
@@ -108,6 +130,8 @@ export const orgs: Record<string, Org> = {
     mark: 'LHS',
     theme: 'proceedings',
     recordPrefix: 'LHSR',
+    timezone: 'America/Los_Angeles',
+    programs: ['scvsefa-2027', 'independent-research'],
     contactEmail: 'hello@example.org',
     verifiedDomains: ['student.fuhsd.org', 'fuhsd.org'],
     editorialReview: true,
@@ -128,6 +152,8 @@ export const orgs: Record<string, Org> = {
     mark: 'OPEN',
     theme: 'entry',
     recordPrefix: 'OPN',
+    timezone: 'America/Los_Angeles',
+    programs: ['independent-research'],
     contactEmail: 'hello@example.org',
     verifiedDomains: [],
     editorialReview: false,
@@ -146,6 +172,7 @@ export const orgs: Record<string, Org> = {
     mark: 'EX',
     theme: 'proceedings',
     recordPrefix: 'EXP',
+    timezone: 'America/Los_Angeles',
     contactEmail: 'research@example.org',
     verifiedDomains: ['students.example.org', 'example.org'],
     editorialReview: true,
@@ -158,7 +185,16 @@ export const orgs: Record<string, Org> = {
  * The active organization. Selected by environment variable so a preview
  * deployment can render another tenant without a code change, and never by
  * a hardcoded constant inside a component.
+ *
+ * Read two ways because two runtimes read this file. Vite replaces
+ * `import.meta.env` at build; plain Node leaves it undefined, and a script
+ * importing this file died on the property access before it reached the
+ * fallback. That is why the seed scripts held their own copies of the
+ * prefix and the program list, and why one of those copies was wrong.
  */
-const requested = import.meta.env.PUBLIC_ORG ?? 'scipath';
+const fromVite = typeof import.meta.env !== 'undefined' ? import.meta.env.PUBLIC_ORG : undefined;
+const fromNode = typeof process !== 'undefined' ? process.env?.PUBLIC_ORG : undefined;
+
+const requested = fromVite ?? fromNode ?? 'scipath';
 
 export const org: Org = orgs[requested] ?? orgs.scipath;

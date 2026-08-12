@@ -11,7 +11,7 @@
     "check": "astro check",
     "test:contrast": "node tests/contrast.mjs",
     "test:static": "node tests/no-db-in-static.mjs",
-    "test": "npm run test:dates && npm run test:structure && npm run test:workflow && npm run test:roster && npm run test:publish && npm run test:seeds && npm run test:pdftext && npm run test:search && npm run test:devvars && npm run test:drift && npm run test:props && npm run test:policy && npm run test:sqlcols && npm run test:embeds && npm run test:contrast && npm run test:static && npm run test:tokens && npm run test:config && npm run test:tenant && npm run test:programs && npm run test:video && npm run test:paths && npm run test:routes",
+    "test": "npm run test:deps && npm run test:scripts && npm run test:tdz && npm run test:next && npm run test:status && npm run test:transport && npm run test:config-sources && npm run test:dates && npm run test:structure && npm run test:workflow && npm run test:roster && npm run test:publish && npm run test:seeds && npm run test:fixtures && npm run test:pdftext && npm run test:search && npm run test:devvars && npm run test:drift && npm run test:props && npm run test:policy && npm run test:visibility && npm run test:sqlorder && npm run test:sqlcols && npm run test:embeds && npm run test:contrast && npm run test:static && npm run test:tokens && npm run test:config && npm run test:tenant && npm run test:templates && npm run test:registry && npm run test:video && npm run test:ordering && npm run test:media && npm run test:caching && npm run test:frontmatter && npm run test:paths && npm run test:routes",
     "test:tokens": "node tests/tokens-only.mjs",
     "test:config": "node tests/config-secrets.mjs",
     "seed:demo": "node scripts/seed-demo.mjs",
@@ -22,7 +22,8 @@
     "test:dates": "node --experimental-strip-types tests/date-order.mjs",
     "test:drift": "node tests/schema-drift.mjs",
     "reset:storage": "node scripts/reset-storage.mjs",
-    "reset": "npx supabase db reset && node scripts/reset-storage.mjs && node scripts/seed-demo.mjs && node scripts/seed-scenarios.mjs",
+    "digest": "node --experimental-strip-types scripts/digest.mjs",
+    "reset": "node scripts/supabase.mjs db reset && node scripts/reset-storage.mjs && node scripts/seed-demo.mjs && node --experimental-strip-types scripts/seed-programs.mjs && node scripts/seed-scenarios.mjs && node --experimental-strip-types scripts/seed-publish.mjs",
     "seed:scenarios": "node scripts/seed-scenarios.mjs",
     "test:props": "node tests/dead-props.mjs",
     "test:structure": "node --experimental-strip-types tests/structure.mjs",
@@ -39,7 +40,30 @@
     "test:seeds": "node --experimental-strip-types tests/seed-manuscripts.mjs",
     "test:paths": "node --experimental-strip-types tests/paths.mjs",
     "test:video": "node --experimental-strip-types tests/video.mjs",
-    "test:programs": "node --experimental-strip-types tests/programs.mjs"
+    "test:templates": "node --experimental-strip-types tests/templates.mjs",
+    "test:deps": "node tests/dependencies.mjs",
+    "test:registry": "node --experimental-strip-types tests/registry.mjs",
+    "test:visibility": "node tests/visibility.mjs",
+    "test:sqlorder": "node tests/sql-order.mjs",
+    "test:scripts": "node tests/scripts.mjs",
+    "test:tdz": "node tests/temporal-dead-zone.mjs",
+    "test:next": "node --experimental-strip-types tests/next-path.mjs",
+    "test:status": "node --experimental-strip-types tests/status.mjs",
+    "test:transport": "node --experimental-strip-types tests/transport.mjs",
+    "supabase": "node scripts/supabase.mjs",
+    "db:start": "node scripts/supabase.mjs start",
+    "db:stop": "node scripts/supabase.mjs stop",
+    "test:config-sources": "node tests/config-sources.mjs",
+    "doctor": "node scripts/doctor.mjs",
+    "db:restart": "node scripts/supabase.mjs stop && node scripts/supabase.mjs start",
+    "test:caching": "node tests/caching.mjs",
+    "seed:programs": "node --experimental-strip-types scripts/seed-programs.mjs",
+    "test:fixtures": "node --experimental-strip-types tests/fixtures.mjs",
+    "test:db": "bash tests/db/run.sh",
+    "test:ordering": "node tests/ordering.mjs",
+    "test:media": "node tests/media.mjs",
+    "seed:publish": "node --experimental-strip-types scripts/seed-publish.mjs",
+    "test:frontmatter": "node tests/frontmatter.mjs"
   },
   "dependencies": {
     "@astrojs/cloudflare": "^12.6.0",
@@ -53,9 +77,11 @@
   },
   "devDependencies": {
     "@astrojs/check": "^0.9.10",
+    "acorn": "^8.18.0",
     "aws4fetch": "^1.0.20",
     "pagefind": "^1.3.0",
     "supabase": "^2.111.0",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "wrangler": "^4.59.2"
   }
 }

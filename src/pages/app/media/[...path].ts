@@ -29,15 +29,26 @@ export const GET: APIRoute = async ({ params, request, cookies, locals }) => {
   /* Policies on these two tables already answer "may this person see it".
      If neither returns a row, either the object is not ours or they are not
      allowed to see it, and both answers are 404. */
-  const [{ data: media }, { data: deliverable }, { data: figure }, { data: paper }] =
-    await Promise.all([
-      supabase.from('note_media').select('id').eq('storage_path', path).maybeSingle(),
-      supabase.from('deliverables').select('id').eq('storage_path', path).maybeSingle(),
-      supabase.from('manuscript_figures').select('id').eq('storage_path', path).maybeSingle(),
-      supabase.from('manuscripts').select('id').eq('pdf_path', path).maybeSingle(),
-    ]);
+  /**
+   * Every table that can hold a storage path.
+   *
+   * `project_images` was added and this list was not, so every showcase
+   * image 404'd: uploaded, stored, referenced, and unreachable. A list of
+   * tables maintained by hand fails silently in exactly one direction —
+   * nothing leaks, and something legitimate disappears — which is the safer
+   * direction and the harder one to notice.
+   *
+   * `test:media` asserts this list against the schema.
+   */
+  const references = await Promise.all([
+    supabase.from('note_media').select('id').eq('storage_path', path).maybeSingle(),
+    supabase.from('project_images').select('id').eq('storage_path', path).maybeSingle(),
+    supabase.from('deliverables').select('id').eq('storage_path', path).maybeSingle(),
+    supabase.from('manuscript_figures').select('id').eq('storage_path', path).maybeSingle(),
+    supabase.from('manuscripts').select('id').eq('pdf_path', path).maybeSingle(),
+  ]);
 
-  if (!media && !deliverable && !figure && !paper) {
+  if (!references.some((r) => r.data)) {
     return new Response('Not found', { status: 404 });
   }
 

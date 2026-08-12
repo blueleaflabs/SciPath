@@ -10,7 +10,28 @@ export const getStaticPaths: GetStaticPaths = withTenants(async () => {
   return guides.map((guide) => ({ params: { slug: guide.id }, props: { guide } }));
 });
 
-const { guide } = Astro.props;
+/**
+ * The guide, from props where they arrived and from the slug where they did
+ * not.
+ *
+ * `getStaticPaths` supplies props, and a rewrite does not always carry them:
+ * the middleware sends `/guides/x/` to `/montavista/guides/x/`, and the
+ * route then rendered with `guide` undefined and threw a framework error at
+ * a reader.
+ *
+ * The slug is in the URL either way, so it is the more reliable of the two.
+ * Props stay as the fast path.
+ */
+const slug = Astro.params.slug;
+
+const guide =
+  Astro.props.guide ??
+  (await getCollection('guides')).find((g) => g.id === slug);
+
+if (!guide) {
+  return new Response(null, { status: 404 });
+}
+
 const { Content } = await render(guide);
 ---
 

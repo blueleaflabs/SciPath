@@ -1,0 +1,129 @@
+# ISEF's forms, as deliverables.
+#
+# A form is a deliverable that somebody else signs. Three fields distinguish
+# it from a file: who signs, whether one is needed per person or per project,
+# and whether it must be dated before the work begins.
+#
+# **Nine of the twelve must be signed and dated before experimentation.** That
+# is not a deadline. Work done first is disqualified and cannot be redone in
+# the time that remains, which is the one place this software is deliberately
+# unforgiving.
+#
+# Which forms a project needs depends on what it does. ISEF publishes a Rules
+# Wizard because working it out from the rulebook is genuinely hard, and every
+# `applies_when` below reads facts the student declares once.
+#
+# Verified against the 2027 rules on 2026-08-06.
+
+id: deliverables-isef
+rules_year: 2027
+wizard: https://ruleswizard.societyforscience.org/
+
+deliverables:
+  - id: sponsor_1
+    name: Checklist for Adult Sponsor (1)
+    kind: form
+    owner: sponsor
+    requirement: required
+    per: project
+    signed_by: [sponsor]
+    before_work: true
+    url: https://sspcdn.blob.core.windows.net/files/Documents/SEP/ISEF/2026/Forms/1-Checklist-for-Adult-Sponsor.pdf
+    guidance: >-
+      Also the document that tells you which of the others you need, which is
+      why it comes first rather than last.
+
+  - id: checklist_1a
+    name: Student Checklist (1A)
+    kind: form
+    owner: student
+    requirement: required
+    per: project
+    before_work: true
+
+  - id: approval_1b
+    name: Approval Form (1B)
+    kind: form
+    owner: student
+    requirement: required
+    per: member
+    signed_by: [student, parent, sponsor]
+    before_work: true
+    guidance: One per team member, not one per team.
+
+  - id: rri_1c
+    name: Regulated Research Institutional Form (1C)
+    kind: form
+    owner: sponsor
+    requirement: conditional
+    applies_when: rri
+    guidance: Judges read it to establish what you did yourself.
+
+  - id: qualified_scientist_2
+    name: Qualified Scientist Form (2)
+    kind: form
+    owner: sponsor
+    requirement: conditional
+    applies_when: vertebrates or pha or hazardous
+    before_work: true
+
+  - id: risk_3
+    name: Risk Assessment Form (3)
+    kind: form
+    owner: student
+    requirement: conditional
+    applies_when: hazardous
+    before_work: true
+
+  - id: humans_4
+    name: Human Participants Form (4)
+    kind: form
+    owner: student
+    requirement: conditional
+    applies_when: humans
+    before_work: true
+    guidance: >-
+      A survey is human participants research. A great many students do not
+      realize this, and it is the commonest way to discover in February that
+      the work does not count.
+
+  - id: vertebrate_5a
+    name: Vertebrate Animal Form (5A)
+    kind: form
+    owner: student
+    requirement: conditional
+    applies_when: vertebrates
+    before_work: true
+
+  - id: pha_6a
+    name: Potentially Hazardous Biological Agents Form (6A)
+    kind: form
+    owner: student
+    requirement: conditional
+    applies_when: pha
+    before_work: true
+
+  - id: continuation_7
+    name: Continuation Form (7)
+    kind: form
+    owner: student
+    requirement: conditional
+    applies_when: continuation
+
+  - id: field_safety
+    name: Field Work Safety Plan
+    kind: file
+    owner: student
+    requirement: conditional
+    applies_when: field_work
+    before_work: true
+
+# The facts every `applies_when` above reads. Answered once, at the start.
+facts:
+  - { id: humans, question: "Does anybody take part as a participant, including answering a survey?" }
+  - { id: vertebrates, question: "Does it involve vertebrate animals?" }
+  - { id: pha, question: "Does it involve microorganisms, rDNA, tissue, blood, or bodily fluids?" }
+  - { id: hazardous, question: "Does it involve hazardous chemicals, activities, or devices?" }
+  - { id: rri, question: "Is any of it done at a research institution, a company, or a government lab?" }
+  - { id: continuation, question: "Does it continue work from a previous year?" }
+  - { id: field_work, question: "Does any of it happen outdoors, away from school?" }

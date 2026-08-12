@@ -1,0 +1,43 @@
+# A short grant proposal.
+#
+# Two pages, read in four minutes by somebody funding ten of them. The order
+# matters more than the prose: a reviewer who cannot find the number by the
+# end of the first page stops looking for it.
+
+id: grant_narrative
+name: Grant proposal
+guidance: >-
+  Two pages. The reader is deciding between yours and nine others, and the
+  question they are answering is whether the money changes the outcome.
+
+parts:
+  - id: what
+    name: What you want to do
+    min_words: 100
+    guidance: The question, in the first three sentences. Not the background.
+
+  - id: why_now
+    name: Why it needs funding
+    min_words: 75
+    guidance: >-
+      What you cannot do without it. "I would like a better spectrophotometer"
+      is a wish; "the borrowed one is only available on Thursdays and the
+      reaction runs for six hours" is a reason.
+
+  - id: what_it_buys
+    name: What the money buys
+    min_words: 75
+    guidance: The items and the prices, matching the budget exactly.
+
+  - id: what_happens
+    name: What comes of it
+    min_words: 75
+    guidance: >-
+      Where the work goes: a fair, a class showcase, a paper. A funder is
+      buying an outcome rather than an object.
+
+  - id: who
+    name: Who you are
+    min_words: 50
+    guidance: >-
+      Short. What you have already done that shows you will finish this one.

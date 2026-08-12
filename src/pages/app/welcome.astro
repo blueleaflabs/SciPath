@@ -4,11 +4,15 @@ export const prerender = false;
 import Base from '../../layouts/Base.astro';
 import { serverClient } from '../../lib/supabase';
 import { activeOrg } from '../../lib/tenant';
+import { afterPost, outcomeFrom, leaveTo } from '../../lib/post-redirect';
+import { signInWith } from '../../lib/next-path';
 
 const { session, account, orgSlug } = Astro.locals;
 const org = activeOrg(Astro) as any;
 
-if (!session) return Astro.redirect('/app/');
+/* Remembering where they were headed, so a link from a notification
+   survives the sign in it triggers (20.10). */
+if (!session) return Astro.redirect(signInWith(Astro.url));
 if (account) return Astro.redirect('/app/');
 
 const openProgram = org?.signupMode === 'open';
@@ -36,7 +40,9 @@ if (domainRefused) {
 const year = new Date().getFullYear();
 const gradYears = [year, year + 1, year + 2, year + 3, year + 4];
 
-let error: string | null = null;
+/* Seeded from the redirect a POST answers with. See
+   src/lib/post-redirect.ts. */
+let { error: error } = outcomeFrom(Astro.url);
 let sent: Record<string, string> = {};
 
 if (Astro.request.method === 'POST') {
@@ -67,8 +73,11 @@ if (Astro.request.method === 'POST') {
     });
 
     if (rpcError) error = rpcError.message;
-    else return Astro.redirect('/app/');
+    else return leaveTo('/app/');
   }
+
+  /* A refresh should re-read this page, not send the form again. */
+  return afterPost(Astro.url, { error: error });
 }
 
 const suggestedName = sent.display_name ?? session.email?.split('@')[0] ?? '';
@@ -84,7 +93,12 @@ const band = sent.age_band ?? '';
       Three things, and nothing your sign-in already proves.
     </p>
 
+    {/* Anchored, and every form on this page posts to it. These pages
+        run to several screens, and an outcome rendered at the top after
+        a click three screens down reads as nothing having happened. */}
+    <div id="outcome" tabindex="-1">
     {error && <p class="note" role="alert">{error}</p>}
+    </div>
 
     {domainRefused ? (
       <div class="note" role="alert">
@@ -103,7 +117,7 @@ const band = sent.age_band ?? '';
         </p>
       </div>
     ) : (
-    <form method="POST" class="stack">
+    <form method="POST" action="#outcome" class="stack">
       <label>
         <span>Your name, as it should appear on a byline</span>
         <input name="display_name" required value={suggestedName} autocomplete="name" />
@@ -150,7 +164,7 @@ const band = sent.age_band ?? '';
       )}
 
       <div class="finish">
-        <button type="submit">Create my account</button>
+        <button class="btn" type="submit">Create my account</button>
         <ul class="terms">
           <li><i class="req">*</i> required</li>
           <li>A club officer will be assigned to your project.</li>

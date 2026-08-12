@@ -295,6 +295,25 @@ export function actionsFor(state: State, actor: Actor, facts: Facts = {}): Actio
     if (action.id === 'withdraw_submission' && facts.withdrawalRequested) return false;
     if (action.id === 'confirm_withdrawal' && !facts.withdrawalRequested) return false;
 
+    /**
+     * An unsent list and an acceptance are a contradiction.
+     *
+     * An editor wrote out the changes the authors should make, did not send
+     * them, and accepted the paper. The list stayed *not sent yet* forever:
+     * the authors never saw it, the tracker never mentioned it, and the work
+     * of writing it was thrown away by a click that said nothing about it.
+     *
+     * A list on the current round at `editorial_review` is unsent by
+     * construction — the round only advances when the authors send it back
+     * — so the count is the whole test.
+     *
+     * Accepting means *nothing further is needed*, so the way out is to send
+     * the list, or to remove the findings if they turned out not to matter.
+     * Declining is deliberately not guarded: a refused paper makes the list
+     * moot, and blocking that would trap an editor between two doors.
+     */
+    if (action.id === 'decide_accepted' && (facts.findingCount ?? 0) > 0) return false;
+
     return true;
   });
 }

@@ -3,14 +3,19 @@ export const prerender = false;
 
 import { activeOrg } from '../../../../lib/tenant';
 import { toDate } from '../../../../lib/dates';
+import { parseVideo } from '../../../../lib/video';
+import { programTitle } from '../../../../lib/program-names';
 import { serverClient } from '../../../../lib/supabase';
 import { renderNote, linkDomain } from '../../../../lib/notes';
+import { signInWith } from '../../../../lib/next-path';
 
 const { session, account } = Astro.locals;
 const org = activeOrg(Astro);
 const { id } = Astro.params;
 
-if (!session) return Astro.redirect('/app/');
+/* Remembering where they were headed, so a link from a notification
+   survives the sign in it triggers (20.10). */
+if (!session) return Astro.redirect(signInWith(Astro.url));
 if (!account) return Astro.redirect('/app/welcome/');
 
 const supabase = serverClient(
@@ -21,7 +26,7 @@ const supabase = serverClient(
 
 const { data: project } = await supabase
   .from('projects')
-  .select('id, title, question, stage, started_on, created_at, project_authors(role, users(id, display_name))')
+  .select('id, title, question, started_on, created_at, video_url, project_authors(role, users(id, display_name))')
   .eq('id', id)
   .maybeSingle();
 
@@ -50,7 +55,7 @@ const { data: links } = await supabase
 
 const { data: entries } = await supabase
   .from('entries')
-  .select('id, programs(name, season_year, fair_date)')
+  .select('id, programs(name, season_year, kind, phases, fair_date)')
   .eq('project_id', id);
 
 const entryIds = (entries ?? []).map((e: any) => e.id);
@@ -62,6 +67,62 @@ const { data: deliverables } = entryIds.length
       .in('entry_id', entryIds)
       .order('signed_on', { ascending: true })
   : { data: [] as any[] };
+
+/**
+ * The deadlines, the pictures, and the video.
+ *
+ * The export is what a judge is handed, and it carried the entries and the
+ * paperwork and nothing else — so a project's calendar, its showcase, and
+ * its film existed only on a screen the judge will never see.
+ */
+const { data: milestones } = entryIds.length
+  ? await supabase
+      .from('entry_milestones')
+      .select('name, kind, due_on, completed_on, blocks_experimentation, source, phase')
+      .in('entry_id', entryIds)
+      .order('due_on', { ascending: true, nullsFirst: false })
+  : { data: [] as any[] };
+
+const { data: images } = await supabase
+  .from('project_images')
+  .select('position, storage_path, alt, caption')
+  .eq('project_id', id)
+  .is('withdrawn_at', null)
+  .order('position');
+
+const savedVideo = parseVideo(project.video_url);
+
+/* A course's deadlines are set by the class, not a club. Same reasoning as
+   the entry page: naming a body that does not exist is worse than vague. */
+const isCourse = (entries ?? []).some((e: any) => e.programs?.kind === 'course');
+
+/* The same grouping the entry page uses. A printed list of nineteen rows is
+   a list; five named stretches is a plan, and a judge reads it once. */
+const phaseList: any[] = (entries ?? [])
+  .flatMap((e: any) => e.programs?.phases ?? []);
+
+const milestoneGroups = (() => {
+  const order = new Map(phaseList.map((p: any, i: number) => [p.id, i]));
+  const buckets = new Map<string, any[]>();
+
+  for (const m of milestones ?? []) {
+    const key = m.phase && order.has(m.phase) ? m.phase : '';
+    buckets.set(key, [...(buckets.get(key) ?? []), m]);
+  }
+
+  return [...buckets.entries()]
+    .map(([id, rows]) => {
+      const phase = phaseList.find((p: any) => p.id === id);
+      return { id, name: phase?.name ?? 'Everything else', window: phase?.window ?? null, rows };
+    })
+    .sort((a, b) => (order.get(a.id) ?? 999) - (order.get(b.id) ?? 999));
+})();
+
+const whose: Record<string, string> = {
+  process: 'Research',
+  program: isCourse ? 'The class' : 'The fair',
+  school: isCourse ? 'The class' : 'The club',
+};
 
 const attachments = project.project_authors ?? [];
 const authors = attachments.filter((a: any) => a.role === 'author');
@@ -106,7 +167,7 @@ const printedOn = new Date().toLocaleDateString('en-US', {
   <body>
     <div class="toolbar">
       <a href={`/app/project/${id}/`}>Back to the project</a>
-      <button onclick="window.print()">Print or save as PDF</button>
+      <button class="btn" onclick="window.print()">Print or save as PDF</button>
     </div>
 
     <article class="book">
@@ -129,7 +190,7 @@ const printedOn = new Date().toLocaleDateString('en-US', {
           <dd>{org.name}</dd>
 
           {entries && entries.length > 0 && (<><dt>Entered</dt>
-          <dd>{entries.map((e: any) => `${e.programs?.name} ${e.programs?.season_year}`).join(', ')}</dd></>)}
+          <dd>{entries.map((e: any) => programTitle(e.programs)).join(', ')}</dd></>)}
 
           <dt>Work began</dt>
           <dd>{fmt(project.started_on)}</dd>
@@ -187,6 +248,70 @@ const printedOn = new Date().toLocaleDateString('en-US', {
 
         {(!notes || notes.length === 0) && <p class="empty">No entries recorded.</p>}
       </section>
+
+      {/* The showcase, before the paperwork. A judge holding this should see
+          what the work looked like near the front rather than after two
+          tables. */}
+      {images && images.length > 0 && (
+        <section class="appendix">
+          <h2>Showcase</h2>
+          <ul class="shots">
+            {images.map((img: any) => (
+              <li class="shot">
+                <img src={`/app/media/${img.storage_path}`} alt={img.alt} />
+                <p>{img.caption}</p>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
+      {savedVideo && (
+        <section class="appendix">
+          <h2>Video</h2>
+          {/* No player on paper. The address is the useful thing, and the
+              print rule prints it after the link anyway. */}
+          <p>
+            <a href={savedVideo.watch} target="_blank" rel="noopener noreferrer">
+              {savedVideo.host === 'vimeo' ? 'Vimeo' : 'YouTube'}
+            </a>
+          </p>
+        </section>
+      )}
+
+      {milestones && milestones.length > 0 && (
+        <section class="appendix">
+          <h2>Deadlines</h2>
+          <table>
+            <thead>
+              <tr><th>Due</th><th>Obligation</th><th>Set by</th><th>Done</th></tr>
+            </thead>
+            <tbody>
+              {milestoneGroups.map((group) => (
+                <>
+                  <tr class="phase-row">
+                    <th colspan="4" scope="colgroup">
+                      {group.name}
+                      {group.window && ` · ${group.window.from} to ${group.window.to}`}
+                    </th>
+                  </tr>
+              {group.rows.map((m: any) => (
+                <tr>
+                  <td>{fmt(m.due_on)}</td>
+                  <td>
+                    {m.name}
+                    {m.blocks_experimentation && ' — must precede work'}
+                  </td>
+                  <td>{whose[m.source] ?? 'The program'}</td>
+                  <td>{m.completed_on ? fmt(m.completed_on) : '—'}</td>
+                </tr>
+              ))}
+                </>
+              ))}
+            </tbody>
+          </table>
+        </section>
+      )}
 
       {deliverables && deliverables.length > 0 && (
         <section class="appendix">
@@ -307,6 +432,38 @@ const printedOn = new Date().toLocaleDateString('en-US', {
     margin: 44px 0 22px;
   }
   .entry { margin-bottom: 30px; page-break-inside: avoid; }
+
+  .phase-row th {
+    padding: 16px 0 5px;
+    text-align: left;
+    font-family: var(--face-ui);
+    font-weight: 600;
+    font-size: 0.92rem;
+    border-bottom: 1px solid var(--ink);
+  }
+
+  /* Two across on paper, which fits four images on half a page rather than
+     four pages. */
+  .shots {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 18px 22px;
+  }
+  .shot img {
+    width: 100%;
+    aspect-ratio: 4 / 3;
+    object-fit: cover;
+    border: 1px solid var(--rule-fine);
+  }
+  .shot p {
+    margin: 6px 0 0;
+    font-size: 0.88rem;
+    line-height: 1.4;
+    color: var(--ink-2);
+  }
   .entry .meta {
     display: flex;
     gap: 12px;
@@ -354,10 +511,42 @@ const printedOn = new Date().toLocaleDateString('en-US', {
   .fine { font-size: 0.9rem; color: var(--ink-3); }
   .empty { color: var(--ink-3); }
 
+  /* The printed page.
+   
+     Without an @page rule the browser uses its own margin, which puts the
+     first line against the edge and gives a judge nowhere to write. Nobody
+     reads this on a screen: it is exported, printed, and handed over. */
+  @page {
+    margin: 20mm 18mm 18mm;
+  }
+
   @media print {
     body { background: var(--paper); }
     .toolbar { display: none; }
-    .book { max-width: none; margin: 0; padding: 0; border: 0; }
+
+    /* The page's margin is the margin now; the frame around the block was
+       there to look like paper on a screen. */
+    .book {
+      max-width: none;
+      margin: 0;
+      padding: 0;
+      border: 0;
+      box-shadow: none;
+    }
+
     h2 { page-break-after: avoid; }
+
+    /* A heading alone at the foot of a page, or one line of an entry
+       stranded at the top of the next, both read as damage. */
+    .entry, .shot, tr { page-break-inside: avoid; }
+    .title { page-break-after: avoid; }
+
+    /* Links are useless in print unless the address is on the paper. */
+    a[href^='http']::after {
+      content: ' (' attr(href) ')';
+      font-size: 0.82em;
+      color: var(--ink-3);
+      word-break: break-all;
+    }
   }
 </style>

@@ -2,6 +2,7 @@
 export const prerender = false;
 
 import Base from '../../layouts/Base.astro';
+import { cachePublicPage } from '../../lib/caching';
 import PageHead from '../../components/PageHead.astro';
 import RecordCard from '../../components/RecordCard.astro';
 import Empty from '../../components/Empty.astro';
@@ -11,7 +12,7 @@ const archive = await openArchive(Astro);
 const records = archive.articles;
 const years = byYear(records);
 
-Astro.response.headers.set('Cache-Control', 'public, max-age=120, s-maxage=600');
+cachePublicPage(Astro);
 ---
 
 <Base title="Showcase" description="Every published record, newest first, each with its full abstract.">

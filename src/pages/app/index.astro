@@ -5,13 +5,20 @@ import Base from '../../layouts/Base.astro';
 import { formatDate } from '../../lib/dates';
 import AppShell from '../../components/AppShell.astro';
 import { activeOrg } from '../../lib/tenant';
+import { programTitle, programKind, participationVerb, staffWord } from '../../lib/program-names';
 import { serverClient } from '../../lib/supabase';
 import { standing, roleLabel } from '../../lib/roles';
 import { checkDateOrder, worstFinding } from '../../lib/dateOrder';
 import { assess, tally } from '../../lib/attention';
+import { afterPost, outcomeFrom, leaveTo } from '../../lib/post-redirect';
+import { safeNext, HOME } from '../../lib/next-path';
 
 const { configured, session, account, roles } = Astro.locals;
 const org = activeOrg(Astro);
+
+/* Where they were headed before being asked to sign in. Kept through the
+   form and through Google's round trip. */
+const next = safeNext(Astro.url.searchParams.get('next'));
 /* Ours, not the provider's. See the comment in middleware.ts: sharing the
    `error` parameter with Supabase produced a redirect loop. */
 const signin = Astro.url.searchParams.get('signin');
@@ -25,30 +32,79 @@ const supabase = account
   ? serverClient(Astro.request, Astro.cookies, (Astro.locals as any).runtime?.env)
   : null;
 
-let error2: string | null = null;
+/* Seeded from the redirect a POST answers with. `cleared` was a count that
+   could not survive one, so it became the sentence it was rendered as. See
+   src/lib/post-redirect.ts. */
+let { error: error2, note: attached } = outcomeFrom(Astro.url);
 
-let cleared: number | null = null;
-
-/* Attaching someone to a project. Either club role may do it. */
-if (Astro.request.method === 'POST' && supabase && me.runsTheClub) {
+/**
+ * Two different people post to this page, and the guard is per action.
+ *
+ * Joining a program is a student's, attaching somebody to a project is the
+ * club's, and the whole handler used to sit behind `me.runsTheClub` — so a
+ * student's join would have been dropped without a word. The action is also
+ * explicit on every branch now: attaching was the `else`, and a form that
+ * forgot its action fell into it.
+ */
+if (Astro.request.method === 'POST' && supabase) {
   const form = await Astro.request.formData();
+  const action = String(form.get('action') ?? '');
 
-  if (String(form.get('action')) === 'detach') {
+  if (action === 'join') {
+    const title = String(form.get('title') ?? '').trim();
+
+    if (!title) {
+      error2 = 'Give the project a working title. You can change it later.';
+    } else {
+      const { data: entryId, error: e } = await supabase.rpc('start_entry', {
+        p_program_id: String(form.get('program_id') ?? ''),
+        p_title: title,
+        p_started_on: String(form.get('started_on') ?? '') || null,
+      });
+
+      if (e) error2 = e.message;
+      /* The top of their new project, not wherever the last outcome was.
+         See leaveTo. */
+      else return leaveTo(`/app/entry/${entryId}/`);
+    }
+  } else if (!me.runsTheClub) {
+    error2 = 'Only an officer or your advisor can do that.';
+  } else if (action === 'detach') {
     const { error: e } = await supabase.rpc('detach_from_project', {
       p_project_id: String(form.get('project_id') ?? ''),
       p_user_id: String(form.get('user_id') ?? ''),
     });
     if (e) error2 = e.message;
-  } else {
+  } else if (action === 'select') {
+    /* Which projects a school puts forward. The advisor's, and the function
+       says so too; this only decides whether the control is offered. */
+    if (!me.isAdvisor) {
+      error2 = 'Only your advisor decides which projects go forward.';
+    } else {
+      const { error: e } = await supabase.rpc('set_selection', {
+        p_entry_id: String(form.get('entry_id') ?? ''),
+        p_state: String(form.get('state') ?? 'candidate'),
+        p_note: String(form.get('note') ?? '') || null,
+      });
+      if (e) error2 = e.message;
+    }
+  } else if (action === 'attach') {
     const { data, error: e } = await supabase.rpc('attach_to_project', {
       p_project_id: String(form.get('project_id') ?? ''),
       p_user_id: String(form.get('user_id') ?? ''),
       p_role: String(form.get('role') ?? 'mentor'),
       p_dated: String(form.get('dated') ?? '') || null,
     });
-    if (e) error2 = e.message;
-    else cleared = data ?? 0;
+    if (e) {
+      error2 = e.message;
+    } else {
+      const n = data ?? 0;
+      attached = `Attached. ${n} approval obligation${n === 1 ? '' : 's'} cleared.`;
+    }
   }
+
+  /* A refresh should re-read this page, not send the form again. */
+  return afterPost(Astro.url, { error: error2, note: attached });
 }
 
 /* --- What a student sees: their own entries -------------------------- */
@@ -76,7 +132,7 @@ if (supabase && account) {
     const { data } = myProjectIds.length
       ? await supabase
           .from('entries')
-          .select('id, status, placement, project_id, programs(name, season_year, fair_date), projects(title, stage)')
+          .select('id, status, placement, program_id, project_id, programs(name, season_year, fair_date, kind, roles), projects(title)')
           .in('project_id', myProjectIds)
           .order('entered_at', { ascending: false })
       : { data: [] as any[] };
@@ -103,23 +159,60 @@ if (supabase && account) {
 
     myReviews = assigned ?? [];
   }
+}
 
+/* --- What is open to join ------------------------------------------------
+ *
+ * This was its own page, listing the same entries as the section above it
+ * with a different row. Two pages holding one list is the sprawl this pass
+ * exists to remove, so the joining half moved here and the page it came
+ * from redirects.
+ */
+let joinable: any[] = [];
+let enteredIn = new Set<string>();
+let entryFor = new Map<string, string>();
+
+if (supabase && account) {
+  const { data: open } = await supabase
+    .from('programs')
+    .select('id, name, season_year, fair_date, description, website_url, advances_to_fairs, status, kind, level, joining, places')
+    .eq('status', 'open')
+    .order('fair_date', { ascending: true });
+
+  joinable = open ?? [];
+
+  /* A program already joined shows the way in rather than the form. */
+  for (const e of myEntries) {
+    enteredIn.add(e.program_id);
+    entryFor.set(e.program_id, e.id);
+  }
+}
+
+/* --- What everyone else sees: the projects they are responsible for --- */
+if (supabase && account) {
   if (me.runsTheClub) {
     /* Every project at the school. Row level security decides who may run
        this at all; the heading says so, unlike the section above. */
     const { data: projects } = await supabase
       .from('projects')
-      .select('id, title, stage, started_on, project_authors(role, self_managed_at, users(id, display_name, grad_year))')
+      .select('id, title, started_on, project_authors(role, self_managed_at, users(id, display_name, grad_year))')
       .is('archived_at', null)
       .order('created_at', { ascending: false });
 
     const ids = (projects ?? []).map((p: any) => p.id);
 
+    /* Per participation, not per project.
+    
+       This picked one entry per project with `.find`, which is arbitrary the
+       moment a project is in two programs — and it is the reason the table
+       could not be grouped by program or carry a selection state, both of
+       which belong to a participation rather than to the work. */
     const { data: entries } = ids.length
       ? await supabase
           .from('entries')
-          .select('id, project_id, status, programs(name, season_year, fair_date)')
+          .select('id, project_id, status, selection_state, selection_decided_at, programs(id, name, season_year, fair_date, kind, roles, selection_cap)')
           .in('project_id', ids)
+          .in('status', ['entered', 'competed'])
       : { data: [] as any[] };
 
     const { data: sponsorRows } = ids.length
@@ -135,12 +228,19 @@ if (supabase && account) {
     const { data: milestones } = entryIds.length
       ? await supabase
           .from('entry_milestones')
-          .select('id, entry_id, name, due_on, required, blocks_experimentation, completed_on')
+          .select('id, entry_id, name, kind, due_on, required, blocks_experimentation, completed_on')
           .in('entry_id', entryIds)
       : { data: [] as any[] };
 
-    watched = (projects ?? []).map((p: any) => {
-      const entry = (entries ?? []).find((e: any) => e.project_id === p.id);
+    /* One row per participation, and a project in no program still gets a
+       row, because a project nobody has entered anywhere is exactly the one
+       an advisor should see. */
+    const pairs = (projects ?? []).flatMap((p: any) => {
+      const its = (entries ?? []).filter((e: any) => e.project_id === p.id);
+      return its.length ? its.map((entry: any) => ({ p, entry })) : [{ p, entry: null }];
+    });
+
+    watched = pairs.map(({ p, entry }: any) => {
       const mine = (milestones ?? []).filter((m: any) => m.entry_id === entry?.id);
 
       const findings = checkDateOrder({
@@ -172,6 +272,23 @@ if (supabase && account) {
         sponsor,
         done: mine.filter((m: any) => m.completed_on).length,
         total: mine.length,
+
+        /* Where the project is: the next thing not done, by date. Undated
+           steps sort last, because a step nobody has scheduled is not the
+           next thing to worry about.
+         
+           Events are skipped. "Applications open" is a day on the fair's
+           calendar rather than something anybody does, and a column of forty
+           projects all reading "Applications open" says nothing about any of
+           them. */
+        next:
+          mine
+            .filter((m: any) => !m.completed_on && m.kind !== 'event')
+            .sort((a: any, b: any) => (a.due_on ?? '9999').localeCompare(b.due_on ?? '9999'))[0] ??
+          mine
+            .filter((m: any) => !m.completed_on)
+            .sort((a: any, b: any) => (a.due_on ?? '9999').localeCompare(b.due_on ?? '9999'))[0] ??
+          null,
         worst,
         verdict: assess({
           worst,
@@ -201,13 +318,10 @@ if (supabase && account) {
 
 const fmt = (d: string | null) => formatDate(d, 'long', 'To be announced');
 
-const stageLabel: Record<string, string> = {
-  registered: 'Registered',
-  in_progress: 'In progress',
-  fair_ready: 'Fair ready',
-  competed: 'Competed',
-  published: 'Published',
-};
+/* There was a stageLabel map here, five literals describing a competition's
+   lifecycle. Where a project is comes from its steps now: the next one that
+   is not done, which is both more accurate and more useful than a bucket
+   name, because it says what to do rather than roughly where you are. */
 
 /* An officer sees every project by role and looks after the ones assigned to
    them. Counting the first as "in your care" told Marchetti she was
@@ -218,6 +332,69 @@ const mine = watched.filter((w) =>
 );
 
 const counts = tally(watched.map((w) => w.verdict));
+
+/**
+ * The oversight table, grouped by program.
+ *
+ * This and the selection screen were the same list of the same projects with
+ * six of seven columns in common, and the seventh — the selection state —
+ * is a column rather than a page. So selection moved here and that route
+ * redirects.
+ *
+ * Grouped because the club and the class are not one decision: an advisor
+ * putting projects forward to a fair is not choosing which class projects
+ * are good, and a cap belongs to a program. Grouping also lets the staff
+ * column say the program's own word, which one table could not.
+ */
+const filter = Astro.url.searchParams.get('show') ?? 'all';
+
+const shown = watched.filter((w) => {
+  if (filter === 'no_officer') return w.officers.length === 0 && w.selfManaged.length === 0;
+  if (filter === 'no_sponsor') return !w.sponsor;
+  if (filter === 'flagged') return w.worst?.severity === 'disqualifying';
+  if (filter === 'selected') return w.entry?.selection_state === 'selected';
+  return true;
+});
+
+const filters = [
+  ['all', 'Everything'],
+  ['selected', 'Selected'],
+  ['no_officer', 'No officer'],
+  ['no_sponsor', 'No sponsor'],
+  ['flagged', 'Disqualifying'],
+];
+
+const groups = (() => {
+  const by = new Map<string, { program: any; rows: any[] }>();
+
+  for (const row of shown) {
+    const program = row.entry?.programs ?? null;
+    /* A project in no program is still somebody's to look after, and it
+       groups under its own heading rather than vanishing. */
+    const key = program?.id ?? 'none';
+    const held = by.get(key) ?? { program, rows: [] };
+    held.rows.push(row);
+    by.set(key, held);
+  }
+
+  return [...by.values()].sort((a, b) => {
+    if (!a.program) return 1;
+    if (!b.program) return -1;
+    return (a.program.name ?? '').localeCompare(b.program.name ?? '');
+  });
+})();
+
+/* Selected against the cap, per program. Only a competition selects: a class
+   has nowhere to put projects forward to, so the column is absent rather
+   than empty. */
+const selects = (program: any) => program?.kind === 'competition';
+
+function standingOf(group: { program: any; rows: any[] }) {
+  const chosen = group.rows.filter((r) => r.entry?.selection_state === 'selected').length;
+  const cap = group.program?.selection_cap ?? null;
+  if (!selects(group.program)) return `${group.rows.length} in progress`;
+  return cap ? `${chosen} of ${cap} selected` : `${chosen} selected`;
+}
 ---
 
 <Base title="Overview" noindex={true}>
@@ -241,12 +418,13 @@ const counts = tally(watched.map((w) => w.verdict));
     {signin === 'oauth' && <p class="note" role="alert">Sign in could not start. Try again.</p>}
     {signin === 'exchange' && <p class="note" role="alert">Sign in did not complete. Try again.</p>}
     {signin === 'no_code' && <p class="note" role="alert">Sign in did not complete. Try again.</p>}
-    {error2 && <p class="note" role="alert">{error2}</p>}
-    {cleared !== null && (
-      <p class="note" role="status">
-        Attached. {cleared} approval obligation{cleared === 1 ? '' : 's'} cleared.
-      </p>
-    )}
+    {/* Anchored, and the forms on this page post to it. Attaching or
+        detaching happens far down a long list of projects, and the failure
+        message renders here. */}
+    <div id="outcome" tabindex="-1">
+      {error2 && <p class="note" role="alert">{error2}</p>}
+    </div>
+    {attached && <p class="note" role="status">{attached}</p>}
 
     {configured && !session && (
       <section class="hero">
@@ -257,15 +435,28 @@ const counts = tally(watched.map((w) => w.verdict));
           needs an account.
         </p>
         <div class="row" style="margin-top:24px">
-          <a class="btn" href="/auth/signin/">Sign in with Google</a>
+          <a
+            class="btn"
+            href={next === HOME ? '/auth/signin/' : `/auth/signin/?next=${encodeURIComponent(next)}`}
+          >Sign in with Google</a>
         </div>
 
         <div class="fixture">
           <p class="t-lbl">Or with an email and password</p>
           <form method="POST" action="/auth/password/" class="fixrow">
-            <input name="email" type="email" required placeholder="Email" />
-            <input name="password" type="password" required placeholder="Password" />
-            <button type="submit">Sign in</button>
+            {/* Without this the round trip loses its destination on the last
+                step, which is the one place it would be hardest to notice. */}
+            {next !== HOME && <input type="hidden" name="next" value={next} />}
+            {/* Labelled rather than placeheld: grey text inside a box reads
+                as a filled value, and it disappears the moment somebody
+                types, which is when they most want to know what the box is
+                for. */}
+            <label class="skip" for="fixture-email">Email</label>
+            <input id="fixture-email" name="email" type="email" autocomplete="username" required />
+
+            <label class="skip" for="fixture-password">Password</label>
+            <input id="fixture-password" name="password" type="password" autocomplete="current-password" required />
+            <button class="btn" type="submit">Sign in</button>
           </form>
         </div>
       </section>
@@ -275,7 +466,7 @@ const counts = tally(watched.map((w) => w.verdict));
       <>
         <AppShell org={org} account={account} roles={roles} here="/app/" />
 
-        <section class="hero" style="padding-top:0">
+        <section class="hero">
           <p class="t-lbl">
             {me.names.length ? me.names.map((n) => roleLabel[n]).join(' · ') : org.name}
           </p>
@@ -293,83 +484,137 @@ const counts = tally(watched.map((w) => w.verdict));
           </p>
 
           {me.runsTheClub && watched.length > 0 && (
-            <div class="countdown">
-              <div><b>{mine.length}</b><span>in your care</span></div>
-              <div><b>{watched.length}</b><span>at the school</span></div>
-              <div><b>{counts.disqualifying}</b><span>disqualifying</span></div>
-              <div><b>{counts.attention}</b><span>need attention</span></div>
-            </div>
+            <ul class="counts">
+              {/* One line. Stacked labels under figures made a four item row
+                  three lines tall at the top of the page a teacher opens
+                  first. */}
+              <li><b>{mine.length}</b> in your care</li>
+              <li><b>{watched.length}</b> at the school</li>
+              <li><b>{watched.filter((w: any) => !w.sponsor).length}</b> no sponsor</li>
+              <li><b>{watched.filter((w: any) => w.officers.length === 0 && w.selfManaged.length === 0).length}</b> no officer</li>
+              <li class={counts.disqualifying > 0 ? 'bad' : ''}>
+                <b>{counts.disqualifying}</b> disqualifying
+              </li>
+              <li><b>{counts.attention}</b> need attention</li>
+            </ul>
           )}
         </section>
 
         {/* ---------------- OVERSIGHT ---------------- */}
         {me.runsTheClub && (
-          <section class="sec">
-            <div class="sec-h">
-              <b>{me.runsTheClub ? 'All projects' : 'Projects you look after'}</b>
-              <span>{watched.length}</span>
-            </div>
+          watched.length > 0 ? (
+            <>
+              <nav class="filters" aria-label="Filter projects">
+                {filters.map(([key, label]) => (
+                  <a href={`/app/?show=${key}#projects`} class={filter === key ? 'on' : ''}>
+                    {label}
+                  </a>
+                ))}
+              </nav>
 
-            {watched.length > 0 ? (
-              <table class="tbl">
-                <thead>
-                  <tr>
-                    <th scope="col">Project</th>
-                    <th scope="col">Students</th>
-                    <th scope="col">Fair</th>
-                    <th scope="col">Stage</th>
-                    <th scope="col">Obligations</th>
-                    <th scope="col">Standing</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {watched.map((w) => (
-                    <tr class={w.worst?.severity === 'disqualifying' ? 'row-bad' : w.worst?.severity === 'planned' ? 'row-warn' : ''}>
-                      <td>
-                        <a href={`/app/project/${w.id}/`}>{w.title}</a>
-                        <span class="sub">
-                          {w.entry && <><a href={`/app/entry/${w.entry.id}/`}>deadlines</a> · </>}
-                          <a href={`/app/project/${w.id}/team/`}>who is on it</a>
-                        </span>
-                        {w.officers.length > 0 ? (
-                          <span class="sub">
-                            officer: {w.officers.map((m: any) => m.users?.display_name).join(', ')}
-                          </span>
-                        ) : w.selfManaged.length > 0 ? (
-                          <span class="sub">
-                            self-managed by {w.selfManaged.map((m: any) => m.users?.display_name).join(', ')}
-                          </span>
-                        ) : null}
-                      </td>
-                      <td>
-                        {w.authors.map((a: any) => a.users?.display_name).join(', ') || '—'}
-                      </td>
-                      <td>
-                        {w.entry?.programs
-                          ? `${w.entry.programs.name} ${w.entry.programs.season_year}`
-                          : 'Not entered'}
-                      </td>
-                      <td>{stageLabel[w.stage] ?? w.stage}</td>
-                      <td>{w.total ? `${w.done} of ${w.total}` : '—'}</td>
-                      <td>
-                        {w.verdict.reason
-                          ? <span class={w.verdict.level === 'disqualifying' ? 'sev bad' : 'sev warn'}>{w.verdict.reason}</span>
-                          : 'In order'}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            ) : (
+              <div id="projects" tabindex="-1"></div>
+
+              {groups.map((group) => (
+                <section class="sec">
+                  <div class="sec-h">
+                    <b>{group.program ? programTitle(group.program) : 'In no program'}</b>
+                    <span>{standingOf(group)}</span>
+                  </div>
+
+                  <table class="tbl">
+                    <thead>
+                      <tr>
+                        <th scope="col">Project</th>
+                        <th scope="col">Students</th>
+                        <th scope="col">{staffWord(group.program)}</th>
+                        <th scope="col">Sponsor</th>
+                        <th scope="col">Next</th>
+                        <th scope="col">Obligations</th>
+                        <th scope="col">Standing</th>
+                        {/* Only where there is somewhere to go forward to. A
+                            class does not select, so the column is absent
+                            rather than present and inapplicable. */}
+                        {me.isAdvisor && selects(group.program) && (
+                          <th scope="col">Selection</th>
+                        )}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {group.rows.map((w: any) => (
+                        <tr class={w.worst?.severity === 'disqualifying' ? 'row-bad' : w.worst?.severity === 'planned' ? 'row-warn' : ''}>
+                          <td>
+                            <a href={w.entry ? `/app/entry/${w.entry.id}/` : `/app/project/${w.id}/`}>
+                              {w.title}
+                            </a>
+                            <span class="sub">
+                              <a href={`/app/project/${w.id}/`}>notebook</a> ·{' '}
+                              <a href={`/app/project/${w.id}/team/`}>who is on it</a>
+                            </span>
+                          </td>
+                          <td>{w.authors.map((a: any) => a.users?.display_name).join(', ') || '—'}</td>
+                          <td>
+                            {w.officers.length > 0
+                              ? w.officers.map((m: any) => m.users?.display_name).join(', ')
+                              : w.selfManaged.length > 0
+                                ? <>{w.selfManaged.map((m: any) => m.users?.display_name).join(', ')}<span class="sub">self-managed</span></>
+                                : <span class="miss">none</span>}
+                          </td>
+                          <td>
+                            {w.sponsor
+                              ? w.sponsor.teacher_name
+                              : <span class="miss">none named</span>}
+                          </td>
+                          <td>
+                            {w.next
+                              ? <span class="next">{w.next.name}</span>
+                              : <span class="none">Nothing outstanding</span>}
+                          </td>
+                          <td>{w.total ? `${w.done} of ${w.total}` : '—'}</td>
+                          <td>
+                            {w.verdict.reasons.length > 0
+                              ? w.verdict.reasons.map((r: string) => (
+                                  <span class={w.verdict.level === 'disqualifying' ? 'sev bad' : 'sev warn'}>{r}</span>
+                                ))
+                              : 'In order'}
+                          </td>
+                          {me.isAdvisor && selects(group.program) && (
+                            <td>
+                              <form method="POST" action="#outcome" class="inline">
+                                <input type="hidden" name="action" value="select" />
+                                <input type="hidden" name="entry_id" value={w.entry.id} />
+                                <select
+                                  name="state"
+                                  aria-label={`Selection state for ${w.title}`}
+                                >
+                                  <option value="candidate" selected={w.entry.selection_state === 'candidate'}>Under consideration</option>
+                                  <option value="selected" selected={w.entry.selection_state === 'selected'}>Selected</option>
+                                  <option value="not_selected" selected={w.entry.selection_state === 'not_selected'}>Not selected</option>
+                                  <option value="withdrawn" selected={w.entry.selection_state === 'withdrawn'}>Withdrawn</option>
+                                </select>
+                                <button class="btn btn-sm" type="submit">Set</button>
+                              </form>
+                            </td>
+                          )}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </section>
+              ))}
+
+              {shown.length === 0 && (
+                <p class="t-sm" style="margin-top:16px">Nothing matches that filter.</p>
+              )}
+            </>
+          ) : (
+            <section class="sec">
+              <div class="sec-h"><b>All projects</b><span>0</span></div>
               <div class="note">
                 <h4>No projects yet</h4>
-                <p>
-                  Projects appear here as students register them.
-                </p>
-
+                <p>Projects appear here as students register them.</p>
               </div>
-            )}
-          </section>
+            </section>
+          )
         )}
 
         {/* ---------------- STUDENT ---------------- */}
@@ -402,40 +647,184 @@ const counts = tally(watched.map((w) => w.verdict));
             <section class="sec">
               <div class="sec-h">
                 <b>This season</b>
-                <span>{myEntries.length ? `${myEntries.length} entered` : 'nothing entered'}</span>
+                <span>{myEntries.length ? `${myEntries.length} joined` : 'nothing yet'}</span>
               </div>
               {myEntries.length ? (
                 <ul class="linklist">
                   {myEntries.map((e) => (
                     <li>
-                      {/* The project, not the entry. A student's own front page
-                          linking only to a deadlines view buried the work
-                          itself two clicks down. */}
-                      <a href={`/app/project/${e.project_id}/`}>{e.projects?.title}</a>
-                      <span class="t-sm"> · {e.programs?.name} {e.programs?.season_year} · judging {fmt(e.programs?.fair_date)}</span>
-                      <span class="going">
-                        <a href={`/app/project/${e.project_id}/manuscript/`}>
-                          {myManuscripts.has(e.project_id) ? 'Manuscript' : 'Start the manuscript'}
-                        </a>
-                        <a href={`/app/entry/${e.id}/`}>Deadlines</a>
-                        <a href={`/app/project/${e.project_id}/team/`}>Who is on it</a>
-                      </span>
+                      {/* The entry, which is the hub (7.13).
+                      
+                          This pointed at the project route on the reasoning
+                          that a front page should reach the work rather
+                          than a deadlines view. The reasoning held and the
+                          target moved: the project route is the notebook
+                          now, and everything that row's links named lives
+                          on the entry. */}
+                      <a href={`/app/entry/${e.id}/`}>{e.projects?.title}</a>
+                      <span class="t-sm"> · {programTitle(e.programs)} · judging {fmt(e.programs?.fair_date)}</span>
                     </li>
                   ))}
                 </ul>
               ) : (
+                /* No noun here on purpose. With nothing joined we do not know
+                   whether this student's school runs a fair, a class, or
+                   both, and "no fair entered" is wrong for somebody whose
+                   only option is IRPD. */
                 <div class="note">
-                  <h4>No fair entered</h4>
+                  <h4>Nothing yet this season</h4>
                   <p style="margin-top:12px">
-                    <a class="btn btn-2" href="/app/fairs/">See open fairs</a>
+                    <a class="btn" href="#join">See what you can join</a>
                   </p>
                 </div>
               )}
             </section>
 
+    <section class="sec" id="join">
+      {/* Not "Open fairs": a research class is not a fair, and "programs" is
+          our word rather than a student's. The heading says what the list is
+          for, and each card says what kind of thing it is. */}
+      <div class="sec-h"><b>Programs you can join</b></div>
+
+      {joinable && joinable.length > 0 ? (
+        <div class="progs">
+          {/* A grid rather than a stack.
+          
+              Each program was a full width card carrying a two field form,
+              so five of them ran to several screens and the one somebody
+              wanted was below the fold. What a reader is doing here is
+              choosing, and choosing wants everything visible at once.
+          
+              The form is the reason they were tall, so it folds away: a
+              card is a name, a kind, a date and a way in, and the fields
+              appear when somebody has decided which one they want. */}
+          {joinable.map((p: any) => (
+            <div class="card prog">
+              <div class="about">
+                <p class="season">{programKind(p)} · {p.season_year} season</p>
+                <h3>
+                  {p.website_url
+                    ? <a href={p.website_url} target="_blank" rel="noopener noreferrer">{p.name}</a>
+                    : p.name}
+                </h3>
+
+                {p.description && <p class="blurb">{p.description}</p>}
+
+                <dl class="facts">
+                  {/* A class has no judging day. Its calendar is its phases,
+                      which the deadlines page shows. */}
+                  {/* Independent research has no judging day and never will,
+                      so "to be announced" was promising something that is not
+                      coming. A program with no date and nothing to wait for
+                      says nothing rather than an empty label. */}
+                  {p.kind !== 'independent' && (
+                    <>
+                      <dt>
+                        {p.kind === 'course' ? 'Ends' : p.kind === 'grant' ? 'Closes' : 'Judging'}
+                      </dt>
+                      <dd>{fmt(p.fair_date) ?? 'to be announced'}</dd>
+                    </>
+                  )}
+                  {p.advances_to_fairs?.length > 0 && (
+                    <>
+                      <dt>Advances to</dt>
+                      <dd>{p.advances_to_fairs.join(' and ')}</dd>
+                    </>
+                  )}
+                </dl>
+              </div>
+
+              {enteredIn.has(p.id) ? (
+                <div class="already">
+                  {/* One line and a way through, rather than a paragraph
+                      explaining a rule nobody is trying to break. */}
+                  <a class="btn" href={`/app/entry/${entryFor.get(p.id)}/`}>
+                    View {participationVerb(p).noun}
+                  </a>
+                </div>
+              ) : (
+              <details class="enter" style={!me.isStudent ? 'display:none' : undefined}>
+                {/* The verb is the control. A disclosure whose summary reads
+                    "Ask to join" and then asks for a title is the same two
+                    steps as a button that opens a form, without a second
+                    page or a line of script. */}
+                <summary>
+                  {p.joining === 'approval'
+                    ? 'Ask to join'
+                    : p.kind === 'course'
+                      ? 'Join the class'
+                      : p.kind === 'grant'
+                        ? 'Start an application'
+                        : p.kind === 'independent'
+                          ? 'Start research'
+                          : 'Enter fair'}
+                </summary>
+              {/* No fragment on the action.
+              
+                  A browser keeps the fragment across a redirect when the
+                  destination has none of its own, so posting to `#outcome`
+                  and then being sent to the entry page landed somebody
+                  partway down it, at an anchor belonging to a different
+                  screen. Joining succeeds far more often than it fails, and
+                  the failure message is at the top of this page anyway. */}
+              <form method="POST" data-leaves-page>
+                <input type="hidden" name="action" value="join" />
+                <input type="hidden" name="program_id" value={p.id} />
+                <label>
+                  <span>Working title for your project <i class="req">*</i></span>
+                  <input name="title" required />
+                </label>
+                <label>
+                  <span>The day you started, or plan to start, experimenting</span>
+                  <input name="started_on" type="date" />
+                  <small>Leave it blank if you have not started.</small>
+                </label>
+                {/* You enter a fair and you join a class. The kind is on the
+                    card, so there is no reason to guess. */}
+                {/* Asking is not joining where a program grants places, and
+                    a button that says "join" and produces a request is a
+                    button that lied. */}
+                {/* Every kind names its own verb. "Enter fair" was the
+                    default and independent research is not a fair: nobody
+                    enters it, they just begin. */}
+                <button class="btn" type="submit">
+                  {p.joining === 'approval'
+                    ? 'Send the request'
+                    : p.kind === 'course'
+                      ? 'Join the class'
+                      : p.kind === 'grant'
+                        ? 'Start an application'
+                        : p.kind === 'independent'
+                          ? 'Start research'
+                          : 'Enter fair'}
+                </button>
+
+                {p.joining === 'approval' && (
+                  <p class="legend fit">
+                    {p.places ? `${p.places} places. ` : ''}You can start work
+                    while you wait for approval
+                  </p>
+                )}
+                <p class="legend"><i class="req">*</i> required</p>
+              </form>
+              </details>
+              )}
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div class="note">
+          <h4>Nothing is open yet</h4>
+          <p>An officer or your advisor sets up the season.</p>
+        </div>
+      )}
+    </section>
+
             <section class="sec">
-              <div class="sec-h"><b>Past fairs</b><span>nothing yet</span></div>
-              <p class="t-sm">Fairs you have competed in appear here with what you placed.</p>
+              <div class="sec-h"><b>Earlier seasons</b><span>nothing yet</span></div>
+              <p class="t-sm">
+                What you have done before appears here, with any placement.
+              </p>
             </section>
           </>
         )}
@@ -445,6 +834,124 @@ const counts = tally(watched.map((w) => w.verdict));
 </Base>
 
 <style>
+  
+  
+  .miss { color: var(--ink-3); font-style: italic; }
+  .inline { display: flex; gap: 6px; align-items: center; }
+  .inline select {
+    padding: 6px 9px;
+    border: 1px solid var(--rule);
+    background: var(--card);
+    color: var(--ink);
+    font: inherit;
+    font-size: 0.86rem;
+  }
+
+  /* Three or more across wherever there is room for them.
+  
+     `auto-fill` with a 15.5rem floor gives three on a laptop, two on a
+     tablet and one on a phone, without a breakpoint per count. The floor is
+     what guarantees the three: a program name and a date fit in it, and
+     anything narrower would start hyphenating titles. */
+  .progs {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(15.5rem, 1fr));
+    gap: 16px;
+  }
+  .prog {
+    display: flex;
+    flex-direction: column;
+    padding: 0;
+  }
+  /* The description grows and the action sits on the floor, so a row of
+     cards has its buttons on one line however long the blurbs are. */
+  .prog .about { padding: 18px 20px; flex: 1; }
+  .prog h3 { margin: 0 0 10px; }
+  .prog .season {
+    margin: 0 0 4px;
+    font-family: var(--face-num);
+    font-size: 0.82rem;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    color: var(--ink-3);
+  }
+  .prog h3 { font-size: 1.1rem; line-height: 1.25; }
+  .prog .blurb {
+    margin: 0 0 14px;
+    font-size: 0.92rem;
+    /* Four lines. A card grid wants a predictable height and a description
+       nobody wrote a limit for will otherwise set it. The full text is on
+       the program's own page. */
+    display: -webkit-box;
+    -webkit-line-clamp: 4;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+  .prog .facts {
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    gap: 4px 14px;
+    margin: 0;
+    padding-top: 12px;
+    border-top: 1px solid var(--rule-fine);
+    font-size: 0.95rem;
+  }
+  .prog .facts dt {
+    font-family: var(--face-ui);
+    font-size: 0.82rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--ink-3);
+    padding-top: 3px;
+  }
+  .prog .facts dd { margin: 0; }
+  .req { color: var(--alert); font-style: normal; }
+  .legend { margin: 10px 0 0; font-size: 0.86rem; color: var(--ink-3); }
+
+  /* One line, whatever the column width. The sentence is short enough that
+     shrinking it a little beats wrapping it: a two-line caption under a
+     button reads as a warning rather than a note. */
+  .fit {
+    white-space: nowrap;
+    font-size: clamp(0.72rem, 1.6cqi, 0.86rem);
+  }
+
+  .already {
+    padding: 14px 20px;
+    border-top: 1px solid var(--rule-fine);
+    background: var(--paper);
+  }
+  .already p { margin: 0 0 6px; }
+
+  .enter {
+    margin: 0;
+    border-top: 1px solid var(--rule-fine);
+    background: var(--paper);
+    container-type: inline-size;
+  }
+  /* The summary is the button. Reset the marker rather than hiding the
+     control it belongs to: a disclosure with no affordance at all is a
+     button somebody has to guess at. */
+  .enter > summary {
+    padding: 12px 20px;
+    font-family: var(--face-ui);
+    font-size: 0.94rem;
+    cursor: pointer;
+    list-style: none;
+  }
+  .enter > summary::-webkit-details-marker { display: none; }
+  .enter > summary::after {
+    content: ' +';
+    font-family: var(--face-num);
+    color: var(--ink-3);
+  }
+  .enter[open] > summary::after { content: ' \2212'; }
+  .enter[open] > summary { border-bottom: 1px solid var(--rule-fine); }
+  .enter > form { padding: 16px 20px; }
+  .enter label { display: block; margin-bottom: 12px; }
+  .enter label > span { display: block; margin-bottom: 5px; font-family: var(--face-ui); font-size: 0.9rem; }
+  .enter input { width: 100%; padding: 8px 10px; border: 1px solid var(--rule); background: var(--card); color: var(--ink); font: inherit; }
+
   .plain { list-style: none; margin: 0; padding: 0; }
   .plain li {
     display: flex;
@@ -473,7 +980,11 @@ const counts = tally(watched.map((w) => w.verdict));
   .going a:hover {
     color: var(--ink);
   }
-  .hero { padding: 44px 0 28px; max-width: 74ch; }
+  /* The measure belongs to the prose, not to the container. With it on the
+     hero, a one line row of six figures wrapped at 74 characters while two
+     thirds of the page sat empty beside it. */
+  .hero { padding: 44px 0 28px; }
+  .hero .t-lbl, .hero h1, .hero .lede { max-width: 74ch; }
   .hero .t-lbl { margin-bottom: 14px; }
   .fixture { margin-top: 34px; padding: 18px 20px; border: 1px dashed var(--rule); max-width: 52ch; }
   .fixture .t-lbl { margin-bottom: 8px; }
@@ -509,7 +1020,9 @@ const counts = tally(watched.map((w) => w.verdict));
   .countdown span { display: block; margin-top: 3px; font-family: var(--face-ui); font-size: 0.84rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--ink-3); }
   .also { font-size: 0.95rem; }
   .sub { display: block; margin-top: 3px; font-family: var(--face-ui); font-size: 0.82rem; color: var(--ink-3); }
-  .sev { font-family: var(--face-ui); font-size: 0.86rem; }
+  /* One per line. Two reasons run together read as one long sentence, and
+     the second is the one somebody has not noticed yet. */
+  .sev { display: block; font-family: var(--face-ui); font-size: 0.86rem; }
   .sev.bad { color: var(--alert); font-weight: 600; }
   .row-bad td { background: var(--alert-bg); }
   .row-warn td { background: var(--ready-bg); }
@@ -518,4 +1031,16 @@ const counts = tally(watched.map((w) => w.verdict));
   .assign label > span { display: block; margin-bottom: 5px; font-family: var(--face-ui); font-size: 0.9rem; }
   .assign select { padding: 8px 10px; border: 1px solid var(--rule); background: var(--card); color: var(--ink); font: inherit; min-width: 22ch; }
   .assign button { padding: 9px 16px; border: 1px solid var(--ink); background: var(--ink); color: var(--paper); font-family: var(--face-ui); font-size: 1rem; font-weight: 600; cursor: pointer; }
+  /* Quiet, and not part of the link's name. */
+  .yet {
+    margin-left: 6px;
+    font-family: var(--face-mono);
+    font-size: 0.76rem;
+    letter-spacing: 0.02em;
+    text-transform: none;
+    color: var(--ink-3);
+  }
+
+  .next { font-size: 0.94rem; }
+  .none { color: var(--ink-3); font-size: 0.92rem; }
 </style>

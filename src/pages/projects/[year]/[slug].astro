@@ -2,6 +2,7 @@
 export const prerender = false;
 
 import Base from '../../../layouts/Base.astro';
+import { cachePublicPage } from '../../../lib/caching';
 import RecordDetail from '../../../components/RecordDetail.astro';
 import { openArchive, findRecord, readBody, bodyOf } from '../../../lib/archive';
 import { companionOf } from '../../../lib/records-store';
@@ -22,10 +23,7 @@ const companion = companionOf(archive.all, record);
 /* Published records do not change. A correction writes a new one and the
    manifest points at it, so a long cache is safe and makes the common case
    never touch the store. */
-Astro.response.headers.set(
-  'Cache-Control',
-  'public, max-age=300, s-maxage=86400, stale-while-revalidate=604800'
-);
+cachePublicPage(Astro);
 ---
 
 <Base title={record.title} description={record.abstract.slice(0, 300)}>

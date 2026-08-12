@@ -17,6 +17,8 @@ import { resolveOrg } from './lib/tenant';
 import { tenantSlugs } from './lib/tenant-paths';
 
 import { isNonTenantPath } from './config/routes';
+import { signInWith } from './lib/next-path';
+import { setSessionHint, clearSessionHint } from './lib/session-hint';
 
 const GUARDED = '/app/';
 
@@ -89,7 +91,20 @@ export const onRequest = defineMiddleware(async (context, next) => {
     return Response.redirect(`${url.origin}${url.pathname}/${url.search}`, 308);
   }
 
-  const needsSession = isNonTenantPath(url.pathname);
+  /**
+   * The home page is on demand and needs a session.
+   *
+   * It moved out of `[org]/` when it started showing published records, so it
+   * resolves its organization from the hostname like the working surface
+   * does. Two things follow, and returning early from here got the second one
+   * and missed the first: it must load a session, or somebody who is signed
+   * in is shown a Sign in button they have already used; and it must not be
+   * rewritten, because there is no tenant home page to rewrite to.
+   *
+   * The same fault took out the tracker, for the same reason.
+   */
+  const isHome = url.pathname === '/';
+  const needsSession = isHome || isNonTenantPath(url.pathname);
 
   if (!needsSession) {
     /* Every public route is prerendered once per tenant under /[org]/, so a
@@ -103,11 +118,6 @@ export const onRequest = defineMiddleware(async (context, next) => {
        again produces /scipath/lynbrook/about/, which matches no route and
        writes the 404 page into every tenant's files. Any path that already
        begins with a tenant slug passes through untouched. */
-    /* The root is the home page, which lives outside [org]/ and resolves its
-       organization from the hostname. Rewriting it would look for a tenant
-       home page that no longer exists. */
-    if (url.pathname === '/') return next();
-
     const first = url.pathname.split('/')[1];
     if (
       tenantSlugs.includes(first) ||
@@ -148,8 +158,19 @@ export const onRequest = defineMiddleware(async (context, next) => {
   } = await supabase.auth.getUser();
 
   if (!user) {
+    /* An expired session leaves the hint behind, and the archive goes on
+       greeting somebody who is signed out. Clearing it here is the only
+       place that notices. */
+    clearSessionHint(context.cookies);
+
     if (url.pathname.startsWith(GUARDED) && url.pathname !== SIGNIN) {
-      return context.redirect(SIGNIN);
+      /* Remembering where they were headed.
+      
+         This runs before any page does, so a page level guard never sees a
+         request with no session: every one of them was unreachable for the
+         case they were written for. A notification link therefore has to be
+         remembered *here* or nowhere. */
+      return context.redirect(signInWith(url));
     }
     return next();
   }
@@ -164,6 +185,15 @@ export const onRequest = defineMiddleware(async (context, next) => {
     .maybeSingle();
 
   locals.account = account ?? null;
+
+  /* So a prerendered page can greet somebody it cannot ask about.
+  
+     Here rather than in the sign in routes because the account is already
+     loaded: no extra query, and a changed display name corrects itself on
+     the next request rather than persisting until somebody signs out. */
+  if (account?.display_name) {
+    setSessionHint(context.cookies, account.display_name, url.protocol === 'https:');
+  }
 
   if (!account) {
     /* Session without an account row. Signup is the only reachable page. */

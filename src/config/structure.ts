@@ -169,85 +169,21 @@ export const defaultRules: Rule[] = [
     appliesTo: ['project'],
   },
 
-  /* ── The prose ────────────────────────────────────────────────────────── */
-  {
-    id: 'section.background',
-    kind: 'section',
-    key: 'background',
-    label: 'Introduction and background',
-    required: true,
-    minWords: 150,
-    guidance:
-      'The problem, why it matters, and your hypothesis or design goal, stated plainly enough that somebody outside your field follows it.',
-    appliesTo: ARTICLE,
-  },
-  {
-    id: 'section.prior_work',
-    kind: 'section',
-    key: 'prior_work',
-    label: 'Prior work',
-    required: true,
-    minWords: 100,
-    guidance:
-      'What is already known, and the specific gap you are working in. Not a list of everything you read.',
-    appliesTo: ARTICLE,
-  },
-  {
-    id: 'section.methods',
-    kind: 'section',
-    key: 'methods',
-    label: 'Methods',
-    required: true,
-    minWords: 200,
-    guidance:
-      'Enough that somebody else could repeat it. This is the section reviewers most often send back, and the test is specific: could a stranger run your experiment from this text alone.',
-    appliesTo: ARTICLE,
-  },
-  {
-    id: 'section.results',
-    kind: 'section',
-    key: 'results',
-    label: 'Results',
-    required: true,
-    minWords: 150,
-    guidance:
-      'What happened, with the data that supports it. What it means belongs in the next section.',
-    appliesTo: ARTICLE,
-  },
-  {
-    id: 'section.discussion',
-    kind: 'section',
-    key: 'discussion',
-    label: 'Discussion and limitations',
-    required: true,
-    minWords: 150,
-    guidance:
-      'What the results mean, and where they fall down. Stating a limitation honestly is worth more than hiding it, and every judge knows it is there.',
-    appliesTo: ARTICLE,
-  },
-  {
-    id: 'section.conclusion',
-    kind: 'section',
-    key: 'conclusion',
-    label: 'Conclusion',
-    required: true,
-    minWords: 75,
-    guidance: 'What you now know that you did not before. Short is fine.',
-    appliesTo: ARTICLE,
-  },
-  {
-    id: 'section.future_work',
-    kind: 'section',
-    key: 'future_work',
-    label: 'Future work',
-    required: true,
-    minWords: 50,
-    guidance:
-      'What you would do next with more time. Judges ask this out loud, so having written it down is rehearsal.',
-    appliesTo: ARTICLE,
-  },
+  /* ── The prose ──────────────────────────────────────────────────────────
+   *
+   * Seven literals used to sit here describing a scientific paper. That was
+   * right while a paper was the only thing anybody wrote here, and wrong the
+   * moment a design research course existed: forcing IMRaD onto it produces a
+   * checklist a student cannot honestly satisfy.
+   *
+   * The sections now come from a **shape**, in src/config/shapes/. The
+   * mechanism below is unchanged and stays single-source; the content became
+   * plural. `imrad` is one shape among several, and a deliverable names the
+   * one it takes.
+   *
+   * `sectionRules()` builds these at the bottom of this file.
+   * ─────────────────────────────────────────────────────────────────────── */
 
-  /* ── What no machine can judge ────────────────────────────────────────── */
   {
     id: 'human.axes',
     kind: 'human',
@@ -295,7 +231,64 @@ export function rulesFor(orgId?: string): Rule[] {
   return (orgId && overrides[orgId]) || defaultRules;
 }
 
-/** The prose sections, in order, for whichever kind of record this is. */
-export function sectionsFor(kind: RecordKind, orgId?: string): Rule[] {
-  return rulesFor(orgId).filter((r) => r.kind === 'section' && r.appliesTo.includes(kind));
+/**
+ * The prose sections, from a shape.
+ *
+ * `imrad` by default, which is what every record here has been until now. A
+ * program whose write-up is a different thing names a different shape on the
+ * deliverable, and the check reads that instead.
+ */
+export function sectionsFor(kind: RecordKind, shape?: DocumentShape | null): Rule[] {
+  /* Only an article has prose sections. A project entry is an abstract, a
+     result, and what happened at the fair. */
+  if (kind !== 'article') return [];
+  return sectionRules(shape);
+}
+
+/** Every rule, including the sections the shape supplies. */
+export function allRules(shape?: DocumentShape | null, orgId?: string): Rule[] {
+  const base = rulesFor(orgId);
+  const sections = sectionRules(shape);
+
+  /* Sections sit between the record fields and the human checks, which is
+     the order the checklist reads in. */
+  const at = base.findIndex((r) => r.kind === 'human');
+  return at < 0
+    ? [...base, ...sections]
+    : [...base.slice(0, at), ...sections, ...base.slice(at)];
+}
+
+/**
+ * The part of a shape this file needs.
+ *
+ * **The shape is passed in, not imported.** Shapes are YAML bundled by Vite,
+ * and this module is also read by the tests under plain Node. More
+ * importantly it is the right direction: this file knows how a completeness
+ * check works and has no business knowing where document shapes are kept.
+ */
+export interface DocumentShape {
+  id?: string;
+  parts?: { id: string; name: string; min_words?: number; guidance?: string }[];
+}
+
+/**
+ * A shape's parts, as rules.
+ *
+ * The shape says what the sections are and how long each has to be; this
+ * turns that into the same Rule the rest of the check already understands, so
+ * nothing downstream needs to know a shape exists.
+ */
+function sectionRules(shape?: DocumentShape | null): Rule[] {
+  if (!shape?.parts) return [];
+
+  return shape.parts.map((part) => ({
+    id: `section.${part.id}`,
+    kind: 'section' as const,
+    key: part.id,
+    label: part.name,
+    required: true,
+    minWords: part.min_words ?? 0,
+    guidance: part.guidance ?? '',
+    appliesTo: ARTICLE,
+  }));
 }

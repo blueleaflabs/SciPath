@@ -2,6 +2,7 @@
 export const prerender = false;
 
 import Base from '../../layouts/Base.astro';
+import { cachePublicPage } from '../../lib/caching';
 import PageHead from '../../components/PageHead.astro';
 import Empty from '../../components/Empty.astro';
 import { openArchive, authorsOf } from '../../lib/archive';
@@ -9,7 +10,7 @@ import { openArchive, authorsOf } from '../../lib/archive';
 const archive = await openArchive(Astro);
 const people = authorsOf(archive.all);
 
-Astro.response.headers.set('Cache-Control', 'public, max-age=120, s-maxage=600');
+cachePublicPage(Astro);
 ---
 
 <Base title="Authors" description="Everybody with published work here.">

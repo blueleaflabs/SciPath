@@ -16,7 +16,13 @@
 
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import { defaultRules } from '../src/config/structure.ts';
+import yaml from 'js-yaml';
+import { allRules } from '../src/config/structure.ts';
+
+/* The section rules come from a shape now. The seeded prose is a scientific
+   paper, so it is checked against the scientific paper's shape. */
+const imrad = yaml.load(fs.readFileSync('src/config/shapes/imrad.yaml', 'utf8'));
+const defaultRules = allRules(imrad);
 
 let passed = 0;
 function test(name, fn) {

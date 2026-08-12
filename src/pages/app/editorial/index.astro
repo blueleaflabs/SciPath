@@ -2,17 +2,20 @@
 export const prerender = false;
 
 import Base from '../../../layouts/Base.astro';
-import { daysFrom } from '../../../lib/dates';
+import { arrivedAt } from '../../../lib/dates';
 import AppShell from '../../../components/AppShell.astro';
 import { activeOrg } from '../../../lib/tenant';
 import { serverClient } from '../../../lib/supabase';
 import { standing } from '../../../lib/roles';
 import { QUEUE_ORDER, editorLabel } from '../../../lib/workflow';
+import { signInWith } from '../../../lib/next-path';
 
 const { session, account, roles } = Astro.locals;
 const org = activeOrg(Astro);
 
-if (!session) return Astro.redirect('/app/');
+/* Remembering where they were headed, so a link from a notification
+   survives the sign in it triggers (20.10). */
+if (!session) return Astro.redirect(signInWith(Astro.url));
 if (!account) return Astro.redirect('/app/welcome/');
 
 const me = standing(roles, account?.population);
@@ -61,13 +64,6 @@ const byState = QUEUE_ORDER.map((state) => ({
   rows: live.filter((s: any) => s.state === state),
 })).filter((g) => g.rows.length > 0);
 
-const waited = (iso: string | null) => {
-  const days = daysFrom(iso);
-  if (days === null) return '';
-  const waiting = Math.abs(days);
-  if (waiting === 0) return 'today';
-  return `${waiting} ${waiting === 1 ? 'day' : 'days'}`;
-};
 ---
 
 <Base title="Editorial" noindex={true}>
@@ -84,13 +80,18 @@ const waited = (iso: string | null) => {
     ) : (
       <>
         <section class="hero">
-          <p class="t-lbl">Editorial</p>
-          <h1 class="t-big">The queue</h1>
-          <p class="lede">
-            {live.length === 0
-              ? 'Nothing is waiting.'
-              : `${live.length} ${live.length === 1 ? 'submission' : 'submissions'} in progress`}
-          </p>
+          <h1 class="t-big">Editorial queue</h1>
+          {/* One figure, and it is the one somebody can act on.
+          
+              "Finished with" counted every submission ever published,
+              declined or withdrawn — a number that only goes up, that
+              nothing follows from, and that sat beside a count of work
+              waiting as though the two were comparable. The section below
+              still lists them, which is where somebody looking for one
+              would go. */}
+          <ul class="counts">
+            <li class={live.length > 0 ? 'bad' : ''}><b>{live.length}</b> in progress</li>
+          </ul>
         </section>
 
         {byState.map((group) => (
@@ -100,7 +101,7 @@ const waited = (iso: string | null) => {
               <span>{group.rows.length}</span>
             </div>
 
-            <ul class="q">
+            <ul class="queue">
               {group.rows.map((s: any) => {
                 const tally = reviewsFor.get(s.id) ?? { out: 0, overdue: 0 };
                 return (
@@ -125,7 +126,7 @@ const waited = (iso: string | null) => {
                       {tally.overdue === 0 && tally.out > 0 && (
                         <b>{tally.out} out</b>
                       )}
-                      <i>{waited(s.submitted_at)}</i>
+                      <i>{arrivedAt(s.submitted_at)}</i>
                     </span>
                   </li>
                 );

@@ -4,7 +4,8 @@ export const getStaticPaths = orgPaths;
 
 import Base from '../../../layouts/Base.astro';
 import PageHead from '../../../components/PageHead.astro';
-import { rulesFor } from '../../../config/structure';
+import { allRules } from '../../../config/structure';
+import { shape } from '../../../lib/templates';
 
 /**
  * Generated from the rule set the checker reads, not written alongside it.
@@ -15,7 +16,7 @@ import { rulesFor } from '../../../config/structure';
  * A config import rather than a database one, so the archive still builds
  * with Supabase absent.
  */
-const rules = rulesFor();
+const rules = allRules(shape('imrad'));
 
 const automated = rules.filter((r) => r.kind !== 'human' && r.appliesTo.includes('article'));
 const human = rules.filter((r) => r.kind === 'human');

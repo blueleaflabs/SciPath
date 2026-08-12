@@ -88,4 +88,74 @@ test('only GET and HEAD are redirected', () => {
   assert.match(middleware, /request\.method === 'GET'/, 'the redirect is not limited to safe methods');
 });
 
+/* ── Every on-demand page loads a session ────────────────────────────────── */
+
+test('the home page loads a session', () => {
+  /* It renders on demand and shows the masthead, so without a session
+     somebody who is signed in is offered a Sign in button they have already
+     used. This has now happened twice: once to the tracker, once here. */
+  assert.match(
+    middleware,
+    /const isHome = url\.pathname === '\/'/,
+    'the home page must be in the session-loading set'
+  );
+  assert.match(
+    middleware,
+    /needsSession = isHome \|\| isNonTenantPath/,
+    'and it must reach needsSession rather than returning before it'
+  );
+});
+
+test('nothing returns before the session is decided', () => {
+  /* A `return next()` above `needsSession` skips session loading for that
+     path, which is the shape of the bug both times. The redirect above it is
+     the one legitimate early exit, because it renders nothing. */
+  const beforeSession = middleware.slice(0, middleware.indexOf('const needsSession'));
+  const exits = [...beforeSession.matchAll(/return (next\(\)|new Response)/g)];
+  assert.deepEqual(
+    exits.map((m) => m[0]),
+    [],
+    'an early return here renders a page with no session'
+  );
+});
+
+/* ── A rewritten route cannot rely on props alone ────────────────────────── */
+
+test('a parameterised page can render from its URL, not only from props', () => {
+  /* `getStaticPaths` supplies props, and the middleware rewrite that puts a
+     tenant slug on the front does not always carry them. The guides route
+     took `Astro.props.guide` and nothing else, and rendered undefined —
+     which reaches a reader as a framework error page.
+   
+     The parameters are in the URL either way, so a page with parameters
+     should be able to find its own content from them. */
+  const problems = [];
+
+  const walk = (dir) => {
+    const out = [];
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = `${dir}/${entry.name}`;
+      if (entry.isDirectory()) out.push(...walk(full));
+      else if (entry.name.endsWith('.astro')) out.push(full);
+    }
+    return out;
+  };
+
+  for (const file of walk('src/pages')) {
+    const text = fs.readFileSync(file, 'utf8');
+    if (!/getStaticPaths/.test(text)) continue;
+    if (!/Astro\.props/.test(text)) continue;
+
+    /* A fallback reads the parameters, or guards the missing case. */
+    const recovers = /Astro\.params/.test(text) || /\?\?\s*\(await/.test(text);
+    const guards = /status: 404/.test(text);
+
+    if (!recovers || !guards) {
+      problems.push(`${file}${recovers ? '' : ' (no fallback)'}${guards ? '' : ' (no 404)'}`);
+    }
+  }
+
+  assert.deepEqual(problems, [], 'fall back to the params, and 404 when there is nothing');
+});
+
 console.log(`${passed} path assertions passed.`);

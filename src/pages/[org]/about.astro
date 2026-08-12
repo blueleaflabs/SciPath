@@ -66,7 +66,7 @@ const org = activeOrg(Astro);
       <p>
         {platform.name} is free and open source. Any organization can run its own copy, hold
         its own students' data, and keep operating whether or not we do.
-        <a href={platform.repoUrl}>The source is public</a>, licensed from the first commit.
+        <a href={platform.repoUrl} target="_blank" rel="noopener noreferrer">The source is public</a>, licensed from the first commit.
       </p>
       <p>
         {org.isPlatform ? platform.operatorCredit : `${org.name} runs on ${platform.name}.`}

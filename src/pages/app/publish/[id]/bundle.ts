@@ -2,6 +2,7 @@ import type { APIRoute } from 'astro';
 import { serverClient } from '../../../../lib/supabase';
 import { blobStore } from '../../../../lib/blob';
 import { zip } from '../../../../lib/zip';
+import { shape } from '../../../../lib/templates';
 import { assembleRecord } from '../../../../lib/record-files';
 import { activeOrg } from '../../../../lib/tenant';
 
@@ -37,7 +38,8 @@ export const GET: APIRoute = async (context) => {
     supabase,
     blobStore(context.locals),
     org.id,
-    record
+    record,
+    shape('imrad')
   );
 
   const zipped = zip([

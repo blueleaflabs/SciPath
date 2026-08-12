@@ -1,0 +1,158 @@
+# The scientific research process.
+#
+# The phases a science fair project actually passes through, in the order it
+# passes through them. `process-standard` had five broad buckets, which was
+# fine when nothing else existed and is vaguer than a student needs: "getting
+# started" covers both choosing a question and reading a year of literature,
+# which are different jobs done at different times.
+#
+# A program picks the process that matches the work. This is the one for
+# science; `process-engineering` is the one for building something. Choosing
+# per project rather than per program is the obvious next step and is not
+# done yet: SCVSEFA points at this one for now.
+#
+# Forms are a phase of their own. They are not research, they happen
+# alongside it rather than after it, and burying an approval deadline inside
+# "designing the study" is how it gets missed.
+
+id: process-science
+kind: process
+name: Scientific research
+
+# Forms first, and it is the one place this list is not in the order the
+# work happens.
+#
+# The phase order is the display order, so whatever sits at the top is what
+# a student sees when they open the page. Forms are the only phase whose
+# lateness ends a season — everything else is a warning — and they are also
+# the phase somebody scrolls past, because paperwork feels like it comes
+# after the thinking. It does not: an approval has to be signed before the
+# work it approves.
+#
+# Reading it as a narrative of the research, this is out of order. Reading
+# it as what to do next, it is the only order that is not misleading (3.1a).
+phases:
+  - { id: forms,       name: Forms and approvals }
+  - { id: topic,       name: Topic selection }
+  - { id: literature,  name: Literature review }
+  - { id: design,      name: Experimental design }
+  - { id: hypothesis,  name: Hypothesis }
+  - { id: experiment,  name: Experiment }
+  - { id: analysis,    name: Data analysis }
+  - { id: conclusions, name: Discussion and conclusions }
+
+steps:
+  - id: topic
+    name: Choose a question
+    phase: topic
+    order: 10
+    owner: student
+    deliverables:
+      - { id: question, kind: text }
+    risk: >-
+      The commonest failure is a question too broad to answer in a season. If
+      it cannot be answered with the time and equipment actually available,
+      it is a topic rather than a question.
+
+  - id: literature
+    name: Read the prior work
+    phase: literature
+    order: 20
+    owner: student
+    requires: [topic]
+    deliverables:
+      - { id: literature_review, kind: link }
+
+  - id: design
+    name: Design the experiment
+    phase: design
+    order: 30
+    owner: student
+    requires: [literature]
+    deliverables:
+      - { id: research_plan, kind: link }
+    note: >-
+      Where a fair's approvals attach, because a plan is what a review
+      committee reads.
+
+  - id: hypothesis
+    name: State the hypothesis
+    phase: hypothesis
+    order: 35
+    owner: student
+    requires: [design]
+    deliverables:
+      - { id: hypothesis, kind: text }
+    note: >-
+      Written down before the data exists, which is the only time it means
+      anything. A hypothesis fitted to a result afterwards is a conclusion
+      wearing a disguise.
+
+  - id: sponsor
+    name: Find an adult sponsor
+    phase: forms
+    order: 40
+    owner: student
+    deliverables:
+      - { id: sponsor_agreed, kind: text }
+    risk: >-
+      Teachers are asked by many students at once and reply slowly. A week of
+      silence is normal and is not a refusal; two weeks means ask somebody
+      else. Start before the plan is finished, not after.
+
+  - id: permissions
+    name: Get the permissions the work needs
+    phase: forms
+    order: 50
+    owner: student
+    requires: [design, sponsor]
+    deliverables: []
+    note: Empty where the research needs none. An empty step is not a skipped one.
+
+  - id: collect
+    name: Run the experiment and collect the data
+    phase: experiment
+    order: 60
+    owner: student
+    requires: [permissions]
+    deliverables: []
+    risk: >-
+      Losing a week to an instrument nobody calibrated, or to a run that
+      cannot be repeated because the conditions were not written down.
+
+  - id: notebook_check
+    name: Keep the notebook current
+    phase: experiment
+    order: 65
+    owner: student
+    repeats: { every: week }
+    deliverables: []
+    note: >-
+      What makes a result defensible later is that it was written down at the
+      time.
+
+  - id: analyse
+    name: Analyse the data
+    phase: analysis
+    order: 70
+    owner: student
+    requires: [collect]
+    deliverables:
+      - { id: figures, kind: link }
+
+  - id: write
+    name: Write up the discussion and conclusions
+    phase: conclusions
+    order: 80
+    owner: student
+    requires: [analyse]
+    deliverables:
+      - { id: manuscript, kind: link }
+
+  - id: present
+    name: Present it
+    phase: conclusions
+    order: 90
+    owner: student
+    requires: [write]
+    deliverables: []

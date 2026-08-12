@@ -1,0 +1,125 @@
+# The standard research process.
+#
+# A default, not a spine. Every program starts here and edits freely, and a
+# program may replace it outright: IRPD does, because a research club student
+# should never be shown "empathy interview" and an IRPD student should never
+# be shown anything else.
+#
+# It exists because a club writing its own from a blank page writes six steps
+# and forgets ethics. This is what a sane result looks like when nobody has
+# thought hard about it yet.
+
+id: process-standard
+kind: process
+name: Research process
+
+# Permission first. See the note in `process-science.yaml`.
+phases:
+  - { id: approval, name: Permission }
+  - { id: start,    name: Getting started }
+  - { id: design,   name: Designing the study }
+  - { id: work,     name: Doing the work }
+  - { id: tell,     name: Telling people }
+
+steps:
+  - id: topic
+    name: Choose a question
+    phase: start
+    order: 10
+    owner: student
+    deliverables:
+      - { id: question, kind: text }
+    risk: >-
+      The commonest failure is a question too broad to answer in a season. If
+      it cannot be answered with the time and equipment actually available,
+      it is a topic rather than a question.
+
+  - id: literature
+    name: Read the prior work
+    phase: start
+    order: 20
+    owner: student
+    requires: [topic]
+    deliverables:
+      - { id: literature_review, kind: file }
+
+  - id: design
+    name: Design the study
+    phase: design
+    order: 30
+    owner: student
+    requires: [literature]
+    deliverables:
+      - { id: research_plan, kind: file }
+    note: >-
+      Where a fair's approvals attach, because a plan is what a review
+      committee reads.
+
+  - id: sponsor
+    name: Find an adult sponsor
+    phase: approval
+    order: 40
+    owner: student
+    deliverables:
+      - { id: sponsor_agreed, kind: text }
+    risk: >-
+      Teachers are asked by many students at once and reply slowly. A week of
+      silence is normal and is not a refusal; two weeks means ask somebody
+      else. Start before the plan is finished, not after.
+
+  - id: permissions
+    name: Get the permissions the work needs
+    phase: approval
+    order: 50
+    owner: student
+    requires: [design, sponsor]
+    deliverables: []
+    note: Empty where the research needs none. An empty step is not a skipped one.
+
+  - id: collect
+    name: Collect the data
+    phase: work
+    order: 60
+    owner: student
+    requires: [permissions]
+    deliverables: []
+    risk: >-
+      Losing a week to an instrument nobody calibrated, or to a run that
+      cannot be repeated because the conditions were not written down.
+
+  - id: notebook_check
+    name: Keep the notebook current
+    phase: work
+    order: 65
+    owner: student
+    repeats: { every: week }
+    deliverables: []
+    note: >-
+      A step that happens many times rather than eight steps. What makes a
+      result defensible later is that it was written down at the time.
+
+  - id: analyse
+    name: Analyse it
+    phase: work
+    order: 70
+    owner: student
+    requires: [collect]
+    deliverables:
+      - { id: figures, kind: file }
+
+  - id: write
+    name: Write it up
+    phase: tell
+    order: 80
+    owner: student
+    requires: [analyse]
+    deliverables:
+      - { id: manuscript, kind: file }
+
+  - id: present
+    name: Present it
+    phase: tell
+    order: 90
+    owner: student
+    requires: [write]
+    deliverables: []

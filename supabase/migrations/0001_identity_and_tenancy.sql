@@ -204,7 +204,12 @@ create table public.user_roles (
   -- student : runs their own projects
   -- officer : runs the club. Usually a student, usually the president
   -- mentor  : the teacher. Sponsors projects and oversees them
-  role       text not null check (role in ('student', 'officer', 'mentor')),
+  -- student : runs their own projects
+  -- officer : runs a program. Usually a student
+  -- advisor : the teacher responsible for it
+  -- editor  : reads submissions for the journal
+  role       text not null
+               check (role in ('student', 'officer', 'advisor', 'editor')),
   scope_id   uuid,
   granted_by uuid references public.users on delete restrict,
   granted_at timestamptz not null default now(),
@@ -288,7 +293,8 @@ create table public.pending_role_grants (
   id          uuid primary key default gen_random_uuid(),
   org_id      uuid not null references public.organizations on delete restrict,
   email       text not null,
-  role        text not null check (role in ('student', 'officer', 'mentor')),
+  role        text not null
+                check (role in ('student', 'officer', 'advisor', 'editor')),
   note        text,
   expires_at  timestamptz not null default (now() + interval '180 days'),
   consumed_at timestamptz,
@@ -319,34 +325,98 @@ create index audit_log_entity_idx on public.audit_log (entity_type, entity_id);
 create index audit_log_org_time_idx on public.audit_log (org_id, occurred_at desc);
 
 -- --------------------------------------------------------------------------
--- notifications : 11.5. Needed in 0001 because the consent reminder schedule
--- at days 7, 12, 30, 45, and 53 is part of signup, not a later feature.
+-- notifications : the outbox. 20.7.
+--
+-- Rows are written by triggers, in the same transaction as the state change
+-- that caused them: if the change commits the row exists, and if it rolls
+-- back it does not. The alternative, every call site remembering to enqueue,
+-- is a rule somebody forgets, and the one they forget is invisible, because
+-- a missing notification looks exactly like nothing having happened.
+--
+-- **Nothing here stores a rendered message.** An earlier version of this
+-- table held `subject` and `body`, which is how a reminder composed at six
+-- for a form signed at seven goes out as a lie that was true when it was
+-- written. Events carry only the few values their sentence needs, and a
+-- digest is composed at the moment it is sent from state as it stands
+-- (20.2).
 -- --------------------------------------------------------------------------
 create table public.notifications (
   id            uuid primary key default gen_random_uuid(),
   org_id        uuid not null references public.organizations on delete restrict,
-  user_id       uuid not null references public.users on delete restrict,
+
+  -- A platform kind from src/lib/notify/platform.ts, or 'digest'.
   kind          text not null,
-  subject       text not null,
-  body          text not null,
-  entity_type   text,
-  entity_id     uuid,
 
-  -- Seven kinds bypass the digest: an authorship invitation, a review
-  -- assignment, and each thing a person is expected to act on or would be
-  -- embarrassed to learn about late. 11.5.
-  immediate     boolean not null default false,
+  -- Who hears, and who caused it. Nobody is told about their own click, so
+  -- the actor is kept in order to be excluded at send time.
+  recipient_id  uuid not null references public.users on delete restrict,
+  actor_id      uuid references public.users on delete restrict,
 
-  queued_at     timestamptz not null default now(),
-  digest_bucket date,
-  sent_at       timestamptz,
-  error         text,
+  -- What it is about, so a message can link to the exact thing and somebody
+  -- can later ask what was ever sent about one entry.
+  subject_kind  text,
+  subject_id    uuid,
+
+  -- The few values the sentence needs. Never the notebook, never the
+  -- manuscript, never review comments (20.8).
+  payload       jsonb not null default '{}'::jsonb,
+
+  -- The event rather than the moment: 'place_granted:{entry}' or
+  -- 'digest:{user}:{date}'. With the constraint below, a retry, a replay or
+  -- a second drain cannot double a message.
+  dedupe_key    text not null,
+
+  -- Held back so a burst becomes one message, and so a thousand of them do
+  -- not leave in the same second (20.11).
+  send_after    timestamptz not null default now(),
+
+  state         text not null default 'pending'
+                check (state in ('pending', 'sent', 'failed', 'skipped')),
+  attempts      int not null default 0,
+  last_error    text,
+
   created_at    timestamptz not null default now(),
-  updated_at    timestamptz not null default now()
+  sent_at       timestamptz,
+
+  unique (recipient_id, dedupe_key)
 );
 
-create index notifications_pending_idx
-  on public.notifications (digest_bucket) where sent_at is null;
+-- The drain's only query: what is due, oldest first.
+create index notifications_due_idx
+  on public.notifications (send_after)
+  where state = 'pending';
+
+-- --------------------------------------------------------------------------
+-- notification_settings : 20.4.
+--
+-- Keyed on a category, never on a kind. A template with forty dated steps
+-- generates forty kinds and nobody has an opinion about forty switches, so a
+-- step added to a template never adds a row to a settings screen.
+--
+-- Absent means the default, which is on for everything except that a digest
+-- is weekly rather than daily. `account` is not listed, because consent and
+-- sign in are the substance of the thing rather than news about it.
+-- --------------------------------------------------------------------------
+create table public.notification_settings (
+  user_id  uuid not null references public.users on delete cascade,
+  category text not null
+           check (category in ('reminders', 'approvals', 'editorial')),
+  channel  text not null default 'email',
+  enabled  boolean not null default true,
+
+  -- Only meaningful for 'reminders'. 'off' is enabled = false; this decides
+  -- how often the digest arrives when it is on.
+  cadence  text not null default 'weekly'
+           check (cadence in ('weekly', 'daily')),
+
+  -- Whether anything inside its urgent window arrives on its own rather
+  -- than waiting for the next digest.
+  urgent   boolean not null default true,
+
+  updated_at timestamptz not null default now(),
+
+  primary key (user_id, category, channel)
+);
 
 
 -- ===========================================================================
@@ -359,7 +429,7 @@ begin
   foreach t in array array[
     'organizations', 'org_domains', 'users', 'identities', 'user_roles',
     'guardian_consents', 'confirmation_tokens',
-    'pending_role_grants', 'notifications'
+    'pending_role_grants', 'notification_settings'
   ] loop
     execute format(
       'create trigger %I before update on public.%I
@@ -917,6 +987,7 @@ alter table public.confirmation_tokens enable row level security;
 alter table public.pending_role_grants enable row level security;
 alter table public.audit_log           enable row level security;
 alter table public.notifications       enable row level security;
+alter table public.notification_settings enable row level security;
 
 -- ---------------------------------------------------------------------------
 -- TABLE GRANTS.
@@ -1047,9 +1118,31 @@ revoke update, delete on public.audit_log from authenticated, anon, service_role
 revoke update, delete on public.confirmation_tokens from authenticated, anon;
 
 -- notifications -------------------------------------------------------------
-create policy notifications_read_own on public.notifications
+--
+-- No policy at all, deliberately. The outbox is drained by a scheduled
+-- Worker on the service role, and nothing in the interface reads it: a table
+-- recording who was told what is the wrong thing to leave readable by
+-- default. When there is an in app inbox, a policy giving a person their own
+-- rows is the change to make, and it should be a decision somebody takes
+-- rather than a permission they inherit (20.7).
+
+-- notification_settings -----------------------------------------------------
+--
+-- A person's own, and only their own. An advisor has no business reading
+-- whether a student turned reminders off, and turning them back on for them
+-- would be worse.
+create policy notification_settings_read_own on public.notification_settings
   for select to authenticated
   using (user_id = (select auth.uid()));
+
+create policy notification_settings_write_own on public.notification_settings
+  for insert to authenticated
+  with check (user_id = (select auth.uid()));
+
+create policy notification_settings_update_own on public.notification_settings
+  for update to authenticated
+  using (user_id = (select auth.uid()))
+  with check (user_id = (select auth.uid()));
 
 
 -- ===========================================================================
@@ -1143,12 +1236,107 @@ create table public.programs (
   registration_opens_on date,
   source        text not null default 'external'
                   check (source in ('external', 'internal')),
-  advances_to   text,                          -- where placing sends you next
   status        text not null default 'open'
                   check (status in ('draft', 'open', 'closed', 'archived')),
   created_at    timestamptz not null default now(),
   updated_at    timestamptz not null default now(),
-  unique (slug, season_year)
+
+  -- ── Added as the model grew ─────────────────────────────────────────────
+  description   text,
+  website_url   text,
+  advances_to_fairs text[],
+
+  -- How many a school may put forward. 7.8.
+  selection_cap int,
+
+  -- ── A program is one edition of one activity at one school. 5.1 ─────────
+  --
+  -- `family` groups editions: scvsefa-2027 and scvsefa-2028 share it, which
+  -- is what lets this year's officers see last year's work. It is a string
+  -- and not an object, because a family with staff of its own would be the
+  -- seasons model returning through the side door.
+  family        text,
+  -- `showcase` is a checkpoint that produces a record without judging: the
+  -- IRPD Community Showcase, where nobody places and nothing is accepted or
+  -- declined, but a student can say two years later that they presented
+  -- there. It is an opportunity by 22.2's test — it produces something the
+  -- project carries afterwards — and it is its own kind because none of the
+  -- others describe an outcome with no decision in it.
+  kind          text not null default 'competition'
+                  check (kind in
+                    ('competition', 'course', 'publication', 'grant',
+                     'independent', 'showcase')),
+  template_id   text,
+
+  -- The research process this program prescribes for a project started in
+  -- it, or null where it prescribes none. A cohort may; an opportunity may
+  -- not, and a check refuses one that tries (22.4).
+  process_id    text,
+
+  version       int not null default 1,
+  level         text,
+
+  -- The real dates somebody read off the organizer's page. Here rather than
+  -- in the shared template, because a template is shared between schools and
+  -- dates are not.
+  anchors       jsonb not null default '{}'::jsonb,
+
+  -- How somebody joins.
+  --
+  --   open      : anybody at the school, the moment they ask
+  --   approval  : a request, granted by the program's staff
+  --
+  -- From the template, because it is a fact about the program rather than a
+  -- setting: IRPD takes a handful of students and a fair takes everybody who
+  -- turns up, and neither is a preference an administrator should toggle.
+  joining     text not null default 'open'
+                check (joining in ('open', 'approval')),
+
+  -- How many places, where there are a limited number of them. Null means
+  -- as many as ask.
+  places      int check (places > 0),
+
+  -- The phases this program runs, resolved from its template: id, name, and
+  -- the month window a teacher set. Held here rather than repeated on every
+  -- milestone, because a phase belongs to the program and a milestone only
+  -- names one. 6.8.
+  phases        jsonb not null default '[]'::jsonb,
+
+  -- What this program calls the people in it, resolved from its template.
+  --
+  --   { "staff":  { "singular": "Elder",  "plural": "Elders" },
+  --     "member": { "singular": "Student", "plural": "Students" } }
+  --
+  -- The template supplies the words and never a second permission
+  -- vocabulary (6.4): an Elder, an Officer, and an Editor hold exactly the
+  -- same powers, and only the label differs. The database role stays
+  -- `officer` everywhere, which is what keeps the access model auditable.
+  --
+  -- Here rather than resolved at render, for the same reason `phases` is
+  -- here. The words are needed on nine screens and only two of them have
+  -- any other reason to load the template library, which is a 183 KB chunk
+  -- and a parse of every YAML file in it. Every one of those screens
+  -- already selects this row, so the words arrive in a query that was
+  -- happening anyway.
+  --
+  -- The cost is drift: edit a template's vocabulary and rows written before
+  -- the edit keep the old word until a reseed. Accepted, because it is the
+  -- same trade `phases` already makes and because a stale label is cosmetic
+  -- where a stale date is not.
+  roles         jsonb not null default '{}'::jsonb,
+
+  -- Editors are derived rather than granted twice: staff of any program in
+  -- these families are staff here, resolved against whichever edition is
+  -- current. 6.7.
+  staff_from    text[] not null default '{}',
+  publishes_to  text,
+  current       boolean not null default true,
+
+  -- Per organization. Two schools running the same template is the ordinary
+  -- case — every school has an `independent-research` — and a global
+  -- uniqueness made the second one to seed fail. The slug comes from the
+  -- template, so it is only unique within a school by construction.
+  unique (org_id, slug, season_year)
 );
 
 comment on column public.programs.org_id is
@@ -1159,18 +1347,42 @@ create table public.program_milestones (
   program_id   uuid not null references public.programs on delete restrict,
   org_id       uuid references public.organizations on delete restrict,
   name         text not null,
+  -- `event` is a day something happens rather than something to hand in:
+  -- applications open, results are announced. It has no deliverable and no
+  -- consequence, and counting down to one tells a student nothing to act on.
   kind         text not null check (kind in
-                 ('form', 'approval', 'registration', 'submission', 'judging', 'local')),
+                 ('form', 'approval', 'registration', 'submission', 'judging',
+                  'local', 'event')),
   due_on       date,
   opens_on     date,
   required     boolean not null default true,
   blocks_experimentation boolean not null default false,
   form_number  text,
   source_url   text,
+  -- Whose deadline this is.
+  --
+  --   process  the research itself: read the prior work, collect the data
+  --   program  the institution's, and the only kind that can end a season
+  --   school   the club's own, earlier on purpose and binding on nobody else
+  --
+  -- A student who cannot tell a club deadline from a fair rule starts
+  -- treating real deadlines as advisory, and the fair's November date is one
+  -- where that ends a season. `org_id` cannot say it: on a copied milestone
+  -- it is always the school's. 6.8.
+  source       text not null default 'program'
+                 check (source in ('process', 'program', 'school')),
+
+  -- Which phase it belongs to, naming an entry in `programs.phases`. A phase
+  -- is what lets forty projects be read in five buckets rather than as one
+  -- list of nineteen rows, which is the job `projects.stage` did badly.
+  phase        text,
   notes        text,
   sort_order   int not null default 0,
   created_at   timestamptz not null default now(),
-  updated_at   timestamptz not null default now()
+  updated_at   timestamptz not null default now(),
+
+  -- Completed by something happening rather than by somebody ticking it.
+  satisfied_by  text check (satisfied_by in ('sponsor', 'officer', 'start_date'))
 );
 
 comment on column public.program_milestones.org_id is
@@ -1190,13 +1402,56 @@ create table public.projects (
   title       text not null,
   question    text,
   discipline  text,
-  stage       text not null default 'registered'
-                check (stage in ('registered', 'in_progress', 'fair_ready', 'competed', 'published')),
+  -- There was a `stage` column here: registered, in_progress, fair_ready,
+  -- competed, published. That is a competition's lifecycle imposed on every
+  -- project, and a design research course has different phases while generic
+  -- research has almost none. Where a project is comes from its steps, which
+  -- the program declares. 7.1.
   started_on  date,                           -- the day experimentation began
+
+  -- How this work is done: the scientific method, engineering design, or a
+  -- class's own framework. A template id from src/config/programs.
+  --
+  -- **On the project, because you did one piece of work.** Nobody uses design
+  -- thinking for one venue and the scientific method for another, so this is
+  -- decided once and the same eleven steps follow the work wherever it goes
+  -- (22.4).
+  --
+  -- A cohort may prescribe it: enrolling in IRPD picks the d.school process,
+  -- because that is what the class teaches. An opportunity may not — Synopsys
+  -- science and engineering are *categories*, the fair's view of what you
+  -- did, and they live on `has.categories`. Keeping that line is what stops
+  -- three parties fighting over one field.
+  --
+  -- Not null with a default, because a fourteen year old's first screen must
+  -- not be "scientific method or engineering design?", and a project with no
+  -- process has an empty calendar and a digest that never speaks.
+  process_id  text not null default 'process-science',
   created_by  uuid not null references public.users on delete restrict,
   archived_at timestamptz,
   created_at  timestamptz not null default now(),
-  updated_at  timestamptz not null default now()
+  updated_at  timestamptz not null default now(),
+
+  -- Set by any author. Keeps the project out of the browsable history for
+  -- staff of later editions. It does not hide a running project from the
+  -- people responsible for it, and does not unpublish a published record:
+  -- that is a retraction. 6.6.
+  is_private    boolean not null default false,
+
+  -- One address, stored and never fetched. 7.4.
+  video_url     text,
+
+  -- What the project says about itself: does it involve human participants,
+  -- vertebrate animals, hazardous agents, a regulated institution.
+  --
+  -- Eight questions answered once, and the paperwork follows. ISEF publishes
+  -- a Rules Wizard because working out your own forms from the rulebook is
+  -- genuinely hard, and a student who gets it wrong finds out at check-in.
+  --
+  -- Held as json because the questions belong to a program's template rather
+  -- than to this schema: a course asks two, a fair asks eight, and a column
+  -- per question would put a template's content in a migration. 6.8.
+  facts         jsonb not null default '{}'::jsonb
 );
 
 comment on column public.projects.started_on is
@@ -1210,11 +1465,15 @@ create table public.project_authors (
   project_id  uuid not null references public.projects on delete restrict,
   user_id     uuid not null references public.users on delete restrict,
   role        text not null default 'author'
-                check (role in ('author', 'mentor', 'officer')),
+                check (role in ('author', 'officer')),
   accepted_at timestamptz,
   invited_at  timestamptz not null default now(),
   created_at  timestamptz not null default now(),
   updated_at  timestamptz not null default now(),
+
+  -- An author looking after their own project, with no officer assigned. 6.4.
+  self_managed_at timestamptz,
+
   unique (project_id, user_id)
 );
 
@@ -1225,12 +1484,61 @@ create table public.entries (
   org_id      uuid not null references public.organizations on delete restrict,
   project_id  uuid not null references public.projects on delete restrict,
   program_id  uuid not null references public.programs on delete restrict,
+  -- `requested` is a place asked for and not yet granted. IRPD takes a
+  -- handful of students and the club has a signup, so joining is a request
+  -- at some programs and immediate at others.
+  --
+  -- **It does not gate the work.** A student with a requested place can
+  -- write, keep a notebook, and upload from the first day: the project is
+  -- theirs and the participation is what a teacher grants. Software that
+  -- refuses to let somebody work while an adult gets round to clicking is
+  -- software that has confused an administrative state for a permission,
+  -- and the student it stops is the one with nobody to chase it for them.
+  --
+  -- What a requested place does not get is the program's deadlines, its
+  -- staff, or a place in its showcase, because none of those are true yet.
   status      text not null default 'entered'
-                check (status in ('entered', 'withdrawn', 'competed')),
+                check (status in
+                  ('requested', 'declined', 'entered', 'withdrawn', 'competed')),
+
+  -- Who granted or refused it, and when. A refusal with nobody's name on it
+  -- is a refusal nobody can ask about.
+  decided_by  uuid references public.users on delete restrict,
+  decided_at  timestamptz,
+  decided_note text,
   placement   text,
   entered_at  timestamptz not null default now(),
   created_at  timestamptz not null default now(),
   updated_at  timestamptz not null default now(),
+
+  -- ── Selection: which entries a school puts forward. 7.8 ─────────────────
+  selection_state text not null default 'candidate'
+                  check (selection_state in ('candidate', 'selected', 'not_selected', 'withdrawn')),
+  selection_decided_at timestamptz,
+  selection_decided_by uuid references public.users on delete restrict,
+  selection_note  text,
+
+  -- ── Money, where the program is a grant ─────────────────────────────────
+  --
+  -- Two numbers and no budget. A line-item budget belongs in a spreadsheet a
+  -- student already knows how to use, and holding one here would mean
+  -- holding a family's financial circumstances, which is not ours to keep.
+  --
+  -- Asked and given, because they differ more often than not: a partial
+  -- award is the ordinary outcome and a student should be able to see what
+  -- they have to cut.
+  requested_amount numeric(10, 2) check (requested_amount >= 0),
+  awarded_amount   numeric(10, 2) check (awarded_amount >= 0),
+  currency         text not null default 'USD',
+
+  -- ── What happened at the fair ───────────────────────────────────────────
+  category      text,
+  entry_code    text,
+  awards        text[] not null default '{}',
+  advanced_to   text,
+  result_recorded_at timestamptz,
+  result_recorded_by uuid references public.users on delete restrict,
+
   unique (project_id, program_id)
 );
 
@@ -1247,8 +1555,15 @@ create table public.entry_milestones (
   completed_on         date,
   completed_by         uuid references public.users on delete restrict,
   sort_order           int not null default 0,
+
+  -- Copied from the program milestone. See the notes there.
+  source               text not null default 'program'
+                         check (source in ('process', 'program', 'school')),
+  phase                text,
   created_at           timestamptz not null default now(),
-  updated_at           timestamptz not null default now()
+  updated_at           timestamptz not null default now(),
+
+  satisfied_by  text check (satisfied_by in ('sponsor', 'officer', 'start_date'))
 );
 
 create index entry_milestones_entry_idx
@@ -1308,16 +1623,31 @@ begin
     raise exception 'not an author on that project';
   end if;
 
-  insert into public.entries (org_id, project_id, program_id)
-  values (v_org, p_project_id, p_program_id)
-  on conflict (project_id, program_id) do update set status = 'entered'
+  /* Asked for, or joined. A program that takes a handful of students grants
+     places; a fair takes everybody who turns up. The template says which,
+     and it is a fact about the program rather than a setting.
+   
+     `on conflict` restores a withdrawn place to whatever joining that
+     program does, so somebody who left and came back does not skip a queue
+     they were meant to be in. */
+  insert into public.entries (org_id, project_id, program_id, status)
+  select v_org, p_project_id, p_program_id,
+         case when p.joining = 'approval' then 'requested' else 'entered' end
+    from public.programs p
+   where p.id = p_program_id
+  on conflict (project_id, program_id) do update
+     set status = case
+                    when (select joining from public.programs where id = p_program_id)
+                         = 'approval' then 'requested'
+                    else 'entered'
+                  end
   returning id into v_entry;
 
   insert into public.entry_milestones
     (org_id, entry_id, program_milestone_id, name, kind, due_on, required,
-     blocks_experimentation, sort_order)
+     blocks_experimentation, sort_order, source, phase)
   select v_org, v_entry, m.id, m.name, m.kind, m.due_on, m.required,
-         m.blocks_experimentation, m.sort_order
+         m.blocks_experimentation, m.sort_order, m.source, m.phase
     from public.program_milestones m
    where m.program_id = p_program_id
      and (m.org_id is null or m.org_id = v_org)
@@ -1375,94 +1705,253 @@ create policy program_milestones_write on public.program_milestones
     and ((select app.has_role('officer')) or (select app.is_staff()))
   );
 
+-- ===========================================================================
+-- PROGRAMS AS EDITIONS, AND ONE VISIBILITY RULE
+--
+-- Brief 1.44 through 1.47. A school runs several structured research
+-- activities; a program is one edition of one of them; roles are held in a
+-- program rather than in the school; and where a project is comes from its
+-- steps rather than from a column.
+-- ===========================================================================
+
+-- ---------------------------------------------------------------------------
+-- What a program now carries.
+--
+-- `family` is a key, not an object. There is no parent row and nothing hangs
+-- off it: a family with staff would be the seasons model returning through
+-- the side door, and high school turnover does not match a durable thing.
+-- ---------------------------------------------------------------------------
+
+create index if not exists programs_family_idx
+  on public.programs (org_id, family) where current;
+
+
+-- ---------------------------------------------------------------------------
+-- Roles scope to a program.
+--
+-- `scope_id` has existed since the first migration and nothing has ever set
+-- it. This is what it was for. A student role granted against an edition
+-- lapses when the edition does, which is not a mechanism built to solve a
+-- problem: it corrects one. Roles were granted against the school with no
+-- expiry, so a graduated officer held theirs forever unless somebody revoked
+-- it by hand, and nobody would.
+-- ---------------------------------------------------------------------------
+comment on column public.user_roles.scope_id is
+  'The program this role is held in. Null for a role held at the school: '
+  'student, and the school administrator. 6.4.';
+
+
+-- ---------------------------------------------------------------------------
+-- Participation. `entries` already meant "one project in one program"; what
+-- changes is that a program need not be a competition.
+--
+-- The rename to `participations` is open item 52 and is deliberately not done
+-- here: it touches every page and carries no behavior with it, and mixing a
+-- rename into a policy rewrite is how a policy rewrite goes wrong unnoticed.
+-- ---------------------------------------------------------------------------
+comment on table public.entries is
+  'One project participating in one program. A competition entry is one kind; '
+  'a course enrollment and a journal submission are others. To be renamed to '
+  'participations, open item 52.';
+
+
+-- ---------------------------------------------------------------------------
+-- A project has no stage.
+--
+-- It was a competition lifecycle imposed on everything, and a design research
+-- course has different stages while generic research has almost none. Where a
+-- project is comes from its steps, which the program declares.
+--
+-- Kept as a column for one release so nothing breaks mid-refactor, and
+-- ignored by everything. Dropped in the next migration.
+-- ---------------------------------------------------------------------------
+
+
+comment on column public.projects.is_private is
+  'Set by any author. Keeps the project out of the browsable history for '
+  'staff of later editions. Does not hide a running project from the people '
+  'responsible for it, and does not unpublish a published record. 6.6.';
+
+-- ---------------------------------------------------------------------------
+-- The advisor check, needed here.
+--
+-- Defined again further down alongside the other helpers, which is this
+-- file's existing pattern: `is_staff` appears twice for the same reason.
+-- `create or replace` keeps one function and one oid, so the later definition
+-- is the one that survives and every policy pointing at it stays pointed.
+--
+-- It is needed early because `can_see_project` calls it, and a SQL function
+-- has its body checked when it is created.
+-- ---------------------------------------------------------------------------
+create or replace function app.is_advisor()
+returns boolean
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select exists (
+    select 1 from public.user_roles r
+     where r.user_id = auth.uid() and r.role = 'advisor' and r.revoked_at is null
+  );
+$$;
+
+grant execute on function app.is_advisor() to authenticated;
+
+
+-- ---------------------------------------------------------------------------
+-- WHO CAN SEE A PROJECT
+--
+-- One rule, in one place, because forty-eight policies reimplementing a
+-- four-table join is how an access model becomes slow and quietly wrong.
+--
+-- Visible to its authors, to the school administrator, and to staff of any
+-- program in the same FAMILY as a program the project participates in.
+--
+-- Family rather than edition: this year's officers see the club's whole
+-- history, which is the institutional knowledge a club runs on. Family rather
+-- than school: IRPD's elders have no business in the fair's archive.
+--
+-- A graduated officer sees nothing, because they hold a role in an edition
+-- that has ended and no current edition has granted them anything.
+-- ---------------------------------------------------------------------------
+create or replace function app.can_see_project(p_project_id uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select
+    -- Its authors, always. Authorship is independent of every role and
+    -- survives graduation.
+    exists (
+      select 1 from public.project_authors a
+       where a.project_id = p_project_id
+         and a.user_id = auth.uid()
+    )
+
+    -- And whoever created it.
+    --
+    -- A project is created and its first author row written in the next
+    -- statement. Between those two there is no author, and without this the
+    -- creator can edit a row they cannot read: `can_edit_project` counts the
+    -- creator and this did not. An UPDATE that returns nothing, on a project
+    -- you just made, with no route back to it.
+    --
+    -- Found by running the policies against a real database rather than
+    -- reading them, which is the only way this kind of asymmetry shows up.
+    or exists (
+      select 1 from public.projects p
+       where p.id = p_project_id
+         and p.created_by = auth.uid()
+    )
+
+    -- The advisor and the school administrator. A teacher's duty of care does
+    -- not toggle, so this is unaffected by the privacy setting.
+    or app.is_advisor()
+
+    -- Staff of any current program in a family this project participates in.
+    or exists (
+      select 1
+        from public.entries e
+        join public.programs mine on mine.id = e.program_id
+        join public.programs theirs
+          on theirs.org_id = mine.org_id
+         and theirs.family is not distinct from mine.family
+         and theirs.current
+        join public.user_roles r
+          on r.scope_id = theirs.id
+         and r.user_id = auth.uid()
+         and r.role in ('officer', 'mentor')
+         and r.revoked_at is null
+       where e.project_id = p_project_id
+         -- A private project leaves the browsable history. It stays visible
+         -- to whoever is running it now, because a student cannot be allowed
+         -- to conceal a missing approval from the person who signs it.
+         and (
+           not (select p.is_private from public.projects p where p.id = p_project_id)
+           or theirs.id = mine.id
+         )
+    );
+$$;
+
+grant execute on function app.can_see_project(uuid) to authenticated;
+
+
+-- Can this person change it. Authors and the advisor; staff comment and
+-- chase rather than edit.
+create or replace function app.can_edit_project(p_project_id uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select
+    exists (
+      select 1 from public.project_authors a
+       where a.project_id = p_project_id
+         and a.user_id = auth.uid()
+         and a.role = 'author'
+    )
+    -- The creator, until the author rows exist. A project is created and its
+    -- first author written in the next statement, and between those two an
+    -- author check is false, which would make creating a project impossible.
+    or exists (
+      select 1 from public.projects p
+       where p.id = p_project_id and p.created_by = auth.uid()
+    )
+    or app.is_advisor();
+$$;
+
+grant execute on function app.can_edit_project(uuid) to authenticated;
+
 create policy projects_read on public.projects
   for select to authenticated
-  using (
-    org_id = (select app.org_id())
-    and (
-      exists (
-        select 1 from public.project_authors a
-         where a.project_id = projects.id and a.user_id = (select auth.uid())
-      )
-      or (select app.is_staff())
-    )
-  );
+  using ((select app.can_see_project(projects.id)));
 
 create policy projects_create on public.projects
   for insert to authenticated
+  -- Not can_edit_project: on INSERT the row does not exist yet, so there is
+  -- nothing to look up. What is checkable is the organization and that
+  -- somebody is not creating a project in another person's name.
   with check (
     org_id = (select app.org_id())
     and created_by = (select auth.uid())
-    and (select app.has_role('student'))
   );
 
 create policy projects_update on public.projects
   for update to authenticated
-  using (
-    exists (
-      select 1 from public.project_authors a
-       where a.project_id = projects.id
-         and a.user_id = (select auth.uid())
-         and a.role = 'author'
-         and a.accepted_at is not null
-    )
-  );
+  using ((select app.can_edit_project(projects.id)));
 
 create policy project_authors_read on public.project_authors
   for select to authenticated
-  using (org_id = (select app.org_id()));
+  using ((select app.can_see_project(project_authors.project_id)));
 
 create policy project_authors_write on public.project_authors
   for insert to authenticated
-  with check (org_id = (select app.org_id()));
+  with check ((select app.can_edit_project(project_authors.project_id)));
 
 create policy project_authors_update on public.project_authors
   for update to authenticated
-  using (user_id = (select auth.uid()) or (select app.is_staff()));
+  using ((select app.can_edit_project(project_authors.project_id)));
 
 create policy entries_read on public.entries
   for select to authenticated
-  using (
-    exists (
-      select 1 from public.project_authors a
-       where a.project_id = entries.project_id and a.user_id = (select auth.uid())
-    )
-    or (select app.is_staff())
-  );
+  using ((select app.can_see_project(entries.project_id)));
 
 create policy entries_write on public.entries
   for update to authenticated
-  using (
-    exists (
-      select 1 from public.project_authors a
-       where a.project_id = entries.project_id and a.user_id = (select auth.uid())
-    )
-  );
+  using ((select app.can_edit_project(entries.project_id)));
 
 create policy entry_milestones_read on public.entry_milestones
   for select to authenticated
-  using (
-    exists (
-      select 1
-        from public.entries e
-        join public.project_authors a on a.project_id = e.project_id
-       where e.id = entry_id and a.user_id = (select auth.uid())
-    )
-    or (select app.is_staff())
-  );
+  using ((select app.can_see_project((select e.project_id from public.entries e where e.id = entry_milestones.entry_id))));
 
 create policy entry_milestones_update on public.entry_milestones
   for update to authenticated
-  using (
-    exists (
-      select 1
-        from public.entries e
-        join public.project_authors a on a.project_id = e.project_id
-       where e.id = entry_id
-         and a.user_id = (select auth.uid())
-         and a.role = 'author'
-    )
-  );
+  using ((select app.can_edit_project((select e.project_id from public.entries e where e.id = entry_milestones.entry_id))));
 
 
 -- ===========================================================================
@@ -1477,50 +1966,17 @@ create policy entry_milestones_update on public.entry_milestones
 -- later season is a new program row, not an edit to this one.
 -- ===========================================================================
 
-do $$
-declare
-  v_program uuid;
-  v_mv      uuid;
-begin
-  select id into v_mv from public.organizations where slug = 'montavista';
+-- ---------------------------------------------------------------------------
+-- The fair and its deadlines used to be written here by hand: one program,
+-- twelve milestones, dates typed into an insert.
+--
+-- They come from `src/config/programs/` now, seeded by
+-- `scripts/seed-programs.mjs`, because a fair's calendar is data a person
+-- reads off the organizer's page once a year and not something to edit a
+-- migration for. A row seeded that way carries `template_id`, which is what
+-- marks it as derived and what lets a reset regenerate it.
+-- ---------------------------------------------------------------------------
 
-  insert into public.programs
-    (org_id, slug, name, season_year, fair_date, source, status)
-  values
-    (null, 'scvsefa-science-fair', 'SCVSEFA Science Fair', 2027,
-     date '2027-03-10', 'external', 'open')
-  on conflict (slug, season_year) do nothing
-  returning id into v_program;
-
-  if v_program is null then
-    select id into v_program from public.programs
-     where slug = 'scvsefa-science-fair' and season_year = 2027;
-  end if;
-
-  -- The fair's own deadlines. Every school entering sees these.
-  insert into public.program_milestones
-    (program_id, org_id, name, kind, due_on, blocks_experimentation, sort_order)
-  values
-    (v_program, null, 'SRC submission deadline',                    'submission', date '2026-11-14', true,  60),
-    (v_program, null, 'Non-SRC submission deadline',                'submission', date '2027-01-12', false, 70),
-    (v_program, null, 'Last day to change title, category, or field of study', 'submission', date '2027-02-20', false, 80),
-    (v_program, null, 'Final deadline to upload abstracts',         'submission', date '2027-02-27', false, 90),
-    (v_program, null, 'Last day to edit abstracts',                 'submission', date '2027-03-03', false, 100),
-    (v_program, null, 'SCVSEFA Science Fair',                      'judging',    date '2027-03-10', false, 120)
-  on conflict do nothing;
-
-  -- One school's internal deadlines, which run earlier on purpose.
-  insert into public.program_milestones
-    (program_id, org_id, name, kind, due_on, blocks_experimentation, sort_order)
-  values
-    (v_program, v_mv, 'Project categories due',      'submission', date '2026-09-18', false, 10),
-    (v_program, v_mv, 'General research idea due',   'submission', date '2026-10-02', false, 20),
-    (v_program, v_mv, 'Specific research idea due',  'submission', date '2026-10-09', false, 30),
-    (v_program, v_mv, 'Teacher project sponsor named','approval',  date '2026-10-16', true,  40),
-    (v_program, v_mv, 'Proposal deadline',           'submission', date '2026-10-23', false, 50),
-    (v_program, v_mv, 'Mock judging',                'judging',    date '2027-03-05', false, 110)
-  on conflict do nothing;
-end $$;
 
 
 
@@ -1534,6 +1990,29 @@ end $$;
 -- link does not exist yet, which is a genuinely confusing failure.
 --
 -- One function, one transaction, one thing that can go wrong.
+/**
+ * The research process a project starting in this program should follow.
+ *
+ * A cohort prescribes it — enrolling in IRPD picks the class's framework —
+ * and anything else falls to the column default. Read from the program row
+ * rather than passed in, so three call sites that create projects cannot
+ * disagree about it (22.4).
+ *
+ * Null when the program says nothing, which lets the insert fall through to
+ * the default rather than writing one process's name over another's.
+ */
+create or replace function app.process_for(p_program_id uuid)
+returns text
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select p.process_id
+    from public.programs p
+   where p.id = p_program_id
+$$;
+
 -- ---------------------------------------------------------------------------
 
 create or replace function public.start_entry(
@@ -1582,23 +2061,32 @@ begin
     raise exception 'that fair is not open to this school';
   end if;
 
-  insert into public.projects (org_id, title, started_on, created_by)
-  values (v_org, trim(p_title), p_started_on, v_uid)
+  /* Coalesced rather than assumed: a program that prescribes nothing leaves
+     the column default in place. */
+  insert into public.projects (org_id, title, started_on, created_by, process_id)
+  values (v_org, trim(p_title), p_started_on, v_uid,
+          coalesce(app.process_for(p_program_id), 'process-science'))
   returning id into v_project;
 
   insert into public.project_authors
     (org_id, project_id, user_id, role, accepted_at)
   values (v_org, v_project, v_uid, 'author', now());
 
-  insert into public.entries (org_id, project_id, program_id)
-  values (v_org, v_project, p_program_id)
+  /* Asked for, or joined, depending on what the program does. This is the
+     path a student takes on their first day, which is where it matters
+     most. */
+  insert into public.entries (org_id, project_id, program_id, status)
+  select v_org, v_project, p_program_id,
+         case when p.joining = 'approval' then 'requested' else 'entered' end
+    from public.programs p
+   where p.id = p_program_id
   returning id into v_entry;
 
   insert into public.entry_milestones
     (org_id, entry_id, program_milestone_id, name, kind, due_on, required,
-     blocks_experimentation, sort_order)
+     blocks_experimentation, sort_order, source, phase)
   select v_org, v_entry, m.id, m.name, m.kind, m.due_on, m.required,
-         m.blocks_experimentation, m.sort_order
+         m.blocks_experimentation, m.sort_order, m.source, m.phase
     from public.program_milestones m
    where m.program_id = p_program_id
      and (m.org_id is null or m.org_id = v_org);
@@ -1625,6 +2113,9 @@ drop policy if exists projects_create on public.projects;
 
 create policy projects_create on public.projects
   for insert to authenticated
+  -- Not can_edit_project: on INSERT the row does not exist yet, so there is
+  -- nothing to look up. What is checkable is the organization and that
+  -- somebody is not creating a project in another person's name.
   with check (
     org_id = (select app.org_id())
     and created_by = (select auth.uid())
@@ -1636,17 +2127,7 @@ drop policy if exists projects_read on public.projects;
 
 create policy projects_read on public.projects
   for select to authenticated
-  using (
-    org_id = (select app.org_id())
-    and (
-      created_by = (select auth.uid())
-      or exists (
-        select 1 from public.project_authors a
-         where a.project_id = projects.id and a.user_id = (select auth.uid())
-      )
-      or (select app.is_staff())
-    )
-  );
+  using ((select app.can_see_project(projects.id)));
 
 
 -- ---------------------------------------------------------------------------
@@ -2040,56 +2521,31 @@ revoke delete on public.deliverables, public.project_links
 -- question in one more place.
 create policy deliverables_read on public.deliverables
   for select to authenticated
-  using (
-    exists (
-      select 1 from public.entries e
-       where e.id = entry_id
-         and (
-           exists (select 1 from public.project_authors a
-                    where a.project_id = e.project_id and a.user_id = (select auth.uid()))
-           or (select app.is_staff())
-         )
-    )
-  );
+  using ((select app.can_see_project((select e.project_id from public.entries e where e.id = deliverables.entry_id))));
 
 create policy deliverables_write on public.deliverables
   for insert to authenticated
-  with check (org_id = (select app.org_id()));
+  with check ((select app.can_edit_project((select e.project_id from public.entries e where e.id = deliverables.entry_id))));
 
 create policy deliverables_update on public.deliverables
   for update to authenticated
-  using (org_id = (select app.org_id()));
+  using ((select app.can_edit_project((select e.project_id from public.entries e where e.id = deliverables.entry_id))));
 
 create policy field_notes_read on public.field_notes
   for select to authenticated
-  using (
-    exists (select 1 from public.project_authors a
-             where a.project_id = field_notes.project_id and a.user_id = (select auth.uid()))
-    or (select app.is_staff())
-  );
+  using ((select app.can_see_project(field_notes.project_id)));
 
 create policy note_media_read on public.note_media
   for select to authenticated
-  using (
-    exists (
-      select 1 from public.field_notes n
-       join public.project_authors a on a.project_id = n.project_id
-      where n.id = note_id and a.user_id = (select auth.uid())
-    )
-    or (select app.is_staff())
-  );
+  using ((select app.can_see_project((select n.project_id from public.field_notes n where n.id = note_media.note_id))));
 
 create policy project_links_read on public.project_links
   for select to authenticated
-  using (
-    exists (select 1 from public.project_authors a
-             where a.project_id = project_links.project_id and a.user_id = (select auth.uid()))
-    or (select app.is_staff())
-  );
+  using ((select app.can_see_project(project_links.project_id)));
 
 create policy project_links_write on public.project_links
   for insert to authenticated
-  with check (org_id = (select app.org_id()) and added_by = (select auth.uid()));
+  with check ((select app.can_edit_project(project_links.project_id)));
 
 
 -- ---------------------------------------------------------------------------
@@ -2591,26 +3047,11 @@ notify pgrst, 'reload schema';
 -- account for somebody whose entire involvement might be a signature.
 -- ===========================================================================
 
-alter table public.user_roles
-  drop constraint if exists user_roles_role_check;
 
-alter table public.user_roles
-  add constraint user_roles_role_check
-  check (role in ('student', 'officer', 'advisor', 'editor'));
 
-alter table public.pending_role_grants
-  drop constraint if exists pending_role_grants_role_check;
 
-alter table public.pending_role_grants
-  add constraint pending_role_grants_role_check
-  check (role in ('student', 'officer', 'advisor', 'editor'));
 
-alter table public.project_authors
-  drop constraint if exists project_authors_role_check;
 
-alter table public.project_authors
-  add constraint project_authors_role_check
-  check (role in ('author', 'officer'));
 
 
 -- ---------------------------------------------------------------------------
@@ -2673,15 +3114,7 @@ create trigger project_sponsors_set_updated_at
 -- rather than implied by who happens to still be in a list.
 -- ---------------------------------------------------------------------------
 
-alter table public.programs
-  add column if not exists selection_cap int;
 
-alter table public.entries
-  add column if not exists selection_state text not null default 'candidate'
-    check (selection_state in ('candidate', 'selected', 'not_selected', 'withdrawn')),
-  add column if not exists selection_decided_at timestamptz,
-  add column if not exists selection_decided_by uuid references public.users on delete restrict,
-  add column if not exists selection_note text;
 
 update public.programs
    set selection_cap = 50
@@ -2891,6 +3324,38 @@ begin
     raise exception 'no such project at this school';
   end if;
 
+  /* An officer does not appoint the officer for their own project.
+   
+     Officers are assigned by other officers, and somebody who is both an
+     author here and an officer of the club has an obvious interest in who
+     oversees their work. Hiding the button is not enough: this is the rule,
+     and the page merely reflects it.
+   
+     The advisor is the exception. They oversee the club rather than compete
+     in it, and somebody has to be able to act when a project is stuck. */
+  if (select not app.is_advisor()) and exists (
+    select 1 from public.project_authors a
+     where a.project_id = p_project_id
+       and a.user_id = auth.uid()
+       and a.role = 'author'
+  ) then
+    raise exception
+      'an author does not assign the officer for their own project. Another officer or the advisor does.';
+  end if;
+
+  /* Nor is an author of this project a candidate for its officer. That state
+     exists and is called self managed, which an author sets for themselves
+     rather than being appointed to oversee themselves. */
+  if exists (
+    select 1 from public.project_authors a
+     where a.project_id = p_project_id
+       and a.user_id = p_user_id
+       and a.role = 'author'
+  ) then
+    raise exception
+      'an author of this project cannot be its officer. They can manage it themselves instead.';
+  end if;
+
   if not exists (
     select 1 from public.user_roles r
      where r.user_id = p_user_id
@@ -2978,72 +3443,29 @@ drop policy if exists projects_read on public.projects;
 
 create policy projects_read on public.projects
   for select to authenticated
-  using (
-    org_id = (select app.org_id())
-    and (
-      created_by = (select auth.uid())
-      or exists (
-        select 1 from public.project_authors a
-         where a.project_id = projects.id and a.user_id = (select auth.uid())
-      )
-      or (select app.is_staff())
-      or (select app.sponsors_project(id))
-    )
-  );
+  using ((select app.can_see_project(projects.id)));
 
 drop policy if exists field_notes_read on public.field_notes;
 
 create policy field_notes_read on public.field_notes
   for select to authenticated
-  using (
-    exists (select 1 from public.project_authors a
-             where a.project_id = field_notes.project_id and a.user_id = (select auth.uid()))
-    or (select app.is_staff())
-    or (select app.sponsors_project(project_id))
-  );
+  using ((select app.can_see_project(field_notes.project_id)));
 
 drop policy if exists entries_read on public.entries;
 
 create policy entries_read on public.entries
   for select to authenticated
-  using (
-    exists (
-      select 1 from public.project_authors a
-       where a.project_id = entries.project_id and a.user_id = (select auth.uid())
-    )
-    or (select app.is_staff())
-    or (select app.sponsors_project(project_id))
-  );
+  using ((select app.can_see_project(entries.project_id)));
 
 drop policy if exists entry_milestones_read on public.entry_milestones;
 
 create policy entry_milestones_read on public.entry_milestones
   for select to authenticated
-  using (
-    exists (
-      select 1
-        from public.entries e
-        join public.project_authors a on a.project_id = e.project_id
-       where e.id = entry_id and a.user_id = (select auth.uid())
-    )
-    or (select app.is_staff())
-    or exists (
-      select 1 from public.entries e
-       where e.id = entry_id and (select app.sponsors_project(e.project_id))
-    )
-  );
+  using ((select app.can_see_project((select e.project_id from public.entries e where e.id = entry_milestones.entry_id))));
 
 create policy project_sponsors_read on public.project_sponsors
   for select to authenticated
-  using (
-    org_id = (select app.org_id())
-    and (
-      exists (select 1 from public.project_authors a
-               where a.project_id = project_sponsors.project_id and a.user_id = (select auth.uid()))
-      or (select app.is_staff())
-      or (select app.sponsors_project(project_id))
-    )
-  );
+  using ((select app.can_see_project(project_sponsors.project_id)));
 
 /* A sponsor writes an observation like anyone else who can read the project.
    add_field_note already asks the reading question; it just has to ask the
@@ -3120,10 +3542,6 @@ notify pgrst, 'reload schema';
 -- season. Advancement is a list, because a fair can feed more than one.
 -- ---------------------------------------------------------------------------
 
-alter table public.programs
-  add column if not exists description text,
-  add column if not exists website_url text,
-  add column if not exists advances_to_fairs text[];
 
 update public.programs
    set description = 'The regional science and engineering fair for Santa Clara County. '
@@ -3136,7 +3554,6 @@ update public.programs
        ]
  where slug = 'scvsefa-science-fair' and season_year = 2027;
 
-alter table public.programs drop column if exists advances_to;
 
 notify pgrst, 'reload schema';
 
@@ -3178,6 +3595,38 @@ begin
     raise exception 'no such project at this school';
   end if;
 
+  /* An officer does not appoint the officer for their own project.
+   
+     Officers are assigned by other officers, and somebody who is both an
+     author here and an officer of the club has an obvious interest in who
+     oversees their work. Hiding the button is not enough: this is the rule,
+     and the page merely reflects it.
+   
+     The advisor is the exception. They oversee the club rather than compete
+     in it, and somebody has to be able to act when a project is stuck. */
+  if (select not app.is_advisor()) and exists (
+    select 1 from public.project_authors a
+     where a.project_id = p_project_id
+       and a.user_id = auth.uid()
+       and a.role = 'author'
+  ) then
+    raise exception
+      'an author does not assign the officer for their own project. Another officer or the advisor does.';
+  end if;
+
+  /* Nor is an author of this project a candidate for its officer. That state
+     exists and is called self managed, which an author sets for themselves
+     rather than being appointed to oversee themselves. */
+  if exists (
+    select 1 from public.project_authors a
+     where a.project_id = p_project_id
+       and a.user_id = p_user_id
+       and a.role = 'author'
+  ) then
+    raise exception
+      'an author of this project cannot be its officer. They can manage it themselves instead.';
+  end if;
+
   if not exists (
     select 1 from public.user_roles r
      where r.user_id = p_user_id
@@ -3213,8 +3662,6 @@ begin
 end;
 $$;
 
-alter table public.project_authors
-  add column if not exists self_managed_at timestamptz;
 
 create or replace function public.detach_from_project(
   p_project_id uuid,
@@ -3269,13 +3716,7 @@ notify pgrst, 'reload schema';
 -- `satisfied_by` names the fact. Null means manual.
 -- ===========================================================================
 
-alter table public.program_milestones
-  add column if not exists satisfied_by text
-    check (satisfied_by in ('sponsor', 'officer', 'start_date'));
 
-alter table public.entry_milestones
-  add column if not exists satisfied_by text
-    check (satisfied_by in ('sponsor', 'officer', 'start_date'));
 
 comment on column public.entry_milestones.satisfied_by is
   'The fact that closes this obligation, or null when a person reports it. '
@@ -3327,23 +3768,32 @@ begin
     raise exception 'that fair is not open to this school';
   end if;
 
-  insert into public.projects (org_id, title, started_on, created_by)
-  values (v_org, trim(p_title), p_started_on, v_uid)
+  /* Coalesced rather than assumed: a program that prescribes nothing leaves
+     the column default in place. */
+  insert into public.projects (org_id, title, started_on, created_by, process_id)
+  values (v_org, trim(p_title), p_started_on, v_uid,
+          coalesce(app.process_for(p_program_id), 'process-science'))
   returning id into v_project;
 
   insert into public.project_authors
     (org_id, project_id, user_id, role, accepted_at)
   values (v_org, v_project, v_uid, 'author', now());
 
-  insert into public.entries (org_id, project_id, program_id)
-  values (v_org, v_project, p_program_id)
+  /* Asked for, or joined, depending on what the program does. This is the
+     path a student takes on their first day, which is where it matters
+     most. */
+  insert into public.entries (org_id, project_id, program_id, status)
+  select v_org, v_project, p_program_id,
+         case when p.joining = 'approval' then 'requested' else 'entered' end
+    from public.programs p
+   where p.id = p_program_id
   returning id into v_entry;
 
   insert into public.entry_milestones
     (org_id, entry_id, program_milestone_id, name, kind, due_on, required,
-     blocks_experimentation, satisfied_by, sort_order)
+     blocks_experimentation, satisfied_by, sort_order, source, phase)
   select v_org, v_entry, m.id, m.name, m.kind, m.due_on, m.required,
-         m.blocks_experimentation, m.satisfied_by, m.sort_order
+         m.blocks_experimentation, m.satisfied_by, m.sort_order, m.source, m.phase
     from public.program_milestones m
    where m.program_id = p_program_id
      and (m.org_id is null or m.org_id = v_org);
@@ -3500,6 +3950,191 @@ begin
 end;
 $$;
 
+
+-- ---------------------------------------------------------------------------
+-- Granting or refusing a place.
+--
+-- Staff of the program decide, which is the point of scoping roles to
+-- programs: the fair's officers do not decide who is in the class.
+--
+-- A refusal carries a note and a name. "Declined" with nobody attached is a
+-- door closing with no way to ask why, and the student most likely to accept
+-- that silently is the one this software exists for.
+-- ---------------------------------------------------------------------------
+
+
+-- ---------------------------------------------------------------------------
+-- WHAT GOES WRONG HERE.
+--
+-- A club that has run five seasons knows things nobody else can tell a
+-- student: which teacher takes two weeks to sign, what the SRC sends back,
+-- which measurement everybody forgets. That knowledge currently lives in the
+-- head of whoever is graduating.
+--
+-- Written against a template step, so it surfaces where the work happens
+-- rather than on a page of tips nobody opens. The universal ones are in the
+-- process templates and the institution's are in its own; these are the
+-- third layer, and they are the only one a school can write for itself.
+--
+-- Three things keep this from turning into folklore:
+--
+--   a name and a date, shown, because anonymous institutional advice is how
+--   folklore forms;
+--
+--   `confirmed_at`, set at handover, so last year's warnings are re-read by
+--   somebody rather than inherited;
+--
+--   `retired_at` rather than deletion, because a warning that stopped being
+--   true is a record of something that used to be.
+--
+-- No cap on how many. A club has to be allowed to accumulate before anybody
+-- can say what is worth keeping, and a limit set before that is a guess.
+-- ---------------------------------------------------------------------------
+
+create table public.step_warnings (
+  id          uuid primary key default gen_random_uuid(),
+  org_id      uuid not null references public.organizations on delete restrict,
+
+  -- The program whose students see it. A club's warning is the club's; the
+  -- class next door has its own.
+  program_id  uuid not null references public.programs on delete restrict,
+
+  -- The template step it attaches to, by id. Not a foreign key: steps come
+  -- from YAML and a warning against a step that has been renamed should go
+  -- quiet rather than break the page.
+  step_id     text not null,
+
+  body        text not null check (char_length(trim(body)) between 10 and 600),
+
+  -- What made somebody write it. A specific project that hit it, kept as
+  -- evidence: "this happened" is a better argument than "be careful".
+  from_project uuid references public.projects on delete restrict,
+
+  written_by  uuid not null references public.users on delete restrict,
+  created_at  timestamptz not null default now(),
+
+  -- Re-read at handover. Null means nobody has confirmed it this season.
+  confirmed_at timestamptz,
+  confirmed_by uuid references public.users on delete restrict,
+
+  -- Stopped being true. Kept, not deleted.
+  retired_at  timestamptz,
+  retired_by  uuid references public.users on delete restrict,
+
+  updated_at  timestamptz not null default now()
+);
+
+create index step_warnings_program on public.step_warnings (program_id, step_id)
+  where retired_at is null;
+
+alter table public.step_warnings enable row level security;
+
+-- Everybody at the school reads them. That is the point: a warning only the
+-- officers can see is a warning that has not been written.
+create policy step_warnings_read on public.step_warnings
+  for select to authenticated
+  using (org_id = app.org_id());
+
+-- Officers of that program write them, and the advisor. An officer of the
+-- fair does not write the class's warnings.
+create policy step_warnings_write on public.step_warnings
+  for insert to authenticated
+  with check (
+    org_id = app.org_id()
+    and (app.is_advisor() or app.has_role('officer', program_id))
+  );
+
+create policy step_warnings_edit on public.step_warnings
+  for update to authenticated
+  using (
+    org_id = app.org_id()
+    and (app.is_advisor() or app.has_role('officer', program_id))
+  );
+
+grant select, insert, update on public.step_warnings to authenticated;
+
+/* The trigger comes from the list below rather than being written here.
+   One list, so a table added without one is visible. */
+do $$
+begin
+  execute
+    'create trigger step_warnings_set_updated_at before update on public.step_warnings
+       for each row execute function app.set_updated_at()';
+end $$;
+
+create or replace function public.decide_place(
+  p_entry_id uuid,
+  p_grant    boolean,
+  p_note     text default null
+)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_org     uuid;
+  v_program uuid;
+  v_places  int;
+  v_taken   int;
+begin
+  select e.org_id, e.program_id into v_org, v_program
+    from public.entries e
+   where e.id = p_entry_id;
+
+  if v_org is null or v_org is distinct from app.org_id() then
+    raise exception 'no such request at this school';
+  end if;
+
+  /* Staff of this program.
+   
+     `has_role` treats a role with no scope as matching any program, so a
+     school-wide advisor passes here and a teacher who advises one class does
+     not decide who is in the club. Which is what a school with two advisors
+     wants, and the reason not to use `is_advisor()`, which ignores scope
+     entirely because duty of care does. */
+  if not (app.has_role('advisor', v_program) or app.has_role('officer', v_program)) then
+    raise exception 'only this program''s staff may decide a place';
+  end if;
+
+  if p_grant then
+    select p.places into v_places from public.programs p where p.id = v_program;
+
+    if v_places is not null then
+      select count(*) into v_taken
+        from public.entries e
+       where e.program_id = v_program
+         and e.status in ('entered', 'competed');
+
+      /* A warning rather than a refusal. A teacher who wants a
+         twenty-first student knows something the number does not, and
+         software that overrules them will simply be worked around. */
+      if v_taken >= v_places then
+        raise warning 'this program has % places and % are taken', v_places, v_taken;
+      end if;
+    end if;
+  end if;
+
+  update public.entries
+     set status = case when p_grant then 'entered' else 'declined' end,
+         decided_by = auth.uid(),
+         decided_at = now(),
+         decided_note = nullif(trim(coalesce(p_note, '')), '')
+   where id = p_entry_id;
+
+  perform app.audit(
+    v_org,
+    case when p_grant then 'place.granted' else 'place.declined' end,
+    'entries',
+    p_entry_id,
+    null,
+    jsonb_build_object('note', p_note)
+  );
+end;
+$$;
+
+grant execute on function public.decide_place(uuid, boolean, text) to authenticated;
+
 create or replace function public.assign_officer(
   p_project_id uuid,
   p_user_id    uuid
@@ -3521,6 +4156,38 @@ begin
 
   if v_org is null or v_org is distinct from app.org_id() then
     raise exception 'no such project at this school';
+  end if;
+
+  /* An officer does not appoint the officer for their own project.
+   
+     Officers are assigned by other officers, and somebody who is both an
+     author here and an officer of the club has an obvious interest in who
+     oversees their work. Hiding the button is not enough: this is the rule,
+     and the page merely reflects it.
+   
+     The advisor is the exception. They oversee the club rather than compete
+     in it, and somebody has to be able to act when a project is stuck. */
+  if (select not app.is_advisor()) and exists (
+    select 1 from public.project_authors a
+     where a.project_id = p_project_id
+       and a.user_id = auth.uid()
+       and a.role = 'author'
+  ) then
+    raise exception
+      'an author does not assign the officer for their own project. Another officer or the advisor does.';
+  end if;
+
+  /* Nor is an author of this project a candidate for its officer. That state
+     exists and is called self managed, which an author sets for themselves
+     rather than being appointed to oversee themselves. */
+  if exists (
+    select 1 from public.project_authors a
+     where a.project_id = p_project_id
+       and a.user_id = p_user_id
+       and a.role = 'author'
+  ) then
+    raise exception
+      'an author of this project cannot be its officer. They can manage it themselves instead.';
   end if;
 
   if not exists (
@@ -3869,23 +4536,32 @@ begin
       (select p.title from public.projects p where p.id = v_clash);
   end if;
 
-  insert into public.projects (org_id, title, started_on, created_by)
-  values (v_org, trim(p_title), p_started_on, v_uid)
+  /* Coalesced rather than assumed: a program that prescribes nothing leaves
+     the column default in place. */
+  insert into public.projects (org_id, title, started_on, created_by, process_id)
+  values (v_org, trim(p_title), p_started_on, v_uid,
+          coalesce(app.process_for(p_program_id), 'process-science'))
   returning id into v_project;
 
   insert into public.project_authors
     (org_id, project_id, user_id, role, accepted_at)
   values (v_org, v_project, v_uid, 'author', now());
 
-  insert into public.entries (org_id, project_id, program_id)
-  values (v_org, v_project, p_program_id)
+  /* Asked for, or joined, depending on what the program does. This is the
+     path a student takes on their first day, which is where it matters
+     most. */
+  insert into public.entries (org_id, project_id, program_id, status)
+  select v_org, v_project, p_program_id,
+         case when p.joining = 'approval' then 'requested' else 'entered' end
+    from public.programs p
+   where p.id = p_program_id
   returning id into v_entry;
 
   insert into public.entry_milestones
     (org_id, entry_id, program_milestone_id, name, kind, due_on, required,
-     blocks_experimentation, satisfied_by, sort_order)
+     blocks_experimentation, satisfied_by, sort_order, source, phase)
   select v_org, v_entry, m.id, m.name, m.kind, m.due_on, m.required,
-         m.blocks_experimentation, m.satisfied_by, m.sort_order
+         m.blocks_experimentation, m.satisfied_by, m.sort_order, m.source, m.phase
     from public.program_milestones m
    where m.program_id = p_program_id
      and (m.org_id is null or m.org_id = v_org);
@@ -3966,6 +4642,12 @@ create table public.manuscripts (
   created_by    uuid not null references public.users on delete restrict,
   created_at    timestamptz not null default now(),
   updated_at    timestamptz not null default now(),
+
+  -- Research at a glance: the four things somebody deciding whether to read
+  -- further actually wants. 8.1b.
+  methods       text[] not null default '{}',
+  data_sources  text[] not null default '{}',
+  outputs       text[] not null default '{}',
 
   constraint manuscripts_link_needs_url
     check (body_format <> 'link-only' or external_url is not null)
@@ -4065,13 +4747,6 @@ create index manuscript_references_idx
 -- a key: the fair reassigns it to a different project next season.
 -- ---------------------------------------------------------------------------
 
-alter table public.entries
-  add column if not exists category    text,
-  add column if not exists entry_code  text,
-  add column if not exists awards      text[] not null default '{}',
-  add column if not exists advanced_to text,
-  add column if not exists result_recorded_at timestamptz,
-  add column if not exists result_recorded_by uuid references public.users on delete restrict;
 
 
 create trigger manuscripts_set_updated_at
@@ -4125,76 +4800,51 @@ grant execute on function app.manuscript_project(uuid) to authenticated;
 -- question in four more places rather than inventing a second answer.
 create policy manuscripts_read on public.manuscripts
   for select to authenticated
-  using (
-    exists (select 1 from public.project_authors a
-             where a.project_id = manuscripts.project_id and a.user_id = (select auth.uid()))
-    or (select app.is_staff())
-  );
+  using ((select app.can_see_project(manuscripts.project_id)));
 
 create policy manuscripts_write on public.manuscripts
   for insert to authenticated
-  with check (org_id = (select app.org_id()));
+  with check ((select app.can_edit_project(manuscripts.project_id)));
 
 create policy manuscripts_update on public.manuscripts
   for update to authenticated
-  using (org_id = (select app.org_id()));
+  using ((select app.can_edit_project(manuscripts.project_id)));
 
 create policy manuscript_sections_read on public.manuscript_sections
   for select to authenticated
-  using (
-    exists (
-      select 1 from public.project_authors a
-       where a.project_id = (select app.manuscript_project(manuscript_sections.manuscript_id))
-         and a.user_id = (select auth.uid())
-    )
-    or (select app.is_staff())
-  );
+  using ((select app.can_see_project((select m.project_id from public.manuscripts m where m.id = manuscript_sections.manuscript_id))));
 
 create policy manuscript_sections_write on public.manuscript_sections
   for insert to authenticated
-  with check (org_id = (select app.org_id()));
+  with check ((select app.can_edit_project((select m.project_id from public.manuscripts m where m.id = manuscript_sections.manuscript_id))));
 
 create policy manuscript_sections_update on public.manuscript_sections
   for update to authenticated
-  using (org_id = (select app.org_id()));
+  using ((select app.can_edit_project((select m.project_id from public.manuscripts m where m.id = manuscript_sections.manuscript_id))));
 
 create policy manuscript_figures_read on public.manuscript_figures
   for select to authenticated
-  using (
-    exists (
-      select 1 from public.project_authors a
-       where a.project_id = (select app.manuscript_project(manuscript_figures.manuscript_id))
-         and a.user_id = (select auth.uid())
-    )
-    or (select app.is_staff())
-  );
+  using ((select app.can_see_project((select m.project_id from public.manuscripts m where m.id = manuscript_figures.manuscript_id))));
 
 create policy manuscript_figures_write on public.manuscript_figures
   for insert to authenticated
-  with check (org_id = (select app.org_id()));
+  with check ((select app.can_edit_project((select m.project_id from public.manuscripts m where m.id = manuscript_figures.manuscript_id))));
 
 create policy manuscript_figures_update on public.manuscript_figures
   for update to authenticated
-  using (org_id = (select app.org_id()));
+  using ((select app.can_edit_project((select m.project_id from public.manuscripts m where m.id = manuscript_figures.manuscript_id))));
 
 create policy manuscript_references_read on public.manuscript_references
   for select to authenticated
-  using (
-    exists (
-      select 1 from public.project_authors a
-       where a.project_id = (select app.manuscript_project(manuscript_references.manuscript_id))
-         and a.user_id = (select auth.uid())
-    )
-    or (select app.is_staff())
-  );
+  using ((select app.can_see_project((select m.project_id from public.manuscripts m where m.id = manuscript_references.manuscript_id))));
 
 create policy manuscript_references_write on public.manuscript_references
   for insert to authenticated
-  with check (org_id = (select app.org_id()));
+  with check ((select app.can_edit_project((select m.project_id from public.manuscripts m where m.id = manuscript_references.manuscript_id))));
 
 create policy manuscript_references_update on public.manuscript_references
   for update to authenticated
-  using (org_id = (select app.org_id()));
+  using ((select app.can_edit_project((select m.project_id from public.manuscripts m where m.id = manuscript_references.manuscript_id))));
 
 
 -- ---------------------------------------------------------------------------
@@ -4587,7 +5237,7 @@ grant delete on public.manuscript_references to authenticated, service_role;
 
 create policy manuscript_references_delete on public.manuscript_references
   for delete to authenticated
-  using (org_id = (select app.org_id()));
+  using ((select app.can_edit_project((select m.project_id from public.manuscripts m where m.id = manuscript_references.manuscript_id))));
 
 
 -- ---------------------------------------------------------------------------
@@ -4748,25 +5398,11 @@ revoke update on public.state_events from authenticated, anon, service_role;
 
 create policy submissions_read on public.submissions
   for select to authenticated
-  using (
-    exists (select 1 from public.project_authors a
-             where a.project_id = submissions.project_id
-               and a.user_id = (select auth.uid()))
-    or (select app.is_staff())
-  );
+  using ((select app.can_see_project(submissions.project_id)));
 
 create policy state_events_read on public.state_events
   for select to authenticated
-  using (
-    exists (select 1 from public.submissions s
-             where s.id = state_events.submission_id
-               and (
-                 exists (select 1 from public.project_authors a
-                          where a.project_id = s.project_id
-                            and a.user_id = (select auth.uid()))
-                 or (select app.is_staff())
-               ))
-  );
+  using ((select app.can_see_project((select s.project_id from public.submissions s where s.id = state_events.submission_id))));
 
 
 -- ---------------------------------------------------------------------------
@@ -5424,13 +6060,16 @@ begin
   values (v_org, p_submission_id, p_reviewer_id, v_round, auth.uid(), p_due_at)
   returning id into v_id;
 
+  /* The values the sentence needs, not the sentence. A rendered message
+     stored now is a message composed before the facts it describes can
+     change (20.2). The wording lives in src/lib/notify/platform.ts. */
   insert into public.notifications
-    (org_id, user_id, kind, subject, body, entity_type, entity_id, immediate, queued_at)
-  values (v_org, p_reviewer_id, 'review_assigned',
-    'You have a paper to review',
-    'A submission has been assigned to you for review. It is due on '
-      || to_char(p_due_at, 'FMMonth FMDD') || '.',
-    'submissions', p_submission_id, true, now());
+    (org_id, kind, recipient_id, actor_id, subject_kind, subject_id, payload, dedupe_key)
+  values (v_org, 'reviewer_assigned', p_reviewer_id, auth.uid(),
+    'submission', p_submission_id,
+    jsonb_build_object('due_at', p_due_at),
+    'reviewer_assigned:' || v_id)
+  on conflict (recipient_id, dedupe_key) do nothing;
 
   if v_state = 'screening' then
     perform app.move_submission(p_submission_id, 'in_review', 'With reviewers');
@@ -5491,9 +6130,10 @@ begin
 
   if v_editor is not null then
     insert into public.notifications
-      (org_id, user_id, kind, subject, body, entity_type, entity_id, queued_at)
-    values (v_org, v_editor, 'review_returned', 'A review has come back',
-      'A reviewer has returned their comments.', 'submissions', v_sub, now());
+      (org_id, kind, recipient_id, actor_id, subject_kind, subject_id, dedupe_key)
+    values (v_org, 'review_returned', v_editor, auth.uid(),
+      'submission', v_sub, 'review_returned:' || p_review_id)
+    on conflict (recipient_id, dedupe_key) do nothing;
   end if;
 end;
 $$;
@@ -5609,13 +6249,14 @@ begin
      where s.id = p_submission_id and a.role = 'author'
   loop
     insert into public.notifications
-      (org_id, user_id, kind, subject, body, entity_type, entity_id, immediate, queued_at)
-    values (v_org, v_author.user_id, 'revisions_requested',
-      'Changes have been asked for',
-      case when v_count > 0
-           then 'The editor has sent back a list of ' || v_count || ' changes.'
-           else 'The editor has sent it back with a note.' end,
-      'submissions', p_submission_id, true, now());
+      (org_id, kind, recipient_id, actor_id, subject_kind, subject_id, payload, dedupe_key)
+    values (v_org, 'revisions_requested', v_author.user_id, auth.uid(),
+      'submission', p_submission_id,
+      jsonb_build_object('changes', v_count),
+      /* The round, so a second time round is a second message rather than
+         a duplicate suppressed by the constraint. */
+      'revisions_requested:' || p_submission_id || ':' || v_round)
+    on conflict (recipient_id, dedupe_key) do nothing;
   end loop;
 end;
 $$;
@@ -5791,11 +6432,12 @@ begin
      where s.id = p_submission_id and a.role = 'author'
   loop
     insert into public.notifications
-      (org_id, user_id, kind, subject, body, entity_type, entity_id, immediate, queued_at)
-    values (v_org, v_author.user_id, p_decision,
-      case when p_decision = 'accepted' then 'Your work has been accepted'
-           else 'A decision on your submission' end,
-      coalesce(p_note, ''), 'submissions', p_submission_id, true, now());
+      (org_id, kind, recipient_id, actor_id, subject_kind, subject_id, payload, dedupe_key)
+    values (v_org, 'decision_made', v_author.user_id, auth.uid(),
+      'submission', p_submission_id,
+      jsonb_build_object('decision', p_decision),
+      'decision_made:' || p_submission_id)
+    on conflict (recipient_id, dedupe_key) do nothing;
   end loop;
 end;
 $$;
@@ -6661,10 +7303,12 @@ begin
      where s.id = p_submission_id and a.role = 'author'
   loop
     insert into public.notifications
-      (org_id, user_id, kind, subject, body, entity_type, entity_id, immediate, queued_at)
-    values (v_org, v_author.user_id, 'published', 'Your work is published',
-      'It is live, and the record is ' || v_id || '.',
-      'submissions', p_submission_id, true, now());
+      (org_id, kind, recipient_id, actor_id, subject_kind, subject_id, payload, dedupe_key)
+    values (v_org, 'record_published', v_author.user_id, auth.uid(),
+      'submission', p_submission_id,
+      jsonb_build_object('record_id', v_id),
+      'record_published:' || v_id)
+    on conflict (recipient_id, dedupe_key) do nothing;
   end loop;
 
   perform app.audit(v_org, 'record.published', 'records', null, null,
@@ -6859,8 +7503,6 @@ grant execute on function public.generate_project_record(uuid, text, text, date)
 
 /* The manuscript is the paper. It was carrying a kind, which is a property of
    a record rather than of the writing. */
-alter table public.manuscripts
-  alter column record_kind set default 'article';
 
 notify pgrst, 'reload schema';
 
@@ -6913,10 +7555,6 @@ notify pgrst, 'reload schema';
 -- is the same as a column that is not there.
 -- ===========================================================================
 
-alter table public.manuscripts
-  add column if not exists methods      text[] not null default '{}',
-  add column if not exists data_sources text[] not null default '{}',
-  add column if not exists outputs      text[] not null default '{}';
 
 create or replace function public.save_project_question(
   p_project_id uuid,
@@ -7034,48 +7672,20 @@ grant select, insert, update on public.project_images to authenticated, service_
 
 create policy project_images_read on public.project_images
   for select to authenticated
-  using (
-    org_id = (select app.org_id())
-    and (
-      (select app.is_staff())
-      or exists (
-        select 1 from public.project_authors a
-         where a.project_id = project_images.project_id
-           and a.user_id = (select auth.uid())
-      )
-    )
-  );
+  using ((select app.can_see_project(project_images.project_id)));
 
 create policy project_images_write on public.project_images
   for insert to authenticated
-  with check (
-    org_id = (select app.org_id())
-    and exists (
-      select 1 from public.project_authors a
-       where a.project_id = project_images.project_id
-         and a.user_id = (select auth.uid())
-         and a.role = 'author'
-    )
-  );
+  with check ((select app.can_edit_project(project_images.project_id)));
 
 create policy project_images_update on public.project_images
   for update to authenticated
-  using (
-    org_id = (select app.org_id())
-    and exists (
-      select 1 from public.project_authors a
-       where a.project_id = project_images.project_id
-         and a.user_id = (select auth.uid())
-         and a.role = 'author'
-    )
-  );
+  using ((select app.can_edit_project(project_images.project_id)));
 
 
 -- One video, held as a string and never fetched by us. 7.4's rule, and the
 -- reason it is one field rather than a list: a page with four videos on it is
 -- a channel, and nobody watches the fourth.
-alter table public.projects
-  add column if not exists video_url text;
 
 
 create or replace function public.add_project_image(
@@ -7194,5 +7804,11 @@ end;
 $$;
 
 grant execute on function public.save_project_video(uuid, text) to authenticated;
+
+notify pgrst, 'reload schema';
+
+
+
+
 
 notify pgrst, 'reload schema';

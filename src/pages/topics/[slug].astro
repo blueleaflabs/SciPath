@@ -2,6 +2,7 @@
 export const prerender = false;
 
 import Base from '../../layouts/Base.astro';
+import { cachePublicPage } from '../../lib/caching';
 import PageHead from '../../components/PageHead.astro';
 import RecordCard from '../../components/RecordCard.astro';
 import { openArchive } from '../../lib/archive';
@@ -13,7 +14,7 @@ const records = archive.all.filter((r) => r.discipline === slug);
 
 if (records.length === 0) return new Response('Not found', { status: 404 });
 
-Astro.response.headers.set('Cache-Control', 'public, max-age=120, s-maxage=600');
+cachePublicPage(Astro);
 ---
 
 <Base title={disciplineLabel(slug)} description={`Work in ${disciplineLabel(slug)}.`}>

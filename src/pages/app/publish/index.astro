@@ -8,15 +8,20 @@ import { standing } from '../../../lib/roles';
 import { formatDate } from '../../../lib/dates';
 import { slugify } from '../../../lib/publish';
 import { blobStore } from '../../../lib/blob';
+import { shape } from '../../../lib/templates';
 import { assembleRecord } from '../../../lib/record-files';
 import { requestReindex } from '../../../lib/reindex';
 import { bucketFrom, readManifest, writeManifest, upsert } from '../../../lib/records-store';
 import { activeOrg } from '../../../lib/tenant';
+import { afterPost, outcomeFrom } from '../../../lib/post-redirect';
+import { signInWith } from '../../../lib/next-path';
 
 const { session, account, roles } = Astro.locals;
 const org = activeOrg(Astro);
 
-if (!session) return Astro.redirect('/app/');
+/* Remembering where they were headed, so a link from a notification
+   survives the sign in it triggers (20.10). */
+if (!session) return Astro.redirect(signInWith(Astro.url));
 if (!account) return Astro.redirect('/app/welcome/');
 
 const me = standing(roles, account?.population);
@@ -26,8 +31,9 @@ const supabase = serverClient(
   (Astro.locals as any).runtime?.env
 );
 
-let error: string | null = null;
-let done: string | null = null;
+/* Seeded from the redirect a POST answers with. See
+   src/lib/post-redirect.ts. */
+let { error: error, note: done } = outcomeFrom(Astro.url);
 let generated: string | null = null;
 let committed: { files: number } | null = null;
 
@@ -55,7 +61,8 @@ if (Astro.request.method === 'POST' && me.isEditor) {
         supabase,
         blobStore(Astro.locals),
         org.id,
-        record
+        record,
+        shape('imrad')
       );
 
       if (missing.length > 0) {
@@ -73,9 +80,28 @@ if (Astro.request.method === 'POST' && me.isEditor) {
           /* No decision to wait on and nobody to notify, so writing the files
              and marking it live are one act. */
           await supabase.rpc('mark_record_live', { p_record_id: record.id });
-          await requestReindex((Astro.locals as any).runtime?.env, `published ${record.id}`);
+          const indexed = await requestReindex(
+            (Astro.locals as any).runtime?.env,
+            `published ${record.id}`
+          );
 
-          done = `${record.id} is live.`;
+          /* Said in the reader's terms, not the operator's.
+          
+             An editor is usually a student officer, and telling them to run
+             a command they have never heard of and could not run is a
+             development note on a page a student reaches. What they need to
+             know is that the record is live and search will lag; whoever
+             can fix it is reading a terminal, so the instruction goes
+             there. */
+          if (!indexed) {
+            console.log(`Search was not scheduled for ${record.id}. Run: npm run index:records`);
+          }
+
+          done =
+            `${record.id} is live.` +
+            (indexed
+              ? ' Search catches up in a minute or two.'
+              : ' It may take a while to appear in search.');
         } catch (e: any) {
           error = `The store rejected it: ${e.message}`;
         }
@@ -135,7 +161,8 @@ if (Astro.request.method === 'POST' && me.isEditor) {
         supabase,
         blobStore(Astro.locals),
         org.id,
-        record
+        record,
+        shape('imrad')
       );
 
       /* Publishing a page that points at files which are not there is worse
@@ -164,9 +191,22 @@ if (Astro.request.method === 'POST' && me.isEditor) {
             `published ${record.id}`
           );
 
+          /* Say which happened. Silence when the dispatch is unconfigured
+             looked identical to success, so a record was live and unfindable
+             with nothing on the screen to suggest a step was outstanding.
+          
+             The instruction goes to the terminal rather than the page: an
+             editor is usually a student officer, and a command they cannot
+             run is a development note on a screen a student reaches. */
+          if (!queued) {
+            console.log(`Search was not scheduled for ${record.id}. Run: npm run index:records`);
+          }
+
           done =
             `Published. ${files.length} ${files.length === 1 ? 'file' : 'files'} written, and the record is live now.` +
-            (queued ? ' Search catches up in a minute or two.' : '');
+            (queued
+              ? ' Search catches up in a minute or two.'
+              : ' It may take a while to appear in search.');
         } catch (e: any) {
           error = `The store rejected it: ${e.message}`;
         }
@@ -181,6 +221,9 @@ if (Astro.request.method === 'POST' && me.isEditor) {
     if (e) error = e.message;
     else done = 'Published. The authors have been told.';
   }
+
+  /* A refresh should re-read this page, not send the form again. */
+  return afterPost(Astro.url, { error: error, note: done });
 }
 
 const { data: queue } = me.isEditor
@@ -199,6 +242,10 @@ const { data: candidates } = me.isEditor
       .from('entries')
       .select('project_id, placement, projects(title), programs(name, season_year)')
       .not('result_recorded_at', 'is', null)
+      /* A result can only exist on a granted place, but say so rather than
+         relying on that: a refused request with a stale result would
+         otherwise be publishable. */
+      .in('status', ['entered', 'competed'])
   : { data: [] };
 
 const { data: records } = me.isEditor
@@ -209,6 +256,27 @@ const { data: records } = me.isEditor
   : { data: [] };
 
 const recordFor = new Map((records ?? []).map((r: any) => [r.submission_id, r]));
+
+/**
+ * How many published pages each project has.
+ *
+ * A project can have both a paper and a fair entry. They are siblings — the
+ * paper is the claim and the entry is what happened at the fair — and the
+ * published pages already link to one another. This screen showed them as
+ * two rows with the same title and no way to tell which was which, which
+ * reads as a duplicate somebody made by mistake.
+ */
+/* Projects that already have a published paper, so the entry queue can say
+   so before somebody generates a second record rather than after. */
+const paperFor = new Set(
+  (records ?? []).filter((r: any) => r.record_kind !== 'project' && r.project_id).map((r: any) => r.project_id)
+);
+
+const companionCount = new Map<string, number>();
+for (const r of records ?? []) {
+  if (!r.project_id) continue;
+  companionCount.set(r.project_id, (companionCount.get(r.project_id) ?? 0) + 1);
+}
 
 const entryPublished = new Set(
   (records ?? []).filter((r: any) => r.record_kind === 'project').map((r: any) => r.project_id)
@@ -246,22 +314,24 @@ const today = new Date().toISOString().slice(0, 10);
     ) : (
       <>
         <section class="hero">
-          <p class="t-lbl">Publishing</p>
-          <h1 class="t-big">Accepted and waiting</h1>
-          <p class="lede">
-            {waiting.length + exported.length === 0
-              ? 'Nothing waiting.'
-              : `${waiting.length} to generate · ${exported.length} to commit`}
-          </p>
+          <h1 class="t-big">Publish what is ready</h1>
+          <ul class="counts">
+            <li><b>{waiting.length}</b> to generate</li>
+            <li class={exported.length > 0 ? 'bad' : ''}>
+              <b>{exported.length}</b> awaiting confirmation
+            </li>
+            <li><b>{live.length}</b> published</li>
+          </ul>
         </section>
 
-        {error && <p class="note" role="alert">{error}</p>}
-        {done && !error && (
-          <p class="note" role="status">
-            {done}
-
-          </p>
-        )}
+        {/* Anchored, and the form posts to it. The publish page is long, and
+            an outcome rendered at the top after a click three screens down
+            reads as nothing having happened — which is what a person then
+            reports, correctly. */}
+        <div id="outcome" tabindex="-1">
+          {error && <p class="note" role="alert">{error}</p>}
+          {done && !error && <p class="note" role="status">{done}</p>}
+        </div>
 
         <!-- ── Step one ────────────────────────────────────────────────── -->
         {waiting.length > 0 && (
@@ -272,12 +342,13 @@ const today = new Date().toISOString().slice(0, 10);
               const title = s.manuscripts?.title ?? s.projects?.title ?? 'Untitled';
               const slug = slugify(title);
               return (
-                <form method="POST" class="mform item">
+                <form method="POST" action="#outcome" class="mform item">
                   <input type="hidden" name="action" value="generate" />
                   <input type="hidden" name="submission_id" value={s.id} />
                   <input type="hidden" name="title" value={title} />
 
                   <h3>{title}</h3>
+
                   <p class="path">
                     /{s.record_kind === 'project' ? 'projects' : 'articles'}/{new Date().getFullYear()}/{slug}/
                   </p>
@@ -295,7 +366,7 @@ const today = new Date().toISOString().slice(0, 10);
                     </label>
                   </div>
 
-                  <button class="btn" type="submit">Generate the record</button>
+                  <button class="btn" type="submit">Generate</button>
                 </form>
               );
             })}
@@ -317,11 +388,25 @@ const today = new Date().toISOString().slice(0, 10);
             {entryQueue.map((e: any) => {
               const title = e.projects?.title ?? 'Untitled';
               return (
-                <form method="POST" class="mform item">
+                <form method="POST" action="#outcome" class="mform item">
                   <input type="hidden" name="action" value="generate_entry" />
                   <input type="hidden" name="project_id" value={e.project_id} />
                   <input type="hidden" name="title" value={title} />
                   <h3>{title}</h3>
+
+                  {/* Said before, not after. Somebody who has just published
+                      a paper and then finds a second record with the same
+                      title has no way to know whether they made a mistake.
+                      They did not — the two are different pages — but the
+                      screen has to be the thing that tells them. */}
+                  {paperFor.has(e.project_id) && (
+                    <p class="pair">
+                      This project already has a paper. A fair entry is a
+                      different page about the same work — what happened at
+                      the fair rather than what the work claims — and the two
+                      will link to each other.
+                    </p>
+                  )}
                   <p class="path">
                     /projects/{new Date().getFullYear()}/{slugify(title)}/
                     {e.programs?.name ? ` · ${e.programs.name}` : ''}
@@ -333,7 +418,7 @@ const today = new Date().toISOString().slice(0, 10);
                       <input class="in" type="date" name="published_on" value={today} />
                     </label>
                   </div>
-                  <button class="btn" type="submit">Generate the entry</button>
+                  <button class="btn" type="submit">Generate</button>
                 </form>
               );
             })}
@@ -347,10 +432,10 @@ const today = new Date().toISOString().slice(0, 10);
               <div class="item">
                 <h3>{r.title}</h3>
                 <p class="path">{r.id} · /projects/{r.year}/{r.slug}/</p>
-                <form method="POST" class="act">
+                <form method="POST" action="#outcome" class="act">
                   <input type="hidden" name="action" value="publish_entry" />
                   <input type="hidden" name="record_id" value={r.id} />
-                  <button class="btn" type="submit">Publish the entry</button>
+                  <button class="btn" type="submit">Publish</button>
                 </form>
               </div>
             ))}
@@ -371,16 +456,16 @@ const today = new Date().toISOString().slice(0, 10);
 
                   {bucket ? (
                     <>
-                      <form method="POST" class="act">
+                      <form method="POST" action="#outcome" class="act">
                         <input type="hidden" name="action" value="commit" />
                         <input type="hidden" name="submission_id" value={s.id} />
-                        <button class="btn btn-2" type="submit">Publish to the site</button>
+                        <button class="btn" type="submit">Publish</button>
                       </form>
 
-                      <form method="POST" class="act">
+                      <form method="POST" action="#outcome" class="act">
                         <input type="hidden" name="action" value="confirm" />
                         <input type="hidden" name="submission_id" value={s.id} />
-                        <button class="btn" type="submit">Confirm it is live</button>
+                        <button class="btn" type="submit">Confirm</button>
                       </form>
                     </>
                   ) : (
@@ -389,8 +474,8 @@ const today = new Date().toISOString().slice(0, 10);
                         No record store is bound to this deployment, so the
                         files come as a download instead.
                       </p>
-                      <form method="POST" class="act">
-                        <a class="btn btn-2" href={`/app/publish/${s.id}/bundle`}>
+                      <form method="POST" action="#outcome" class="act">
+                        <a class="btn" href={`/app/publish/${s.id}/bundle`}>
                           Download the files
                         </a>
                         <span class="fine">
@@ -398,10 +483,10 @@ const today = new Date().toISOString().slice(0, 10);
                           the bucket and the record is live.
                         </span>
                       </form>
-                      <form method="POST" class="act">
+                      <form method="POST" action="#outcome" class="act">
                         <input type="hidden" name="action" value="confirm" />
                         <input type="hidden" name="submission_id" value={s.id} />
-                        <button class="btn" type="submit">Confirm it is live</button>
+                        <button class="btn" type="submit">Confirm</button>
                       </form>
                     </>
                   )}
@@ -430,25 +515,45 @@ const today = new Date().toISOString().slice(0, 10);
               Adding one means regenerating the bundle and committing again.
             </p>
             <table class="tbl">
-              <thead><tr><th>Record</th><th>Title</th><th>DOI</th><th>When</th></tr></thead>
+              {/* The kind is a column, not a detail.
+               
+                  A project can have both a paper and a fair entry: they are
+                  siblings rather than alternatives, and the published pages
+                  link to each other. This table showed two rows with the
+                  same title and nothing to tell them apart, which reads as a
+                  duplicate somebody made by accident. */}
+              <thead>
+                <tr>
+                  <th>Record</th><th>Kind</th><th>Title</th><th>DOI</th><th>When</th>
+                </tr>
+              </thead>
               <tbody>
                 {live.map((r: any) => (
                   <tr>
                     <td><code>{r.id}</code></td>
+                    <td class="kind">
+                      {r.record_kind === 'project' ? 'Fair entry' : 'Paper'}
+                    </td>
                     <td>
                       <a href={`/${r.record_kind === 'project' ? 'projects' : 'articles'}/${r.year}/${r.slug}/`}>
                         {r.title}
                       </a>
+                      {(companionCount.get(r.project_id) ?? 0) > 1 && (
+                        <span class="pair">
+                          {r.record_kind === 'project'
+                            ? 'This project also has a paper. Both are listed, and each page links to the other.'
+                            : 'This project also has a fair entry. Both are listed, and each page links to the other.'}
+                        </span>
+                      )}
                     </td>
                     <td>
-                      <form method="POST" class="doi">
+                      <form method="POST" action="#outcome" class="doi">
                         <input type="hidden" name="action" value="doi" />
                         <input type="hidden" name="record_id" value={r.id} />
                         <input
                           class="in"
                           name="doi"
                           value={r.doi ?? ''}
-                          placeholder="10.xxxx/yyyy"
                           aria-label={`DOI for ${r.id}`}
                         />
                         <button class="btn btn-q" type="submit">Save</button>

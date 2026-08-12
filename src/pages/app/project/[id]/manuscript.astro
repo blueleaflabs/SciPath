@@ -9,9 +9,12 @@ import { standing, isAuthorOf } from '../../../../lib/roles';
 import { blobStore, figurePath, manuscriptPdfPath, MAX_UPLOAD_BYTES } from '../../../../lib/blob';
 import { extractPdfText, worthIndexing } from '../../../../lib/pdf-text';
 import { disciplines, disciplineLabel } from '../../../../config/site';
-import { rulesFor, sectionsFor } from '../../../../config/structure';
+import { allRules, sectionsFor } from '../../../../config/structure';
+import { shape } from '../../../../lib/templates';
 import { checkStructure, completeness, checklist, maySubmit, words } from '../../../../lib/structure';
 import { doneLabel, publicLabel, authorGuidance, authorMayEdit } from '../../../../lib/workflow';
+import { afterPost, outcomeFrom } from '../../../../lib/post-redirect';
+import { signInWith } from '../../../../lib/next-path';
 import {
   toSnapshot,
   parseKeywords,
@@ -24,7 +27,9 @@ const { session, account, roles } = Astro.locals;
 const org = activeOrg(Astro);
 const { id } = Astro.params;
 
-if (!session) return Astro.redirect('/app/');
+/* Remembering where they were headed, so a link from a notification
+   survives the sign in it triggers (20.10). */
+if (!session) return Astro.redirect(signInWith(Astro.url));
 if (!account) return Astro.redirect('/app/welcome/');
 
 const me = standing(roles, account?.population);
@@ -34,14 +39,16 @@ const supabase = serverClient(
   (Astro.locals as any).runtime?.env
 );
 
-let error: string | null = null;
+/* Seeded from the redirect a POST answers with. See
+   src/lib/post-redirect.ts. */
+let { error: error } = outcomeFrom(Astro.url);
 /* Which action ran. The sentence is built after the reads, so it can name the
    state the submission is actually in. */
 let didAction: string | null = null;
 
 const { data: project } = await supabase
   .from('projects')
-  .select('id, title, question, discipline, stage, project_authors(role, accepted_at, users(id, display_name))')
+  .select('id, title, question, discipline, project_authors(role, accepted_at, users(id, display_name))')
   .eq('id', id)
   .maybeSingle();
 
@@ -247,6 +254,9 @@ if (Astro.request.method === 'POST' && iAuthor) {
     if (e) error = e.message;
     else didAction = action;
   }
+
+  /* A refresh should re-read this page, not send the form again. */
+  return afterPost(Astro.url, { error: error });
 }
 
 /* ── Reads ──────────────────────────────────────────────────────────────── */
@@ -333,7 +343,7 @@ const { count: entryCount } = await supabase
   .select('id', { count: 'exact', head: true })
   .eq('project_id', id);
 
-const rules = rulesFor();
+const rules = allRules(shape('imrad'));
 
 const snapshot = manuscript
   ? toSnapshot({
@@ -358,7 +368,7 @@ const human = findings.filter((f) => f.severity === 'human');
 const items = snapshot ? checklist(rules, snapshot, findings) : [];
 
 const kind = (manuscript?.record_kind ?? 'article') as 'article' | 'project';
-const orderedSections = sectionsFor(kind);
+const orderedSections = sectionsFor(kind, shape('imrad'));
 const bodyByKey = new Map(sections.map((s: any) => [s.section_key, s]));
 const findingFor = (key: string) => findings.find((f) => f.key === key && f.severity !== 'human');
 
@@ -479,7 +489,7 @@ function targetFor(key: string): string | null {
   <div class="wrap">
     <AppShell org={org} account={account} roles={roles} here="/app/" />
 
-    <section class="hero" style="padding-top:0">
+    <section class="hero">
       <p class="t-lbl">Manuscript</p>
       <h1 class="t-big">{project.title}</h1>
       <p class="lede">
@@ -495,6 +505,10 @@ function targetFor(key: string): string | null {
       </div>
     </section>
 
+    {/* Anchored, and every form on this page posts to it. These pages
+        run to several screens, and an outcome rendered at the top after
+        a click three screens down reads as nothing having happened. */}
+    <div id="outcome" tabindex="-1">
     {error && <p class="note" role="alert">{error}</p>}
     {confirmation && !error && (
       <p class="note done" role="status">
@@ -503,6 +517,7 @@ function targetFor(key: string): string | null {
         {confirmation.now && <span>Now {confirmation.now.toLowerCase()}</span>}
       </p>
     )}
+    </div>
 
     {!iAuthor && (
       <p class="note">
@@ -524,7 +539,7 @@ function targetFor(key: string): string | null {
             becomes the published record.
           </p>
           {iAuthor ? (
-            <form method="POST" style="margin-top:16px">
+            <form method="POST" action="#outcome" style="margin-top:16px">
               <input type="hidden" name="action" value="start" />
               <button class="btn" type="submit">Start the manuscript</button>
             </form>
@@ -553,13 +568,13 @@ function targetFor(key: string): string | null {
               </p>
 
               <div class="row">
-                <a class="btn btn-2" href={`/track/${submission.id}/`}>Track progress</a>
+                <a class="btn" href={`/track/${submission.id}/`}>Track progress</a>
 
                 {iAuthor && submission.state !== 'published' && !submission.withdrawal_requested_at && (
-                  <form method="POST">
+                  <form method="POST" action="#outcome">
                     <input type="hidden" name="action" value={selfWithdraw ? 'withdraw' : 'ask-withdraw'} />
                     <input type="hidden" name="submission_id" value={submission.id} />
-                    <button class="btn btn-2" type="submit">
+                    <button class="btn" type="submit">
                       {selfWithdraw ? 'Withdraw' : 'Ask to withdraw'}
                     </button>
                   </form>
@@ -582,7 +597,7 @@ function targetFor(key: string): string | null {
                       reads it next, and you will be able to follow it on a
                       page that needs no login.
                     </p>
-                    <form method="POST" style="margin-top:16px">
+                    <form method="POST" action="#outcome" style="margin-top:16px">
                       <input type="hidden" name="action" value="submit" />
                       <input type="hidden" name="manuscript_id" value={manuscript.id} />
                       <button class="btn" type="submit">
@@ -667,16 +682,17 @@ function targetFor(key: string): string | null {
                     )}
                     <p>{f.finding}</p>
                     {iAuthor ? (
-                      <form method="POST" class="answer">
+                      <form method="POST" action="#outcome" class="answer">
                         <input type="hidden" name="action" value="respond" />
                         <input type="hidden" name="finding_id" value={f.id} />
                         <textarea
                           class="ta grow"
                           name="response"
                           rows="2"
-                          placeholder="What you changed, or why you disagree"
+                          aria-label="Your response to this finding"
                         >{f.author_response ?? ''}</textarea>
-                        <button class="btn btn-2" type="submit">Save the answer</button>
+                        <small>What you changed, or why you disagree.</small>
+                        <button class="btn" type="submit">Save the answer</button>
                       </form>
                     ) : (
                       f.author_response && <p class="reply">{f.author_response}</p>
@@ -687,7 +703,7 @@ function targetFor(key: string): string | null {
             </ol>
 
             {iAuthor && (
-              <form method="POST" style="margin-top:22px">
+              <form method="POST" action="#outcome" style="margin-top:22px">
                 <input type="hidden" name="action" value="resubmit" />
                 <input type="hidden" name="submission_id" value={submission.id} />
                 {/* Only unanswered required changes hold this back. An empty
@@ -798,7 +814,17 @@ function targetFor(key: string): string | null {
                     <option value={value} selected={manuscript.body_format === value}>{label}</option>
                   ))}
                 </select>
-                <small>Written here means the sections below. A finished PDF skips them.</small>
+                <small>
+                  {/* This was a select labelled "where the writing lives",
+                      which is accurate and does not tell a student that the
+                      sections below are optional. Somebody who has already
+                      written the paper elsewhere should not have to discover
+                      that by reading a dropdown. */}
+                  <b>Written here</b> means the sections below, checked as you
+                  go. <b>A finished PDF</b> replaces them entirely: upload the
+                  paper and the sections disappear. <b>A link</b> is for a
+                  paper that lives somewhere else and stays there.
+                </small>
               </label>
             </div>
 
@@ -810,7 +836,6 @@ function targetFor(key: string): string | null {
                   name="external_url"
                   type="url"
                   value={manuscript.external_url ?? ''}
-                  placeholder="https://"
                   disabled={!iAuthor || locked}
                 />
                 <small>Where the full text actually lives. This record carries the metadata and points at it.</small>
@@ -843,7 +868,6 @@ function targetFor(key: string): string | null {
                   class="in"
                   name="keywords"
                   value={(manuscript.keywords ?? []).join(', ')}
-                  placeholder="thermal tolerance, intertidal, gastropods"
                   disabled={!iAuthor || locked}
                 />
                 <small>Three to six, separated however you like.</small>
@@ -904,7 +928,7 @@ function targetFor(key: string): string | null {
 
             {iAuthor && !locked && (
               <div class="foot">
-                <button class="btn btn-2" type="submit">Save the record</button>
+                <button class="btn" type="submit">Save the record</button>
                 <nav class="jump">
                   <a href="#checklist">Back to the checklist</a>
                   {nextAfter('title') && (
@@ -964,6 +988,7 @@ function targetFor(key: string): string | null {
                     class="ta grow"
                     name="body"
                     rows="10"
+                    aria-label={rule.label}
                     disabled={!iAuthor || locked}
                     data-count={`count-${rule.key}`}
                     data-min={rule.minWords}
@@ -971,7 +996,7 @@ function targetFor(key: string): string | null {
 
                   {iAuthor && !locked && (
                     <div class="foot">
-                      <button type="submit" class="btn btn-2">
+                      <button type="submit" class="btn">
                         Save {rule.label.toLowerCase()}
                       </button>
                       <nav class="jump">
@@ -1011,7 +1036,7 @@ function targetFor(key: string): string | null {
             )}
 
             {iAuthor && !locked && (
-              <form method="POST" enctype="multipart/form-data" class="mform">
+              <form method="POST" action="#outcome" enctype="multipart/form-data" class="mform">
                 <input type="hidden" name="action" value="paper" />
                 <input type="hidden" name="manuscript_id" value={manuscript.id} />
                 <label>
@@ -1019,7 +1044,7 @@ function targetFor(key: string): string | null {
                   <input type="file" name="paper" accept="application/pdf" required />
                   <small>Up to 5 MB.</small>
                 </label>
-                <button class="btn btn-2" type="submit">
+                <button class="btn" type="submit">
                   {manuscript.pdf_path ? 'Replace the paper' : 'Upload the paper'}
                 </button>
               </form>
@@ -1052,7 +1077,7 @@ function targetFor(key: string): string | null {
                 reads after it.
               </small>
             </label>
-            {iAuthor && <button class="btn btn-2" type="submit">Save the question</button>}
+            {iAuthor && <button class="btn" type="submit">Save the question</button>}
           </form>
 
           <form method="POST" action="#glance" class="mform" style="margin-top:26px">
@@ -1076,7 +1101,7 @@ function targetFor(key: string): string | null {
             </label>
             {iAuthor && !locked && (
               <div class="foot">
-                <button class="btn btn-2" type="submit">Save research at a glance</button>
+                <button class="btn" type="submit">Save research at a glance</button>
                 <nav class="jump">
                   <a href="#checklist">Back to the checklist</a>
                 </nav>
@@ -1095,7 +1120,7 @@ function targetFor(key: string): string | null {
           <p class="aside">
             {human.length} things about figures nobody can check for you: axis
             labels and units, what the error bars represent, legibility at
-            arm's length, and the display rules for the fair you are entering.
+            arm's length, and whatever display rules your program sets.
             <a href="/submit/checklist/">They are on the checklist</a>.
           </p>
 
@@ -1109,7 +1134,7 @@ function targetFor(key: string): string | null {
                     <p class="cap">{f.caption}</p>
                     <p class="alt">Alt text: {f.alt}</p>
                     {iAuthor && !locked && (
-                      <form method="POST">
+                      <form method="POST" action="#outcome">
                         <input type="hidden" name="action" value="figure-remove" />
                         <input type="hidden" name="figure_id" value={f.id} />
                         <button type="submit" class="btn btn-q">Remove</button>
@@ -1134,21 +1159,21 @@ function targetFor(key: string): string | null {
                 </label>
                 <label>
                   <span>Caption</span>
-                  <input class="in" name="caption" required placeholder="Survival at 32C by shore height, n = 240" />
+                  <input class="in" name="caption" required />
                   <small>What a reader sees.</small>
                 </label>
               </div>
 
               <label>
                 <span>Alt text</span>
-                <textarea class="ta" name="alt" rows="3" required placeholder="Bar chart showing survival falling from 88 percent at high shore to 41 percent at low shore."></textarea>
+                <textarea class="ta" name="alt" rows="3" required></textarea>
                 <small>
                   What somebody who cannot see the image needs to know. Required,
                   and not as a formality: the column will not accept a blank.
                 </small>
               </label>
 
-              <button class="btn btn-2" type="submit">Add the figure</button>
+              <button class="btn" type="submit">Add the figure</button>
             </form>
           )}
         </section>
@@ -1176,7 +1201,7 @@ function targetFor(key: string): string | null {
 
               {iAuthor && !locked && (
                 <div class="foot">
-                  <button class="btn btn-2" type="submit">Save the references</button>
+                  <button class="btn" type="submit">Save the references</button>
                   <nav class="jump">
                     <a href="#checklist">Back to the checklist</a>
                     {nextAfter('references') && (

@@ -24,6 +24,10 @@ export const NON_TENANT_TREES = [
      these render on demand and resolve their organization from the hostname
      the way the working surface does. They are tenant scoped; they are not
      built once per tenant. */
+  /* The combined index of both record kinds, which is what the nav points
+     at. `articles` and `projects` survive as its filtered views and as the
+     separate crawl paths 10.2 depends on. */
+  'showcase',
   'articles',
   'projects',
   'authors',

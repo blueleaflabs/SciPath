@@ -20,6 +20,7 @@
 
 import { createClient } from '@supabase/supabase-js';
 import { loadDevVars } from './dev-vars.mjs';
+import { actingAs, signOutAll } from './act-as.mjs';
 import { placeholderSvg, PLACEHOLDER_CAPTIONS } from './placeholder-image.mjs';
 
 loadDevVars();
@@ -33,6 +34,23 @@ const PRODUCTION_REF = 'mejibvorrfjiadnsvkyu';
 function fail(message) {
   console.error(`\n${message}\n`);
   process.exit(1);
+}
+
+/**
+ * A write that must have worked.
+ *
+ * Twenty-four writes in this file, and the ones that ignored their result
+ * were indistinguishable from the ones that could not fail. A delete refused
+ * by a foreign key looked like nothing at all until the next insert collided
+ * with the row that should have gone.
+ *
+ * `fail` rather than a warning: a half-seeded database is worse than no
+ * database, because everything after it looks like a different bug.
+ */
+async function must(builder, what) {
+  const { data, error } = await builder;
+  if (error) fail(`${what}: ${error.message}`);
+  return data;
 }
 
 if (!URL || !KEY) {
@@ -52,6 +70,75 @@ const db = createClient(URL, KEY, {
   auth: { persistSession: false, autoRefreshToken: false },
 });
 
+/* ── Pictures ─────────────────────────────────────────────────────────────
+ *
+ * The showcase is the first thing on a published page and is hard to judge
+ * empty, so the fixtures carry images. Drawn rather than committed: a handful
+ * of photographs in the repository would be binary blobs nobody can review in
+ * a diff, each with a licence question attached, to make a fixture look nice.
+ *
+ * The bucket is optional. Without it everything else still seeds, which
+ * matters because a checkout with no wrangler state is a normal thing.
+ * ─────────────────────────────────────────────────────────────────────── */
+
+let bucket = null;
+let proxy = null;
+
+try {
+  const { getPlatformProxy } = await import('wrangler');
+  proxy = await getPlatformProxy();
+  bucket = proxy.env.NOTEBOOK ?? null;
+} catch {
+  /* No local bucket. Said once, below, rather than per image. */
+}
+
+/**
+ * Shut the proxy down explicitly.
+ *
+ * `getPlatformProxy` starts a miniflare runtime with open handles, so a
+ * script that does not dispose it prints everything it was going to print and
+ * then hangs. An `exit` handler cannot help, because exit is the thing that
+ * never happens. `reset-storage.mjs` disposes on both paths, which is why it
+ * ends and this did not.
+ */
+async function releaseBucket() {
+  if (proxy) await proxy.dispose();
+  proxy = null;
+}
+
+async function seedImages(orgId, projectId, authorId, seedKey, howMany) {
+  if (!bucket) return 0;
+
+  for (let i = 0; i < howMany; i += 1) {
+    const svg = placeholderSvg(`${seedKey}-${i}`);
+    const path = `projects/${projectId}/images/placeholder-${i + 1}.svg`;
+
+    /* A fresh ArrayBuffer: miniflare's proxy asserts on a typed array whose
+       byte offset is not zero, and a Node Buffer almost never starts at
+       zero. */
+    await bucket.put(path, new Uint8Array(new TextEncoder().encode(svg)).buffer, {
+      httpMetadata: { contentType: 'image/svg+xml' },
+    });
+
+    const { caption, alt } = PLACEHOLDER_CAPTIONS[i % PLACEHOLDER_CAPTIONS.length];
+
+    await must(
+      db.from('project_images').insert({
+        org_id: orgId,
+        project_id: projectId,
+        position: i + 1,
+        storage_path: path,
+        alt,
+        caption,
+        uploaded_by: authorId,
+      }),
+      `writing project_images`
+    );
+  }
+
+  return howMany;
+}
+
 /* ── Dates, all relative to today so the demo never goes stale ─────────── */
 
 const today = new Date();
@@ -67,15 +154,30 @@ const shift = (days) => {
 const SCENARIOS = [
   {
     key: 'clean',
+    /* Live animals, so Form 5A applies and a qualified scientist signs. */
+    facts: { vertebrates: true },
     title: 'Thermal tolerance in intertidal snails',
     question: 'Does prior heat exposure change the upper thermal limit of Nucella?',
     authors: ['student.a'],
     officer: 'officer.a',
-    sponsor: { name: 'J. Okonkwo', email: 'j.okonkwo@fuhsd.org', signedDaysAgo: 30 },
+    sponsor: { name: 'mv_sponsor1', email: 'mv_sponsor1@fuhsd.org', signedDaysAgo: 30 },
     startedDaysAgo: 20,
     complete: 4,
     notes: 5,
     selection: 'selected',
+
+    /* A recorded fair result, so there is something to publish as a project
+       entry without doing it by hand first. Nothing had one, which left the
+       entry queue empty on every fresh database and made the publish seed
+       skip half its job silently. */
+    result: {
+      category: 'Animal Sciences',
+      entryCode: 'ANIM041',
+      placement: 'Second Award',
+      advancedTo: 'California Science and Engineering Fair',
+      awards: ['Ricoh Sustainable Development Award'],
+    },
+
     images: 4,
     /* A real Creative Commons film, so the facade has something to load if
        somebody presses play. Nothing is fetched until they do. */
@@ -109,11 +211,13 @@ const SCENARIOS = [
   },
   {
     key: 'disqualified',
+    /* Daphnia are live animals too. */
+    facts: { vertebrates: true },
     title: 'Microplastic uptake in Daphnia',
     question: 'Do polystyrene beads reduce Daphnia reproduction rate?',
     authors: ['student.b'],
     officer: 'officer.a',
-    sponsor: { name: 'A. Beaumont', email: 'a.beaumont@fuhsd.org', signedDaysAgo: 5 },
+    sponsor: { name: 'mv_sponsor2', email: 'mv_sponsor2@fuhsd.org', signedDaysAgo: 5 },
     /* Work began well before the sponsor signed. Already true, cannot be
        undone, and the reason the ordering check exists. */
     startedDaysAgo: 60,
@@ -123,11 +227,14 @@ const SCENARIOS = [
   },
   {
     key: 'planned-clash',
+    /* Solvents, in a university lab. Form 3 for the chemicals and Form 1C to
+       establish what the student did themselves. */
+    facts: { hazardous: true, rri: true },
     title: 'Perovskite film stability under humidity cycling',
     question: 'How fast does efficiency fall with repeated humidity cycles?',
     authors: ['student.c'],
     officer: 'officer.b',
-    sponsor: { name: 'A. Beaumont', email: 'a.beaumont@fuhsd.org', signedDaysAgo: -20 },
+    sponsor: { name: 'mv_sponsor2', email: 'mv_sponsor2@fuhsd.org', signedDaysAgo: -20 },
     /* Plans to start before the signature is due. Not yet a problem, and
        fixable by moving one date, which is the whole point of saying so. */
     startedDaysAgo: -10,
@@ -137,11 +244,13 @@ const SCENARIOS = [
   },
   {
     key: 'overdue',
+    /* Sampling four catchments, which needs a field safety plan. */
+    facts: { field_work: true },
     title: 'Rainwater nitrate across four Cupertino catchments',
     question: 'Does nitrate concentration track distance from the freeway?',
     authors: ['student.d'],
     officer: 'officer.b',
-    sponsor: { name: 'M. Lindqvist', email: 'm.lindqvist@fuhsd.org', signedDaysAgo: 40 },
+    sponsor: { name: 'mv_sponsor3', email: 'mv_sponsor3@fuhsd.org', signedDaysAgo: 40 },
     startedDaysAgo: 25,
     complete: 1,
     /* Part written, so the editor shows a real 'four of thirteen'. */
@@ -161,6 +270,8 @@ const SCENARIOS = [
   },
   {
     key: 'no-sponsor',
+    /* Growing fungus, which counts as a potentially hazardous biological agent. */
+    facts: { pha: true },
     title: 'Mycelium composites as packing foam',
     question: 'Can mycelium reach the compressive strength of expanded polystyrene?',
     authors: ['student.e'],
@@ -174,6 +285,9 @@ const SCENARIOS = [
   },
   {
     key: 'unassigned',
+    /* Nothing regulated. Three forms and no more, which is what most projects
+       look like and the reason the conditional ones are worth getting right. */
+    facts: {},
     title: 'Acoustic detection of bearing wear',
     question: 'Can a phone microphone detect bearing wear before failure?',
     authors: ['student.f'],
@@ -189,7 +303,7 @@ const SCENARIOS = [
         'Rolling element bearings emit a characteristic acoustic signature as they wear, well before failure. This work tests whether a phone microphone and a small convolutional model can detect that signature early enough to be useful, using recordings from a test rig run to destruction.',
     },
     officer: null,
-    sponsor: { name: 'J. Okonkwo', email: 'j.okonkwo@fuhsd.org', signedDaysAgo: 12 },
+    sponsor: { name: 'mv_sponsor1', email: 'mv_sponsor1@fuhsd.org', signedDaysAgo: 12 },
     startedDaysAgo: 8,
     complete: 2,
     notes: 2,
@@ -198,12 +312,14 @@ const SCENARIOS = [
   },
   {
     key: 'self-managed',
+    /* Raised beds, outdoors. */
+    facts: { field_work: true },
     title: 'Nitrogen-fixing cover crops in raised beds',
     question: 'Does vetch outperform clover on available nitrogen after eight weeks?',
     /* An officer running a project of her own, and looking after it herself. */
     authors: ['officer.c'],
     officer: 'officer.c',
-    sponsor: { name: 'M. Lindqvist', email: 'm.lindqvist@fuhsd.org', signedDaysAgo: 15 },
+    sponsor: { name: 'mv_sponsor3', email: 'mv_sponsor3@fuhsd.org', signedDaysAgo: 15 },
     startedDaysAgo: 10,
     complete: 3,
     notes: 3,
@@ -238,12 +354,14 @@ const SCENARIOS = [
         'A planting date recommendation that inverts the usual advice',
       ],
       contributions:
-        'P. Osei designed the trial, built and planted the beds, ran every extraction and measurement, analyzed the data, and wrote the paper. M. Lindqvist reviewed the protocol and supervised use of the spectrophotometer.',
+        'mv_officer3 designed the trial, built and planted the beds, ran every extraction and measurement, analyzed the data, and wrote the paper. mv_sponsor3 reviewed the protocol and supervised use of the spectrophotometer.',
     },
     note: 'Self managed, and a second paper ready to submit.',
   },
   {
     key: 'co-authored',
+    /* A creek. */
+    facts: { field_work: true },
     title: 'Low-cost turbidity sensing for creek monitoring',
     question: 'Can an LED and photodiode match a commercial turbidity meter?',
     authors: ['student.g', 'student.h'],
@@ -257,10 +375,10 @@ const SCENARIOS = [
       abstract:
         'Commercial turbidity meters cost more than a school science budget allows, which puts continuous creek monitoring out of reach for most student projects. This work tests whether an LED and photodiode pair, calibrated against formazin standards, can match a commercial nephelometer across the range encountered in a local creek. Paired measurements were taken at six sites over eight weeks, spanning two storm events, and the agreement between instruments was assessed by Bland-Altman analysis rather than by correlation alone.',
       contributions:
-        'L. Nakamura designed the optical path, built and calibrated the sensor, ran the field comparison, and wrote the paper.',
+        'mv_student7 designed the optical path, built and calibrated the sensor, ran the field comparison, and wrote the paper.',
     },
     officer: 'officer.a',
-    sponsor: { name: 'J. Okonkwo', email: 'j.okonkwo@fuhsd.org', signedDaysAgo: 22 },
+    sponsor: { name: 'mv_sponsor1', email: 'mv_sponsor1@fuhsd.org', signedDaysAgo: 22 },
     startedDaysAgo: 14,
     complete: 5,
     notes: 6,
@@ -269,19 +387,102 @@ const SCENARIOS = [
   },
   {
     key: 'not-selected',
+    /* **The case that ends seasons.** A survey is human participants research,
+       a great many students do not realize it, and SCVSEFA refuses a human
+       participants project received after the November date outright: not
+       late, not penalized, refused. */
+    facts: { humans: true },
     title: 'Sleep duration and reaction time in high schoolers',
     question: 'Does self-reported sleep predict simple reaction time?',
     /* An officer running a project of her own, looked after by another
        officer. The common case, and different from the self-managed one. */
     authors: ['officer.a'],
     officer: 'officer.b',
-    sponsor: { name: 'A. Beaumont', email: 'a.beaumont@fuhsd.org', signedDaysAgo: 35 },
+    sponsor: { name: 'mv_sponsor2', email: 'mv_sponsor2@fuhsd.org', signedDaysAgo: 35 },
     startedDaysAgo: 28,
     complete: 6,
     notes: 4,
     selection: 'not_selected',
     selectionNote: 'Human subjects paperwork would not clear in time.',
   },
+  /* ── The course ─────────────────────────────────────────────────────────
+   *
+   * Two projects in IRPD rather than the fair. They exist because a program
+   * with no projects in it is visible and untestable, and because the whole
+   * argument for the template model was that a course and a competition are
+   * the same shape with different contents. If these do not work, the model
+   * is wrong.
+   *
+   * Neither has a sponsor, a category, or a placement. A course does not
+   * have those, and the interface should stop asking.
+   * ─────────────────────────────────────────────────────────────────────── */
+  {
+    key: 'irpd-interviews',
+    program: 'course',
+    title: 'Why students skip breakfast at Monta Vista',
+    question: 'What actually stops students eating before first period?',
+    /* Interviews are human participants research, which is the one thing in
+       this course with a consequence outside the classroom. */
+    facts: { humans: true, minors: true },
+    authors: ['student.c'],
+    officer: 'officer.b',
+    startedDaysAgo: 45,
+    complete: 2,
+    notes: 6,
+    images: 2,
+    manuscript: {
+      write: 4,
+      references: 4,
+      keywords: ['food access', 'student wellbeing', 'design research'],
+      discipline: 'social-science',
+    },
+  },
+  {
+    key: 'grant-applied',
+    program: 'grant',
+    title: 'A pocket spectrophotometer for creek monitoring',
+    question: 'Can a phone camera replace a bench spectrophotometer for nitrate?',
+    facts: { equipment: true },
+    authors: ['student.d'],
+    officer: 'officer.c',
+    startedDaysAgo: 30,
+    complete: 3,
+    notes: 4,
+    requested: 385.4,
+    note:
+      'A grant application partway through. The money is asked for and not ' +
+      'yet decided, which is where most of them sit.',
+  },
+  {
+    key: 'grant-awarded',
+    program: 'grant',
+    title: 'Low-cost turbidity logging for a school creek',
+    question: 'How cheaply can turbidity be logged hourly for a season?',
+    facts: { equipment: true, awarded: true },
+    authors: ['student.f'],
+    officer: 'officer.c',
+    startedDaysAgo: 90,
+    complete: 6,
+    notes: 7,
+    requested: 400,
+    awarded: 250,
+    note:
+      'Awarded, and for less than was asked. A partial award is the ordinary ' +
+      'outcome and the one a student has to plan around.',
+  },
+  {
+    key: 'irpd-early',
+    program: 'course',
+    title: 'Shade and heat on the walk to school',
+    question: 'Which routes to campus are unwalkable on a hot afternoon?',
+    facts: { humans: true },
+    authors: ['student.e'],
+    officer: 'officer.c',
+    startedDaysAgo: 20,
+    complete: 0,
+    notes: 2,
+  },
+
 ];
 
 /* Notebook entries, written to read like a real week rather than lorem. */
@@ -378,22 +579,49 @@ async function main() {
     return;
   }
 
-  const { data: program } = await db
+  /* Every program this school runs, by kind. A scenario says which one it
+     belongs to, because a school now runs several and one of them is a
+     journal with no date at all. */
+  const { data: allPrograms, error: programsError } = await db
     .from('programs')
-    .select('id, name, season_year')
+    .select('id, name, season_year, kind')
+    .eq('org_id', org.id)
     .eq('status', 'open')
-    .order('fair_date', { ascending: true })
-    .limit(1)
-    .single();
+    .order('fair_date', { ascending: true });
 
-  if (!program) fail('No open program. Run npm run reset first.');
+  if (programsError) {
+    fail(`Could not read the programs: ${programsError.message}`);
+  }
 
-  const { data: templates } = await db
-    .from('program_milestones')
-    .select('id, name, kind, due_on, required, blocks_experimentation, satisfied_by, sort_order, org_id')
-    .eq('program_id', program.id);
+  const byKind = new Map();
+  for (const p of allPrograms ?? []) {
+    if (!byKind.has(p.kind)) byKind.set(p.kind, p);
+  }
 
-  const mine = (templates ?? []).filter((m) => !m.org_id || m.org_id === org.id);
+  const program = byKind.get('competition');
+  if (!program) {
+    fail(`No competition for ${org.slug}. Run npm run seed:programs first.`);
+  }
+  if (!byKind.get('course')) {
+    console.log('  No course at this school, so the course scenarios are skipped.');
+  }
+
+  /* One read per program rather than one per project. A school runs two or
+     three, and every scenario in the same program shares its deadlines. */
+  const milestonesByProgram = new Map();
+  for (const p of allPrograms ?? []) {
+    const { data: rows } = await db
+      .from('program_milestones')
+      .select('id, name, kind, due_on, required, blocks_experimentation, satisfied_by, sort_order, org_id, source')
+      .eq('program_id', p.id)
+      .order('sort_order');
+
+    milestonesByProgram.set(
+      p.id,
+      (rows ?? []).filter((m) => !m.org_id || m.org_id === org.id)
+    );
+  }
+
 
   /* Fixture people, by handle.
      The addresses live in auth, not in public.identities: that table is a
@@ -421,7 +649,10 @@ async function main() {
     if (!nameById.has(account.id)) continue;
 
     const handle = email.slice(ORG_SLUG.length + 1, email.indexOf('@'));
-    byHandle.set(handle, { id: account.id, display_name: nameById.get(account.id) });
+    /* The address travels with the person because signing in needs it, and
+       reconstructing it from the handle would be a second place the fixture
+       address format is written down. */
+    byHandle.set(handle, { id: account.id, email, display_name: nameById.get(account.id) });
   }
 
   if (byHandle.size === 0) {
@@ -431,7 +662,14 @@ async function main() {
     );
   }
 
-  console.log(`Seeding ${SCENARIOS.length} scenarios into ${org.lockup_name}.\n`);
+  const kinds = [...byKind.keys()].sort().join(', ');
+  console.log(`Seeding ${SCENARIOS.length} scenarios into ${org.lockup_name}.`);
+  console.log(`  Programs available: ${kinds || 'none'}`);
+  console.log(
+    bucket
+      ? '  Showcase images are drawn and written to local file storage.\n'
+      : '  No local file storage, so the showcase images are skipped.\n'
+  );
 
   for (const scene of SCENARIOS) {
     const authors = scene.authors.map((h) => byHandle.get(h)).filter(Boolean);
@@ -439,6 +677,15 @@ async function main() {
       console.log(`  skipped ${scene.key}: no author found`);
       continue;
     }
+
+    /* Which program this project belongs to. A scenario that names a kind
+       the school does not run is skipped rather than forced into the fair. */
+    const scenePrograms = byKind.get(scene.program ?? 'competition');
+    if (!scenePrograms) {
+      console.log(`  skipped ${scene.key}: no ${scene.program} at this school`);
+      continue;
+    }
+    const sceneMilestones = milestonesByProgram.get(scenePrograms.id) ?? [];
 
     const startedOn = scene.startedDaysAgo === null ? null : shift(-scene.startedDaysAgo);
 
@@ -449,7 +696,9 @@ async function main() {
         title: scene.title,
         question: scene.question,
         started_on: startedOn,
-        stage: scene.complete > 3 ? 'in_progress' : 'registered',
+        /* No stage. Where a project is comes from its steps, and the seeded
+           milestones already say. The column survives one release and is
+           dropped in the next migration. */
         created_by: authors[0].id,
       })
       .select('id')
@@ -458,22 +707,38 @@ async function main() {
     if (projectError) fail(`${scene.key}: ${projectError.message}`);
 
     for (const author of authors) {
-      await db.from('project_authors').insert({
-        org_id: org.id,
-        project_id: project.id,
-        user_id: author.id,
-        role: 'author',
-        accepted_at: new Date().toISOString(),
-      });
+      await must(
+        db.from('project_authors').insert({
+          org_id: org.id,
+          project_id: project.id,
+          user_id: author.id,
+          role: 'author',
+          accepted_at: new Date().toISOString(),
+        }),
+        `writing project_authors`
+      );
     }
 
     /* Pictures, where the scenario asks for them. */
+    /* What the project says about itself. The conditional forms key off
+       these, so a project that declares nothing gets the three every project
+       needs and no more. */
+    if (scene.facts) {
+      await must(
+        db.from('projects').update({ facts: scene.facts }).eq('id', project.id),
+        `writing projects`
+      );
+    }
+
     if (scene.images) {
       await seedImages(org.id, project.id, authors[0].id, scene.key, scene.images);
     }
 
     if (scene.video) {
-      await db.from('projects').update({ video_url: scene.video }).eq('id', project.id);
+      await must(
+        db.from('projects').update({ video_url: scene.video }).eq('id', project.id),
+        `writing projects`
+      );
     }
 
     /* An officer, or the author looking after it herself. */
@@ -482,40 +747,54 @@ async function main() {
       const isAuthor = authors.some((a) => a.id === officer?.id);
 
       if (officer && isAuthor) {
-        await db
+        const { error: selfManagedError } = await db
           .from('project_authors')
           .update({ self_managed_at: new Date().toISOString() })
           .eq('project_id', project.id)
           .eq('user_id', officer.id);
+
+        if (selfManagedError) {
+          fail(`${scene.key}: could not mark it self managed (${selfManagedError.message})`);
+        }
       } else if (officer) {
-        await db.from('project_authors').insert({
-          org_id: org.id,
-          project_id: project.id,
-          user_id: officer.id,
-          role: 'officer',
-          accepted_at: new Date().toISOString(),
-        });
+        await must(
+          db.from('project_authors').insert({
+            org_id: org.id,
+            project_id: project.id,
+            user_id: officer.id,
+            role: 'officer',
+            accepted_at: new Date().toISOString(),
+          }),
+          `writing project_authors`
+        );
       }
     }
 
     if (scene.sponsor) {
-      await db.from('project_sponsors').insert({
-        org_id: org.id,
-        project_id: project.id,
-        teacher_name: scene.sponsor.name,
-        teacher_email: scene.sponsor.email,
-        signed_on: shift(-scene.sponsor.signedDaysAgo),
-        recorded_by: authors[0].id,
-      });
+      await must(
+        db.from('project_sponsors').insert({
+          org_id: org.id,
+          project_id: project.id,
+          teacher_name: scene.sponsor.name,
+          teacher_email: scene.sponsor.email,
+          signed_on: shift(-scene.sponsor.signedDaysAgo),
+          recorded_by: authors[0].id,
+        }),
+        `writing project_sponsors`
+      );
     }
 
-    const { data: entry } = await db
+    const { data: entry, error: entryError } = await db
       .from('entries')
       .insert({
         org_id: org.id,
         project_id: project.id,
-        program_id: program.id,
+        program_id: scenePrograms.id,
         selection_state: scene.selection ?? 'candidate',
+        /* A grant's two numbers. Null everywhere else, which is what they
+           mean for a fair. */
+        requested_amount: scene.requested ?? null,
+        awarded_amount: scene.awarded ?? null,
         selection_note: scene.selectionNote ?? null,
         selection_decided_at:
           scene.selection && scene.selection !== 'candidate'
@@ -525,8 +804,38 @@ async function main() {
       .select('id')
       .single();
 
+    if (entryError || !entry) {
+      fail(`${scene.key}: could not enter the program (${entryError?.message ?? 'no row'})`);
+    }
+
+    /* What happened at the fair, through the same function the entry page
+       calls, so a fixture cannot end up in a state the interface could not
+       produce.
+    
+       Signed in as the first author rather than written through the table.
+       The function reads `auth.uid()` and the secret key carries no subject,
+       so the seed is nobody and the call raises before it looks at the
+       entry. An author is always present and always permitted, which an
+       officer is not: three of the scenarios have none. */
+    if (scene.result) {
+      const asAuthor = await actingAs(authors[0].email);
+
+      const { error: resultError } = await asAuthor.rpc('record_entry_result', {
+        p_entry_id: entry.id,
+        p_category: scene.result.category ?? '',
+        p_entry_code: scene.result.entryCode ?? '',
+        p_placement: scene.result.placement ?? '',
+        p_awards: scene.result.awards ?? [],
+        p_advanced_to: scene.result.advancedTo ?? '',
+      });
+
+      if (resultError) {
+        fail(`${scene.key}: could not record the result (${resultError.message})`);
+      }
+    }
+
     /* The milestone copy, in order, with a slice marked complete. */
-    const ordered = [...mine].sort((a, b) => a.sort_order - b.sort_order);
+    const ordered = [...sceneMilestones].sort((a, b) => a.sort_order - b.sort_order);
     let completed = 0;
     let overdueLeft = scene.overdue ?? 0;
 
@@ -551,67 +860,83 @@ async function main() {
         overdueLeft -= 1;
       }
 
-      await db.from('entry_milestones').insert({
-        org_id: org.id,
-        entry_id: entry.id,
-        program_milestone_id: m.id,
-        name: m.name,
-        kind: m.kind,
-        due_on: dueOn,
-        required: m.required,
-        blocks_experimentation: m.blocks_experimentation,
-        satisfied_by: m.satisfied_by,
-        completed_on: completedOn,
-        completed_by: completedOn && !isDerived ? authors[0].id : null,
-        sort_order: m.sort_order,
-      });
-
-      if (completedOn && !isDerived) {
-        await db.from('deliverables').insert({
+      await must(
+        db.from('entry_milestones').insert({
           org_id: org.id,
           entry_id: entry.id,
-          milestone_id: null,
-          type: m.kind,
-          label: m.name,
-          signed_on: completedOn,
-          submitted_at: new Date().toISOString(),
-          created_by: authors[0].id,
-        });
+          program_milestone_id: m.id,
+          name: m.name,
+          kind: m.kind,
+          due_on: dueOn,
+          required: m.required,
+          blocks_experimentation: m.blocks_experimentation,
+          satisfied_by: m.satisfied_by,
+          completed_on: completedOn,
+          completed_by: completedOn && !isDerived ? authors[0].id : null,
+          sort_order: m.sort_order,
+          source: m.source,
+        }),
+        `writing entry_milestones`
+      );
+
+      if (completedOn && !isDerived) {
+        await must(
+          db.from('deliverables').insert({
+            org_id: org.id,
+            entry_id: entry.id,
+            milestone_id: null,
+            type: m.kind,
+            label: m.name,
+            signed_on: completedOn,
+            submitted_at: new Date().toISOString(),
+            created_by: authors[0].id,
+          }),
+          `writing deliverables`
+        );
       }
     }
 
     /* A notebook that reads like a term rather than a placeholder. */
     for (let i = 0; i < (scene.notes ?? 0); i += 1) {
-      await db.from('field_notes').insert({
-        org_id: org.id,
-        project_id: project.id,
-        author_id: authors[i % authors.length].id,
-        body_md: NOTE_TEXTS[i % NOTE_TEXTS.length],
-        occurred_on: shift(-(scene.notes - i) * 4),
-      });
+      await must(
+        db.from('field_notes').insert({
+          org_id: org.id,
+          project_id: project.id,
+          author_id: authors[i % authors.length].id,
+          body_md: NOTE_TEXTS[i % NOTE_TEXTS.length],
+          occurred_on: shift(-(scene.notes - i) * 4),
+        }),
+        `writing field_notes`
+      );
     }
 
     /* One officer observation, so the attribution tag is visible. */
     if (scene.officer && scene.notes > 1) {
       const officer = byHandle.get(scene.officer);
       if (officer && !authors.some((a) => a.id === officer.id)) {
-        await db.from('field_notes').insert({
-          org_id: org.id,
-          project_id: project.id,
-          author_id: officer.id,
-          body_md: OBSERVATIONS[SCENARIOS.indexOf(scene) % OBSERVATIONS.length],
-          occurred_on: shift(-3),
-        });
+        await must(
+          db.from('field_notes').insert({
+            org_id: org.id,
+            project_id: project.id,
+            author_id: officer.id,
+            body_md: OBSERVATIONS[SCENARIOS.indexOf(scene) % OBSERVATIONS.length],
+            occurred_on: shift(-3),
+          }),
+          `writing field_notes`
+        );
       }
     }
 
-    await db.from('project_links').insert({
-      org_id: org.id,
-      project_id: project.id,
-      label: 'Data spreadsheet',
-      url: 'https://docs.google.com/spreadsheets/d/example',
-      added_by: authors[0].id,
-    });
+    await must(
+      db.from('project_links').insert({
+        org_id: org.id,
+        project_id: project.id,
+        label: 'Data spreadsheet',
+        url: 'https://docs.google.com/spreadsheets/d/example',
+        added_by: authors[0].id,
+      }),
+      `writing project_links`
+    );
 
     /* The manuscript, at whatever stage this scenario is meant to show.
        `write` is how many sections exist, so the editor reads as a real
@@ -620,7 +945,7 @@ async function main() {
       const spec = scene.manuscript;
       const names = authors.map((a) => a.display_name);
 
-      const { data: manuscript } = await db
+      const { data: manuscript, error: manuscriptError } = await db
         .from('manuscripts')
         .insert({
           org_id: org.id,
@@ -643,6 +968,10 @@ async function main() {
         .select('id')
         .single();
 
+      if (manuscriptError || !manuscript) {
+        fail(`${scene.key}: could not create the manuscript (${manuscriptError?.message ?? 'no row'})`);
+      }
+
       if (manuscript) {
         const order = [
           'background',
@@ -658,7 +987,7 @@ async function main() {
         const citations = spec.bank === 'b' ? REFERENCES_B : REFERENCES;
 
         if (spec.methods || spec.dataSources || spec.outputs) {
-          await db
+          const { error: glanceError } = await db
             .from('manuscripts')
             .update({
               methods: spec.methods ?? [],
@@ -666,36 +995,54 @@ async function main() {
               outputs: spec.outputs ?? [],
             })
             .eq('id', manuscript.id);
+
+          if (glanceError) {
+            fail(`${scene.key}: could not save research at a glance (${glanceError.message})`);
+          }
         }
 
         for (const [index, key] of order.entries()) {
           if (index >= (spec.write ?? 0)) break;
-          await db.from('manuscript_sections').insert({
-            org_id: org.id,
-            manuscript_id: manuscript.id,
-            section_key: key,
-            body: bank[key],
-            sort_order: index,
-            updated_by: authors[0].id,
-          });
+          await must(
+            db.from('manuscript_sections').insert({
+              org_id: org.id,
+              manuscript_id: manuscript.id,
+              section_key: key,
+              body: bank[key],
+              sort_order: index,
+              updated_by: authors[0].id,
+            }),
+            `writing manuscript_sections`
+          );
         }
 
         for (const [index, citation] of citations.slice(0, spec.references ?? 0).entries()) {
-          await db.from('manuscript_references').insert({
-            org_id: org.id,
-            manuscript_id: manuscript.id,
-            sort_order: index + 1,
-            citation,
-          });
+          await must(
+            db.from('manuscript_references').insert({
+              org_id: org.id,
+              manuscript_id: manuscript.id,
+              sort_order: index + 1,
+              citation,
+            }),
+            `writing manuscript_references`
+          );
         }
       }
     }
+
+    /* What a project declares about itself decides its paperwork, so it is
+       worth seeing at a glance which fixture exercises which forms. */
+    const declared = Object.entries(scene.facts ?? {})
+      .filter(([, value]) => value)
+      .map(([name]) => name);
 
     console.log(
       `  ${scene.title}\n` +
         `    ${authors.map((a) => a.display_name).join(', ')}` +
         `${scene.officer ? ` · officer ${byHandle.get(scene.officer)?.display_name ?? '?'}` : ' · no officer'}` +
         `${scene.sponsor ? ` · ${scene.sponsor.name}` : ' · no sponsor'}` +
+        `\n    ${scenePrograms.name}` +
+        `${declared.length ? ` · declares ${declared.join(', ')}` : ' · nothing regulated'}` +
         `${scene.note ? `\n    ${scene.note}` : ''}`
     );
   }
@@ -707,8 +1054,18 @@ async function main() {
       '\n  montavista.officer.c@demo.invalid   runs one of her own' +
       '\n  montavista.student.a@demo.invalid   one project, in good order' +
       '\n  montavista.student.b@demo.invalid   one disqualified' +
-      '\n  montavista.student.g@demo.invalid   co-authored with C. Duarte\n'
+      '\n  montavista.student.g@demo.invalid   co-authored with mv_student8\n'
   );
 }
 
-main().catch((e) => fail(e.message));
+async function release() {
+  await signOutAll();
+  await releaseBucket();
+}
+
+main()
+  .then(release)
+  .catch(async (e) => {
+    await release();
+    fail(e.message);
+  });

@@ -5,11 +5,15 @@ import Base from '../../layouts/Base.astro';
 import AppShell from '../../components/AppShell.astro';
 import { activeOrg } from '../../lib/tenant';
 import { serverClient } from '../../lib/supabase';
+import { afterPost, outcomeFrom } from '../../lib/post-redirect';
+import { signInWith } from '../../lib/next-path';
 
 const { session, account, roles } = Astro.locals;
 const org = activeOrg(Astro);
 
-if (!session) return Astro.redirect('/app/');
+/* Remembering where they were headed, so a link from a notification
+   survives the sign in it triggers (20.10). */
+if (!session) return Astro.redirect(signInWith(Astro.url));
 if (!account) return Astro.redirect('/app/welcome/');
 
 const supabase = serverClient(
@@ -18,11 +22,40 @@ const supabase = serverClient(
   (Astro.locals as any).runtime?.env
 );
 
-let saved = false;
-let error: string | null = null;
+/* Seeded from the redirect a POST answers with. `saved` was a boolean that
+   could not survive one, so it became the sentence it always printed. */
+let { error, note: saved } = outcomeFrom(Astro.url);
 
 if (Astro.request.method === 'POST') {
   const form = await Astro.request.formData();
+  const action = String(form.get('action') ?? 'details');
+
+  /* Two forms on one page, so each says which it is. Without that the
+     notification form would fall into the details branch and blank a
+     display name it never carried. */
+  if (action === 'notifications') {
+    const digest = String(form.get('digest') ?? 'weekly');
+
+    const { error: prefError } = await supabase.from('notification_settings').upsert(
+      {
+        user_id: account.id,
+        category: 'reminders',
+        channel: 'email',
+        /* Off is the absence of a digest rather than a third cadence, so
+           that "how often" and "at all" stay separate questions. */
+        enabled: digest !== 'off',
+        cadence: digest === 'off' ? 'weekly' : digest,
+        urgent: form.get('urgent') === 'on',
+      },
+      { onConflict: 'user_id,category,channel' }
+    );
+
+    if (prefError) error = prefError.message;
+    else saved = 'Saved.';
+
+    return afterPost(Astro.url, { error, note: saved });
+  }
+
   const gradYear = String(form.get('grad_year') ?? '');
 
   const { error: updateError } = await supabase
@@ -37,7 +70,10 @@ if (Astro.request.method === 'POST') {
     .eq('id', account.id);
 
   if (updateError) error = updateError.message;
-  else saved = true;
+  else saved = 'Saved.';
+
+  /* A refresh should re-read this page, not send the form again. */
+  return afterPost(Astro.url, { error, note: saved });
 }
 
 /* Re-read so the form shows what is actually stored, not what was posted. */
@@ -48,6 +84,21 @@ const { data: current } = await supabase
   .single();
 
 const person = current ?? account;
+
+/* How often the digest arrives, and whether anything urgent arrives on its
+   own. Absent means the default, which is weekly with urgent items on: a
+   person who has never opened this screen should hear about a deadline, and
+   should not hear daily about nothing. */
+const { data: reminders } = await supabase
+  .from('notification_settings')
+  .select('enabled, cadence, urgent')
+  .eq('user_id', account.id)
+  .eq('category', 'reminders')
+  .eq('channel', 'email')
+  .maybeSingle();
+
+const digest = reminders && !reminders.enabled ? 'off' : (reminders?.cadence ?? 'weekly');
+const urgent = reminders?.urgent ?? true;
 
 const { data: guardian } = await supabase
   .from('guardian_consents')
@@ -101,7 +152,7 @@ const consentLabel: Record<string, string> = {
   <div class="wrap">
     <AppShell org={org} account={account} roles={roles} here="/app/profile/" />
 
-    <section class="hero" style="padding-top:0">
+    <section class="hero">
       <p class="t-lbl">Profile</p>
       <h1 class="t-big">{person.display_name}</h1>
       <p class="lede">
@@ -110,12 +161,17 @@ const consentLabel: Record<string, string> = {
       </p>
     </section>
 
-    {saved && <p class="note" role="status">Saved.</p>}
+    {saved && <p class="note" role="status">{saved}</p>}
+    {/* Anchored, and every form on this page posts to it. These pages
+        run to several screens, and an outcome rendered at the top after
+        a click three screens down reads as nothing having happened. */}
+    <div id="outcome" tabindex="-1">
     {error && <p class="note" role="alert">{error}</p>}
+    </div>
 
     <section class="sec">
       <div class="sec-h"><b>Your details</b><span>Editable</span></div>
-      <form method="POST" class="stack">
+      <form method="POST" action="#outcome" class="stack">
         <label>
           <span>Name, as it should appear on a byline</span>
           <input name="display_name" required value={person.display_name} autocomplete="name" />
@@ -133,13 +189,13 @@ const consentLabel: Record<string, string> = {
 
         <label>
           <span>ORCID</span>
-          <input name="orcid" value={person.orcid ?? ''} placeholder="0000-0000-0000-0000" />
+          <input name="orcid" value={person.orcid ?? ''} />
           <small>Optional. A permanent identifier that follows you to university.</small>
         </label>
 
         <label>
           <span>A link of your own</span>
-          <input name="outbound_url" type="url" value={person.outbound_url ?? ''} placeholder="https://" />
+          <input name="outbound_url" type="url" value={person.outbound_url ?? ''} />
           <small>Optional. Shown on your author page once you have published.</small>
         </label>
 
@@ -150,7 +206,49 @@ const consentLabel: Record<string, string> = {
 
 
 
-        <button type="submit">Save</button>
+        <button class="btn" type="submit">Save</button>
+      </form>
+    </section>
+
+    <section class="sec" id="notifications">
+      <div class="sec-h"><b>What reaches you</b><span>By email</span></div>
+
+      <p class="t-sm" style="max-width:var(--measure-text)">
+        One message, listing where your projects stand: what is late, what is
+        coming, and what is missing. Nothing is sent when there is nothing to
+        say.
+      </p>
+
+      <form method="POST" action="#outcome" class="stack">
+        <input type="hidden" name="action" value="notifications" />
+
+        <label>
+          <span>How often</span>
+          <select name="digest">
+            <option value="weekly" selected={digest === 'weekly'}>Weekly</option>
+            <option value="daily" selected={digest === 'daily'}>Daily</option>
+            <option value="off" selected={digest === 'off'}>Never</option>
+          </select>
+        </label>
+
+        <label class="check">
+          <input type="checkbox" name="urgent" checked={urgent} />
+          <span>
+            Tell me about something urgent as soon as it happens, rather than
+            waiting for the next one
+          </span>
+        </label>
+
+        {/* Said rather than hidden. A list of switches that pretends to be
+            complete is lying about what it controls: a decision on your own
+            paper, a place granted or refused, a consent request are the
+            substance of the thing and not news about it (20.4). */}
+        <p class="t-sm">
+          A decision on your work, a place granted or refused, and anything
+          about your account are always sent.
+        </p>
+
+        <p><button class="btn" type="submit">Save</button></p>
       </form>
     </section>
 
