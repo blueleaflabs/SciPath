@@ -56,7 +56,29 @@ const shapes = readDir('src/config/shapes');
 /* The same loader the seed uses, so these tests exercise the path that
    actually writes the database rather than a second reading of the files. */
 const library = loadLibrary();
-const resolve = (id) => resolveProgram(id, library);
+/**
+ * How a program resolves for an ordinary project.
+ *
+ * A program no longer names a research process — the project does (22.4) —
+ * so a bare resolution has no process at all, and a template that tightens a
+ * step of the scientific method has nothing to tighten. Every caller in the
+ * application supplies the project's process, and these have to resolve the
+ * same way or they are testing something nobody runs.
+ */
+const DEFAULT_PROCESS = 'process-science';
+
+/* Each program with the process it declares. IRPD says `own`, meaning its
+   framework is its own steps, and forcing the science default on it prepends
+   eleven steps the class does not teach. */
+const programDocs = readDir('src/config/programs');
+
+const declaredProcess = (id) => {
+  const doc = programDocs[id];
+  if (doc?.process === 'own') return id;
+  return doc?.process ? `process-${doc.process}` : DEFAULT_PROCESS;
+};
+
+const resolve = (id) => resolveProgram(id, library, declaredProcess(id));
 
 /** What the seed and the pages both use, keyed by step id. */
 const dated = (program) => new Map(datesFor(program).map((d) => [d.step.id, d.date]));

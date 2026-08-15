@@ -142,8 +142,8 @@ async function main() {
   /* ── A fair entry, which never goes through review ───────────────────── */
 
   const { data: withResult, error: resultError } = await db
-    .from('entries')
-    .select('project_id, placement, projects(title)')
+    .from('opportunity_participations')
+    .select('project_id, placement, projects:project_id(title)')
     .eq('org_id', org.id)
     .not('placement', 'is', null)
     .limit(1)

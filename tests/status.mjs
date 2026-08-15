@@ -26,7 +26,10 @@ function test(name, fn) {
 }
 
 const library = loadLibrary();
-const fair = resolveProgram('mvhs-scvsefa-2027', library);
+/* Resolved for a project's process, which is how every caller in the
+   application resolves now: a program no longer names one (22.4). */
+const PROCESS = 'process-science';
+const fair = resolveProgram('mvhs-scvsefa-2027', library, PROCESS);
 const dueBy = new Map(datesFor(fair).map((d) => [d.step.id, d.date]));
 
 const statusOn = (isoDay, recorded = [], facts = { vertebrates: true }) =>

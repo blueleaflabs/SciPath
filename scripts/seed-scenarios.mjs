@@ -584,8 +584,10 @@ async function main() {
      journal with no date at all. */
   const { data: allPrograms, error: programsError } = await db
     .from('programs')
-    .select('id, name, season_year, kind')
-    .eq('org_id', org.id)
+    .select('id, name, season_year, kind, program_role')
+    /* Shared programs have a null `org_id` and belong to every school that
+       enters them, so an equality test hides the regional fair. */
+    .or(`org_id.eq.${org.id},org_id.is.null`)
     .eq('status', 'open')
     .order('fair_date', { ascending: true });
 
@@ -593,9 +595,32 @@ async function main() {
     fail(`Could not read the programs: ${programsError.message}`);
   }
 
+  /**
+   * One program per kind, preferring the thing a project is *entered into*.
+   *
+   * Monta Vista now sees two programs of kind `competition`: the regional
+   * fair, and the research club that prepares for it. The club is a cohort.
+   * Taking whichever arrived first put nine scenarios "in" a class and
+   * recorded fair placements against it -- a course with an entry code and
+   * an award, which is 22.1's conflation sitting in the fixtures. It was
+   * invisible while `entries` and `project_cohorts` were separate tables,
+   * and it is why nothing published: `seed-publish` reads
+   * `opportunity_participations`, and a cohort is not in it.
+   */
   const byKind = new Map();
   for (const p of allPrograms ?? []) {
-    if (!byKind.has(p.kind)) byKind.set(p.kind, p);
+    const held = byKind.get(p.kind);
+    if (!held || (held.program_role !== 'opportunity' && p.program_role === 'opportunity')) {
+      byKind.set(p.kind, p);
+    }
+  }
+
+  /* The cohort a scene's entry was made through, where the school runs one
+     that prepares for it. This is `via_id`: *with my research, in my club*
+     (22.6), and until now no fixture had one at all. */
+  const cohortByKind = new Map();
+  for (const p of allPrograms ?? []) {
+    if (p.program_role === 'cohort' && !cohortByKind.has(p.kind)) cohortByKind.set(p.kind, p);
   }
 
   const program = byKind.get('competition');
@@ -770,26 +795,95 @@ async function main() {
       }
     }
 
-    if (scene.sponsor) {
-      await must(
-        db.from('project_sponsors').insert({
-          org_id: org.id,
-          project_id: project.id,
-          teacher_name: scene.sponsor.name,
-          teacher_email: scene.sponsor.email,
-          signed_on: shift(-scene.sponsor.signedDaysAgo),
-          recorded_by: authors[0].id,
-        }),
-        `writing project_sponsors`
-      );
+    /* Which cohort's project this is, and who is in that cohort.
+    
+       The scenarios were written when joining a program and entering one
+       were the same row, so every project got an entry and nothing recorded
+       a membership. The entry stays — a project really is entered into these
+       programs — and the two relationships the model separated are written
+       alongside it (22.5).
+    
+       Only for a cohort: nobody is a member of a regional fair. */
+    const viaCohort =
+      scenePrograms.program_role === 'opportunity'
+        ? cohortByKind.get(scenePrograms.kind)
+        : null;
+
+    /* **The club, and the entry made through it. 22.6.**
+    
+       A scene at the fair is a club member's work: they are in the club,
+       the project is the club's, and the entry went through it. That last
+       relationship is `via_id`, and it answers which cohort's officer looks
+       after the entry, whose `selection_cap` it counts against, and which
+       school-layer deadlines apply -- none of which had a fixture before,
+       because there was no column to put it in. */
+    let viaId = null;
+
+    if (viaCohort) {
+      for (const author of authors) {
+        await must(
+          db.from('memberships').upsert(
+            { org_id: org.id, user_id: author.id, cohort_id: viaCohort.id, state: 'member' },
+            { onConflict: 'user_id,cohort_id' }
+          ),
+          `putting ${author.display_name} in ${viaCohort.name}`
+        );
+      }
+
+      const { data: viaRow, error: viaError } = await db
+        .from('participations')
+        .upsert(
+          { org_id: org.id, project_id: project.id, program_id: viaCohort.id },
+          { onConflict: 'project_id,program_id' }
+        )
+        .select('id')
+        .single();
+
+      if (viaError || !viaRow) {
+        fail(`${scene.key}: could not attach to ${viaCohort.name} (${viaError?.message ?? 'no row'})`);
+      }
+
+      viaId = viaRow.id;
     }
 
+    if (scenePrograms.program_role === 'cohort') {
+      /* No participation row is written here.
+      
+         There used to be one, because attaching a project to a cohort and
+         entering it into a program were two tables and a scene whose program
+         is a course legitimately wrote to both. They are one table now, keyed
+         on `(project_id, program_id)`, so writing the row here and inserting
+         it again below is the same row twice -- which is what
+         `participations_project_id_program_id_key` refused.
+      
+         The single insert below covers both cases, and it has to be the
+         survivor rather than this one because it carries the selection state
+         and the money and returns the id everything downstream hangs off.
+      
+         The memberships are what is genuinely extra for a cohort: a person
+         belongs to the class, which is a different left-hand side and a
+         different table (22.5). */
+      for (const author of authors) {
+        await must(
+          db.from('memberships').upsert(
+            { org_id: org.id, user_id: author.id, cohort_id: scenePrograms.id, state: 'member' },
+            { onConflict: 'user_id,cohort_id' }
+          ),
+          `putting ${author.display_name} in the cohort`
+        );
+      }
+    }
+
+    /* The table, not a view. The two views exist so that *reads* cannot
+       conflate a class with a fair (22.5); they join `programs` and so are
+       not insertable. Writes name the table. */
     const { data: entry, error: entryError } = await db
-      .from('entries')
-      .insert({
+      .from('participations')
+      .upsert({
         org_id: org.id,
         project_id: project.id,
         program_id: scenePrograms.id,
+        via_id: viaId,
         selection_state: scene.selection ?? 'candidate',
         /* A grant's two numbers. Null everywhere else, which is what they
            mean for a fair. */
@@ -800,12 +894,33 @@ async function main() {
           scene.selection && scene.selection !== 'candidate'
             ? new Date().toISOString()
             : null,
-      })
+      }, { onConflict: 'project_id,program_id' })
       .select('id')
       .single();
 
     if (entryError || !entry) {
       fail(`${scene.key}: could not enter the program (${entryError?.message ?? 'no row'})`);
+    }
+
+    /* The sponsor, which hangs off the participation rather than the project.
+    
+       Written after the entry rather than before it, because there was
+       nothing to attach it to until the participation existed. Recording it
+       against the project was the bug: one signature showed on every cohort
+       and every entry the project had, and the approval it cleared cleared
+       them all. */
+    if (scene.sponsor) {
+      await must(
+        db.from('project_sponsors').insert({
+          org_id: org.id,
+          participation_id: entry.id,
+          teacher_name: scene.sponsor.name,
+          teacher_email: scene.sponsor.email,
+          signed_on: shift(-scene.sponsor.signedDaysAgo),
+          recorded_by: authors[0].id,
+        }),
+        `writing project_sponsors`
+      );
     }
 
     /* What happened at the fair, through the same function the entry page
@@ -821,7 +936,7 @@ async function main() {
       const asAuthor = await actingAs(authors[0].email);
 
       const { error: resultError } = await asAuthor.rpc('record_entry_result', {
-        p_entry_id: entry.id,
+        p_participation_id: entry.id,
         p_category: scene.result.category ?? '',
         p_entry_code: scene.result.entryCode ?? '',
         p_placement: scene.result.placement ?? '',
@@ -863,7 +978,7 @@ async function main() {
       await must(
         db.from('entry_milestones').insert({
           org_id: org.id,
-          entry_id: entry.id,
+          participation_id: entry.id,
           program_milestone_id: m.id,
           name: m.name,
           kind: m.kind,
@@ -883,7 +998,7 @@ async function main() {
         await must(
           db.from('deliverables').insert({
             org_id: org.id,
-            entry_id: entry.id,
+            participation_id: entry.id,
             milestone_id: null,
             type: m.kind,
             label: m.name,

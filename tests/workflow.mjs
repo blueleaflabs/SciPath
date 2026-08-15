@@ -334,7 +334,7 @@ test('a shared deliverable is not tied to one step', () => {
      This asserts the shape that produced it, so a template edit that quietly
      removes the sharing does not silently remove the reason this is derived
      rather than stored. */
-  const program = resolveProgram('mvhs-scvsefa-2027', library);
+  const program = resolveProgram('mvhs-scvsefa-2027', library, 'process-science');
 
   const wanting = program.steps.filter((s) =>
     deliverablesFor(program, s, {}).some((d) => d.id === 'question')
@@ -358,7 +358,7 @@ test('the entry page derives doneness rather than reading it', () => {
   /* The fix, in the place it has to hold. Reading `completed_on` for a step
      that hands something over puts the answer in a row that recording may
      never have touched. */
-  const page = fs.readFileSync('src/pages/app/entry/[id].astro', 'utf8');
+  const page = fs.readFileSync('src/pages/app/project/[id]/in/[program].astro', 'utf8');
 
   assert.match(page, /const satisfied = /, 'the derivation is gone');
   assert.match(

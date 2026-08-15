@@ -1,0 +1,153 @@
+# The California Science and Engineering Fair, 2027.
+#
+# **[FIXTURE] The 2027 season has not been released.** Every date below is
+# invented except one, and the file says which. Read the real calendar off
+# cseflosangeles.org before a season runs on this, and replace the anchors
+# wholesale rather than adjusting them: a guessed date corrected by a week is
+# still a guess, and it reads like a fact once the comment is gone.
+#
+# It exists because **advancement is a second entry, not a field** (22.8).
+# SCVSEFA's `advances_to` names `csef`, and until there was a program here
+# there was nothing to enter: case 10 of 22.14 -- competed, placed, advanced
+# -- could record where it went and not that it went there. A state fair with
+# invented dates carries that shape correctly. A missing one carries nothing.
+#
+# What is deliberately thin: no categories and no fields of study. CSEF
+# publishes its own taxonomy and inventing one would put invented category
+# names in front of a student choosing between them, which is worse than
+# inheriting ISEF's. The `entry_code_format` is omitted for the same reason.
+
+id: csef-2027
+family: csef
+
+# The ISEF chain, as SCVSEFA does. The forms are the same forms: a project
+# advancing from a regional has them already, and a state fair that asked for
+# a different Form 1B would be a different fair.
+extends: isef
+kind: competition
+
+# A state fair. Not owned by any school -- `org_id` is null and one row
+# serves every school that advances to it.
+role: opportunity
+level: state
+
+name: California Science and Engineering Fair
+short_name: CSEF
+authority: California Science and Engineering Fair
+season: 2027
+version: 1
+
+url: https://cseflosangeles.org/
+
+uses:
+  deliverables: [deliverables-isef, deliverables-common]
+
+# Inherited from the regional's own notification defaults would be wrong:
+# advancing students are already registered somewhere and are working to a
+# second calendar on top of the first. Three weeks on the things that refuse
+# work, which is the shortest that reliably leaves time to chase a signature.
+notify_default:
+  blocks_registration: { from: 21, urgent: 3 }
+
+# ── Anchors ────────────────────────────────────────────────────────────────
+#
+# **`signup` is the only date here derived from anything real.** It is two
+# weeks after the Synopsys Championship judges on 2027-03-04, which is the
+# shape the chain actually takes: a regional finishes, the students who
+# advanced are told, and the state fair opens to them shortly after. If the
+# regional moves, this moves with it.
+#
+# **[FIXTURE] Everything below `signup` is invented**, spaced to look like a
+# spring state fair and to exercise the calendar. None of it is transcribed.
+anchors:
+  # Two weeks after SCVSEFA judging. See above.
+  signup: 2027-03-18
+  # [FIXTURE] from here down.
+  registration_close: 2027-04-08
+  abstracts_close: 2027-04-15
+  project_upload: 2027-04-22
+  # Named `fair` rather than `judging` because `programs.fair_date` is read
+  # off this anchor by name, and a state fair with no fair date sorts as
+  # though it had not been scheduled.
+  fair: 2027-05-10
+  awards: 2027-05-11
+
+unscheduled: [awards_ceremony]
+
+steps:
+  add:
+    - id: csef_signup
+      name: Accept the invitation to the state fair
+      phase: forms
+      order: 94
+      owner: student
+      consequence: blocks_registration
+      due: { anchor: signup, days: 0 }
+      deliverables: []
+      note: >-
+        Advancing is an invitation rather than an entry: the regional puts a
+        project forward and the student has to accept it. A place nobody
+        claims goes to somebody else.
+
+    - id: csef_register
+      name: Register for the state fair
+      phase: forms
+      order: 95
+      owner: student
+      consequence: blocks_registration
+      due: { anchor: registration_close, days: 0 }
+      deliverables:
+        - { ref: approval_1 }
+        - { ref: approval_1b }
+      note: >-
+        **[FIXTURE]** Invented date. The forms are the ones already signed for
+        the regional, which is the point of the ISEF chain: they are filed
+        again, not filled in again.
+
+    - id: csef_abstract
+      name: Submit the abstract
+      phase: conclusions
+      order: 96
+      owner: student
+      requires: [analyse]
+      consequence: blocks_competition
+      due: { anchor: abstracts_close, days: 0 }
+      deliverables:
+        - { ref: abstract }
+      note: >-
+        **[FIXTURE]** Invented date. A state fair reads the abstract that went
+        to the regional, and a project that changed in between has to say so.
+
+    - id: csef_upload
+      name: Upload the project material
+      phase: conclusions
+      order: 97
+      owner: student
+      consequence: blocks_competition
+      due: { anchor: project_upload, days: 0 }
+      deliverables:
+        - { ref: board }
+      note: "**[FIXTURE]** Invented date."
+
+    - id: csef_judging
+      name: Judging
+      phase: conclusions
+      order: 98
+      owner: program
+      consequence: none
+      due: { anchor: fair, days: 0 }
+      deliverables: []
+      note: "**[FIXTURE]** Invented date. Nothing to hand in: you talk about the work."
+
+    - id: csef_awards
+      name: Awards announced
+      phase: conclusions
+      order: 99
+      owner: program
+      consequence: none
+      due: { anchor: awards, days: 0 }
+      deliverables: []
+      note: "**[FIXTURE]** Invented date."
+
+advances_to:
+  - { program: isef, label: International Science and Engineering Fair }

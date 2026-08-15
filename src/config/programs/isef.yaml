@@ -24,7 +24,6 @@ level: international
 # ISEF's own steps override `collect`, which belongs to the standard research
 # process, so this file depends on it and has to say so. A child inherits the
 # choice; a program that brings its own process says `own` instead.
-process: science
 
 version: 1
 # Bump when anything a student works against changes. A participation records

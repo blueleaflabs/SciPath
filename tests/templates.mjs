@@ -62,13 +62,24 @@ const CHAINS = {
 };
 
 const library = loadLibrary();
-const resolve = (id) => resolveProgram(id, library);
+/**
+ * How a program resolves for an ordinary project.
+ *
+ * A program no longer names a research process — the project does (22.4) —
+ * so a bare resolution has no process at all, and a template that tightens a
+ * step of the scientific method has nothing to tighten. Every caller in the
+ * application supplies the project's process, and these have to resolve the
+ * same way or they are testing something nobody runs.
+ */
+const DEFAULT_PROCESS = 'process-science';
+
+const resolve = (id) => resolveProgram(id, library, DEFAULT_PROCESS);
 
 /* Every program a school actually runs, which is what the notification
    checks below walk. The process templates are layers rather than programs
    and resolve to nothing on their own. */
 const programIds = ['mvhs-scvsefa-2027', 'irpd-mvhs-2027', 'grant-mvhs-micro-2027',
-                    'mvrj-2027', 'independent-research', 'scvsefa-2027'];
+                    'mvrj-2027', 'scvsefa-2027'];
 
 /* A resolved program carries its deliverables as a Map, keyed by id: the
    libraries it uses, merged with anything it declares itself. */
@@ -265,7 +276,7 @@ test('every dated step has a reminder window', () => {
   const problems = [];
 
   for (const id of programIds) {
-    const program = resolveProgram(id, library);
+    const program = resolveProgram(id, library, DEFAULT_PROCESS);
     const dated = datesFor(program).filter((d) => d.date);
 
     for (const { step } of dated) {
@@ -283,7 +294,7 @@ test('a step that blocks something may not be silenced', () => {
   const problems = [];
 
   for (const id of programIds) {
-    for (const step of resolveProgram(id, library).steps) {
+    for (const step of resolveProgram(id, library, DEFAULT_PROCESS).steps) {
       const blocks = step.consequence && step.consequence !== 'none';
       if (blocks && step.notify === null) problems.push(`${id}/${step.id}`);
     }
@@ -298,7 +309,7 @@ test('urgent is never further out than from', () => {
   const problems = [];
 
   for (const id of programIds) {
-    for (const step of resolveProgram(id, library).steps) {
+    for (const step of resolveProgram(id, library, DEFAULT_PROCESS).steps) {
       const w = step.notify;
       if (!w) continue;
       if ((w.urgent ?? 0) > (w.from ?? 0)) {
@@ -332,11 +343,11 @@ test('every template says which of the two things it is', () => {
     if (doc.kind === 'process') continue;
     if (doc.role === 'cohort' || doc.role === 'opportunity') continue;
 
-    /* `role: none` is a template that is neither, which today means exactly
-       one: `independent-research`, scheduled for removal in 22.10 and
-       waiting on `projects.process_id`. Saying so is the point — a template
-       that cannot be classified is either a mistake or a thing being
-       retired, and both deserve to be visible rather than absent. */
+    /* `role: none` was `independent-research`, which is gone: neither a
+       cohort (no teacher, no mentors, nobody answerable) nor an opportunity
+       (nothing entered, no record out). That it could not be classified was
+       the argument for deleting it (22.10). Kept as a branch because a
+       template being retired should be visible rather than absent. */
     if (doc.role === 'none') continue;
 
     problems.push(`${file}: role is ${doc.role ?? 'missing'}`);
@@ -405,27 +416,16 @@ test('an opportunity does not prescribe a research process', () => {
      against like work, and they live on `has.categories`. Letting a fair set
      the process would mean entering two fairs asks a student to have done
      the work two ways (22.4). */
-  /**
-   * Three do today, and they are named rather than tolerated.
-   *
-   * `scvsefa-2027` and `isef` declare `process: science` because that is
-   * currently how the fair's steps get merged with the scientific method,
-   * and `grant-mvhs-micro-2027` declares `process: grant` for steps that are
-   * really the grant's own requirements rather than a way of doing research.
-   *
-   * They stay until the resolver reads the process from the project instead.
-   * Removing the declaration first would take the science steps away before
-   * anything else supplies them — the destructive half of a two part change,
-   * which is the same trap `independent-research` is waiting on.
-   *
-   * Named individually so the list can only shrink: a fourth opportunity
-   * doing this fails, and each of these disappearing is a line deleted here.
-   */
-  const pending = new Set([
-    'scvsefa-2027.yaml',
-    'isef.yaml',
-    'grant-mvhs-micro-2027.yaml',
-  ]);
+  /* The fairs came off this list when the process moved to the project: a
+     venue no longer has to name one for its students to get research steps.
+   
+     The grant is different in kind rather than pending. `process-grant` is
+     not a way of doing research — it is how you apply for money, and those
+     steps belong to this one opportunity. The rule is about research
+     processes, and this is a shared step list wearing the same file
+     extension. The honest fix is to move the steps into the grant's own
+     file, and until then it is named here rather than tolerated. */
+  const pending = new Set(['grant-mvhs-micro-2027.yaml']);
 
   const problems = [];
   const fixed = [];
@@ -461,6 +461,42 @@ test('every project can be given a process', () => {
     everyTemplate.some(({ doc }) => doc.id === fallback[1]),
     `the default process ${fallback[1]} is not a template`
   );
+});
+
+
+test('no override is left with nothing to target', () => {
+  /* The strictness that used to be a thrown error.
+   
+     An override naming a step no parent defines used to throw, which was
+     right while a program named its own process. Now the process comes from
+     the project, so the same template resolves against different steps
+     depending on the work, and throwing would make a public deadlines page
+     fail because somebody might one day enter with a different process.
+   
+     So the resolver records instead, and the check moved here: resolved with
+     the process it expects, a template must have nothing dangling. That
+     still catches the typo the throw was written for. */
+  const problems = [];
+
+  /* Resolved with the process each program expects, which is its own where
+     it names one and the default otherwise. Forcing one process on all of
+     them would report the grant's steps as dangling, when what is actually
+     wrong in that case is the test. */
+  const byId = new Map(everyTemplate.map(({ doc }) => [doc.id, doc]));
+
+  for (const id of programIds) {
+    const declared = byId.get(id)?.process;
+    const process =
+      declared === 'own' ? id : declared ? `process-${declared}` : DEFAULT_PROCESS;
+
+    const resolved = resolveProgram(id, library, process);
+
+    for (const missing of resolved.inapplicableOverrides ?? []) {
+      problems.push(`${id}: overrides "${missing}", which nothing defines`);
+    }
+  }
+
+  assert.deepEqual(problems, [], 'an override with no target is a typo');
 });
 
 console.log(`${passed} template assertions passed.`);

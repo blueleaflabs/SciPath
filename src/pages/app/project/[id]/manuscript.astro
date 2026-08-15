@@ -339,7 +339,7 @@ else if (reviewerNotes.error) error = reviewerNotes.error.message;
 else if (editorNotes.error) error = editorNotes.error.message;
 
 const { count: entryCount } = await supabase
-  .from('entries')
+  .from('opportunity_participations')
   .select('id', { count: 'exact', head: true })
   .eq('project_id', id);
 

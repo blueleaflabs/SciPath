@@ -62,14 +62,14 @@ test('every deadline query orders by date first', () => {
 test('an undated deadline sorts last, not first', () => {
   /* A step nobody has scheduled is not the next thing to worry about, and
      Postgres puts nulls first for ascending order unless told otherwise. */
-  const entry = fs.readFileSync('src/pages/app/entry/[id].astro', 'utf8');
+  const entry = fs.readFileSync('src/pages/app/project/[id]/in/[program].astro', 'utf8');
   assert.match(entry, /nullsFirst: false/);
 });
 
 test('the sequence is still the tiebreak', () => {
   /* Two things due the same day should read in the order they happen, which
      is what the template's order is for. */
-  const entry = fs.readFileSync('src/pages/app/entry/[id].astro', 'utf8');
+  const entry = fs.readFileSync('src/pages/app/project/[id]/in/[program].astro', 'utf8');
   const at = entry.indexOf(".order('due_on'");
   assert.ok(at > 0);
   assert.match(entry.slice(at, at + 300), /\.order\('sort_order'/);
@@ -120,7 +120,7 @@ test('the small variant exists, and lives with the other buttons', () => {
 });
 
 test('the deadline row is laid out as one line', () => {
-  const entry = fs.readFileSync('src/pages/app/entry/[id].astro', 'utf8');
+  const entry = fs.readFileSync('src/pages/app/project/[id]/in/[program].astro', 'utf8');
   assert.match(entry, /\.statusf\s*\{[\s\S]*?display:\s*grid/);
   assert.match(entry, /grid-template-columns/);
 });
@@ -151,7 +151,7 @@ test('a copied milestone keeps the layer it came from', () => {
 });
 
 test('the entry page shows it', () => {
-  const entry = fs.readFileSync('src/pages/app/entry/[id].astro', 'utf8');
+  const entry = fs.readFileSync('src/pages/app/project/[id]/in/[program].astro', 'utf8');
   assert.match(entry, /Set by/);
   assert.match(entry, /source/, 'and reads the column');
 });
@@ -188,7 +188,7 @@ test('an event is not what a page counts down to', () => {
   /* Applications opening is a day on the fair's calendar, not something a
      student does. Counting down to it while their sponsor is unasked is
      worse than saying nothing. */
-  for (const file of ['src/pages/app/entry/[id].astro', 'src/pages/app/index.astro']) {
+  for (const file of ['src/pages/app/project/[id]/in/[program].astro', 'src/pages/app/index.astro']) {
     const text = fs.readFileSync(file, 'utf8');
     assert.match(text, /kind !== 'event'/, `${file} counts down to events`);
   }
@@ -319,7 +319,7 @@ test('an author is not invited to assign their own officer', () => {
      gap was theirs to close. */
   for (const file of [
     'src/pages/app/project/[id]/team.astro',
-    'src/pages/app/entry/[id].astro',
+    'src/pages/app/project/[id]/in/[program].astro',
   ]) {
     const text = fs.readFileSync(file, 'utf8');
     const at = text.indexOf('Assign one');
@@ -343,7 +343,7 @@ test('and is told who does it instead', () => {
      make the check fail on exactly the pages that got this right. */
   for (const file of [
     'src/pages/app/project/[id]/team.astro',
-    'src/pages/app/entry/[id].astro',
+    'src/pages/app/project/[id]/in/[program].astro',
   ]) {
     const text = fs.readFileSync(file, 'utf8');
     assert.match(text, /or your advisor assigns one/i, file);
@@ -395,7 +395,7 @@ test('a class is never described as a club', () => {
   /* "Set by: The club" against every IRPD deadline named a body that does not
      exist. The school's own layer on top of a fair is a club; the school's
      own layer when the program IS the class is the class. */
-  const entry = fs.readFileSync('src/pages/app/entry/[id].astro', 'utf8');
+  const entry = fs.readFileSync('src/pages/app/project/[id]/in/[program].astro', 'utf8');
   const map = entry.slice(entry.indexOf('const whose'), entry.indexOf('};', entry.indexOf('const whose')));
 
   assert.match(map, /school: isCourse \? 'The class'/, 'a course has no club');
@@ -412,9 +412,15 @@ test('the pages that can tell a class from a fair do', () => {
   /* Where the kind is on the record there is no reason to guess, and "days
      to fair" in front of an IRPD student is the software describing
      something they are not doing. */
-  const entry = fs.readFileSync('src/pages/app/entry/[id].astro', 'utf8');
-  assert.match(entry, /isCourse/, 'the entry page should branch on the kind');
-  assert.match(entry, /programs\(name, season_year, kind/, 'and select it');
+  const entry = fs.readFileSync('src/pages/app/project/[id]/in/[program].astro', 'utf8');
+  assert.match(entry, /isCourse/, 'the participation page should branch on the kind');
+
+  /* The select moved into `src/lib/participation.ts`, which is the one place
+     that reads the merged table and the place that decides whether a row is
+     a class or a fair. Checked there rather than loosened here. */
+  const resolver = fs.readFileSync('src/lib/participation.ts', 'utf8');
+  assert.match(resolver, /program_role/, 'the resolver has to select the kind');
+  assert.match(resolver, /programs\(id, name, season_year, kind/, 'and the program with it');
 
   const overview = fs.readFileSync('src/pages/app/index.astro', 'utf8');
   assert.match(overview, /kind === 'course'/, 'the join button should say which');
@@ -622,7 +628,7 @@ test('deliverables are recorded in one place', () => {
      be ticked complete with nothing behind it and a deliverable could exist
      against a deadline still reading open. One list, and the deadline is
      complete because the thing exists. */
-  const entry = fs.readFileSync('src/pages/app/entry/[id].astro', 'utf8');
+  const entry = fs.readFileSync('src/pages/app/project/[id]/in/[program].astro', 'utf8');
 
   assert.match(entry, /id="deliverables"/, 'there should be a deliverables section');
   assert.match(entry, /action" value="deliverable"/, 'and it records them');
@@ -728,7 +734,7 @@ test('an entry page says where the place stands', () => {
      been granted, refused, or never decided. A student who had been turned
      down saw their deadlines and their deliverables with nothing to say that
      none of it counted for this program. */
-  const entry = fs.readFileSync('src/pages/app/entry/[id].astro', 'utf8');
+  const entry = fs.readFileSync('src/pages/app/project/[id]/in/[program].astro', 'utf8');
 
   assert.match(entry, /entry\.status === 'declined'/, 'a refusal is invisible');
   assert.match(entry, /entry\.status === 'requested'/, 'so is a pending request');
@@ -817,7 +823,7 @@ test('a program is only asked for what it has', () => {
   const resolve = fs.readFileSync('src/lib/template-resolve.ts', 'utf8');
   assert.match(resolve, /Object\.assign\(has, layer\.has/, 'capabilities must survive resolution');
 
-  const entry = fs.readFileSync('src/pages/app/entry/[id].astro', 'utf8');
+  const entry = fs.readFileSync('src/pages/app/project/[id]/in/[program].astro', 'utf8');
   assert.match(entry, /const hasResult =/, 'the result section should know whether there is one');
 
   for (const cap of ['categories', 'awards', 'advancement']) {
@@ -1136,6 +1142,50 @@ test('no page tells a student to run a command', () => {
   walk('src/components');
 
   assert.deepEqual(problems, [], 'say it in the terminal, not on the page');
+});
+
+/* ── A supervisor belongs to a cohort, not to a venue ────────────────────── */
+
+test('no page reads a role word off an entry', () => {
+  /* The project page called somebody an Officer because the project had been
+     entered at a fair, which is a venue's vocabulary rather than a school's.
+     A regional fair has no opinion about what a school calls the person
+     looking after a project; a class calls them an Elder and a club calls
+     them an Officer, and that comes from the cohort (22.9).
+   
+     `staffWord(program)` on an entry page is correct: there the program *is*
+     the subject. What this refuses is deriving one from a list of entries,
+     which is how a project in two cohorts got one word for two supervisors. */
+  const problems = [];
+
+  const walk = (dir) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else if (entry.name.endsWith('.astro')) {
+        const text = fs.readFileSync(full, 'utf8');
+
+        for (const m of text.matchAll(/(shared)?[sS]taffWord\([^)]*\)/g)) {
+          if (!/entries|e\.programs/.test(m[0])) continue;
+          problems.push(`${full}:${text.slice(0, m.index).split('\n').length} ${m[0].slice(0, 50)}`);
+        }
+      }
+    }
+  };
+
+  walk('src/pages/app');
+
+  assert.deepEqual(problems, [], 'read the word from project_cohorts, not from where the work went');
+});
+
+test('the project page says when nobody is looking after a project', () => {
+  /* `independent-research` existed so a solo student had something to join,
+     and it hid the fact that nobody was answerable for their work. Deleting
+     it makes the absence visible, which is the argument for a staffed Open
+     Program cohort rather than a placeholder that made it look handled
+     (22.10). */
+  const page = fs.readFileSync('src/pages/app/project/[id].astro', 'utf8');
+  assert.match(page, /nobody at the school is\s*\n?\s*looking after it/);
 });
 
 console.log(`${passed} ordering assertions passed. ${pages.length} pages read.`);

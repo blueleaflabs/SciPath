@@ -10,11 +10,14 @@ kind: course
 # and its own anchors. What it prepares for is its own showcase.
 role: cohort
 
-# The class's own showcase, which is an opportunity rather than a milestone:
-# a student can say "I presented at the IRPD Community Showcase" two years
-# later, and that is a claim about the project which outlives the class. The
-# test is whether it produces something the project carries afterwards.
-prepares_for: irpd-showcase-2027
+# No `prepares_for`. The Community Showcase was briefly lifted out as an
+# opportunity of its own, on the reasoning that a student can say "I presented
+# at the IRPD Community Showcase" two years later. It is going back where it
+# was: it is a milestone of this class, run by this class, on a day this class
+# sets, and a separate template duplicated the step rather than moving it.
+#
+# If a showcase ever needs a record of its own, milestone 6 is where it comes
+# from and the template does not have to exist first.
 
 name: Independent Research and Project Design
 short_name: IRPD

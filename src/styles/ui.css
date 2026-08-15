@@ -597,6 +597,31 @@ input[type='file']::file-selector-button:hover {
   outline-offset: 1px;
 }
 
+/* A dropdown, anywhere.
+ *
+ * Same story as `.in` above, one control later: every `<select>` in the app
+ * was a raw browser control sitting beside a styled button, which reads as
+ * unfinished on the one row where a student picks the class to add their
+ * project to.
+ *
+ * Matched to `.in` rather than given its own look, because they appear on
+ * the same rows and the eye reads a difference in height or border as
+ * meaning something. The arrow stays native: drawing one means
+ * `appearance: none`, and every implementation of that has to reimplement
+ * the focus ring, the disabled state and the dark scheme by hand.
+ */
+select {
+  font-family: inherit;
+  font-size: 0.94rem;
+  padding: 7px 10px;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background: var(--card);
+  color: var(--ink);
+  min-width: 0;
+  max-width: 100%;
+}
+
 /* Read aloud, never drawn.
  *
  * Four pages label a control this way and nothing defined it, so the label

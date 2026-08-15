@@ -40,7 +40,7 @@ const sql = fs.readdirSync(dir).filter((f) => f.endsWith('.sql')).sort()
 /** Tables whose rows belong to a project, directly or through one hop. */
 const PROJECT_OWNED = new Set([
   'projects', 'project_authors', 'project_links', 'project_images',
-  'project_sponsors', 'field_notes', 'note_media', 'entries',
+  'project_sponsors', 'field_notes', 'note_media', 'participations',
   'entry_milestones', 'deliverables', 'manuscripts', 'manuscript_sections',
   'manuscript_figures', 'manuscript_references', 'submissions', 'state_events',
 ]);

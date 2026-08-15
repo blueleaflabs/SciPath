@@ -239,8 +239,8 @@ const { data: queue } = me.isEditor
    recorded the result. */
 const { data: candidates } = me.isEditor
   ? await supabase
-      .from('entries')
-      .select('project_id, placement, projects(title), programs(name, season_year)')
+      .from('opportunity_participations')
+      .select('project_id, placement, projects:project_id(title), programs:program_id(name, season_year)')
       .not('result_recorded_at', 'is', null)
       /* A result can only exist on a granted place, but say so rather than
          relying on that: a refused request with a stale result would

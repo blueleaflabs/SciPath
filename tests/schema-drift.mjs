@@ -110,6 +110,28 @@ for (const file of fs.readdirSync(MIGRATIONS).filter((f) => f.endsWith('.sql')).
       columnsOf.get(m[1])?.add(c[1]);
     }
   }
+
+  /**
+   * Views, which page code reads and this check could not see.
+   *
+   * `cohort_participations` and `opportunity_participations` exist precisely
+   * so that no page selects from `participations` directly (22.5), which
+   * means every one of those reads was invisible here. A query asking the
+   * cohort view for `cohort_id` -- a column that moved to `program_id` in the
+   * merge -- passed this check and returned an error and no rows at runtime,
+   * which is the exact failure the whole file exists to catch.
+   *
+   * Only `select *` views are resolved, and they inherit the columns of the
+   * table they select from. A view with an explicit column list would need
+   * its own parse, and there are none; if one appears, it is left unknown
+   * rather than guessed at, because a wrong answer here is worse than none.
+   */
+  for (const m of sql.matchAll(
+    /create view public\.(\w+) as\s*\n\s*select\s+(\w+)\.\*\s*\n\s*from public\.(\w+)/g
+  )) {
+    const inherited = columnsOf.get(m[3]);
+    if (inherited) columnsOf.set(m[1], new Set(inherited));
+  }
 }
 
 /**
@@ -264,6 +286,98 @@ for (const file of ROOTS.flatMap(walk)) {
 }
 
 const unknown = [...asked].filter(([name]) => !schema.has(name));
+
+/**
+ * A FILTER NAMES A COLUMN TOO.
+ *
+ * Everything above reads `.select(...)`. A `.eq('project_id', id)` names a
+ * column just as surely and was never checked -- so when the sponsor moved
+ * off the project onto the participation, three queries kept filtering on a
+ * column that no longer existed and nothing said a word. The two the earlier
+ * sweep did catch were caught only because they happened to *select*
+ * `project_id` as well.
+ *
+ * Same failure as always: an error and no rows, which reads as "none".
+ */
+{
+  const problems = [];
+  const filter = /\.(?:eq|neq|gt|gte|lt|lte|is|in|not)\(\s*'([a-z_]+)'/g;
+  const from = /\.from\(\s*'([a-z_]+)'\s*\)/g;
+
+  for (const file of ROOTS.flatMap(walk)) {
+    const text = fs.readFileSync(file, 'utf8');
+
+    /* Which table a filter belongs to is the nearest `.from` above it, which
+       is how these chains are written and is good enough to be useful. */
+    for (const m of text.matchAll(filter)) {
+      let table = null;
+      for (const f of text.matchAll(from)) {
+        if (f.index < m.index) table = f[1];
+        else break;
+      }
+
+      const columns = table && columnsOf.get(table);
+      if (!columns) continue;
+      if (columns.has(m[1])) continue;
+      /* `not` takes a column then an operator; `is` and `in` take a column.
+         Anything that is not a column of that table is the bug. */
+      problems.push(`${table}.${m[1]}  (${file})`);
+    }
+  }
+
+  if (problems.length) {
+    console.log('\nA query filters a table on a column it does not have:');
+    for (const p of [...new Set(problems)]) console.log(`  ${p}`);
+    console.log('\nThis returns an error and no rows, which reads as');
+    console.log('"nothing found" rather than as a mistake.\n');
+    process.exit(1);
+  }
+}
+
+/**
+ * AN EMBED ON A VIEW HAS TO NAME ITS FOREIGN KEY.
+ *
+ * `entries` and `project_cohorts` were tables, and a table carries its
+ * foreign keys, so `.select('programs(name)')` resolved on its own. The two
+ * participation views do not: a view has no constraints of its own, so the
+ * relationship has to be spelled out as `programs:program_id(name)`.
+ *
+ * Left implicit the request errors and returns no rows, which reads on the
+ * page as *"not in a class or entered anywhere yet"* -- a sentence that is
+ * false and looks deliberate. It shipped that way, on the overview, while
+ * the project page beside it worked, because that one happened to name the
+ * key.
+ *
+ * Checked by reading the select rather than by calling the database, since
+ * the failure is silent by construction.
+ */
+{
+  const problems = [];
+  const onView =
+    /\.from\('(?:cohort|opportunity)_participations'\)\s*\n?\s*\.select\(\s*'([^']*)'/g;
+
+  for (const file of ROOTS.flatMap(walk)) {
+    const text = fs.readFileSync(file, 'utf8');
+
+    for (const m of text.matchAll(onView)) {
+      for (const embed of ['programs', 'projects']) {
+        const bare = new RegExp(`(^|[ ,])${embed}\\(`);
+        if (bare.test(m[1])) {
+          problems.push(`${file}: ${embed}( on a participation view without its key`);
+        }
+      }
+    }
+  }
+
+  if (problems.length) {
+    console.log('\nAn embed on a view has to name the column it joins through:');
+    for (const p of problems) console.log(`  ${p}`);
+    console.log('\nWrite programs:program_id(...) rather than programs(...).');
+    console.log('Left implicit this returns an error and no rows, which reads');
+    console.log('as "nothing found" rather than as a mistake.\n');
+    process.exit(1);
+  }
+}
 
 console.log(`${schema.size} schema identifiers, ${asked.size} referenced by code.`);
 

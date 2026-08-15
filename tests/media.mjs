@@ -143,7 +143,7 @@ test('every copy of a milestone carries the phase', () => {
 
 test('both the page and the printout group by it', () => {
   for (const file of [
-    'src/pages/app/entry/[id].astro',
+    'src/pages/app/project/[id]/in/[program].astro',
     'src/pages/app/project/[id]/notebook.astro',
   ]) {
     const text = fs.readFileSync(file, 'utf8');
@@ -156,7 +156,7 @@ test('a milestone whose phase is unknown still appears', () => {
   /* A template edited after a season started can leave a milestone naming a
      phase nobody declares. Vanishing quietly is worse than an untidy
      heading. */
-  const entry = fs.readFileSync('src/pages/app/entry/[id].astro', 'utf8');
+  const entry = fs.readFileSync('src/pages/app/project/[id]/in/[program].astro', 'utf8');
   assert.match(entry, /Everything else/);
 });
 

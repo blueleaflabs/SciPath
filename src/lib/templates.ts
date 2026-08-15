@@ -68,11 +68,22 @@ export const library: Library = { programs, deliverables, shapes };
 /* Resolution is not cheap and a page may ask twice. */
 const cache = new Map<string, Resolved>();
 
-export function resolveProgram(id: string): Resolved {
-  const cached = cache.get(id);
+/**
+ * A program, resolved for the process a project follows.
+ *
+ * Cached on both, because the same fair resolves differently for a
+ * scientific project and an engineering one: the process is a fact about the
+ * work rather than about the venue (22.4). Omitting it is what every caller
+ * did before the process moved to the project, and the template's own
+ * declaration is then the fallback.
+ */
+export function resolveProgram(id: string, process?: string | null): Resolved {
+  const key = `${id}::${process ?? ''}`;
+  const cached = cache.get(key);
   if (cached) return cached;
-  const resolved = resolve(id, library);
-  cache.set(id, resolved);
+
+  const resolved = resolve(id, library, process ?? null);
+  cache.set(key, resolved);
   return resolved;
 }
 

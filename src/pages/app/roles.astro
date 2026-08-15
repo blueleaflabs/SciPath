@@ -139,7 +139,11 @@ const counts = GRANTABLE.map((role) => ({
             {counts.map((c, i) => (
               <>
                 {i > 0 && ' · '}
-                {c.n} {c.n === 1 ? roleLabel[c.role].toLowerCase() : `${roleLabel[c.role].toLowerCase()}s`}
+                {/* Interpolated as one string. `{c.n} {label}` renders as
+                    "8club officers": JSX drops whitespace between two
+                    expressions, and the space has to be inside one of
+                    them. */}
+                {`${c.n} ${c.n === 1 ? roleLabel[c.role].toLowerCase() : `${roleLabel[c.role].toLowerCase()}s`}`}
               </>
             ))}
           </p>
@@ -196,7 +200,12 @@ const counts = GRANTABLE.map((role) => ({
                             <input type="hidden" name="action" value="revoke" />
                             <input type="hidden" name="user_id" value={p.id} />
                             <input type="hidden" name="role" value={role} />
-                            <button class="btn btn-q" type="submit">Take back</button>
+                            {/* The same weight as the buttons beside it.
+                                A quiet control in a column of solid ones
+                                reads as disabled rather than as different,
+                                and taking a role back is as ordinary as
+                                granting one. */}
+                            <button class="btn" type="submit">Take back</button>
                             <span class="since">
                               since {formatDate(grantedAt.get(`${p.id}:${role}`), 'short', '')}
                             </span>

@@ -50,7 +50,68 @@ if (Astro.request.method === 'POST' && supabase) {
   const form = await Astro.request.formData();
   const action = String(form.get('action') ?? '');
 
-  if (action === 'join') {
+  /* Joining a cohort. A person enrolls, and no project is invented in order
+     to have somewhere to put the enrolment (22.1). */
+  /* Starting a project.
+  
+     There was no way to do this at all: `start_entry` made one as a side
+     effect of entering something, and separating the two (22.1) left a
+     student who had joined a class with nothing to click. A project exists
+     because somebody started work, so this is its own act. */
+  /* Putting an existing project into a cohort somebody has been admitted
+     to. The same act as the picker on the project page, offered where a
+     student is when they are told they are in (22.5). */
+  if (action === 'attach_cohort') {
+    const { error: e } = await supabase.rpc('set_project_cohort', {
+      p_project_id: String(form.get('project_id') ?? ''),
+      p_cohort_id: String(form.get('cohort_id') ?? ''),
+      p_in: true,
+    });
+
+    if (e) error2 = e.message;
+    else return leaveTo(`/app/project/${String(form.get('project_id') ?? '')}/`);
+  } else if (action === 'start_project') {
+    const title = String(form.get('title') ?? '').trim();
+
+    if (!title) {
+      error2 = 'Give the project a working title. You can change it later.';
+    } else {
+      const { data: projectId, error: e } = await supabase.rpc('start_project', {
+        p_title: title,
+        p_started_on: String(form.get('started_on') ?? '') || null,
+        p_cohort_id: String(form.get('cohort_id') ?? '') || null,
+      });
+
+      if (e) error2 = e.message;
+      else return leaveTo(`/app/project/${projectId}/`);
+    }
+  } else if (action === 'join_cohort') {
+    const { error: e } = await supabase.rpc('join_cohort', {
+      p_cohort_id: String(form.get('program_id') ?? ''),
+    });
+
+    if (e) error2 = e.message;
+    else {
+      /* What happens next, in the order it happens. A request that says "you
+         are in" when a teacher has not decided is telling somebody something
+         untrue. */
+      /* Named, because a student asking to join three things in a row gets
+         three identical confirmations otherwise and cannot tell which one
+         this was. */
+      const { data: program } = await supabase
+        .from('programs')
+        .select('joining, name')
+        .eq('id', String(form.get('program_id') ?? ''))
+        .maybeSingle();
+
+      const what = program?.name ?? 'it';
+
+      attached =
+        program?.joining === 'approval'
+          ? `Request to join ${what} sent. You can start a project while you wait for approval.`
+          : `You are in ${what}. Start a project when you are ready.`;
+    }
+  } else if (action === 'join') {
     const title = String(form.get('title') ?? '').trim();
 
     if (!title) {
@@ -82,7 +143,7 @@ if (Astro.request.method === 'POST' && supabase) {
       error2 = 'Only your advisor decides which projects go forward.';
     } else {
       const { error: e } = await supabase.rpc('set_selection', {
-        p_entry_id: String(form.get('entry_id') ?? ''),
+        p_participation_id: String(form.get('participation_id') ?? ''),
         p_state: String(form.get('state') ?? 'candidate'),
         p_note: String(form.get('note') ?? '') || null,
       });
@@ -129,15 +190,65 @@ if (supabase && account) {
 
     const myProjectIds = (authored ?? []).map((a: any) => a.project_id);
 
-    const { data } = myProjectIds.length
+    /**
+     * The projects, and where each of them went.
+     *
+     * **Read from projects, not from entries.** This listed entries, so a
+     * project that had not been submitted anywhere did not exist to it: a
+     * student who started work and joined a class saw *nothing yet this
+     * season* while looking at their own project's page in another tab.
+     *
+     * That was the conflation surviving in a query. Work exists because
+     * somebody started it, and entering it somewhere is a later and optional
+     * thing (22.1). A project with no entry is the ordinary state of every
+     * project for its first month.
+     */
+    const { data: mineProjects } = myProjectIds.length
       ? await supabase
-          .from('entries')
-          .select('id, status, placement, program_id, project_id, programs(name, season_year, fair_date, kind, roles), projects(title)')
+          .from('projects')
+          .select('id, title, created_at')
+          .in('id', myProjectIds)
+          .is('archived_at', null)
+          .order('created_at', { ascending: false })
+      : { data: [] as any[] };
+
+    const { data: theirEntries } = myProjectIds.length
+      ? await supabase
+          .from('opportunity_participations')
+          .select('id, status, placement, program_id, project_id, programs:program_id(name, season_year, fair_date, kind, roles)')
           .in('project_id', myProjectIds)
           .order('entered_at', { ascending: false })
       : { data: [] as any[] };
 
-    myEntries = data ?? [];
+    /* The classes and clubs these projects are in, which is a separate
+       question from what they have been entered in. Before the merge a
+       cohort had no participation row to read, so this line could not be
+       written and the list below said "not entered anywhere yet" to a
+       student whose project was sitting in IRPD. */
+    const { data: theirCohorts } = myProjectIds.length
+      ? await supabase
+          .from('cohort_participations')
+          .select('id, program_id, project_id, programs:program_id(name, season_year, kind, roles)')
+          .in('project_id', myProjectIds)
+      : { data: [] as any[] };
+
+    const entriesFor = new Map<string, any[]>();
+    for (const e of theirEntries ?? []) {
+      entriesFor.set(e.project_id, [...(entriesFor.get(e.project_id) ?? []), e]);
+    }
+
+    const cohortsFor = new Map<string, any[]>();
+    for (const c of theirCohorts ?? []) {
+      cohortsFor.set(c.project_id, [...(cohortsFor.get(c.project_id) ?? []), c]);
+    }
+
+    /* One row per project, carrying whatever it has been entered in. A
+       project entered nowhere still gets a row, which is the fix. */
+    myEntries = (mineProjects ?? []).map((project: any) => ({
+      project,
+      entries: entriesFor.get(project.id) ?? [],
+      cohorts: cohortsFor.get(project.id) ?? [],
+    }));
 
     /* Which of these already have a manuscript, so the link can say "start"
        or "open" rather than making somebody click to find out. */
@@ -170,21 +281,95 @@ if (supabase && account) {
  */
 let joinable: any[] = [];
 let enteredIn = new Set<string>();
+
+/**
+ * Why a program cannot be entered yet, if it cannot.
+ *
+ * The same function `enter_program` and `start_entry` call, so a form drawn
+ * here is a form that will be accepted. Drawing the door and refusing at it
+ * is worse than not drawing it: the student has already decided to go
+ * through by the time anybody tells them.
+ */
+let gateFor = new Map<string, string>();
 let entryFor = new Map<string, string>();
+
+/* Cohorts this person is in or waiting on, so a card can say which. Asking
+   twice does nothing and reads as though the first request vanished. */
+let cohortState = new Map<string, string>();
+
+/* Cohorts this person is actually in, for the picker when starting a
+   project. A pending request is not one of them. */
+let myMemberships: any[] = [];
+
+/* This person's projects, and which cohorts each is already in, so a card
+   can offer the ones that are not. */
+let myProjects: any[] = [];
+let projectCohorts = new Map<string, Set<string>>();
+
+const myProjectsForCohort = (cohortId: string) =>
+  myProjects.filter((p: any) => !(projectCohorts.get(p.id) ?? new Set()).has(cohortId));
 
 if (supabase && account) {
   const { data: open } = await supabase
     .from('programs')
-    .select('id, name, season_year, fair_date, description, website_url, advances_to_fairs, status, kind, level, joining, places')
+    .select('id, name, season_year, fair_date, description, website_url, advances_to_fairs, status, kind, level, joining, places, program_role')
     .eq('status', 'open')
     .order('fair_date', { ascending: true });
 
   joinable = open ?? [];
 
-  /* A program already joined shows the way in rather than the form. */
-  for (const e of myEntries) {
-    enteredIn.add(e.program_id);
-    entryFor.set(e.program_id, e.id);
+  const { data: mine } = await supabase
+    .from('memberships')
+    .select('cohort_id, state')
+    .eq('user_id', account.id);
+
+  for (const m of mine ?? []) cohortState.set(m.cohort_id, m.state);
+
+  const { data: joined } = await supabase
+    .from('memberships')
+    .select('cohort_id, programs:cohort_id(name, season_year)')
+    .eq('user_id', account.id)
+    .eq('state', 'member');
+
+  myMemberships = joined ?? [];
+
+  const { data: authored } = await supabase
+    .from('project_authors')
+    .select('project_id, projects(id, title)')
+    .eq('user_id', account.id)
+    .eq('role', 'author');
+
+  myProjects = (authored ?? []).map((a: any) => a.projects).filter(Boolean);
+
+  if (myProjects.length > 0) {
+    const { data: attached } = await supabase
+      .from('cohort_participations')
+      .select('project_id, program_id')
+      .in('project_id', myProjects.map((p: any) => p.id));
+
+    for (const row of attached ?? []) {
+      const held = projectCohorts.get(row.project_id) ?? new Set<string>();
+      held.add(row.program_id);
+      projectCohorts.set(row.project_id, held);
+    }
+  }
+
+  const { data: gates } = await supabase.rpc('entry_gates');
+  for (const g of gates ?? []) gateFor.set(g.program_id, g.reason);
+
+  /* A program already entered shows the way in rather than the form.
+   *
+   * `myEntries` is one row per *project*, each carrying its entries -- so
+   * `e.program_id` was undefined on every pass and `enteredIn` only ever
+   * collected `undefined`. Every program therefore kept offering its entry
+   * form to somebody who had already entered it. This predates the merge;
+   * it is fixed here because the loop had to be read anyway.
+   */
+  for (const group of myEntries) {
+    for (const entry of group.entries) {
+      enteredIn.add(entry.program_id);
+      entryFor.set(entry.program_id, entry.id);
+    }
   }
 }
 
@@ -209,8 +394,8 @@ if (supabase && account) {
        which belong to a participation rather than to the work. */
     const { data: entries } = ids.length
       ? await supabase
-          .from('entries')
-          .select('id, project_id, status, selection_state, selection_decided_at, programs(id, name, season_year, fair_date, kind, roles, selection_cap)')
+          .from('opportunity_participations')
+          .select('id, project_id, status, selection_state, selection_decided_at, programs:program_id(id, name, season_year, fair_date, kind, roles, selection_cap)')
           .in('project_id', ids)
           .in('status', ['entered', 'competed'])
       : { data: [] as any[] };
@@ -218,8 +403,8 @@ if (supabase && account) {
     const { data: sponsorRows } = ids.length
       ? await supabase
           .from('project_sponsors')
-          .select('project_id, teacher_name')
-          .in('project_id', ids)
+          .select('teacher_name, participations!inner(project_id)')
+          .in('participations.project_id', ids)
           .is('superseded_at', null)
       : { data: [] as any[] };
 
@@ -228,8 +413,8 @@ if (supabase && account) {
     const { data: milestones } = entryIds.length
       ? await supabase
           .from('entry_milestones')
-          .select('id, entry_id, name, kind, due_on, required, blocks_experimentation, completed_on')
-          .in('entry_id', entryIds)
+          .select('id, participation_id, name, kind, due_on, required, blocks_experimentation, completed_on')
+          .in('participation_id', entryIds)
       : { data: [] as any[] };
 
     /* One row per participation, and a project in no program still gets a
@@ -241,7 +426,7 @@ if (supabase && account) {
     });
 
     watched = pairs.map(({ p, entry }: any) => {
-      const mine = (milestones ?? []).filter((m: any) => m.entry_id === entry?.id);
+      const mine = (milestones ?? []).filter((m: any) => m.participation_id === entry?.id);
 
       const findings = checkDateOrder({
         startedOn: p.started_on,
@@ -260,7 +445,7 @@ if (supabase && account) {
       const selfManaged = (p.project_authors ?? []).filter(
         (a: any) => a.role === 'author' && a.self_managed_at
       );
-      const sponsor = (sponsorRows ?? []).find((s: any) => s.project_id === p.id) ?? null;
+      const sponsor = (sponsorRows ?? []).find((s: any) => s.participations?.project_id === p.id) ?? null;
       const worst = worstFinding(findings);
 
       return {
@@ -581,7 +766,7 @@ function standingOf(group: { program: any; rows: any[] }) {
                             <td>
                               <form method="POST" action="#outcome" class="inline">
                                 <input type="hidden" name="action" value="select" />
-                                <input type="hidden" name="entry_id" value={w.entry.id} />
+                                <input type="hidden" name="participation_id" value={w.entry.id} />
                                 <select
                                   name="state"
                                   aria-label={`Selection state for ${w.title}`}
@@ -647,22 +832,48 @@ function standingOf(group: { program: any; rows: any[] }) {
             <section class="sec">
               <div class="sec-h">
                 <b>This season</b>
-                <span>{myEntries.length ? `${myEntries.length} joined` : 'nothing yet'}</span>
+                <span>
+                  {myEntries.length
+                    ? `${myEntries.length} ${myEntries.length === 1 ? 'project' : 'projects'}`
+                    : 'nothing yet'}
+                </span>
               </div>
               {myEntries.length ? (
                 <ul class="linklist">
                   {myEntries.map((e) => (
                     <li>
-                      {/* The entry, which is the hub (7.13).
-                      
-                          This pointed at the project route on the reasoning
-                          that a front page should reach the work rather
-                          than a deadlines view. The reasoning held and the
-                          target moved: the project route is the notebook
-                          now, and everything that row's links named lives
-                          on the entry. */}
-                      <a href={`/app/entry/${e.id}/`}>{e.projects?.title}</a>
-                      <span class="t-sm"> · {programTitle(e.programs)} · judging {fmt(e.programs?.fair_date)}</span>
+                      {/* The project, which is the hub (22.9). A project may
+                          have gone nowhere, or to three places, and either
+                          way the work is the thing to open. */}
+                      <a href={`/app/project/${e.project.id}/`}>{e.project.title}</a>
+
+                      {/* Classes and clubs first, then entries. A project in
+                          IRPD and nowhere else is not "not entered anywhere
+                          yet" — it is in a class, which is the more useful
+                          thing to say and the thing the old copy denied. */}
+                      {e.cohorts.length > 0 || e.entries.length > 0 ? (
+                        <span class="t-sm">
+                          {e.cohorts.map((c: any, i: number) => (
+                            <>
+                              {i > 0 ? ', ' : ' · '}
+                              <a href={`/app/project/${e.project.id}/in/${c.program_id}/`}>
+                                {programTitle(c.programs)}
+                              </a>
+                            </>
+                          ))}
+                          {e.entries.map((entry: any, i: number) => (
+                            <>
+                              {i > 0 || e.cohorts.length > 0 ? ', ' : ' · '}
+                              <a href={`/app/project/${e.project.id}/in/${entry.program_id}/`}>{programTitle(entry.programs)}</a>
+                            </>
+                          ))}
+                        </span>
+                      ) : (
+                        /* Neither, which is the case the noun has to be
+                           careful about: we do not know whether this school
+                           runs a fair, a class, or both. */
+                        <span class="t-sm"> · not in a class or entered anywhere yet</span>
+                      )}
                     </li>
                   ))}
                 </ul>
@@ -673,8 +884,41 @@ function standingOf(group: { program: any; rows: any[] }) {
                    only option is IRPD. */
                 <div class="note">
                   <h4>Nothing yet this season</h4>
-                  <p style="margin-top:12px">
-                    <a class="btn" href="#join">See what you can join</a>
+                  <p class="t-sm" style="max-width:var(--measure-text)">
+                    Start a project whenever you are ready. It does not have to
+                    be entered anywhere, or belong to a class, to be worth
+                    keeping a notebook for.
+                  </p>
+
+                  <form method="POST" data-leaves-page class="startp">
+                    <input type="hidden" name="action" value="start_project" />
+
+                    <label>
+                      <span>Working title <i class="req">*</i></span>
+                      <input class="in" name="title" required />
+                    </label>
+
+                    {/* Where a person is in a cohort, the project can belong
+                        to it from the start, which also decides its research
+                        process (22.4). Absent, it belongs to nobody, which is
+                        the solo case and is allowed. */}
+                    {myMemberships.length > 0 && (
+                      <label>
+                        <span>Part of</span>
+                        <select name="cohort_id">
+                          <option value="">Nothing in particular</option>
+                          {myMemberships.map((m: any) => (
+                            <option value={m.cohort_id}>{programTitle(m.programs)}</option>
+                          ))}
+                        </select>
+                      </label>
+                    )}
+
+                    <p><button class="btn" type="submit">Start a project</button></p>
+                  </form>
+
+                  <p style="margin-top:6px">
+                    <a href="#join">Or see what you can join</a>
                   </p>
                 </div>
               )}
@@ -742,22 +986,82 @@ function standingOf(group: { program: any; rows: any[] }) {
                     View {participationVerb(p).noun}
                   </a>
                 </div>
+              ) : gateFor.has(p.id) ? (
+                /* Locked, and the sentence says by what. A state fair takes
+                   the projects a regional put forward, and a club is how a
+                   school enters the fair it prepares for -- neither is a
+                   form to fill in. */
+                <div class="already">
+                  <p class="t-sm" style="max-width:var(--measure-text); margin:0">
+                    {gateFor.get(p.id)}
+                  </p>
+                </div>
               ) : (
               <details class="enter" style={!me.isStudent ? 'display:none' : undefined}>
                 {/* The verb is the control. A disclosure whose summary reads
                     "Ask to join" and then asks for a title is the same two
                     steps as a button that opens a form, without a second
                     page or a line of script. */}
+                {/* A cohort is joined and asks for nothing; an opportunity
+                    is entered and asks for a project (22.2). Two different
+                    acts, and the form should not pretend otherwise: asking
+                    a student to name a project in order to enroll in a
+                    class is the conflation this model removed. */}
+                {p.program_role === 'cohort' && cohortState.get(p.id) === 'requested' ? (
+                  /* Already asked. Offering the form again invites somebody
+                     to send a second request that does nothing, and reads as
+                     though the first one was lost. */
+                  <p class="waiting">Request sent, pending approval</p>
+                ) : p.program_role === 'cohort' && cohortState.get(p.id) === 'member' ? (
+                  /* Being in a cohort is not the end of the errand. The card
+                     said "You are in this one" as dead text, so somebody who
+                     had just been admitted had nothing to click and no way
+                     to put their work into the class they had joined. */
+                  <div class="waiting">
+                    <p style="margin:0 0 8px">You are in this one.</p>
+
+                    {myProjectsForCohort(p.id).length > 0 ? (
+                      <form method="POST" action="#outcome" class="inline">
+                        <input type="hidden" name="action" value="attach_cohort" />
+                        <input type="hidden" name="cohort_id" value={p.id} />
+                        <select name="project_id" aria-label={`Add a project to ${p.name}`}>
+                          {myProjectsForCohort(p.id).map((project: any) => (
+                            <option value={project.id}>{project.title}</option>
+                          ))}
+                        </select>
+                        <button class="btn btn-sm" type="submit">Add a project</button>
+                      </form>
+                    ) : (
+                      <p class="t-sm" style="margin:0">
+                        Every project you have is already in it.
+                      </p>
+                    )}
+                  </div>
+                ) : p.program_role === 'cohort' ? (
+                  <>
+                    <summary>
+                      {p.joining === 'approval' ? 'Ask to join' : 'Join'}
+                    </summary>
+                    <form method="POST" data-leaves-page>
+                      <input type="hidden" name="action" value="join_cohort" />
+                      <input type="hidden" name="program_id" value={p.id} />
+                      {/* No explanation above the button. Who decides is not
+                          the student's problem at the moment they ask, and
+                          the line pushed three cards out of alignment for a
+                          sentence nobody needed twice. */}
+                      <button class="btn" type="submit">
+                        {p.joining === 'approval' ? 'Request to join' : 'Join'}
+                      </button>
+                    </form>
+                  </>
+                ) : (
+                  <>
                 <summary>
                   {p.joining === 'approval'
-                    ? 'Ask to join'
-                    : p.kind === 'course'
-                      ? 'Join the class'
-                      : p.kind === 'grant'
-                        ? 'Start an application'
-                        : p.kind === 'independent'
-                          ? 'Start research'
-                          : 'Enter fair'}
+                    ? 'Ask to enter'
+                    : p.kind === 'grant'
+                      ? 'Start an application'
+                      : 'Enter'}
                 </summary>
               {/* No fragment on the action.
               
@@ -807,6 +1111,8 @@ function standingOf(group: { program: any; rows: any[] }) {
                 )}
                 <p class="legend"><i class="req">*</i> required</p>
               </form>
+                  </>
+                )}
               </details>
               )}
             </div>
@@ -862,6 +1168,23 @@ function standingOf(group: { program: any; rows: any[] }) {
     display: flex;
     flex-direction: column;
     padding: 0;
+  }
+  /* The action on the floor of every card, whatever the description above
+     it says. Three cards with three different amounts of text put their
+     buttons at three heights, which reads as three different kinds of
+     thing. */
+  .prog .enter,
+  .prog .already,
+  .prog .waiting { margin-top: auto; }
+
+  .prog .waiting {
+    margin-bottom: 0;
+    padding: 14px 20px;
+    border-top: 1px solid var(--rule-fine);
+    background: var(--paper);
+    font-family: var(--face-ui);
+    font-size: 0.9rem;
+    color: var(--ink-2);
   }
   /* The description grows and the action sits on the floor, so a row of
      cards has its buttons on one line however long the blurbs are. */

@@ -118,6 +118,10 @@ export interface Program {
   version?: number;
   extends?: string;
   process?: string;
+  role?: 'cohort' | 'opportunity' | 'none';
+  prepares_for?: string;
+  /** An opportunity only this cohort's members may enter. */
+  open_to_cohort?: string;
   uses?: { deliverables?: string[]; shapes?: string[] };
   anchors?: Record<string, string>;
   phases?: Phase[];
@@ -147,6 +151,8 @@ export interface Program {
 /* ── Resolving one program through its chain ──────────────────────────────── */
 
 export interface Resolved {
+  /** Overrides a swapped process left with nothing to target. */
+  inapplicableOverrides?: string[];
   /** The research process a project started here follows, or null. */
   processId?: string | null;
   id: string;
@@ -172,7 +178,11 @@ const DEFAULT_ROLES = {
 };
 
 /** Parent first. `extends` walks up; `process` prepends the process file. */
-function chainFor(id: string, programs: Map<string, Program>): Program[] {
+function chainFor(
+  id: string,
+  programs: Map<string, Program>,
+  processOverride?: string | null
+): Program[] {
   const chain: Program[] = [];
   const seen = new Set<string>();
 
@@ -192,7 +202,23 @@ function chainFor(id: string, programs: Map<string, Program>): Program[] {
      replace the science with something else.
    
      `own` means the program brings its own steps, which IRPD does. */
-  const wants = chain.find((p) => p.process)?.process;
+  /* The project's process wins where one is given.
+  
+     A program used to name the process, which meant the same work described
+     itself differently depending on which fair it was entered in, and meant
+     a project entered nowhere had no process at all. The process is a fact
+     about the work (22.4), so the caller passes the project's and the
+     template's own declaration is the fallback. */
+  let wants = processOverride ?? chain.find((p) => p.process)?.process;
+
+  /* A project whose process *is* this template. IRPD's framework is not a
+     process file it inherits, it is the class's own steps, so a project
+     started there carries `irpd-mvhs-2027` as its process and resolving it
+     against itself must not prepend anything. Without this the lookup for
+     `process-irpd-mvhs-2027` misses and falls through to the standard
+     process, quietly giving a design student the scientific method. */
+  if (wants === id) wants = 'own';
+
   if (wants && wants !== 'own') {
     const process = programs.get(`process-${wants}`) ?? programs.get('process-standard');
     if (process) chain.unshift(process);
@@ -201,7 +227,28 @@ function chainFor(id: string, programs: Map<string, Program>): Program[] {
   return chain;
 }
 
-function patch<T extends { id: string }>(base: T[], value: any): T[] {
+function patch<T extends { id: string }>(
+  base: T[],
+  value: any,
+  /**
+   * Where an override names something no parent defines, it is recorded and
+   * skipped rather than thrown.
+   *
+   * It used to throw, which was right while a program named its own research
+   * process: an override with no target meant a typo. Now the process comes
+   * from the project (22.4), so the same template resolves against different
+   * steps depending on the work — a fair that tightens "collect the data" is
+   * tightening a step of the *scientific* process, and an engineering project
+   * at that fair has no such step. Throwing would make a public deadlines
+   * page fail because somebody might one day enter it with a different
+   * process.
+   *
+   * **The strictness moved to a test rather than being dropped.** Resolved
+   * with the process a template expects, `inapplicableOverrides` must be
+   * empty, which still catches the typo it was written for.
+   */
+  skipped?: string[]
+): T[] {
   if (!value) return base;
   if (Array.isArray(value)) return mergeById(base, value);
 
@@ -213,7 +260,10 @@ function patch<T extends { id: string }>(base: T[], value: any): T[] {
   if (value.override) {
     for (const change of value.override) {
       const at = out.findIndex((item: T) => item.id === change.id);
-      if (at < 0) throw new Error(`override targets "${change.id}", which no parent defines`);
+      if (at < 0) {
+        skipped?.push(change.id);
+        continue;
+      }
       out[at] = { ...out[at], ...change };
     }
   }
@@ -245,9 +295,26 @@ export interface Library {
   shapes: Map<string, Shape>;
 }
 
-export function resolveProgram(id: string, library: Library): Resolved {
+export function resolveProgram(
+  id: string,
+  library: Library,
+  /**
+   * The research process to build the chain on, from `projects.process_id`.
+   *
+   * A template id (`process-science`) or a bare name (`science`), because
+   * the column holds the former and the YAML holds the latter, and a caller
+   * should not have to know which. Omitted, the template decides, which is
+   * what every caller did before the process moved to the project.
+   */
+  process?: string | null
+): Resolved {
   const { programs, deliverables: libraries } = library;
-  const chain = chainFor(id, programs);
+  const chain = chainFor(id, programs, process?.replace(/^process-/, '') ?? null);
+
+  /* Overrides that do not apply, because the caller swapped the process out
+     from under them. Kept rather than discarded so a test can see how much a
+     template is coupled to one way of working. */
+  const inapplicable: string[] = [];
   const last = chain[chain.length - 1];
 
   const phases = new Map<string, Phase>();
@@ -314,7 +381,7 @@ export function resolveProgram(id: string, library: Library): Resolved {
     for (const f of layer.facts ?? []) facts.push(f);
 
     const before = new Set(steps.map((s) => s.id));
-    steps = patch(steps, layer.steps);
+    steps = patch(steps, layer.steps, inapplicable);
     /* Tag anything this layer introduced. An override does not change whose
        deadline it is, so only new ids are tagged. */
     const origin =
@@ -374,6 +441,12 @@ export function resolveProgram(id: string, library: Library): Resolved {
        `own` resolves to this template's own id: IRPD's framework *is* the
        template, so a project started there follows that rather than a
        process file. */
+    /** Overrides skipped because this project's process has no such step. */
+    inapplicableOverrides: inapplicable,
+    role: last.role ?? 'opportunity',
+    openToCohort: last.open_to_cohort ?? null,
+    preparesFor: last.prepares_for ?? null,
+
     processId:
       (() => {
         const wants = chain.find((p) => p.process)?.process;

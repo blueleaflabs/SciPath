@@ -55,7 +55,7 @@ const db = createClient(URL, KEY, { auth: { persistSession: false } });
  * place is visible rather than merely possible.
  */
 const STAFF = {
-  'mvhs-scvsefa-2027': { officer: ['officer.a', 'officer.c', 'officer.d'] },
+  'mvhs-scvsefa-2027': { officer: ['officer.a', 'officer.c', 'officer.d'], advisor: ['advisor.c'] },
   /* The class has its own teacher. She decides who is in it, and does not
      see the club's queue: a role scoped to a program means that program. */
   'irpd-mvhs-2027': { officer: ['officer.b', 'officer.c', 'officer.d'], advisor: ['advisor.b'] },
@@ -64,6 +64,11 @@ const STAFF = {
      is one officer. */
   'grant-mvhs-micro-2027': { officer: ['officer.c'] },
   'scvsefa-2027': { officer: ['officer.a', 'officer.b'] },
+  /* The state fair a regional advances to. Staffed by the school, not by
+     the fair: whoever looks after a school's entries at the regional is who
+     looks after the handful that go on. Without this the state fair had no
+     officers at all and its queue belonged to nobody. */
+  'csef-2027': { officer: ['officer.a'] },
 };
 
 /**
@@ -82,6 +87,50 @@ const STAFF = {
 const SEASONS = Object.values(ORG_RECORDS).flatMap((record) =>
   (record.programs ?? []).map((template) => ({ org: record.id, template }))
 );
+
+/**
+ * WHO OWNS A PROGRAM, AND WHAT THAT MAKES POSSIBLE.
+ *
+ * A regional fair is not owned by any school. `scvsefa-2027.yaml` says so at
+ * the top -- *"Not owned by any school, which is why its `org_id` is null"* --
+ * and `programs.org_id` says the same from the other side. It was still being
+ * seeded per school, with the org that happened to list it, which had two
+ * consequences.
+ *
+ * **Only that school could enter it.** Monta Vista's students had no fair at
+ * all: `seed-cases` looks for an opportunity of kind `competition`, found
+ * none, and skipped every fair entry silently. One entry seeded out of six.
+ *
+ * **The school layer had nowhere to go.** A school's own dates for a fair are
+ * meant to sit *on* the fair as `org_id`-scoped milestones, which is what
+ * `enter_program` already reads when it copies
+ * `(m.org_id is null or m.org_id = v_org)`. With a forked program per school
+ * there was nothing shared to layer onto.
+ *
+ * `level` is the discriminator and it is already in every template: `school`
+ * for a class, a club or a school's own grant; `regional` and
+ * `international` for something a school enters rather than runs.
+ */
+const isShared = (file) => (file?.level ?? 'school') !== 'school';
+
+/**
+ * Shared first, so a school template has something to layer onto.
+ *
+ * `orgs.ts` lists programs per school, in the order a school thinks about
+ * them, and nothing there knows that Monta Vista's club depends on a fair
+ * Lynbrook happens to list. Sorting here rather than reordering `orgs.ts`
+ * keeps that ordering a fact about seeding instead of a trap in the config.
+ */
+function orderedSeasons(library) {
+  const sharedFirst = [];
+  const rest = [];
+
+  for (const season of SEASONS) {
+    (isShared(library.programs.get(season.template)) ? sharedFirst : rest).push(season);
+  }
+
+  return [...sharedFirst, ...rest];
+}
 
 /**
  * A step's kind, for the column the schema already has.
@@ -185,7 +234,7 @@ async function main() {
        So say what is in the way rather than deleting what can be deleted and
        colliding on the insert. */
     const { count: participations } = await db
-      .from('entries')
+      .from('opportunity_participations')
       .select('id', { count: 'exact', head: true })
       .in('program_id', ids);
 
@@ -219,7 +268,92 @@ async function main() {
 
   console.log('\nPrograms from templates\n');
 
-  for (const season of SEASONS) {
+  /* template id -> the one program row for it, for the layering below. */
+  const sharedPrograms = new Map();
+
+  /**
+   * A school's own dates, written onto a shared program.
+   *
+   * Only `internal` steps: the rest of what a school template resolves to is
+   * the fair's own, already on the shared row with a null `org_id`, and
+   * writing it again would show a student every compliance deadline twice.
+   */
+  const layerSchoolDates = async (programId, org, dates) => {
+    const rows = dates
+      .filter((d) => d.date && d.step.internal)
+      .map((d, index) => ({
+        program_id: programId,
+        org_id: org.id,
+        name: d.step.name,
+        kind: kindOf(d.step),
+        due_on: d.date,
+        required: d.step.applies_when ? false : true,
+        blocks_experimentation: d.step.consequence === 'blocks_experimentation',
+        notes: d.step.note ?? d.step.risk ?? null,
+        sort_order: Math.round((d.step.order ?? index) * 10),
+        /* Always the school's, whatever the step called itself: on a shared
+           program that is what `org_id` being set means. */
+        source: 'school',
+        phase: d.step.phase ?? null,
+        satisfied_by:
+          d.step.id === 'club_sponsor' || d.step.id === 'sponsor' ? 'sponsor' : null,
+      }));
+
+    if (!rows.length) return 0;
+
+    const { error } = await db.from('program_milestones').insert(rows);
+    if (error) console.error(`  layering ${org.slug}'s dates: ${error.message}`);
+    return rows.length;
+  };
+
+  /**
+   * Staff, scoped to one program and one school.
+   *
+   * Extracted because a shared program is seeded once and staffed many
+   * times: Lynbrook's fair officers are Lynbrook's, on the same row Monta
+   * Vista's sit on, and `user_roles.org_id` is what keeps the two apart.
+   * While this lived inline after the insert, the second school reached it
+   * only through the branch that creates a program -- so the school that did
+   * not create the shared row got no officers at all, and its approval queue
+   * was invisible to the people who run it.
+   */
+  const grantStaff = async (programId, org, template) => {
+    const staff = STAFF[template] ?? {};
+    const assignments = Object.entries(staff).flatMap(([role, handles]) =>
+      handles.map((handle) => ({ role, handle }))
+    );
+    let granted = 0;
+
+    for (const { role, handle } of assignments) {
+      /* Through the auth directory, which is where a fixture's address
+         lives. It looked in `identities`, which holds Google sign-ins and is
+         empty for every fixture: the lookup found nobody, granted nothing,
+         and said nothing. */
+      const userId = byEmail.get(`${org.slug}.${handle}@demo.invalid`);
+
+      if (!userId) {
+        console.error(`  no account for ${handle}, so no ${role} role`);
+        continue;
+      }
+
+      const { error: grantError } = await db.from('user_roles').insert({
+        org_id: org.id,
+        user_id: userId,
+        role,
+        scope_id: programId,
+      });
+
+      if (grantError) {
+        console.error(`  ${template}: could not grant ${handle} (${grantError.message})`);
+      } else {
+        granted += 1;
+      }
+    }
+
+    return granted;
+  };
+
+  for (const season of orderedSeasons(library)) {
     const org = bySlug.get(season.org);
     if (!org) {
       console.log(
@@ -232,11 +366,30 @@ async function main() {
     const resolved = resolveProgram(season.template, library);
     const dates = datesFor(resolved);
     const file = library.programs.get(season.template);
+    const shared = isShared(file);
+
+    /* Seeded once. A second school listing the same fair layers its own
+       dates onto the row that is already there rather than forking it. */
+    if (shared && sharedPrograms.has(season.template)) {
+      const programId = sharedPrograms.get(season.template);
+      const layered = await layerSchoolDates(programId, org, dates);
+      const staffed = await grantStaff(programId, org, season.template);
+
+      console.log(`  ${org.lockup_name}`);
+      console.log(`    ${resolved.name}`);
+      console.log(
+        `    shared · ${layered} of this school's own ` +
+          `${layered === 1 ? 'deadline' : 'deadlines'} layered on` +
+          (staffed ? ` · ${staffed} staff` : '')
+      );
+      console.log('');
+      continue;
+    }
 
     const { data: program, error } = await db
       .from('programs')
       .insert({
-        org_id: org.id,
+        org_id: shared ? null : org.id,
         slug: resolved.id,
         name: resolved.name,
         season_year: file.season ?? new Date().getFullYear(),
@@ -249,6 +402,11 @@ async function main() {
            this is the row learning it, so `app.process_for` has something to
            read at creation (22.4). */
         process_id: resolved.processId ?? null,
+
+        /* Which of the two things this program is (22.2). The template says;
+           the row learns it, so `memberships` can refuse an opportunity and
+           `entries` can refuse a cohort. */
+        program_role: resolved.role ?? 'opportunity',
         version: resolved.version,
         level: file.level ?? null,
         anchors: resolved.anchors,
@@ -328,56 +486,111 @@ async function main() {
       if (milestoneError) console.error(`  ${season.template}: ${milestoneError.message}`);
     }
 
-    /* Staff, scoped to this program. An unscoped advisor sees every queue;
-       one scoped here sees only this program's. */
-    const staff = STAFF[season.template] ?? {};
-    const assignments = Object.entries(staff).flatMap(([role, handles]) =>
-      handles.map((handle) => ({ role, handle }))
-    );
-    let granted = 0;
+    if (shared) sharedPrograms.set(season.template, program.id);
 
-    for (const { role, handle } of assignments) {
-      /* Through the auth directory, which is where a fixture's address
-         lives. It looked in `identities`, which holds Google sign-ins and is
-         empty for every fixture: the lookup found nobody, granted nothing,
-         and said nothing, so every officer dropdown came up empty and the
-         approval queue was invisible to the people who run it. */
-      const userId = byEmail.get(`${org.slug}.${handle}@demo.invalid`);
-
-      if (!userId) {
-        console.error(`  no account for ${handle}, so no ${role} role`);
-        continue;
-      }
-
-      const { error: grantError } = await db.from('user_roles').insert({
-        org_id: org.id,
-        user_id: userId,
-        role,
-        scope_id: program.id,
-      });
-
-      if (grantError) {
-        console.error(`  ${season.template}: could not grant ${handle} (${grantError.message})`);
-      } else {
-        granted += 1;
-      }
+    /* **The school layer, on the shared fair. 6.8.**
+    
+       A club's own dates are offsets from the fair's anchors, and a student
+       who enters the fair should see both in one list: the fair's five
+       compliance steps and the club's dozen in between. That union is
+       already implemented -- `enter_program` copies
+       `(m.org_id is null or m.org_id = v_org)` -- and what it needed was a
+       shared program to layer onto.
+    
+       Written from the school's own template rather than invented, so the
+       club's November plan deadline is one fact appearing in two places
+       rather than two facts that can disagree. */
+    const base = file?.extends;
+    let layeredOnBase = 0;
+    if (!shared && base && sharedPrograms.has(base)) {
+      layeredOnBase = await layerSchoolDates(sharedPrograms.get(base), org, dates);
     }
+
+    const granted = await grantStaff(program.id, org, season.template);
 
     const undated = dates.length - rows.length;
 
     console.log(`  ${org.lockup_name}`);
     console.log(`    ${resolved.name}`);
     console.log(
-      `    ${resolved.kind} · ${rows.length} dated ${rows.length === 1 ? 'deadline' : 'deadlines'}` +
+      `    ${shared ? 'shared · ' : ''}` +
+        `${resolved.kind} · ${rows.length} dated ${rows.length === 1 ? 'deadline' : 'deadlines'}` +
         (undated ? `, ${undated} steps with no date yet` : '') +
-        (granted ? ` · ${granted} staff` : '')
+        (granted ? ` · ${granted} staff from this school` : '')
     );
+    if (layeredOnBase) {
+      console.log(`    ${layeredOnBase} of them also layered onto ${base}`);
+    }
 
     const gates = resolved.steps.filter((s) => s.consequence === 'blocks_experimentation');
     if (gates.length) {
       console.log(`    ${gates.length} of them must precede the work`);
     }
     console.log('');
+  }
+
+  /* ── The gates, resolved once every program exists ───────────────────────
+   *
+   * `prepares_for`, `open_to_cohort` and `reached_by_advancing` are what
+   * `app.entry_gate` reads, and **none of the three was ever written**. The
+   * resolver has produced `preparesFor` and `openToCohort` all along and the
+   * insert above dropped them, so the class's showcase was open to the
+   * school and the club stood between nobody and the fair. The rule existed
+   * in the schema, in the function, and in the brief; the only place it did
+   * not exist was the data.
+   *
+   * A second pass because these point at other programs: a club cannot name
+   * the fair it prepares for until the fair has an id.
+   */
+  const { data: seeded } = await db
+    .from('programs')
+    .select('id, template_id, org_id, name')
+    .not('template_id', 'is', null);
+
+  /* Same school first, then the shared row. A club prepares for *its*
+     school's edition where one exists, and for the shared fair otherwise. */
+  const programFor = (templateId, orgId) =>
+    (seeded ?? []).find((p) => p.template_id === templateId && p.org_id === orgId) ??
+    (seeded ?? []).find((p) => p.template_id === templateId && p.org_id === null);
+
+  /* Every template some other template advances to. Read off `advances_to`,
+     so the chain is declared once. */
+  const advancementTargets = new Set();
+  for (const [, file] of library.programs) {
+    for (const step of file.advances_to ?? []) {
+      if (step?.program) advancementTargets.add(step.program);
+    }
+  }
+
+  let gated = 0;
+
+  for (const row of seeded ?? []) {
+    const file = library.programs.get(row.template_id);
+    if (!file) continue;
+
+    const patch = {};
+
+    const prepares = file.prepares_for && programFor(file.prepares_for, row.org_id);
+    if (prepares) patch.prepares_for = prepares.id;
+
+    const only = file.open_to_cohort && programFor(file.open_to_cohort, row.org_id);
+    if (only) patch.open_to_cohort = only.id;
+
+    /* `advances_to` names a family (`csef`), and the template that is that
+       family carries the season (`csef-2027`). */
+    if (advancementTargets.has(file.family) || advancementTargets.has(row.template_id)) {
+      patch.reached_by_advancing = true;
+    }
+
+    if (!Object.keys(patch).length) continue;
+
+    const { error } = await db.from('programs').update(patch).eq('id', row.id);
+    if (error) console.error(`  gates for ${row.template_id}: ${error.message}`);
+    else gated += 1;
+  }
+
+  if (gated) {
+    console.log(`${gated} programs have a way in that is not simply "apply".\n`);
   }
 
   console.log('Every deadline above came from src/config/programs/.\n');

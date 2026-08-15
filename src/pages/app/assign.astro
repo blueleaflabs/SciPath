@@ -42,11 +42,21 @@ if (Astro.request.method === 'POST') {
   const userId = String(form.get('user_id') ?? '');
 
   if (String(form.get('action')) === 'place') {
-    const { error: e } = await supabase.rpc('decide_place', {
-      p_entry_id: String(form.get('entry_id') ?? ''),
-      p_grant: String(form.get('grant')) === 'yes',
-      p_note: String(form.get('note') ?? '') || null,
-    });
+    /* Two things can be waiting, and they are decided by different
+       functions: a person joining a cohort, and a project entering an
+       opportunity (22.5). The row says which it is. */
+    const { error: e } =
+      String(form.get('waiting')) === 'membership'
+        ? await supabase.rpc('decide_membership', {
+            p_membership_id: String(form.get('participation_id') ?? ''),
+            p_grant: String(form.get('grant')) === 'yes',
+            p_note: String(form.get('note') ?? '') || null,
+          })
+        : await supabase.rpc('decide_place', {
+            p_participation_id: String(form.get('participation_id') ?? ''),
+            p_grant: String(form.get('grant')) === 'yes',
+            p_note: String(form.get('note') ?? '') || null,
+          });
     if (e) error = e.message;
     else decided = true;
   } else if (userId === '') {
@@ -83,8 +93,8 @@ const ids = (projects ?? []).map((p: any) => p.id);
 
 const { data: entries } = ids.length
   ? await supabase
-      .from('entries')
-      .select('id, project_id, program_id, status, selection_state, programs(name, season_year, roles)')
+      .from('opportunity_participations')
+      .select('id, project_id, program_id, status, selection_state, programs:program_id(name, season_year, roles)')
       .in('project_id', ids)
   : { data: [] as any[] };
 
@@ -104,25 +114,39 @@ const participating = new Set(
     .map((e: any) => e.project_id)
 );
 
-/* What these programs call the person who looks after a project. Null when
-   they disagree, which is the ordinary case on a screen that spans the club
-   and the class, and the header then says what the column is for. */
-const staffHeader = sharedStaffWord((entries ?? []).map((e: any) => e.programs)) ?? 'Looked after by';
+/**
+ * What this school calls the person who looks after a project.
+ *
+ * Read from the **cohorts** rather than from the entries. A word was being
+ * taken off the fairs these projects had been entered in, which is a venue's
+ * vocabulary: a regional fair has no opinion about what a school calls its
+ * officers, and a project entered nowhere yielded no word at all (22.9).
+ *
+ * This queue spans a school, so where its cohorts disagree — a class calling
+ * them Elders and a club calling them Officers — no single word is right and
+ * the header says what the column is for instead.
+ */
+const { data: cohortRows } = await supabase
+  .from('cohort_participations')
+  .select('programs:program_id(roles)');
+
+const staffHeader =
+  sharedStaffWord((cohortRows ?? []).map((c: any) => c.programs)) ?? 'Looked after by';
 
 const entryIds = (entries ?? []).map((e: any) => e.id);
 
 const { data: milestones } = entryIds.length
   ? await supabase
       .from('entry_milestones')
-      .select('id, entry_id, name, due_on, required, blocks_experimentation, completed_on')
-      .in('entry_id', entryIds)
+      .select('id, participation_id, name, due_on, required, blocks_experimentation, completed_on')
+      .in('participation_id', entryIds)
   : { data: [] as any[] };
 
 const { data: sponsors } = ids.length
   ? await supabase
       .from('project_sponsors')
-      .select('project_id, teacher_name, confirmed_at')
-      .in('project_id', ids)
+      .select('teacher_name, confirmed_at, participations!inner(project_id)')
+      .in('participations.project_id', ids)
       .is('superseded_at', null)
   : { data: [] as any[] };
 
@@ -160,8 +184,8 @@ const runsEverything = myRoles.some((r: any) => r.role === 'advisor' && !r.scope
 const myPrograms = myRoles.filter((r: any) => r.scope_id).map((r: any) => r.scope_id);
 
 const { data: pending, error: pendingError } = await supabase
-  .from('entries')
-  .select('id, program_id, status, entered_at, decided_at, decided_note, decided:decided_by(display_name), programs(name, kind), projects(title, project_authors(role, users(display_name)))')
+  .from('opportunity_participations')
+  .select('id, program_id, status, entered_at, decided_at, decided_note, decided:decided_by(display_name), programs:program_id(name, kind), projects:project_id(title, project_authors(role, users(display_name)))')
   .in('status', ['requested', 'declined'])
   .order('entered_at', { ascending: true });
 
@@ -169,7 +193,52 @@ if (pendingError) error = pendingError.message;
 
 const mineToDecide = (e: any) => runsEverything || myPrograms.includes(e.program_id);
 
-const requests = (pending ?? []).filter((e) => e.status === 'requested').filter(mineToDecide);
+/**
+ * People waiting to be let into a cohort.
+ *
+ * Joining a class and entering a fair used to be one row, so one query
+ * answered "who is waiting". They are two relationships now (22.5), and this
+ * queue read only the entries — so a student who asked to join the club
+ * waited in a queue nobody could see.
+ *
+ * Merged into one list rather than shown as two sections, because the
+ * question a teacher has is "who is waiting", not "who is waiting in which
+ * of two tables".
+ */
+const { data: pendingMemberships } = await supabase
+  .from('memberships')
+  .select('id, cohort_id, state, joined_at, programs:cohort_id(name), users:user_id(display_name)')
+  .eq('state', 'requested')
+  .order('joined_at', { ascending: true });
+
+const requests = [
+  ...(pendingMemberships ?? [])
+    .filter((m: any) => runsEverything || myPrograms.includes(m.cohort_id))
+    .map((m: any) => ({
+      waiting: 'membership',
+      id: m.id,
+      asked: m.joined_at,
+      who: m.users?.display_name ?? 'Somebody',
+      what: 'Wants to join',
+      program: m.programs?.name,
+    })),
+
+  ...(pending ?? [])
+    .filter((e: any) => e.status === 'requested')
+    .filter(mineToDecide)
+    .map((e: any) => ({
+      waiting: 'entry',
+      id: e.id,
+      asked: e.entered_at,
+      who:
+        (e.projects?.project_authors ?? [])
+          .filter((a: any) => a.role === 'author')
+          .map((a: any) => a.users?.display_name)
+          .join(', ') || 'Nobody named',
+      what: e.projects?.title,
+      program: e.programs?.name,
+    })),
+].sort((a, b) => String(a.asked).localeCompare(String(b.asked)));
 
 /**
  * Places that were refused.
@@ -223,7 +292,7 @@ const rows = (projects ?? [])
   .filter((p: any) => participating.has(p.id))
   .map((p: any) => {
   const entry = (entries ?? []).find((e: any) => e.project_id === p.id);
-  const mine = (milestones ?? []).filter((m: any) => m.entry_id === entry?.id);
+  const mine = (milestones ?? []).filter((m: any) => m.participation_id === entry?.id);
 
   const findings = checkDateOrder({
     startedOn: p.started_on,
@@ -246,7 +315,10 @@ const rows = (projects ?? [])
     selfManaged: (p.project_authors ?? []).filter(
       (a: any) => a.role === 'author' && a.self_managed_at
     ),
-    sponsor: (sponsors ?? []).find((s: any) => s.project_id === p.id) ?? null,
+    /* A sponsor hangs off a participation now, so the project it belongs to
+       comes through the embedded row. Any current sponsor on any of the
+       project's participations answers "is this project sponsored". */
+    sponsor: (sponsors ?? []).find((s: any) => s.participations?.project_id === p.id) ?? null,
     done: mine.filter((m: any) => m.completed_on).length,
     total: mine.length,
     worst: worstFinding(findings),
@@ -280,7 +352,10 @@ const fmt = (d: string | null) =>
         line of figures. The eyebrow is gone because it repeated the nav
         label directly above it. */}
     <section class="hero">
-      <h1 class="t-big">Assign an officer</h1>
+      {/* Two jobs on one page, and the title says both. Somebody arriving to
+          approve an application should not have to infer that the assigning
+          page is also where approvals live. */}
+      <h1 class="t-big">Approve applications and assign officers</h1>
       <ul class="counts">
         <li><b>{requests.length}</b> waiting to join</li>
         <li class={unassigned.length > 0 ? 'bad' : ''}>
@@ -329,7 +404,9 @@ const fmt = (d: string | null) =>
             <tr>
               <th scope="col">Asked</th>
               <th scope="col">Who</th>
-              <th scope="col">Project</th>
+              {/* "What" rather than "Project": a person joining a cohort has
+                  no project, which is the point of separating the two. */}
+              <th scope="col">What</th>
               <th scope="col">Program</th>
               <th scope="col">Decision, and a reason if you are rejecting</th>
             </tr>
@@ -337,19 +414,15 @@ const fmt = (d: string | null) =>
           <tbody>
             {requests.map((r: any) => (
               <tr>
-                <td>{fmt(r.entered_at)}</td>
-                <td>
-                  {(r.projects?.project_authors ?? [])
-                    .filter((a: any) => a.role === 'author')
-                    .map((a: any) => a.users?.display_name)
-                    .join(', ') || 'Nobody named'}
-                </td>
-                <td>{r.projects?.title}</td>
-                <td>{r.programs?.name}</td>
+                <td>{fmt(r.asked)}</td>
+                <td>{r.who}</td>
+                <td>{r.what}</td>
+                <td>{r.program}</td>
                 <td>
                   <form method="POST" action="#outcome" class="decide">
                     <input type="hidden" name="action" value="place" />
-                    <input type="hidden" name="entry_id" value={r.id} />
+                    <input type="hidden" name="waiting" value={r.waiting} />
+                    <input type="hidden" name="participation_id" value={r.id} />
 
                     <button class="btn btn-sm" name="grant" value="yes" type="submit">
                       Approve
@@ -365,7 +438,7 @@ const fmt = (d: string | null) =>
                       <input
                         class="in"
                         name="note"
-                        aria-label={`Reason for the decision on ${r.projects?.title}`}
+                        aria-label={`Reason for the decision on ${r.what}`}
                       />
                     </label>
                   </form>
@@ -542,7 +615,9 @@ const fmt = (d: string | null) =>
             <tr>
               <th scope="col">Decided</th>
               <th scope="col">Who</th>
-              <th scope="col">Project</th>
+              {/* "What" rather than "Project": a person joining a cohort has
+                  no project, which is the point of separating the two. */}
+              <th scope="col">What</th>
               <th scope="col">Program</th>
               <th scope="col">Reason, and by whom</th>
               <th scope="col"><span class="sr">Reverse it</span></th>
@@ -567,7 +642,7 @@ const fmt = (d: string | null) =>
                 <td>
                   <form method="POST" action="#outcome" class="decide">
                     <input type="hidden" name="action" value="place" />
-                    <input type="hidden" name="entry_id" value={r.id} />
+                    <input type="hidden" name="participation_id" value={r.id} />
                     <button class="btn btn-sm" name="grant" value="yes" type="submit">
                       Give them a place after all
                     </button>

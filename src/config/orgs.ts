@@ -108,7 +108,20 @@ export const orgs: Record<string, Org> = {
     theme: 'proceedings',
     recordPrefix: 'MVRJ',
     timezone: 'America/Los_Angeles',
-    programs: ['mvhs-scvsefa-2027', 'irpd-mvhs-2027', 'grant-mvhs-micro-2027', 'mvrj-2027', 'independent-research'],
+    programs: [
+      /* The regional fair, which this school enters rather than runs. Its
+         `org_id` is null and one row serves every school; listing it here
+         says Monta Vista takes part, and is what layers the club's own
+         dates onto it. */
+      'scvsefa-2027',
+      /* The state fair the regional advances to. Shared like the regional,
+         and listed here because Monta Vista has students who advance. */
+      'csef-2027',
+      'mvhs-scvsefa-2027',
+      'irpd-mvhs-2027',
+      'grant-mvhs-micro-2027',
+      'mvrj-2027',
+    ],
     contactEmail: 'hello@example.org',
     verifiedDomains: ['student.fuhsd.org', 'fuhsd.org'],
     editorialReview: true,
@@ -131,7 +144,7 @@ export const orgs: Record<string, Org> = {
     theme: 'proceedings',
     recordPrefix: 'LHSR',
     timezone: 'America/Los_Angeles',
-    programs: ['scvsefa-2027', 'independent-research'],
+    programs: ['scvsefa-2027'],
     contactEmail: 'hello@example.org',
     verifiedDomains: ['student.fuhsd.org', 'fuhsd.org'],
     editorialReview: true,
@@ -153,7 +166,17 @@ export const orgs: Record<string, Org> = {
     theme: 'entry',
     recordPrefix: 'OPN',
     timezone: 'America/Los_Angeles',
-    programs: ['independent-research'],
+    /* Nothing yet, and that is the honest state.
+    
+       This tenant ran `independent-research`, a program with no teacher and
+       no members that existed so a solo student had something to join. The
+       process now attaches to the project, so they get the same eleven steps
+       by starting a project (22.10).
+    
+       What belongs here is a staffed cohort with Blue Leaf Labs mentors, for
+       the student 2.5 is about. Until somebody staffs it, an empty list says
+       so rather than a placeholder implying otherwise. */
+    programs: [],
     contactEmail: 'hello@example.org',
     verifiedDomains: [],
     editorialReview: false,

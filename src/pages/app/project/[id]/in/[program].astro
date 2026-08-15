@@ -1,0 +1,2376 @@
+---
+export const prerender = false;
+
+import Base from '../../../../../layouts/Base.astro';
+import { formatDate, daysFrom } from '../../../../../lib/dates';
+import AppShell from '../../../../../components/AppShell.astro';
+import { activeOrg } from '../../../../../lib/tenant';
+import { resolveProgram, deliverablesFor, stepApplies, shape } from '../../../../../lib/templates';
+import { programTitle, staffWord } from '../../../../../lib/program-names';
+import { serverClient } from '../../../../../lib/supabase';
+import { checkDateOrder, worstFinding } from '../../../../../lib/dateOrder';
+import { standing, isAuthorOf } from '../../../../../lib/roles';
+import { afterPost, outcomeFrom } from '../../../../../lib/post-redirect';
+import { linkDomain } from '../../../../../lib/notes';
+import { blobStore, projectImagePath, MAX_UPLOAD_BYTES } from '../../../../../lib/blob';
+import { parseVideo } from '../../../../../lib/video';
+import { signInWith } from '../../../../../lib/next-path';
+import { participationFor } from '../../../../../lib/participation';
+
+const { session, account, roles } = Astro.locals;
+const org = activeOrg(Astro);
+
+/**
+ * THE PARTICIPATION PAGE. One page, both kinds. 22.5.
+ *
+ * This was `/app/entry/{id}/`, and there was a second, far thinner page at
+ * `/app/project/{id}/cohort/{cohort}/` that could show a list of milestones
+ * and nothing else. That was not a page built badly: while a class and a fair
+ * lived in different tables, the four tables holding deliverables, sponsors
+ * and deadline state could only be keyed to one of them, so the class page
+ * had nothing to show.
+ *
+ * One table means one page. What differs between a class and a fair is what
+ * the template declares it *has* -- IRPD has no categories, no awards and
+ * nothing to place in -- and the sections below already read that.
+ *
+ * **Keyed on the pair rather than on the row id**, so the project is always
+ * in the address. A way back to the work is then structural rather than a
+ * link somebody later removes.
+ */
+const { id: projectId, program: programId } = Astro.params;
+
+/* Remembering where they were headed, so a link from a notification
+   survives the sign in it triggers (20.10). */
+if (!session) return Astro.redirect(signInWith(Astro.url));
+if (!account) return Astro.redirect('/app/welcome/');
+
+const me = standing(roles, account?.population);
+
+const supabase = serverClient(
+  Astro.request,
+  Astro.cookies,
+  (Astro.locals as any).runtime?.env
+);
+
+/* Resolved before anything else, including the POST handler, because every
+   action below is addressed to this participation. `src/lib/participation.ts`
+   is the one place page code reads the merged table directly; the reasoning
+   is written out there. */
+const participation = await participationFor(supabase, projectId, programId);
+
+/* Not in it. Back to the project, which is the hub and always exists.
+   Rendering a class's deadlines against a project that never joined would be
+   showing somebody an obligation nobody agreed to. */
+if (!participation) return Astro.redirect(`/app/project/${projectId}/`);
+
+/* The rest of this page was written when the route was keyed on the
+   participation row, and `id` means that row throughout. Bound here rather
+   than renamed through eighty-odd references, which would be a large diff
+   saying nothing. */
+const id = participation.id;
+
+/* A class or a club, rather than something entered. Read from
+   `program_role`, never inferred from which columns are null: a course has
+   no money and a grant has no placement, so null proves nothing. */
+const isCohort = participation.isCohort;
+
+/* Seeded from the redirect that a POST answers with, not from the POST
+   itself. See src/lib/post-redirect.ts. */
+let { error, note: recordedNote } = outcomeFrom(Astro.url);
+
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData();
+  const action = String(form.get('action') ?? '');
+
+  if (action === 'warn') {
+    const { data: row } = await supabase
+      .from('participations')
+      .select('org_id, program_id, project_id')
+      .eq('id', id)
+      .maybeSingle();
+
+    const { error: e } = await supabase.from('step_warnings').insert({
+      org_id: row?.org_id,
+      program_id: row?.program_id,
+      step_id: String(form.get('step_id') ?? ''),
+      body: String(form.get('body') ?? '').trim(),
+      /* The project that prompted it, kept as evidence. "This happened" is a
+         better argument than "be careful". */
+      from_project: row?.project_id ?? null,
+      written_by: account.id,
+      /* Written this season by somebody who is here, so it counts as
+         confirmed until the next handover asks again. */
+      confirmed_at: new Date().toISOString(),
+      confirmed_by: account.id,
+    });
+
+    if (e) error = e.message;
+    else recordedNote = 'Written. Everybody in this program sees it on that step.';
+  }
+
+  if (action === 'money') {
+    const asNumber = (name: string) => {
+      const raw = String(form.get(name) ?? '').trim();
+      return raw === '' ? null : Number(raw);
+    };
+
+    const patch: Record<string, number | null> = {
+      requested_amount: asNumber('requested_amount'),
+    };
+
+    /* Only a reviewer records what was given. An applicant writing their own
+       award in is not a threat so much as a number nobody can trust. */
+    if (me.runsTheClub) patch.awarded_amount = asNumber('awarded_amount');
+
+    const { error: e } = await supabase.from('participations').update(patch).eq('id', id);
+    if (e) error = e.message;
+    else recordedNote = 'Saved.';
+  }
+
+  if (action === 'deliverable') {
+    const { error: e } = await supabase.rpc('record_deliverable', {
+      p_participation_id: id,
+      p_milestone_id: String(form.get('milestone') ?? '') || null,
+      p_type: String(form.get('deliverable') ?? 'other'),
+      p_label: String(form.get('label') ?? 'Deliverable'),
+      p_signed_on: String(form.get('signed_on') ?? '') || new Date().toISOString().slice(0, 10),
+      p_external_url: String(form.get('external_url') ?? '').trim() || null,
+      p_storage_path: null,
+    });
+    if (e) error = e.message;
+    else recordedNote = 'Recorded.';
+  }
+
+  if (action === 'status') {
+    const milestoneId = String(form.get('milestone_id') ?? '');
+    const status = String(form.get('status') ?? 'open');
+    const on = String(form.get('on') ?? '') || new Date().toISOString().slice(0, 10);
+    const url = String(form.get('external_url') ?? '').trim();
+
+    if (status === 'complete') {
+      /* The obligation's own name is the label. Asking a student to retype
+         "General research idea due" into a box that already said it was a
+         question with one answer. */
+      const { error: e } = await supabase.rpc('record_deliverable', {
+        p_participation_id: id,
+        p_milestone_id: milestoneId,
+        p_type: String(form.get('kind') ?? 'other'),
+        p_label: String(form.get('name') ?? 'Deliverable'),
+        p_signed_on: on,
+        p_external_url: url || null,
+        p_storage_path: null,
+      });
+      if (e) error = e.message;
+    } else {
+      const { error: e } = await supabase.rpc('set_milestone_done', {
+        p_milestone_id: milestoneId,
+        p_completed_on: null,
+      });
+      if (e) error = e.message;
+    }
+  }
+
+  if (action === 'verify') {
+    const { error: e } = await supabase.rpc('verify_deliverable', {
+      p_id: String(form.get('deliverable_id') ?? ''),
+    });
+    if (e) error = e.message;
+  }
+
+  if (action === 'result') {
+    const { error: e } = await supabase.rpc('record_entry_result', {
+      p_participation_id: id,
+      p_category: String(form.get('category') ?? ''),
+      p_entry_code: String(form.get('entry_code') ?? ''),
+      p_placement: String(form.get('placement') ?? ''),
+      p_awards: String(form.get('awards') ?? '')
+        .split(/\r?\n/)
+        .map((a) => a.trim())
+        .filter(Boolean),
+      p_advanced_to: String(form.get('advanced_to') ?? ''),
+    });
+    if (e) error = e.message;
+  }
+
+  if (action === 'started') {
+    const { error: e } = await supabase.rpc('set_project_start', {
+      p_project_id: String(form.get('project_id') ?? ''),
+      p_started_on: String(form.get('started_on') ?? '') || null,
+    });
+    if (e) error = e.message;
+  }
+
+  /* ── What the published record shows ─────────────────────────────────────
+  
+     Images, a video, and links to work kept elsewhere. These are facts about
+     the project rather than about this participation, and they were on the
+     notebook page, where they had nothing to do with a notebook. They belong
+     with the deliverables, because that is what they are: the things a
+     project hands over.
+  
+     The project id comes off the entry rather than from the URL, since this
+     route is keyed on a participation. */
+  const projectOf = async () => {
+    /* The project is already resolved; this survives as a function because
+       several actions call it. */
+    return participation.projectId;
+  };
+
+  if (action === 'image') {
+    const file = form.get('image') as File | null;
+    const pid = await projectOf();
+
+    if (!pid) error = 'That entry has no project.';
+    else if (!file || file.size === 0) error = 'Choose an image first.';
+    else if (file.size > MAX_UPLOAD_BYTES) error = 'That file is too large.';
+    else {
+      const blob = blobStore(Astro.locals);
+      if (!blob.available()) error = 'File storage is not configured here.';
+      else {
+        const path = projectImagePath(pid, file.name);
+        try {
+          await blob.put(path, await file.arrayBuffer(), file.type || 'image/png');
+          const { error: e } = await supabase.rpc('add_project_image', {
+            p_project_id: pid,
+            p_storage_path: path,
+            p_alt: String(form.get('alt') ?? ''),
+            p_caption: String(form.get('caption') ?? ''),
+          });
+          if (e) error = e.message;
+          else recordedNote = 'Image added.';
+        } catch (e: any) {
+          error = e.message;
+        }
+      }
+    }
+  }
+
+  if (action === 'image_remove') {
+    const { error: e } = await supabase.rpc('remove_project_image', {
+      p_image_id: String(form.get('image_id') ?? ''),
+    });
+    if (e) error = e.message;
+    else recordedNote = 'Image removed.';
+  }
+
+  if (action === 'video') {
+    const pid = await projectOf();
+    const { error: e } = await supabase.rpc('save_project_video', {
+      p_project_id: pid,
+      p_url: String(form.get('video_url') ?? ''),
+    });
+    if (e) error = e.message;
+    else recordedNote = 'Video saved.';
+  }
+
+  if (action === 'link') {
+    const pid = await projectOf();
+    const { error: e } = await supabase.rpc('add_project_link', {
+      p_project_id: pid,
+      p_label: String(form.get('label') ?? ''),
+      p_url: String(form.get('url') ?? ''),
+    });
+    if (e) error = e.message;
+    else recordedNote = 'Link added.';
+  }
+
+  /* A refresh should re-read this page, not send the form again. */
+  return afterPost(Astro.url, { error, note: recordedNote });
+}
+
+/* Already fetched by the resolver above, which read the columns this page
+   needs. Named `entry` because the rest of the file calls it that; it is a
+   participation, and on this page it may be a class. */
+const entry: any = participation.row;
+
+/**
+ * THE PROCESS THIS PARTICIPATION IS READ AGAINST. 22.4.
+ *
+ * A precedence, not a field:
+ *
+ *     the program's process, where it has one, else the project's
+ *
+ * An opportunity may not prescribe one -- a check on `programs` refuses it,
+ * and `app.process_for` filters on the same rule -- so for a fair this
+ * resolves to the project's own process, which is what it did before.
+ *
+ * **An entry made through a cohort resolves against that cohort's process**,
+ * because the framework the work was done under is a fact about the work
+ * rather than about the venue. An entry sent to a regional fair through the
+ * research class is design-thinking work being judged at a fair, and the
+ * fair's steps should read that way.
+ */
+const { data: viaCohort } = entry.via_id
+  ? await supabase
+      .from('cohort_participations')
+      .select('programs:program_id(process_id)')
+      .eq('id', entry.via_id)
+      .maybeSingle()
+  : { data: null };
+
+const processFor =
+  (entry.programs as any)?.process_id ??
+  ((viaCohort as any)?.programs?.process_id ?? null) ??
+  (entry.projects as any)?.process_id ??
+  null;
+
+const { data: milestones } = await supabase
+  .from('entry_milestones')
+  .select('id, name, kind, due_on, required, blocks_experimentation, completed_on, satisfied_by, sort_order, source, phase')
+  .eq('participation_id', id)
+  /* By date, not by the template's sequence.
+   
+     A sequence says what depends on what; a student looking at a list of
+     deadlines wants to know what is next. Those differ: the fair's
+     applications open in September and sit late in the sequence because they
+     belong to the approval phase, which reads as an error on a page headed
+     "deadlines".
+   
+     Anything with no date sorts last rather than first, which is what
+     Postgres does by default for ascending order and is the right answer
+     here: a step nobody has scheduled is not the next thing to worry about. */
+  .order('due_on', { ascending: true, nullsFirst: false })
+  .order('sort_order', { ascending: true });
+
+const { data: deliverables } = await supabase
+  .from('deliverables')
+  .select('id, milestone_id, label, type, signed_on, external_url, verified_at')
+  .eq('participation_id', id);
+
+/* This participation's sponsor, not the project's. A teacher who signed for
+   the class did not thereby sign for the fair, and the approval obligation
+   this satisfies is on this calendar. */
+const { data: sponsor } = await supabase
+  .from('project_sponsors')
+  .select('teacher_name, signed_on, recorded_at')
+  .eq('participation_id', id)
+  .is('superseded_at', null)
+  .maybeSingle();
+
+/**
+ * Whoever sponsors this project **somewhere else**.
+ *
+ * A student in a class, a club and a fair has three sponsors and they are
+ * three different teachers. Without this the page said "Name one" while two
+ * teachers were already named on the same project, and gave no hint that
+ * the missing one was the third.
+ *
+ * Shown, never assumed: agreeing to run the class is not agreeing to sponsor
+ * a fair entry, and filling the name in here would claim it was.
+ */
+const { data: elsewhere } = await supabase
+  .from('project_sponsors')
+  .select('teacher_name, participations!inner(project_id, program_id, programs:program_id(name))')
+  .eq('participations.project_id', projectId)
+  .neq('participation_id', id)
+  .is('superseded_at', null);
+
+/* Everything the published record shows, read once the project is known.
+   These belong to the project rather than to this participation, which is
+   the tension recorded in Future Work: a project in two programs shows them
+   on both hubs. Nothing breaks; the facts are simply the same facts. */
+/* `projectId` is the URL's, resolved at the top. It used to be read back off
+   the row here, which was the only way when the route was keyed on the
+   participation. */
+
+const { data: images } = projectId
+  ? await supabase
+      .from('project_images')
+      .select('id, position, storage_path, alt, caption')
+      .eq('project_id', projectId)
+      .is('withdrawn_at', null)
+      .order('position')
+  : { data: [] as any[] };
+
+const { data: links } = projectId
+  ? await supabase
+      .from('project_links')
+      .select('id, label, url, visibility, created_at')
+      .eq('project_id', projectId)
+      .order('created_at')
+  : { data: [] as any[] };
+
+const { data: manuscript } = projectId
+  ? await supabase
+      .from('manuscripts')
+      .select('id, title')
+      .eq('project_id', projectId)
+      .maybeSingle()
+  : { data: null };
+
+const mediaUrl = (path: string) => `/app/media/${path}`;
+
+/* A count rather than the entries themselves. The notebook is its own page;
+   what this row owes the reader is whether there is anything in it. */
+const { count: notes } = projectId
+  ? await supabase
+      .from('field_notes')
+      .select('id', { count: 'exact', head: true })
+      .eq('project_id', projectId)
+  : { count: 0 };
+
+/* The stored address, parsed once. A facade rather than an iframe: the page
+   shows a still and contacts the host only when somebody clicks. */
+const savedVideo = parseVideo((entry?.projects as any)?.video_url);
+
+
+const { data: overseers } = await supabase
+  .from('project_authors')
+  .select('role, self_managed_at, accepted_at, users(display_name)')
+  .eq('project_id', entry.project_id);
+
+const officer = (overseers ?? []).find(
+  (a: any) => a.role === 'officer' || (a.role === 'author' && a.self_managed_at)
+);
+
+/* Accepted authors only. An invitation nobody answered is not a byline, and
+   showing one here would name somebody who has not agreed to be named. */
+const authors = (overseers ?? []).filter(
+  (a: any) => a.role === 'author' && a.accepted_at
+);
+
+const deliverableFor = new Map<string, any>();
+for (const d of deliverables ?? []) {
+  if (d.milestone_id) deliverableFor.set(d.milestone_id, d);
+}
+
+const project: any = entry.projects;
+const program: any = entry.programs;
+
+/* Does the work, or watches it. */
+const iAuthor = isAuthorOf(project?.project_authors ?? [], account.id);
+
+const findings = checkDateOrder({
+  startedOn: project?.started_on ?? null,
+  today: new Date().toISOString().slice(0, 10),
+  obligations: (milestones ?? []).map((m: any) => ({
+    id: m.id,
+    name: m.name,
+    dueOn: m.due_on,
+    completedOn: m.completed_on,
+    /* The signature on the deliverable, where one exists. It is the date the
+       fair actually cares about. */
+    signedOn: deliverableFor.get(m.id)?.signed_on ?? null,
+    blocksExperimentation: m.blocks_experimentation,
+    required: m.required,
+  })),
+});
+
+const worst = worstFinding(findings);
+const byId = new Map(findings.map((f) => [f.id, f]));
+
+/**
+ * What to call each layer, in front of a student.
+ *
+ * The program's own name rather than the word "program": "SCVSEFA" tells you
+ * who will refuse the work, and "program" does not.
+ */
+/* A course rather than a competition, which changes a handful of words. The
+   kind is on the program, so nothing here has to guess.
+
+   `isCohort` above is the wider question -- a club is a cohort and is not a
+   course -- and the two are not interchangeable. `isCourse` decides
+   vocabulary; `isCohort` decides whether a thing is a venue at all. */
+const isCourse = program?.kind === 'course';
+const isGrant = program?.kind === 'grant';
+
+/**
+ * What this program asks for, from the template rather than the database.
+ *
+ * The expected list is computed at render rather than materialised when an
+ * entry is created, because a conditional deliverable depends on facts the
+ * project can change: answer "yes, a survey" in November and Form 4 has to
+ * appear. A materialised list would need re-syncing every time, and the one
+ * that failed to sync would be the one nobody noticed.
+ *
+ * The database stores only what was actually recorded.
+ *
+ * Declared here, above everything that reads it, and that position is
+ * load bearing rather than tidy. `has()` closes over it and `hasResult`
+ * calls `has()` on the next line, so with the declaration further down the
+ * page threw `Cannot access 'template' before initialization` on every
+ * entry. A closure over a later binding is legal; calling it before the
+ * binding is initialised is not, and nothing that only compiles the page
+ * can tell the two apart.
+ */
+const template = (entry?.programs as any)?.template_id
+  ? (() => {
+      try {
+        /* Resolved against `processFor` above: the program's own process
+           where it has one, else the cohort this went through, else the
+           project's. The same fair reads differently for a scientific
+           project and an engineering one (22.4). */
+        return resolveProgram((entry.programs as any).template_id, processFor);
+      } catch {
+        return null;
+      }
+    })()
+  : null;
+
+/**
+ * What this program has, from its template.
+ *
+ * The result section is a competition's: a category, an entry code, a
+ * placement, somewhere it advanced to. A research class has none of those
+ * and was being shown all of them, asking a student what they placed in a
+ * category that does not exist.
+ *
+ * Absent means yes. A competition declares nothing because it has
+ * everything, and a program that lacks something says so.
+ */
+const has = (what: string) => template?.has?.[what] !== false;
+
+/* Whether there is a result to record at all. A grant's outcome is the
+   money, which has its own section; a class's outcome is the work. */
+const hasResult = !isGrant && (has('categories') || has('awards') || has('advancement'));
+
+
+
+/**
+ * Who set a deadline, in words the reader would use.
+ *
+ * `school` means the school's own layer on top of an institution's calendar.
+ * For a fair that layer is the club, which is where "The club" came from —
+ * and IRPD is a class, so every one of its deadlines read as set by a club
+ * that does not exist.
+ *
+ * The kind is on the program, so there is no reason to guess. `program`
+ * falls through to the program's own name, which says more than either word.
+ */
+/**
+ * The deadlines, in phases.
+ *
+ * Every step names a phase and the program carries the list, so this is a
+ * grouping rather than a lookup. Anything whose phase the program does not
+ * declare falls into a final group rather than disappearing: a milestone that
+ * silently vanishes because a template was edited is worse than an untidy
+ * heading.
+ */
+const facts: Record<string, boolean> = (project as any)?.facts ?? {};
+
+/**
+ * Every deliverable this project owes, once each.
+ *
+ * Several steps can ask for the same artifact — the process says write a
+ * research plan, the club says have one read, the fair says submit it — and
+ * a list showing it three times is a list that looks like three jobs. One
+ * row, naming the steps that want it, in the order the first one comes.
+ */
+const expected = (() => {
+  if (!template) return [] as any[];
+
+  const byId = new Map<string, any>();
+
+  for (const step of template.steps) {
+    if (!stepApplies(step, facts)) continue;
+
+    for (const d of deliverablesFor(template, step, facts)) {
+      const already = byId.get(d.id);
+      if (already) {
+        already.steps.push(step);
+        continue;
+      }
+      byId.set(d.id, { ...d, steps: [step], step });
+    }
+  }
+
+  return [...byId.values()];
+})();
+
+
+/* The milestone row a template step became. Recording a deliverable marks
+   the deadline it belongs to, which is the whole point of moving the
+   controls out of the deadlines table. */
+/* The template step a milestone row came from, matched on the name it was
+   seeded with. */
+const stepFor = (name: string) => template?.steps.find((st) => st.name === name);
+
+const milestoneIdFor = (stepId: string) => {
+  const step = template?.steps.find((s) => s.id === stepId);
+  if (!step) return null;
+  return (milestones ?? []).find((m: any) => m.name === step.name)?.id ?? null;
+};
+
+/**
+ * What this club knows goes wrong, by step.
+ *
+ * The third layer. The process templates carry the universal warnings and
+ * the institution's templates carry its own; these are written by officers
+ * against a step, and they are the only layer a school can author for
+ * itself.
+ *
+ * Retired ones are excluded and not deleted: a warning that stopped being
+ * true is a record of something that used to be.
+ */
+const { data: warnings } = await supabase
+  .from('step_warnings')
+  .select('id, step_id, body, created_at, confirmed_at, users:written_by(display_name)')
+  .eq('program_id', entry?.program_id ?? '')
+  .is('retired_at', null)
+  .order('created_at', { ascending: false });
+
+const warningsFor = (stepId: string) =>
+  (warnings ?? []).filter((w: any) => w.step_id === stepId);
+
+
+/* What has been recorded, keyed by the deliverable's id. */
+const recorded = new Map<string, any>();
+for (const d of deliverables ?? []) recorded.set(d.type, d);
+
+const phaseList: any[] = (entry?.programs as any)?.phases ?? [];
+
+/**
+ * Whether a deadline has been met.
+ *
+ * Derived from the deliverables rather than read off the row, and that is
+ * the fix for a real failure: a student recorded the research question
+ * against "Settle the question with an officer" and the row went on saying
+ * *Record it below*, with the phase still reading 0 of 1.
+ *
+ * Two causes, one answer.
+ *
+ * **A deliverable is shared between steps.** 6.8 is explicit that a shared
+ * id is how one research plan satisfies IRPD's October step and the fair's
+ * November one. The form carried the id of the *first* step wanting it, so
+ * recording marked one row and left the others open — the shared artifact
+ * satisfied one calendar and not the other.
+ *
+ * **And that first step may have no row at all.** Only steps with a date
+ * are seeded as milestones, so a process step with no date resolves to no
+ * milestone, the form posts an empty id, and `record_deliverable` marks
+ * nothing anywhere.
+ *
+ * Both disappear if nobody stores the answer. 11.8b already says it about
+ * obligations: where the interface asks somebody to assert what the database
+ * knows, the question is decoration and the answer is a second version of
+ * the truth. A step's doneness *is* what it asked for being there.
+ *
+ * `completed_on` still answers for a step that hands over nothing — a board
+ * measured, judging practised — because there is nothing else to read.
+ */
+const satisfied = (m: any): boolean => {
+  const step = stepFor(m.name);
+  const wants = step ? deliverablesFor(template!, step, facts) : [];
+
+  if (!step || wants.length === 0) return Boolean(m.completed_on);
+
+  /* Optional and inapplicable ones do not hold a step open. A project at
+     twelve of fourteen with two inapplicable reads as complete (6.8). */
+  const needed = wants.filter((d) => d.requirement !== 'optional');
+  if (needed.length === 0) return Boolean(m.completed_on);
+
+  return needed.every((d) => recorded.has(d.id));
+};
+
+const grouped = (() => {
+  const order = new Map(phaseList.map((p: any, i: number) => [p.id, i]));
+  const buckets = new Map<string, any[]>();
+
+  for (const m of milestones ?? []) {
+    const key = m.phase && order.has(m.phase) ? m.phase : '';
+    const list = buckets.get(key) ?? [];
+    list.push(m);
+    buckets.set(key, list);
+  }
+
+  const out = [...buckets.entries()]
+    .map(([id, rows]) => {
+      const phase = phaseList.find((p: any) => p.id === id);
+      return {
+        id,
+        name: phase?.name ?? 'Everything else',
+        window: phase?.window ?? null,
+        rows,
+        done: rows.filter((m: any) => satisfied(m)).length,
+      };
+    })
+    /* In the program's own order, with the leftovers last. */
+    .sort((a, b) => (order.get(a.id) ?? 999) - (order.get(b.id) ?? 999));
+
+  return out;
+})();
+
+const whose: Record<string, string> = {
+  process: 'Research',
+
+  /* The institution's own deadlines. Not the program's name: the row in the
+     database is the school's edition, so the fair's own deadlines read as
+     set by the school's club, which is exactly backwards. The fair's name
+     lives in the template rather than the database, and the distinction a
+     student needs is which of the two set it. */
+  program: isCourse ? 'The class' : isGrant ? 'The funder' : 'The fair',
+
+  /* The school's own layer on top. For a fair that layer is the club, which
+     is where "The club" came from — and IRPD is a class, so every one of its
+     deadlines read as set by a club that does not exist. */
+  school: isCourse ? 'The class' : isGrant ? 'The funder' : 'The club',
+};
+
+const fmt = (d: string | null) =>
+  formatDate(d, 'short');
+
+/* Whole dollars unless the cents matter, which for a few hundred they
+   usually do: a budget of 387.40 is a budget somebody costed. */
+const money = (amount: number | string) =>
+  new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency: (entry as any)?.currency ?? 'USD',
+    minimumFractionDigits: Number(amount) % 1 === 0 ? 0 : 2,
+  }).format(Number(amount));
+
+/* What a derived obligation reports, and where to go and change it. */
+const derived = (m: any) => {
+  if (m.satisfied_by === 'sponsor') {
+    return {
+      met: Boolean(sponsor),
+      says: sponsor ? sponsor.teacher_name : 'No sponsor named',
+      /* Scoped, so naming a sponsor from the class's page records the
+         class's teacher rather than asking again which place was meant. */
+      href: `/app/project/${project?.id}/team/?in=${programId}`,
+      verb: sponsor ? 'Change' : 'Name one',
+    };
+  }
+  if (m.satisfied_by === 'officer') {
+    /* An officer is assigned by another officer or by the advisor, never by
+       the author. Offering an author the link sends them somewhere they
+       cannot act, and implies the gap is theirs to close. */
+    return {
+      met: Boolean(officer),
+      says: officer
+        ? officer.users?.display_name
+        : `No ${staffWord(program).toLowerCase()} assigned`,
+      href: me.runsTheClub ? `/app/project/${project?.id}/team/` : null,
+      verb: officer ? 'Change' : 'Assign one',
+      instead: `Another ${staffWord(program).toLowerCase()} or your advisor assigns one.`,
+    };
+  }
+  if (m.satisfied_by === 'start_date') {
+    return {
+      met: Boolean(project?.started_on),
+      says: project?.started_on ? fmt(project.started_on) : 'Not set',
+      href: '#start',
+      verb: 'Set it',
+    };
+  }
+  return null;
+};
+
+/* Derived, like every other count of doneness on this page. Reading
+   `completed_on` here would have disagreed with the phase headings the
+   moment a shared deliverable satisfied a step. */
+const done = (milestones ?? []).filter((m: any) => satisfied(m)).length;
+const total = milestones?.length ?? 0;
+const openCount = total - done;
+
+const now = new Date();
+const todayIso = now.toISOString().slice(0, 10);
+const weekday = now.toLocaleDateString('en-US', { weekday: 'long' });
+const dateLabel = now.toLocaleDateString('en-US', {
+  month: 'long', day: 'numeric', year: 'numeric',
+});
+
+const daysUntil = (iso: string | null) =>
+  iso ? daysFrom(iso) : null;
+
+const toFair = daysUntil(program?.fair_date ?? null);
+
+/**
+ * The next thing that needs doing.
+ *
+ * Not the next thing listed: a deadline already met should not be what the
+ * page counts down to. And not an **event** either — applications opening is
+ * a day on the fair's calendar, not something a student does, and a card
+ * reading "52 days to applications open" gives them nothing to act on while
+ * their sponsor is unasked.
+ *
+ * If every remaining obligation is complete and only events are left, the
+ * card falls back to the next event rather than showing a dash: something is
+ * still coming and saying so is better than saying nothing.
+ */
+const outstanding = (milestones ?? []).filter((m: any) => !m.completed_on && m.due_on);
+
+const byDate = (a: any, b: any) => a.due_on.localeCompare(b.due_on);
+
+const nextOpen =
+  outstanding.filter((m: any) => m.kind !== 'event').sort(byDate)[0] ??
+  outstanding.sort(byDate)[0];
+const toNext = daysUntil(nextOpen?.due_on ?? null);
+
+/**
+ * The warnings for the step somebody is on right now.
+ *
+ * Timing is the whole difficulty with this: advice about scoping a
+ * literature review is worth a season in October and worthless in March.
+ * The next undone obligation is the best available answer to "where are
+ * they", and it is already computed for the countdown card.
+ */
+const nowWarnings = (() => {
+  if (!nextOpen || !template) return [] as any[];
+
+  const step = template.steps.find((st) => st.name === nextOpen.name);
+  if (!step) return [];
+
+  return [
+    ...(step.risk ? [{ body: step.risk, who: null }] : []),
+    ...warningsFor(step.id).map((w: any) => ({
+      body: w.body,
+      who: `${w.users?.display_name ?? `A ${staffWord(program).toLowerCase()}`}, ${fmt(w.created_at)}`,
+    })),
+  ];
+})();
+
+/**
+ * The sections of this page, in the order a season runs.
+ *
+ * Named `sections` rather than `steps` because a step is already a thing
+ * here: the unit a template is built from (6.8). Two meanings for one word
+ * in a file that reads `template.steps` four lines away is a word nobody
+ * can trust.
+ *
+ * The page is long now that it is the hub, and a long page with eight
+ * headings is a page somebody scrolls twice looking for the one they came
+ * for. This is a route through it rather than a table of contents: set a
+ * date, look after the work, meet the dates, hand things over, show what it
+ * looked like, record what happened.
+ *
+ * Only what is actually rendered. A step that jumps to a heading which is
+ * not there is worse than no step, and four of these sections are
+ * conditional: a class has no money and no result, a program that asks for
+ * nothing has no deliverables.
+ */
+const sections = [
+  { id: 'start', label: 'Start date', show: true },
+  { id: 'project', label: 'The project', show: true },
+  { id: 'deadlines', label: 'Deadlines', show: true },
+  { id: 'deliverables', label: 'Deliverables', show: expected.length > 0 },
+  { id: 'showcase', label: 'Showcase', show: true },
+  { id: 'documents', label: 'Documents', show: true },
+  { id: 'money', label: 'The money', show: isGrant },
+  { id: 'result', label: 'Result', show: hasResult },
+].filter((section) => section.show);
+
+/* The number a heading shows, looked up rather than written out. Four of
+   these sections are conditional, so a number typed into a heading would be
+   right on a fair and wrong on a class the moment one of them was absent. */
+const sectionNo = new Map(sections.map((section, i) => [section.id, String(i + 1).padStart(2, '0')]));
+
+---
+
+<Base title={project?.title ?? 'Entry'} noindex={true}>
+  <div class="wrap">
+    <AppShell org={org} account={account} roles={roles} here="/app/" />
+
+    <section class="hero">
+      <p class="t-lbl">{programTitle(program)}</p>
+      <h1 class="t-big">{project?.title}</h1>
+
+      {/* Who is looking after it. Two names, or the way to get them: an
+          unassigned project with nobody named is the state that quietly
+          persists, and the fix is one click from where somebody notices. */}
+      {/* The same two facts the deadlines table reports further down, and
+          the same links: `derived` already knows where to go and what to
+          call it, and a second copy would drift. */}
+      <ul class="people">
+        {[
+          { key: 'sponsor', label: 'Sponsor', of: derived({ satisfied_by: 'sponsor' }) },
+          /* The program's own word. A class calls this person an elder and
+             a journal calls them an editor, and reading "officer" on a
+             class page is the software describing something the student is
+             not in.
+          
+             `key` is what the self managed note keys off, because the label
+             is now a word from a template and comparing against a literal
+             would silently stop matching the moment somebody renamed it. */
+          { key: 'officer', label: staffWord(program), of: derived({ satisfied_by: 'officer' }) },
+        ].map(({ key, label, of }) => (
+          <li>
+            <span class="p-lbl">{label}</span>
+            {of?.met ? (
+              <span>
+                {of.says}
+                {key === 'officer' && officer?.role === 'author' && officer?.self_managed_at
+                  ? ', self managed'
+                  : ''}
+              </span>
+            ) : of?.href ? (
+              <a class="linkish" href={of.href}>{of.verb}</a>
+            ) : (
+              <span class="p-none">{of?.instead ?? 'Nobody yet'}</span>
+            )}
+          </li>
+        ))}
+      </ul>
+      {/* Four cards, one skeleton: label, value, footnote. Each row is its
+          own grid track shared across the row, so the numbers sit on one
+          line and the footnotes on another whether a label wraps or not.
+          Before this, every card was a flex column of its own content and
+          nothing lined up with anything. */}
+      <div class="cards">
+        <div class="card">
+          <p class="kicker">Today</p>
+          <p class="val"><span class="weekday">{weekday}</span></p>
+          <p class="under">{dateLabel}</p>
+        </div>
+
+        <div class="card">
+          {/* A class has no judging day. Where the kind is known, the word
+              is the kind's: "days to fair" in front of an IRPD student is
+              the software describing something they are not doing. */}
+          <p class="kicker">
+            {isCohort ? 'Days to the end' : isGrant ? 'Days to close' : 'Days to fair'}
+          </p>
+          <p class="val"><span class="num">{toFair !== null ? (toFair >= 0 ? toFair : 0) : '—'}</span></p>
+          <p class="under">{fmt(program?.fair_date)}</p>
+        </div>
+
+        <div class="card">
+          <p class="kicker">Days to next milestone</p>
+          <p class="val">
+            {nextOpen && toNext !== null ? (
+              <span class={toNext < 0 ? 'num late' : 'num'}>{Math.abs(toNext)}</span>
+            ) : (
+              <span class="none">—</span>
+            )}
+          </p>
+          <p class:list={['under', toNext !== null && toNext < 0 && 'late']}>
+            {nextOpen && toNext !== null
+              ? toNext < 0
+                ? `${nextOpen.name}, overdue`
+                : nextOpen.name
+              : 'Nothing open'}
+          </p>
+        </div>
+
+        <div class="card">
+          <p class="kicker">Task counter</p>
+          <p class="val">
+            <span class="num">{done}</span><span class="of">of {total}</span>
+          </p>
+          <p class="under">complete</p>
+        </div>
+      </div>
+
+    </section>
+
+    {/* Anchored, and every form on this page posts to it. These pages
+        run to several screens, and an outcome rendered at the top after
+        a click three screens down reads as nothing having happened. */}
+    <div id="outcome" tabindex="-1">
+      {error && <p class="note" role="alert">{error}</p>}
+      {recordedNote && !error && <p class="note" role="status">{recordedNote}</p>}
+    </div>
+
+    {/* Where the place stands.
+     
+        The page was identical whether a request had been granted, refused,
+        or never decided: a student who had been turned down saw their
+        deadlines, their deliverables, and no indication that none of it
+        counted for this program. The work is still theirs, which is why the
+        rest of the page stays; what changes is that the page says so. */}
+    {entry.status === 'declined' && (
+      <div class="place refused" role="status">
+        <h4>Not approved</h4>
+        <p>
+          {entry.decided_note
+            ? entry.decided_note
+            : 'Follow up directly for further feedback.'}
+        </p>
+        <p class="t-sm">
+          The project is still yours. Everything below is yours to keep working
+          on, and it can be entered somewhere else without being started again.
+        </p>
+      </div>
+    )}
+
+    {entry.status === 'requested' && (
+      <div class="place waiting" role="status">
+        <h4>Waiting on a decision</h4>
+        <p>You can start work anytime; the deadlines below are the real ones</p>
+      </div>
+    )}
+
+    {worst && (
+      <div class={worst.severity === 'disqualifying' ? 'flag bad' : 'flag warn'} role="alert">
+        <h4>{worst.severity === 'disqualifying' ? 'This will disqualify the entry' : 'Needs attention'}</h4>
+        <p>{worst.message}</p>
+      </div>
+    )}
+
+    {/* What goes wrong at the step you are on now.
+     
+        The same sentence is worthless in March and worth a season in
+        October, so it rises here only while its step is the next one due and
+        not yet done. Everything else waits on the deliverable it belongs
+        to. */}
+    {nowWarnings.length > 0 && (
+      <div class="flag now">
+        <h4>Where this usually goes wrong</h4>
+        {nowWarnings.map((w: any) => (
+          <p>
+            {w.body}
+            {w.who && <span class="dl-who">{w.who}</span>}
+          </p>
+        ))}
+        <p class="t-sm">
+          <a href="#deliverables">The rest are on the thing they belong to</a>.
+        </p>
+      </div>
+    )}
+
+    {!iAuthor && (
+      <p class="note">
+        You are watching this entry rather than working on it. Recording forms,
+        marking obligations, and setting the start date belong to the authors.
+        Verifying a deliverable is yours.
+      </p>
+    )}
+
+    {/* Where a link asked to land.
+    
+        A fragment never reaches a server: the browser keeps `#deliverables`
+        to itself. So a link that has to survive a sign in carries the anchor
+        as a query parameter instead, and the page scrolls to it once. That
+        depends on nothing about how browsers treat fragments across
+        redirects, which is inconsistent (20.10). */}
+    {sections.some((section) => section.id === Astro.url.searchParams.get('at')) && (
+      <script
+        is:inline
+        define:vars={{ at: Astro.url.searchParams.get('at') }}
+      >
+        document.getElementById(at)?.scrollIntoView();
+      </script>
+    )}
+
+    {/* The route through the page.
+    
+        Numbered and joined by a rule so it reads as a sequence rather than
+        as a menu, which is what the season is. The numbers repeat above
+        each heading, so arriving somewhere shows where it sits in the
+        whole. */}
+    <nav class="rail" aria-label="Sections of this entry">
+      <ol>
+        {sections.map((section, i) => (
+          <li>
+            <a href={`#${section.id}`}>
+              <span class="rail-n">{String(i + 1).padStart(2, '0')}</span>
+              <span class="rail-l">{section.label}</span>
+            </a>
+          </li>
+        ))}
+      </ol>
+    </nav>
+
+    <section class="sec" id="start">
+      <div class="sec-h"><b><span class="sec-n">{sectionNo.get('start')}</span>Start date</b><span>Checked against all approvals</span></div>
+      {iAuthor ? (
+        <form method="POST" action="#outcome" class="inline">
+          <input type="hidden" name="action" value="started" />
+          <input type="hidden" name="project_id" value={project?.id} />
+          <input class="in" type="date" name="started_on" aria-label="The day you started, or plan to start" value={project?.started_on ?? ''} />
+          <button class="btn btn-sm" type="submit">Save</button>
+        </form>
+      ) : (
+        <p><b>{project?.started_on ? fmt(project.started_on) : 'Not set'}</b></p>
+      )}
+    </section>
+
+    {/* The project, rather than this participation.
+    
+        Everything here belongs to the work and not to the program it was
+        entered in, and it used to be spread across the notebook page, where
+        a student looking for their authors found a print stylesheet. This
+        page controls the project, so the ways into it live here. */}
+    <section class="sec" id="project">
+      <div class="sec-h"><b><span class="sec-n">{sectionNo.get('project')}</span>The project</b><span>Everything about the work</span></div>
+
+      {/* Buttons rather than links in a list.
+      
+          These are the actions somebody takes on this page, and a text link
+          at the end of a row reads as a footnote to the fact beside it. The
+          export sits with the notebook because it is the notebook, printed:
+          a row of its own implied a fourth thing to keep track of. */}
+      <ul class="facts">
+        {/* All three names, because they are one question — who is on this
+            and who is answerable for it — and they are all changed on the
+            same screen. Three rows with three buttons pointing at one page
+            would be three ways of saying the same thing. */}
+        <li>
+          <span class="f-lbl">People</span>
+          <span class="f-val f-people">
+            <span>
+              <i>{authors.length === 1 ? 'Author' : 'Authors'}</i>
+              <em>
+                {authors.length > 0
+                  ? authors.map((a: any) => a.users?.display_name).join(', ')
+                  : 'None yet'}
+              </em>
+            </span>
+            <span>
+              <i>{staffWord(program)}</i>
+              <em>{officer ? officer.users?.display_name : 'None assigned'}</em>
+            </span>
+            <span>
+              <i>Sponsor</i>
+              <em>{sponsor ? sponsor.teacher_name : 'None named'}</em>
+              {!sponsor && (elsewhere ?? []).length > 0 && (
+                <em class="t-sm">
+                  {(elsewhere ?? [])
+                    .map((e: any) => `${e.teacher_name} sponsors this in ${(e.participations as any)?.programs?.name}`)
+                    .join('. ')}
+                </em>
+              )}
+            </span>
+          </span>
+          <span class="f-do">
+            {/* Carries the program, so recording a sponsor from here records
+                it for this class or fair rather than asking again. */}
+            <a class="btn btn-sm" href={`/app/project/${project?.id}/team/?in=${programId}`}>Update</a>
+          </span>
+        </li>
+        <li>
+          <span class="f-lbl">Notebook</span>
+          <span class="f-val">
+            {notes} {notes === 1 ? 'entry' : 'entries'}, append only and attributed
+          </span>
+          <span class="f-do">
+            <a class="btn btn-sm" href={`/app/project/${project?.id}/`}>Append</a>
+            <a class="btn btn-sm" href={`/app/project/${project?.id}/notebook/`}>Export</a>
+          </span>
+        </li>
+        <li>
+          <span class="f-lbl">Manuscript</span>
+          <span class="f-val">{manuscript ? manuscript.title || 'Started' : 'Not started'}</span>
+          <span class="f-do">
+            <a class="btn btn-sm" href={`/app/project/${project?.id}/manuscript/`}>
+              {manuscript ? 'Open' : 'Start'}
+            </a>
+          </span>
+        </li>
+      </ul>
+    </section>
+
+    <section class="sec" id="deadlines">
+      <div class="sec-h"><b><span class="sec-n">{sectionNo.get('deadlines')}</span>Deadlines</b><span>{total - done} of {total} remaining</span></div>
+
+      {/* Grouped by phase, which is what the phases were for: a list of
+          nineteen rows is a list, and five named stretches with two or three
+          things in each is a plan. The window comes from the template where a
+          teacher set one. */}
+      <table class="tbl phased">
+        <thead>
+          <tr>
+            <th scope="col">Due</th>
+            <th scope="col">Obligation</th>
+            <th scope="col">Set by</th>
+            <th scope="col">Status</th>
+            <th scope="col"><span class="sr">Action</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          {grouped.map((group) => (
+            <>
+              <tr class="phase-row">
+                <th colspan="5" scope="colgroup">
+                  <span class="phase-name">{group.name}</span>
+                  {group.window && (
+                    <span class="phase-when">{group.window.from} to {group.window.to}</span>
+                  )}
+                  <span class="phase-count">
+                    {/* The same sentence whether or not it is finished.
+                        "All done" makes somebody scanning five phases read
+                        two different shapes to compare them. */}
+                    {`${group.done} of ${group.rows.length} done`}
+                  </span>
+                </th>
+              </tr>
+
+          {group.rows.map((m: any) => {
+            const f = byId.get(m.id);
+            return (
+              <tr class={f?.severity === 'disqualifying' ? 'row-bad' : f?.severity === 'urgent' ? 'row-warn' : ''}>
+                <td>{fmt(m.due_on)}</td>
+                <td>
+                  {m.name}
+                  {m.blocks_experimentation && <span class="gate">must precede work</span>}
+                </td>
+                <td>
+                  {/* Whose deadline this is. A student who cannot tell a
+                      club deadline from a fair rule starts treating real
+                      deadlines as advisory, and the fair's November date is
+                      one where that ends a season. */}
+                  <span class:list={['whose', m.source]}>{whose[m.source] ?? 'The program'}</span>
+                </td>
+                <td class="act">
+                  {m.satisfied_by ? (
+                    derived(m)?.href ? (
+                      <a class="linkish" href={derived(m)?.href}>{derived(m)?.verb}</a>
+                    ) : (
+                      <span class="p-none">{derived(m)?.instead ?? derived(m)?.says}</span>
+                    )
+                  ) : !iAuthor ? (
+                    deliverableFor.get(m.id) && !deliverableFor.get(m.id).verified_at && me.runsTheClub ? (
+                      <form method="POST" action="#outcome" class="inline">
+                        <input type="hidden" name="action" value="verify" />
+                        <input type="hidden" name="deliverable_id" value={deliverableFor.get(m.id).id} />
+                        <button type="submit" class="linkish">Verify</button>
+                      </form>
+                    ) : null
+                  ) : stepFor(m.name) && (stepFor(m.name).deliverables ?? []).length > 0 ? (
+                    /* Its deliverables are recorded in one place, below.
+                       Two forms for one obligation meant a deadline could be
+                       ticked complete with nothing behind it, and a
+                       deliverable could exist against a deadline still
+                       reading open. */
+                    <a class="linkish" href="#deliverables">
+                      {satisfied(m) ? 'Recorded' : 'Record it below'}
+                    </a>
+                  ) : (
+                    /* A step with nothing to hand in still has to be
+                       markable: practice judging, a board measured. */
+                    <form method="POST" action="#outcome" class="statusf simple">
+                      <input type="hidden" name="action" value="status" />
+                      <input type="hidden" name="milestone_id" value={m.id} />
+                      <input type="hidden" name="name" value={m.name} />
+                      <input type="hidden" name="kind" value={m.kind} />
+
+                      <select name="status" aria-label={`Status of ${m.name}`}>
+                        <option value="open" selected={!m.completed_on}>Open</option>
+                        <option value="complete" selected={Boolean(m.completed_on)}>Done</option>
+                      </select>
+
+                      <input
+                        type="date"
+                        name="on"
+                        value={m.completed_on ?? ''}
+                        aria-label="Date completed"
+                      />
+
+                      <button class="btn btn-sm" type="submit">Save</button>
+                    </form>
+                  )}
+                </td>
+              </tr>
+            );
+          })}
+            </>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+
+    <!-- ── Deliverables ─────────────────────────────────────────────────── -->
+    {expected.length > 0 && (
+      <section class="sec" id="deliverables">
+        <div class="sec-h">
+          <b><span class="sec-n">{sectionNo.get('deliverables')}</span>Deliverables</b>
+          <span>{expected.filter((d) => recorded.has(d.id)).length} of {expected.length} recorded</span>
+        </div>
+
+        <p class="aside">
+          Everything this program asks for, in one place. Recording one here
+          completes the deadline it belongs to, which is why the deadlines
+          table has no controls on it: a thing is done when the thing exists,
+          not when somebody says so.
+        </p>
+
+        <ul class="dlist">
+          {expected.map((d) => {
+            const have = recorded.get(d.id);
+            return (
+              <li class:list={['dl', have && 'have']}>
+                <div class="dl-what">
+                  <p class="dl-name">
+                    {d.name}
+                    <span class:list={['dl-need', d.requirement]}>
+                      {d.requirement === 'required'
+                        ? 'required'
+                        : d.requirement === 'conditional'
+                          ? 'required for this project'
+                          : 'optional'}
+                    </span>
+                  </p>
+
+                  <p class="dl-where">
+                    {d.steps.length === 1
+                      ? d.steps[0].name
+                      : `${d.steps[0].name}, and ${d.steps.length - 1} more`}
+                  </p>
+
+                  {d.guidance && <p class="dl-guide">{d.guidance}</p>}
+
+                  {/* What goes wrong here. Written where somebody is about
+                      to do the thing, which is the only moment it is worth
+                      reading: the same sentence on a page of tips in August
+                      is a sentence nobody opens. */}
+                  {d.steps.some((st: any) => st.risk || warningsFor(st.id).length > 0) && (
+                    <div class="dl-wrong">
+                      <p class="dl-wrong-h">What goes wrong here</p>
+
+                      {d.steps
+                        .filter((st: any) => st.risk)
+                        .map((st: any) => <p class="dl-risk">{st.risk}</p>)}
+
+                      {d.steps.flatMap((st: any) => warningsFor(st.id)).map((w: any) => (
+                        <p class="dl-risk local">
+                          {w.body}
+                          <span class="dl-who">
+                            {w.users?.display_name ?? `A ${staffWord(program).toLowerCase()}`}, {fmt(w.created_at)}
+                            {!w.confirmed_at && ', not confirmed this season'}
+                          </span>
+                        </p>
+                      ))}
+                    </div>
+                  )}
+
+                  {me.runsTheClub && d.steps.length > 0 && (
+                    <details class="dl-add">
+                      <summary>Add a warning</summary>
+                      {/* Written here rather than in an administration
+                          screen. An officer who has just watched somebody's
+                          plan come back from the SRC writes it on the row
+                          where it would have helped, in October, about a
+                          specific thing. A screen filled in once in August
+                          produces advice nobody needed. */}
+                      <form method="POST" action="#outcome">
+                        <input type="hidden" name="action" value="warn" />
+                        <input type="hidden" name="step_id" value={d.steps[0].id} />
+                        <label>
+                          <span>What goes wrong, and what to do instead</span>
+                          <textarea class="ta" name="body" rows="3" required></textarea>
+                        </label>
+                        <button class="btn btn-sm" type="submit">
+                          Everybody here sees this
+                        </button>
+                      </form>
+                    </details>
+                  )}
+
+                  {d.constraints && (
+                    <p class="dl-limit">
+                      {Object.entries(d.constraints).map(([what, rule]: any) => (
+                        <span>
+                          {what.replace(/_/g, ' ')}: {rule.max ? `at most ${rule.max}` : ''}
+                          {rule.counting ? ` (${String(rule.counting).replace(/_/g, ' ')})` : ''}
+                        </span>
+                      ))}
+                    </p>
+                  )}
+
+                  {d.shape && shape(d.shape) && (
+                    <details class="dl-shape">
+                      <summary>What goes in it</summary>
+                      <ol>
+                        {(shape(d.shape)?.parts ?? []).map((part: any) => (
+                          <li>
+                            <b>{part.name}</b>
+                            {part.guidance && <span> — {part.guidance}</span>}
+                          </li>
+                        ))}
+                        {(shape(d.shape)?.answers ?? []).map((q: string) => <li>{q}</li>)}
+                      </ol>
+                    </details>
+                  )}
+
+                  {d.url && (
+                    <p class="dl-form">
+                      <a href={d.url} target="_blank" rel="noopener noreferrer">The form itself</a>
+                    </p>
+                  )}
+                </div>
+
+                <div class="dl-do">
+                  {have ? (
+                    <>
+                      <p class="dl-done">Recorded {fmt(have.signed_on)}</p>
+                      {have.external_url && (
+                        <p><a href={have.external_url} target="_blank" rel="noopener noreferrer">Where it lives</a></p>
+                      )}
+                      {have.verified_at && <p class="dl-ver">Checked by a {staffWord(program).toLowerCase()}</p>}
+                    </>
+                  ) : iAuthor ? (
+                    <form method="POST" action="#outcome" class="dl-form-in">
+                      <input type="hidden" name="action" value="deliverable" />
+                      <input type="hidden" name="deliverable" value={d.id} />
+                      <input type="hidden" name="label" value={d.name} />
+                      <input type="hidden" name="milestone" value={milestoneIdFor(d.step.id) ?? ''} />
+
+                      <label>
+                        <span>Date on it</span>
+                        <input class="in" type="date" name="signed_on" />
+                      </label>
+
+                      {/* Named for what it is rather than for where it
+                          sits. The field takes a URL and refuses anything
+                          else, and "where it lives" reads as a place to
+                          describe rather than an address to paste, so
+                          people typed a folder name and were refused with
+                          no explanation. We store the address and never
+                          fetch it (7.4). */}
+                      <label>
+                        <span>Google Drive or other URL</span>
+                        <input class="in" type="url" name="external_url" />
+                      </label>
+
+                      <button class="btn btn-sm" type="submit">Record it</button>
+                    </form>
+                  ) : (
+                    <p class="dl-none">Not recorded</p>
+                  )}
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+      </section>
+    )}
+
+    {/* What the work produced, and where the rest of it lives.
+    
+        Under the deliverables rather than beside them, because that is what
+        these are: the images, the recording and the documents a project
+        hands over. They were on the notebook page, which is a chronological
+        record and had no business holding them. */}
+    <section class="sec" id="showcase">
+      <div class="sec-h">
+        <b><span class="sec-n">{sectionNo.get('showcase')}</span>Showcase</b>
+        <span>{(images ?? []).length} of 4</span>
+      </div>
+
+      <p class="aside">
+        What the work looked like. These sit at the top of the published page,
+        above the abstract, so somebody arriving can see the thing before
+        reading about it. Four is the limit, which is a choice rather than a
+        constraint: a gallery of twenty is a scroll.
+      </p>
+
+      {(images ?? []).length > 0 && (
+        <ul class="shots">
+          {(images ?? []).map((img: any) => (
+            <li>
+              <img src={mediaUrl(img.storage_path)} alt={img.alt} loading="lazy" />
+              <p>{img.caption}</p>
+              {iAuthor && (
+                <form method="POST" action="#outcome">
+                  <input type="hidden" name="action" value="image_remove" />
+                  <input type="hidden" name="image_id" value={img.id} />
+                  <button class="btn btn-q" type="submit">Remove</button>
+                </form>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {iAuthor && (images ?? []).length < 4 && (
+        <form method="POST" action="#outcome" enctype="multipart/form-data" class="mform" style="margin-top:22px">
+          <input type="hidden" name="action" value="image" />
+          <label>
+            <span>Image</span>
+            <input class="in" type="file" name="image" accept="image/*" required />
+          </label>
+          <div class="row-2">
+            <label>
+              <span>Caption</span>
+              <input class="in" name="caption" required />
+              <small>What it shows, in a line.</small>
+            </label>
+            <label>
+              <span>Alt text</span>
+              <input class="in" name="alt" required />
+              <small>
+                For somebody who cannot see it. Describe the content, not the
+                fact that it is a photograph.
+              </small>
+            </label>
+          </div>
+          <button class="btn" type="submit">Add the image</button>
+        </form>
+      )}
+
+      <h3 class="sub-h">Video</h3>
+      <p class="aside">
+        One, on YouTube or Vimeo. We store the address and never fetch it, and
+        the published page shows a still until somebody presses play, so
+        nothing is requested from a video host on behalf of a reader who did
+        not ask for it.
+      </p>
+
+      {/* What was saved, where it was saved.
+       
+          The images have the gallery above and the video had nothing: a
+          student pasted an address, pressed save, and the only evidence was
+          the field still containing what they typed. The rest of it lives on
+          the published page, which does not exist yet for a project still
+          being written. */}
+      {savedVideo && (
+        <div class="vsaved">
+          {savedVideo.poster ? (
+            <img src={savedVideo.poster} alt="" loading="lazy" />
+          ) : (
+            <div class="vblank"></div>
+          )}
+          <div>
+            <p class="vhost">
+              {savedVideo.host === 'vimeo' ? 'Vimeo' : 'YouTube'} · saved
+            </p>
+            <p class="t-sm">
+              It appears at the top of the published page, above the abstract.
+              <a href={savedVideo.watch} target="_blank" rel="noopener noreferrer"> Watch it there</a>.
+            </p>
+          </div>
+        </div>
+      )}
+
+      {project?.video_url && !savedVideo && (
+        <div class="note">
+          <p>
+            That address is saved and is not one we can show. YouTube and
+            Vimeo only, and it has to start with https.
+          </p>
+        </div>
+      )}
+
+      {iAuthor ? (
+        <form method="POST" action="#outcome" class="mform">
+          <input type="hidden" name="action" value="video" />
+          <label>
+            <span>Address</span>
+            <input class="in" name="video_url" value={project?.video_url ?? ''} />
+            <small>Leave it empty to remove the one that is there.</small>
+          </label>
+          <button class="btn" type="submit">Save the video</button>
+        </form>
+      ) : null}
+    </section>
+
+    <section class="sec" id="documents">
+      <div class="sec-h"><b><span class="sec-n">{sectionNo.get('documents')}</span>Linked documents</b><span>{links?.length ?? 0}</span></div>
+
+      {iAuthor && (
+        <form method="POST" action="#outcome" class="linkf">
+          <input type="hidden" name="action" value="link" />
+          {/* Stacked rather than side by side. A URL is long and a label is
+              short, and putting them in one row gave both a box too narrow
+              to read what had been pasted into it. */}
+          <label>
+            <span>What it is</span>
+            <input name="label" required autocomplete="off" />
+          </label>
+          <label>
+            <span>Google Drive or other URL</span>
+            <input name="url" type="url" required autocomplete="off" />
+          </label>
+          <button class="btn" type="submit">Add</button>
+        </form>
+      )}
+
+      {links && links.length > 0 && (
+        <ul class="linklist" style="margin-top:18px">
+          {links.map((l: any) => (
+            <li>
+              {/* Somebody else's document, so it opens in its own tab: a
+                  student following a link to their own Drive and losing the
+                  entry they were part way through filling in is a small
+                  disaster with no upside. */}
+              <a href={l.url} target="_blank" rel="noopener noreferrer">{l.label}</a>
+              <span class="t-sm"> · {linkDomain(l.url)}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {!iAuthor && (!links || links.length === 0) && (
+        <p class="t-sm">No documents linked yet.</p>
+      )}
+
+    </section>
+
+    {/* ── The money, where the program is a grant ─────────────────────────
+     
+        Two numbers and no budget. Asked and given, because they differ more
+        often than not: a partial award is the ordinary outcome and what a
+        student needs to see is what they have to cut. */}
+    {isGrant && (
+      <section class="sec" id="money">
+        <div class="sec-h">
+          <b><span class="sec-n">{sectionNo.get('money')}</span>The money</b>
+          <span>{entry.awarded_amount != null ? 'Decided' : 'Not yet decided'}</span>
+        </div>
+
+        {iAuthor ? (
+          <form method="POST" action="#outcome" class="mform">
+            <input type="hidden" name="action" value="money" />
+            <div class="row-2">
+              <label>
+                <span>What you asked for</span>
+                <input
+                  class="in"
+                  type="number"
+                  name="requested_amount"
+                  min="0"
+                  step="0.01"
+                  value={entry.requested_amount ?? ''}
+                />
+                <small>Match the budget exactly. A round number invites the question.</small>
+              </label>
+              <label>
+                <span>What you were given</span>
+                <input
+                  class="in"
+                  type="number"
+                  name="awarded_amount"
+                  min="0"
+                  step="0.01"
+                  value={entry.awarded_amount ?? ''}
+                  disabled={!me.runsTheClub}
+                />
+                <small>
+                  {me.runsTheClub
+                    ? 'Recorded once the decision arrives.'
+                    : 'A reviewer records this.'}
+                </small>
+              </label>
+            </div>
+            <button class="btn" type="submit">Save</button>
+          </form>
+        ) : (
+          <p class="prose">
+            {entry.requested_amount != null
+              ? `Asked for ${money(entry.requested_amount)}`
+              : 'Nothing recorded yet'}
+            {entry.awarded_amount != null && ` · awarded ${money(entry.awarded_amount)}`}
+          </p>
+        )}
+
+        {entry.awarded_amount != null &&
+          entry.requested_amount != null &&
+          Number(entry.awarded_amount) > 0 &&
+          Number(entry.awarded_amount) < Number(entry.requested_amount) && (
+            <p class="note">
+              A partial award. Say what you will drop rather than spreading the
+              shortfall across everything: a reviewer who funded most of it
+              would rather see three of four items done properly.
+            </p>
+          )}
+      </section>
+    )}
+
+    <!-- ── What the fair decided ────────────────────────────────────────── -->
+    {hasResult && (
+    <section class="sec" id="result">
+      <div class="sec-h">
+        <b><span class="sec-n">{sectionNo.get('result')}</span>Result</b>
+        <span>
+          {entry.result_recorded_at ? 'Recorded' : isCourse ? 'At the end' : 'After the fair'}
+        </span>
+      </div>
+
+      <p class="aside">
+        What a published record quotes. Facts with names, and no adjectives
+        doing work the evidence should do.
+      </p>
+
+      <form method="POST" action="#outcome" class="resultf">
+        <input type="hidden" name="action" value="result" />
+
+        <div class="rgrid">
+          {has('categories') && (
+          <label>
+            <span>Category</span>
+            <input class="in" name="category" value={entry.category ?? ''} />
+            <small>The fair's own, which need not match your discipline.</small>
+          </label>
+          )}
+          <label>
+            <span>Entry code</span>
+            <input class="in" name="entry_code" value={entry.entry_code ?? ''} />
+            <small>Displayed, never used as an identifier: the fair reassigns it next season.</small>
+          </label>
+          <label>
+            <span>Placement</span>
+            <input class="in" name="placement" value={entry.placement ?? ''} />
+            <small>What you placed in your category, if anything.</small>
+          </label>
+          {has('advancement') && (
+          <label>
+            <span>Advanced to</span>
+            <input class="in" name="advanced_to" value={entry.advanced_to ?? ''} />
+            <small>Where this project actually went, not where placing could send it.</small>
+          </label>
+          )}
+        </div>
+
+        {has('awards') && (
+        <label>
+          <span>Awards, one per line</span>
+          <textarea class="ta" name="awards" rows="3">{(entry.awards ?? []).join('\n')}</textarea>
+          <small>Special awards and sponsored prizes. Facts with names, no adjectives.</small>
+        </label>
+        )}
+
+        <button class="btn" type="submit">Record the result</button>
+      </form>
+    </section>
+    )}
+  </div>
+</Base>
+
+<style>
+  .hero { padding: 44px 0 28px; max-width: 74ch; }
+  .hero .t-lbl { margin-bottom: 14px; }
+  /* Four cards, one line. Each answers one question: what day is it, how
+     long to the fair, what is next, and how much is left. */
+  /* Equal columns. The uneven fractions were sized to the content that
+     happened to be in each card, which is why nothing lined up the moment a
+     label ran to two lines. */
+  .cards {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 12px;
+    margin-top: 28px;
+  }
+
+  @media (max-width: 1020px) {
+    .cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  }
+  @media (max-width: 560px) {
+    .cards { grid-template-columns: 1fr; }
+  }
+
+  /* Subgrid so the three rows are shared across the row rather than being
+     four independent stacks. Every value sits on one line and every footnote
+     on another, however long a label is. */
+  .card {
+    border: 1px solid var(--rule);
+    border-radius: var(--radius);
+    background: var(--card);
+    padding: 16px 18px 18px;
+    display: grid;
+    grid-template-rows: auto 1fr auto;
+    row-gap: 10px;
+  }
+
+  .card .kicker { margin: 0; align-self: start; }
+
+  /* The value sits at the bottom of its track, so a wrapped label above it
+     does not push the number down out of line with its neighbours. */
+  .card .val {
+    margin: 0;
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    align-self: end;
+  }
+
+  .card .under { margin: 0; align-self: end; }
+
+  .resultf {
+    display: grid;
+    gap: 18px;
+    max-width: var(--measure-form);
+  }
+  .resultf label {
+    display: grid;
+    gap: 6px;
+    /* Without this a cell with shorter help text stretches and its input
+       floats away from the one beside it. */
+    align-content: start;
+  }
+  .resultf button,
+  .resultf .btn {
+    justify-self: start;
+    width: auto;
+  }
+  .aside {
+    max-width: var(--measure-form);
+    margin: 0 0 22px;
+    color: var(--ink-3);
+    font-size: 0.9rem;
+    line-height: 1.55;
+  }
+  .resultf label > span {
+    font-family: var(--face-ui);
+    font-size: 0.78rem;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: var(--ink-2);
+  }
+  .resultf small {
+    color: var(--ink-3);
+    font-size: 0.86rem;
+    line-height: 1.5;
+  }
+  .rgrid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 18px;
+  }
+  @media (max-width: 700px) {
+    .rgrid { grid-template-columns: 1fr; }
+  }
+
+  .kicker {
+    margin: 0 0 10px;
+    font-family: var(--face-ui);
+    font-size: 0.76rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--ink-3);
+  }
+
+  .num {
+    margin: 0;
+    font-family: var(--face-num);
+    font-size: 2.5rem;
+    line-height: 1;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+  }
+  .num.late { color: var(--alert); }
+  .of {
+    font-family: var(--face-ed);
+    font-size: 1.1rem;
+    font-weight: 400;
+    color: var(--ink-3);
+  }
+  .none {
+    font-family: var(--face-num);
+    font-size: 2.5rem;
+    line-height: 1;
+    color: var(--ink-3);
+  }
+
+  .under { color: var(--ink-3); font-size: 0.95rem; line-height: 1.35; }
+  .under.late { color: var(--alert); }
+
+  /* Set to the numerals' cap height rather than to its own size, so the day
+     name and the figures beside it sit on one line. */
+  .weekday {
+    font-family: var(--face-ed);
+    font-size: 1.6rem;
+    line-height: 1;
+    font-weight: 600;
+  }
+
+  .flag { border-left: 3px solid var(--alert); padding: 16px 20px; background: var(--alert-bg); margin-bottom: 26px; }
+  .flag.warn { border-left-color: var(--stage-ready); background: var(--ready-bg); }
+  .flag h4 { margin: 0 0 6px; }
+  .flag p { margin: 0; }
+  .gate { display: inline-block; margin-left: 8px; font-family: var(--face-ui); font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--ink-3); }
+  .row-bad td { background: var(--alert-bg); }
+  .row-warn td { background: var(--ready-bg); }
+  .inline { display: flex; gap: 8px; align-items: center; }
+  .inline input[type='date'] { padding: 6px 9px; border: 1px solid var(--rule); background: var(--card); color: var(--ink); font: inherit; font-size: 0.9rem; }
+  /* Not every button in an inline form: `.linkish` sits in one of these and
+     had to carry `!important` to escape. */
+  .inline button:not(.linkish):not(.btn) {
+    padding: 7px 14px;
+    border: 1px solid var(--ink);
+    background: var(--ink);
+    color: var(--paper);
+    font-family: var(--face-ui);
+    font-size: 0.86rem;
+    cursor: pointer;
+  }
+  .sub { display: block; margin-top: 2px; font-family: var(--face-ui); font-size: 0.82rem; color: var(--ink-3); }
+  .rec summary { cursor: pointer; font-family: var(--face-ui); font-size: 0.86rem; color: var(--ink-3); }
+  .recf { margin-top: 10px; min-width: 24ch; }
+  .recf label { display: block; margin-bottom: 8px; }
+  .recf label > span { display: block; margin-bottom: 3px; font-family: var(--face-ui); font-size: 0.82rem; }
+  .recf input { width: 100%; padding: 5px 7px; border: 1px solid var(--rule); background: var(--card); color: var(--ink); font: inherit; font-size: 0.9rem; }
+  .recf button { padding: 7px 14px; border: 1px solid var(--ink); background: var(--ink); color: var(--paper); font-family: var(--face-ui); font-size: 0.86rem; cursor: pointer; }
+  .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+  /* One row, on one line.
+   
+     The status, the date, the address, and the button are one action, and
+     the button wrapping underneath made it read as two. `auto` on the
+     address column lets it take whatever is left rather than pushing the
+     button out. */
+  /* Whose deadline it is. Quiet by default; the institution's is the one
+     that carries a consequence, so it is the one with weight. */
+  .people {
+    list-style: none;
+    margin: 18px 0 0;
+    padding: 0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 28px;
+  }
+
+  .people li {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    font-size: 0.98rem;
+  }
+
+  .p-lbl {
+    font-family: var(--face-ui);
+    font-size: 0.76rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+  }
+
+  .p-none { color: var(--ink-3); }
+
+  .whose {
+    font-family: var(--face-ui);
+    font-size: 0.78rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    white-space: nowrap;
+    color: var(--ink-3);
+  }
+
+  .whose.program {
+    color: var(--ink);
+    font-weight: 600;
+  }
+
+  /* A phase heading, inside the table.
+   
+     A row that looks like the rows around it is another row. This one sits
+     on the wash, is set in the interface face, and carries the phase's own
+     window and progress — so the eye lands on five headings rather than
+     reading nineteen lines to find where it is. */
+  .phased .phase-row th {
+    padding: 22px 0 8px;
+    border-bottom: 1px solid var(--ink);
+    text-align: left;
+    font-family: var(--face-ui);
+    font-weight: 600;
+    background: none;
+  }
+
+  .phased tbody .phase-row:first-child th { padding-top: 6px; }
+
+  .phase-name {
+    font-size: 1.02rem;
+    letter-spacing: -0.01em;
+  }
+
+  .phase-when,
+  .phase-count {
+    font-family: var(--face-mono);
+    font-size: 0.8rem;
+    font-weight: 400;
+    color: var(--ink-3);
+    letter-spacing: 0.02em;
+  }
+
+  .phase-when::before { content: ' · '; }
+
+  /* Pushed to the right, where a count belongs and where it does not
+     compete with the name for the start of the line. */
+  .phase-count { float: right; }
+
+  /* ── Deliverables ─────────────────────────────────────────────────────── */
+
+  .dlist { list-style: none; margin: 0; padding: 0; }
+
+  .dl {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(15rem, 22rem);
+    gap: 14px 32px;
+    padding: 20px 0;
+    border-top: 1px solid var(--rule-fine);
+  }
+  .dl:first-child { border-top: 0; }
+
+  /* Recorded ones recede: what a student needs is the list of what is not
+     done yet, and hiding the rest would lose the record. */
+  .dl.have .dl-what { opacity: 0.72; }
+
+  .dl-name { margin: 0; font-size: 1.02rem; font-weight: 600; }
+
+  .dl-need {
+    margin-left: 10px;
+    font-family: var(--face-mono);
+    font-size: 0.74rem;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    font-weight: 400;
+    color: var(--ink-3);
+  }
+  .dl-need.required,
+  .dl-need.conditional { color: var(--alert); }
+
+  .dl-where {
+    margin: 3px 0 0;
+    font-family: var(--face-ui);
+    font-size: 0.82rem;
+    color: var(--ink-3);
+  }
+
+  /* Quieter than the two above it. This is not a problem, it is a thing
+     worth knowing before starting, and dressing it as an alarm would spend
+     the alarm. */
+  /* Above the attention band, and quieter than it. A refusal is a fact
+     about the participation rather than a problem with the work, and
+     dressing it as an alarm would tell a student their project is broken
+     when it is not. */
+  /* The cell holding a row's control, which is a link for a derived
+     obligation and a form for everything else. */
+  .act { white-space: nowrap; }
+
+  .place {
+    padding: 16px 20px;
+    margin-bottom: 18px;
+    border-left: 3px solid var(--ink);
+    background: var(--wash);
+  }
+  .place h4 {
+    margin: 0 0 6px;
+    font-family: var(--face-ui);
+    font-size: 1rem;
+  }
+  .place p { margin: 0 0 6px; max-width: 62ch; }
+  .place p:last-child { margin-bottom: 0; }
+
+  .place.refused { border-left-color: var(--alert); }
+  .place.refused h4 { color: var(--alert); }
+
+  .flag.now {
+    border-left: 3px solid var(--rule);
+    background: var(--wash);
+  }
+  .flag.now h4 { color: var(--ink); }
+
+  .dl-wrong {
+    margin: 10px 0 0;
+    padding: 10px 0 0;
+    border-top: 1px solid var(--rule-fine);
+    max-width: 60ch;
+  }
+  .dl-wrong-h {
+    margin: 0 0 6px;
+    font-family: var(--face-ui);
+    font-size: 0.78rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--alert);
+  }
+  .dl-risk {
+    margin: 0 0 8px;
+    font-size: 0.92rem;
+    line-height: 1.5;
+  }
+  /* A club's own reads differently from the process's, because a student
+     should be able to tell who is telling them. */
+  .dl-risk.local {
+    padding-left: 12px;
+    border-left: 2px solid var(--rule);
+  }
+  .dl-who {
+    display: block;
+    margin-top: 3px;
+    font-family: var(--face-mono);
+    font-size: 0.76rem;
+    color: var(--ink-3);
+  }
+  .dl-add { margin-top: 10px; }
+  .dl-add summary {
+    cursor: pointer;
+    font-family: var(--face-ui);
+    font-size: 0.84rem;
+    color: var(--ink-3);
+  }
+  .dl-add label > span {
+    display: block;
+    margin: 8px 0 4px;
+    font-family: var(--face-ui);
+    font-size: 0.84rem;
+  }
+  .dl-add .ta { width: 100%; }
+
+  .dl-guide {
+    margin: 8px 0 0;
+    font-size: 0.94rem;
+    line-height: 1.5;
+    max-width: 60ch;
+  }
+
+  .dl-limit {
+    margin: 6px 0 0;
+    font-family: var(--face-mono);
+    font-size: 0.8rem;
+    color: var(--ink-2);
+  }
+  .dl-limit span + span::before { content: ' · '; }
+
+  .dl-shape { margin-top: 8px; }
+  .dl-shape summary {
+    cursor: pointer;
+    font-family: var(--face-ui);
+    font-size: 0.86rem;
+    color: var(--ink-3);
+  }
+  .dl-shape ol { margin: 8px 0 0 18px; font-size: 0.92rem; line-height: 1.5; }
+  .dl-shape li { margin-bottom: 4px; }
+
+  .dl-form { margin: 8px 0 0; font-size: 0.88rem; }
+
+  .dl-form-in label { display: block; margin-bottom: 8px; }
+  .dl-form-in label > span {
+    display: block;
+    margin-bottom: 4px;
+    font-family: var(--face-ui);
+    font-size: 0.82rem;
+    color: var(--ink-3);
+  }
+  .dl-form-in .in { width: 100%; }
+
+  .dl-done { margin: 0; font-family: var(--face-ui); font-size: 0.9rem; }
+  .dl-ver { margin: 4px 0 0; font-size: 0.84rem; color: var(--ink-3); }
+  .dl-none { margin: 0; font-size: 0.9rem; color: var(--ink-3); }
+
+  @media (max-width: 760px) {
+    .dl { grid-template-columns: minmax(0, 1fr); }
+  }
+
+  .statusf.simple { grid-template-columns: auto auto auto; }
+
+  .statusf {
+    display: grid;
+    grid-template-columns: auto auto minmax(9ch, 1fr) auto;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .statusf select,
+  .statusf input {
+    font-family: inherit;
+    font-size: 0.92rem;
+    padding: 7px 9px;
+    border: 1px solid var(--rule);
+    border-radius: var(--radius);
+    background: var(--card);
+    color: var(--ink);
+    min-width: 0;
+  }
+
+  .statusf select { font-family: var(--face-ui); }
+
+  @media (max-width: 900px) {
+    /* Two lines is right when there is no room for one, but by choice
+       rather than because the button fell off the end. */
+    .statusf { grid-template-columns: auto 1fr; }
+    .statusf input[type='url'] { grid-column: 1 / -1; }
+    .statusf button { grid-column: 1 / -1; justify-self: start; }
+  }
+</style>
+
+<style>
+  /* ── The route through the page ────────────────────────────────────────
+  
+     A numbered sequence rather than a menu, because that is what a season
+     is: set a date, look after the work, meet the dates, hand things over,
+     record what happened. The rule running through it is the thread, and
+     each step sits on it.
+  
+     The same number appears above the heading it points at, in the same
+     face and the same weight, so arriving somewhere shows where it sits in
+     the whole rather than only what it is called. That repetition is the
+     tie: the rail and the headings are one system read twice.
+  
+     It wraps rather than scrolls. A horizontal scroller hides its own last
+     item, which on this page is the result. */
+  .rail {
+    margin: 0 0 34px;
+    padding: 18px 0 0;
+    border-top: 1px solid var(--rule);
+  }
+  .rail ol {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0;
+  }
+  .rail li { position: relative; }
+  /* The thread between the steps. On the item rather than between them, so
+     a wrapped row does not trail a rule into empty space. */
+  .rail li + li::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 1.05rem;
+    width: 14px;
+    border-top: 1px solid var(--rule);
+  }
+  .rail a {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    padding: 4px 20px 8px 20px;
+    text-decoration: none;
+    color: var(--ink-2);
+    border-bottom: 2px solid transparent;
+  }
+  .rail li:first-child a { padding-left: 0; }
+  .rail a:hover,
+  .rail a:focus-visible { color: var(--ink); border-bottom-color: var(--ink); }
+  .rail-n {
+    font-family: var(--face-num);
+    font-size: 0.78rem;
+    letter-spacing: 0.08em;
+    color: var(--ink-3);
+  }
+  .rail-l { font-family: var(--face-ui); font-size: 0.94rem; }
+
+  /* The number above its heading, matching the rail exactly. */
+  .sec-n {
+    display: block;
+    font-family: var(--face-num);
+    font-size: 0.78rem;
+    font-weight: 400;
+    letter-spacing: 0.08em;
+    color: var(--ink-3);
+    margin-bottom: 2px;
+  }
+
+  /* A section landed on sits under the masthead otherwise, with its own
+     heading off the top of the window. */
+  .sec[id] { scroll-margin-top: 22px; }
+
+  @media (max-width: 640px) {
+    .rail a { padding: 4px 14px 8px 14px; }
+    .rail li + li::before { width: 10px; }
+  }
+
+  /* The project's own facts, as a list of rows rather than a row of buttons.
+     Four buttons say "here are four places to go"; this says what each one
+     holds and offers the way in beside it. */
+  /* ── The project's facts ───────────────────────────────────────────────
+  
+     Three rows, each: a label, what it says, and what you can do about it.
+  
+     **No reading measure on it.** This carried `max-width: var(--measure-text)`
+     — 66ch — which is right for prose and wrong for a row that also holds
+     two eleven-rem buttons. There was not enough width left for the value,
+     so "0 entries, append only and attributed" wrapped to one word per line
+     and the actions overflowed on top of it. Same mistake as a row of
+     figures wrapping inside a hero capped at 74ch: **a measure belongs to
+     text, not to a container that holds controls** (15.6a).
+  
+     Flex rather than grid, and that is the second half of the fix. Each row
+     was its own grid, so the three tracks were negotiated separately per
+     row and a `max-content` action track could take whatever it liked from
+     the value beside it. With flex the actions take their natural width,
+     the value takes what is left, and `min-width: 0` lets it shrink instead
+     of pushing. */
+  .facts { list-style: none; margin: 0; padding: 0; }
+
+  .facts li {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px 18px;
+    align-items: center;
+    padding: 14px 0;
+    border-bottom: 1px solid var(--rule-fine);
+  }
+
+  .facts .f-lbl {
+    flex: 0 0 7.5rem;
+    font-family: var(--face-ui);
+    font-size: 0.82rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--ink-3);
+  }
+
+  /* Whatever the row says about itself. Grows into the space the actions do
+     not need, and shrinks rather than shoving them. */
+  .facts .f-val {
+    flex: 1 1 14rem;
+    min-width: 0;
+  }
+
+  /* Left aligned, so the eye reads label, fact, action along one line
+     rather than jumping to the right margin and back. */
+  .f-do {
+    flex: 0 0 auto;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  /* Every action here is the same size, whatever its word. Four buttons of
+     four widths reads as four different kinds of thing, and the shortest
+     looks like an afterthought. */
+  .f-do .btn { min-width: 11rem; justify-content: center; }
+
+  /* Three names against a one line button: centring puts the button beside
+     the middle name, which reads as belonging to it. */
+  .facts li:has(.f-people) { align-items: flex-start; }
+  .facts li:has(.f-people) .f-do { padding-top: 2px; }
+
+  /* ── Linking a document ────────────────────────────────────────────────
+  
+     Stacked and wide. A label and a URL side by side gave each half a
+     column, and a Drive address is long enough that half a column showed
+     the first thirty characters of something that is almost all the same
+     for the first thirty characters.
+  
+     Taller boxes too. These are pasted into rather than typed into, and a
+     shallow box makes checking what landed there harder than it needs to
+     be. */
+  .linkf {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    align-items: flex-start;
+    max-width: 48rem;
+  }
+  .linkf label { display: block; width: 100%; }
+  .linkf label > span {
+    display: block;
+    margin-bottom: 6px;
+    font-family: var(--face-ui);
+    font-size: 0.86rem;
+    color: var(--ink-2);
+  }
+  .linkf input {
+    width: 100%;
+    padding: 12px 14px;
+    border: 1px solid var(--rule);
+    background: var(--card);
+    color: var(--ink);
+    font: inherit;
+    font-size: 1rem;
+  }
+  .linkf input:focus-visible {
+    outline: 2px solid var(--ink);
+    outline-offset: -2px;
+  }
+
+  /* Three names under one label, each on **one** line. The caption used to
+     sit above its value, which turned three facts into six lines and pushed
+     the manuscript row below the fold on a laptop. A caption is a label,
+     not a heading: it belongs beside the thing it names. */
+  .f-people { display: flex; flex-direction: column; gap: 6px; }
+  .f-people > span { display: flex; gap: 12px; align-items: baseline; }
+  .f-people i {
+    flex: 0 0 5.5rem;
+    font-family: var(--face-ui);
+    font-style: normal;
+    font-size: 0.74rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--ink-3);
+  }
+  .f-people em { font-style: normal; }
+
+  /* A phone has room for a label and a value, and not for both plus two
+     buttons. The actions drop to their own line and share it. */
+  @media (max-width: 640px) {
+    .facts .f-lbl { flex: 0 0 100%; }
+    .facts .f-val { flex: 1 1 100%; }
+    .f-do { flex: 1 1 100%; }
+    .f-do .btn { min-width: 0; flex: 1; }
+  }
+</style>

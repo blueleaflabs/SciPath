@@ -9,6 +9,7 @@ import { standing, isAuthorOf, attachmentLabel } from '../../../../lib/roles';
 import { sharedStaffWord } from '../../../../lib/program-names';
 import { afterPost, outcomeFrom } from '../../../../lib/post-redirect';
 import { signInWith } from '../../../../lib/next-path';
+import { participationsForProject } from '../../../../lib/participation';
 
 const { session, account, roles } = Astro.locals;
 const org = activeOrg(Astro);
@@ -56,7 +57,7 @@ if (Astro.request.method === 'POST') {
 
   if (action === 'sponsor') {
     const { error: e } = await supabase.rpc('record_sponsor', {
-      p_project_id: id,
+      p_participation_id: String(form.get('participation_id') ?? ''),
       p_teacher_name: String(form.get('teacher_name') ?? ''),
       p_teacher_email: String(form.get('teacher_email') ?? ''),
       /* Still passed as it arrives. The field is required in the form and
@@ -95,19 +96,79 @@ const selfManaged = attachments.filter(
   (a: any) => a.role === 'author' && a.self_managed_at
 );
 
-const { data: sponsor } = await supabase
-  .from('project_sponsors')
-  .select('id, teacher_name, teacher_email, signed_on, confirmed_at, recorded_at')
-  .eq('project_id', id)
-  .is('superseded_at', null)
-  .maybeSingle();
+/**
+ * WHICH PARTICIPATION A SPONSOR IS FOR.
+ *
+ * A sponsor used to hang off the project, which meant one signature showed
+ * on every class and every fair the project was in, and clearing the
+ * approval on one cleared it everywhere. It hangs off a participation now,
+ * so this page has to say which.
+ *
+ * Carried in `?in=` from the participation page's own Update link, so
+ * arriving from the fair records the sponsor for the fair. A project in only
+ * one place needs no asking; a project in none has nothing to record
+ * against yet.
+ */
+const places = await participationsForProject(supabase, id);
+const askedFor = Astro.url.searchParams.get('in');
 
-const { data: sponsorHistory } = await supabase
-  .from('project_sponsors')
-  .select('teacher_name, teacher_email, recorded_at, superseded_at')
-  .eq('project_id', id)
-  .not('superseded_at', 'is', null)
-  .order('recorded_at', { ascending: false });
+const forProgram =
+  places.find((p) => p.programId === askedFor) ??
+  (places.length === 1 ? places[0] : null);
+
+const placeIds = places.map((p) => p.id);
+
+/**
+ * **A project has several sponsors, one per place, and they are different
+ * people.**
+ *
+ * The class's teacher runs the class. Another teacher approves entry to the
+ * club. A third agrees to sponsor the student's own work at the fair. Three
+ * roles, three names, and the earlier project-level sponsor could hold one
+ * of them.
+ *
+ * So they are read together and shown together. What went wrong before was
+ * not the model: it was a page that asked which place you meant, wrote the
+ * answer, and then showed you one of the three -- so a name recorded for the
+ * club made the class look unsponsored, and nothing said the other two
+ * existed.
+ */
+const { data: currentSponsors } = placeIds.length
+  ? await supabase
+      .from('project_sponsors')
+      .select('id, teacher_name, teacher_email, signed_on, confirmed_at, recorded_at, participation_id')
+      .in('participation_id', placeIds)
+      .is('superseded_at', null)
+      .order('recorded_at', { ascending: false })
+  : { data: [] as any[] };
+
+const sponsorOf = new Map<string, any>();
+for (const row of currentSponsors ?? []) {
+  if (!sponsorOf.has(row.participation_id)) sponsorOf.set(row.participation_id, row);
+}
+
+/* Every place, with whoever sponsors it, in the order a student thinks about
+   them: the ones still needing somebody first. */
+const sponsorRows = places
+  .map((place) => ({
+    place,
+    name: (place.row.programs as any)?.name ?? 'This program',
+    sponsor: sponsorOf.get(place.id) ?? null,
+  }))
+  .sort((a, b) => Number(Boolean(a.sponsor)) - Number(Boolean(b.sponsor)));
+
+/* The one this page is scoped to, where it is scoped at all. Kept for the
+   acknowledgement below, which is about a single named teacher. */
+const sponsor = forProgram ? sponsorOf.get(forProgram.id) ?? null : null;
+
+const { data: sponsorHistory } = placeIds.length
+  ? await supabase
+      .from('project_sponsors')
+      .select('teacher_name, teacher_email, recorded_at, superseded_at')
+      .in('participation_id', placeIds)
+      .not('superseded_at', 'is', null)
+      .order('recorded_at', { ascending: false })
+  : { data: [] as any[] };
 
 /* A sponsor who happens to be signed in can acknowledge it. Nothing waits. */
 const iSponsor = Boolean(
@@ -134,8 +195,8 @@ let candidates: any[] = [];
    everybody rather than inside the branch below, because an author sees the
    word too and it was reading "officer" to a class. */
 const { data: participations } = await supabase
-  .from('entries')
-  .select('program_id, programs(name, season_year, kind, roles)')
+  .from('opportunity_participations')
+  .select('program_id, programs:program_id(name, season_year, kind, roles)')
   .eq('project_id', id);
 
 const programIds = (participations ?? []).map((e: any) => e.program_id);
@@ -220,22 +281,31 @@ const fmt = (d: string | null) =>
     <section class="sec">
       <div class="sec-h"><b>Teacher project sponsor</b><span>Recorded by the student</span></div>
 
-      {sponsor ? (
-        <dl class="record">
-          <dt>Teacher</dt>
-          <dd>{sponsor.teacher_name}</dd>
-          <dt>Email</dt>
-          <dd>{sponsor.teacher_email}</dd>
-          <dt>Form signed</dt>
-          <dd>{sponsor.signed_on ? fmt(sponsor.signed_on) : 'Not recorded'}</dd>
-          <dt>Acknowledged</dt>
-          <dd>
-            {sponsor.confirmed_at
-              ? `Yes, ${fmt(sponsor.confirmed_at)}`
-              : 'Not yet. Nothing depends on it'}
-          </dd>
-        </dl>
-      ) : (
+      {/* One row per place. A student in a class, a club and a fair has
+          three sponsors and they are three different teachers; a page
+          showing one of them makes the other two look unasked. */}
+      {sponsorRows.length > 0 && (
+        <ul class="linklist">
+          {sponsorRows.map((row) => (
+            <li>
+              <b>{row.name}</b>
+              {row.sponsor ? (
+                <span class="t-sm">
+                  {' · '}{row.sponsor.teacher_name}
+                  {row.sponsor.signed_on
+                    ? ` · signed ${fmt(row.sponsor.signed_on)}`
+                    : ' · no signature date'}
+                  {row.sponsor.confirmed_at ? ' · acknowledged' : ''}
+                </span>
+              ) : (
+                <span class="t-sm"> · nobody named yet</span>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {sponsorRows.length > 0 && sponsorRows.every((row) => !row.sponsor) && (
         <div class="note">
           <h4>No sponsor named</h4>
           <p>
@@ -256,12 +326,55 @@ const fmt = (d: string | null) =>
         </form>
       )}
 
-      {(iAuthor || me.runsTheClub) && (
+      {(iAuthor || me.runsTheClub) && places.length === 0 && (
+        <p class="t-sm" style="max-width:var(--measure-text); margin-top:20px">
+          A sponsor is recorded for a class or a fair, and this project is in
+          neither yet. Add it to one first, and the form appears there.
+        </p>
+      )}
+
+      {(iAuthor || me.runsTheClub) && places.length > 0 && (
         <form method="POST" action="#outcome" class="assign" style="margin-top:20px">
           <input type="hidden" name="action" value="sponsor" />
+          {/* Which class or fair this signature is for. A project in one
+              place is not asked; a project in several has to say, because
+              the approval it clears belongs to that one calendar. */}
+          {forProgram ? (
+            <>
+              <input type="hidden" name="participation_id" value={forProgram.id} />
+              <p class="t-sm" style="margin:0 0 6px">
+                For <b>{(forProgram.row.programs as any)?.name}</b>.
+              </p>
+            </>
+          ) : (
+            <label>
+              <span>Which class or fair</span>
+              {/* Named, and saying who each already has, because the whole
+                  failure this replaces was a form that asked the question
+                  and then hid the answer. */}
+              <select name="participation_id" required>
+                {sponsorRows.map((row) => (
+                  <option value={row.place.id}>
+                    {row.name}
+                    {row.sponsor ? ` — currently ${row.sponsor.teacher_name}` : ' — nobody yet'}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
           <label>
             <span>Teacher's name</span>
             <input name="teacher_name" required value={sponsor?.teacher_name ?? ''} />
+            {/* Named elsewhere on this project, so the student can see who
+                they already asked without going looking. Not prefilled: a
+                teacher who agreed to the club has not thereby agreed to the
+                fair, and filling their name in would say they had. */}
+            {(currentSponsors ?? []).length > 0 && (
+              <small>
+                Already on this project:{' '}
+                {[...new Set((currentSponsors ?? []).map((c: any) => c.teacher_name))].join(', ')}
+              </small>
+            )}
           </label>
           <label>
             <span>Their school email</span>

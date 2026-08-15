@@ -54,8 +54,8 @@ const { data: links } = await supabase
   .eq('project_id', id);
 
 const { data: entries } = await supabase
-  .from('entries')
-  .select('id, programs(name, season_year, kind, phases, fair_date)')
+  .from('opportunity_participations')
+  .select('id, programs:program_id(name, season_year, kind, phases, fair_date)')
   .eq('project_id', id);
 
 const entryIds = (entries ?? []).map((e: any) => e.id);
@@ -64,7 +64,7 @@ const { data: deliverables } = entryIds.length
   ? await supabase
       .from('deliverables')
       .select('label, type, signed_on, external_url, verified_at')
-      .in('entry_id', entryIds)
+      .in('participation_id', entryIds)
       .order('signed_on', { ascending: true })
   : { data: [] as any[] };
 
@@ -79,7 +79,7 @@ const { data: milestones } = entryIds.length
   ? await supabase
       .from('entry_milestones')
       .select('name, kind, due_on, completed_on, blocks_experimentation, source, phase')
-      .in('entry_id', entryIds)
+      .in('participation_id', entryIds)
       .order('due_on', { ascending: true, nullsFirst: false })
   : { data: [] as any[] };
 
@@ -130,9 +130,14 @@ const officers = attachments.filter((a: any) => a.role === 'officer');
 
 const { data: sponsor } = await supabase
   .from('project_sponsors')
-  .select('teacher_name')
-  .eq('project_id', id)
+  /* Any current sponsor on any of this project's participations. The
+     question here is "does a teacher stand behind this work", which is
+     about the project; which fair they signed for belongs on that fair's
+     page. */
+  .select('teacher_name, participations!inner(project_id)')
+  .eq('participations.project_id', id)
   .is('superseded_at', null)
+  .limit(1)
   .maybeSingle();
 const roleOf = new Map<string, string>(attachments.map((a: any) => [a.users?.id, a.role]));
 const noteById = new Map((notes ?? []).map((n: any) => [n.id, n]));

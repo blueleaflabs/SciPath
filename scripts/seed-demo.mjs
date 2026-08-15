@@ -105,12 +105,19 @@ const YEAR = new Date().getFullYear();
    different jobs, and a club may hand them to different students. The
    advisor is always an editor because the advisor decides. */
 const ROLES = [
-  /* Two teachers. One advises the club, one advises the class, and neither
-     sees the other's approval queue: a role scoped to a program means that
-     program. A school with a single advisor leaves the role unscoped and
-     they see everything, which `advisor` here does. */
+  /* Three teachers, so the scoping can actually be seen.
+  
+     `advisor` holds an unscoped role and sees every queue. `advisor.b`
+     advises the class and `advisor.c` advises the club, and neither sees the
+     other's, because a role scoped to a cohort means that cohort.
+  
+     The unscoped one exists to demonstrate the fallback and is **not what a
+     real school looks like**: every advisor there advises something. It is
+     kept because a school with one teacher should not have to scope a role
+     they would never unscope. */
   { handle: 'advisor',   role: 'advisor', population: 'staff',   grad: null,     age: '18_plus' },
   { handle: 'advisor.b', role: null,      population: 'staff',   grad: null,     age: '18_plus' },
+  { handle: 'advisor.c', role: null,      population: 'staff',   grad: null,     age: '18_plus' },
   { handle: 'officer.a', role: 'officer', population: 'student', grad: YEAR + 1, age: '13_17', alsoEditor: true },
   { handle: 'officer.b', role: 'officer', population: 'student', grad: YEAR + 1, age: '13_17' },
   { handle: 'officer.c', role: 'officer', population: 'student', grad: YEAR + 1, age: '13_17' },
@@ -123,6 +130,31 @@ const ROLES = [
   { handle: 'student.f', role: 'student', population: 'student', grad: YEAR,     age: '18_plus' },
   { handle: 'student.g', role: 'student', population: 'student', grad: YEAR + 2, age: '13_17' },
   { handle: 'student.h', role: 'student', population: 'student', grad: YEAR + 1, age: '13_17' },
+
+  /* ── A second block, for the cases ──────────────────────────────────────
+   *
+   * `seed-scenarios` and `seed-cases` both used `student.a` to `student.h`,
+   * which was harmless while the scenarios entered the club: a class and a
+   * fair are different programs, so one student could hold a project in
+   * each.
+   *
+   * They now both enter the shared regional fair, and one student may not
+   * enter one fair with two projects -- they would compete against
+   * themselves for a place. Every case with a fair entry collided with the
+   * scenario belonging to the same student.
+   *
+   * A wider pool rather than a relaxed rule: the rule is correct, and the
+   * fixtures were quietly relying on two fairs existing where the model says
+   * there is one.
+   */
+  { handle: 'student.i', role: 'student', population: 'student', grad: YEAR + 2, age: '13_17' },
+  { handle: 'student.j', role: 'student', population: 'student', grad: YEAR + 1, age: '13_17' },
+  { handle: 'student.k', role: 'student', population: 'student', grad: YEAR,     age: '18_plus' },
+  { handle: 'student.l', role: 'student', population: 'student', grad: YEAR + 3, age: '13_17' },
+  { handle: 'student.m', role: 'student', population: 'student', grad: YEAR + 2, age: '13_17' },
+  { handle: 'student.n', role: 'student', population: 'student', grad: YEAR,     age: '18_plus' },
+  { handle: 'student.o', role: 'student', population: 'student', grad: YEAR + 1, age: '13_17' },
+  { handle: 'student.p', role: 'student', population: 'student', grad: YEAR + 2, age: '13_17' },
 ];
 
 /**

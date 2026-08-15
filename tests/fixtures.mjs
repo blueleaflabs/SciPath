@@ -256,7 +256,14 @@ test('officers are granted per program, not school-wide', () => {
   const programs = fs.readFileSync('scripts/seed-programs.mjs', 'utf8');
   const demo = fs.readFileSync('scripts/seed-demo.mjs', 'utf8');
 
-  assert.match(programs, /scope_id: program\.id/, 'the program seed should scope the grant');
+  /* Matched on the grant being scoped to *a* program rather than on one
+     spelling of the variable: a shared fair is seeded once and staffed by
+     each school that enters it, so the grant moved into a helper taking the
+     program id as an argument. The rule is that `scope_id` is set, not what
+     the identifier beside it is called. */
+  assert.match(programs, /scope_id: programId\b|scope_id: program\.id/,
+    'the program seed should scope the grant to a program');
+  assert.doesNotMatch(programs, /scope_id: null/, 'a school-wide officer is not a thing');
   assert.match(demo, /roles\.filter\(\(r\) => r !== 'officer'\)/, 'the demo seed should not grant it');
 });
 
@@ -366,9 +373,9 @@ test('every kind a template declares is a kind the schema allows', () => {
 });
 
 test('two schools can run the same template', () => {
-  /* Every school has an `independent-research`, and the slug comes from the
-     template. Uniqueness on (slug, season) alone made the second school to
-     seed fail on a duplicate key. */
+  /* Two schools run SCVSEFA, and the slug comes from the template.
+     Uniqueness on (slug, season) alone made the second school to seed fail
+     on a duplicate key. */
   assert.match(
     migration,
     /unique \(org_id, slug, season_year\)/,
@@ -429,6 +436,187 @@ test('a program can have its own advisor', () => {
   const demo = fs.readFileSync('scripts/seed-demo.mjs', 'utf8');
   assert.match(demo, /handle: 'advisor\.b'/, 'there is only one teacher in the cast');
   assert.match(demo, /handle: 'advisor',\s+role: 'advisor'/, 'the school-wide one should stay unscoped');
+});
+
+
+/* ── The fourteen cases ──────────────────────────────────────────────────── */
+
+const cases = fs.readFileSync('scripts/seed-cases.mjs', 'utf8');
+
+test('the cases still cover what the model was walked against', () => {
+  /* Brief 22.14 is a list of shapes students actually took, and two of them
+     broke the model as first drafted. A seed that quietly stopped producing
+     one of those shapes would leave the model untested in exactly the place
+     it was hardest to get right.
+   
+     Asserted by the property each case exists to exercise, not by counting:
+     a count goes stale the moment somebody adds a fifteenth. */
+  const required = [
+    ['a co-author at another school', /with: \{ school: 'lynbrook'/],
+    ['a club member with no entry', /entries: \[\],/],
+    ['advancement as a second entry', /second: true/],
+    ['one project in two cohorts', /cohorts: \['irpd', 'club'\]/],
+    ['a project in no cohort', /cohorts: \[\],/],
+    ['a membership with no project', /^const JOINERS/m],
+  ];
+
+  const missing = required.filter(([, pattern]) => !pattern.test(cases)).map(([what]) => what);
+
+  assert.deepEqual(missing, [], 'the seed no longer produces these');
+});
+
+test('the cases add rather than replace', () => {
+  /* The thirteen scenarios have been tested against for months. Replacing
+     them to make room for these would trade tests known to work for tests
+     that are new, so this runs after and adds. */
+  assert.ok(fs.existsSync('scripts/seed-scenarios.mjs'), 'the original scenarios are gone');
+
+  const chain = JSON.parse(fs.readFileSync('package.json', 'utf8')).scripts.reset;
+  assert.ok(
+    chain.indexOf('seed-scenarios') < chain.indexOf('seed-cases'),
+    'the cases have to run after the scenarios they build on'
+  );
+});
+
+test('a case that claims a cohort gives its author a membership', () => {
+  /* A project belongs to a cohort somebody is in, and `set_project_cohort`
+     refuses otherwise. A seed writing `project_cohorts` without the matching
+     membership would produce data the interface could not have made. */
+  assert.match(cases, /from\('memberships'\)\.upsert/);
+  assert.match(cases, /from\('participations'\)\.upsert/);
+
+  const membershipAt = cases.indexOf("from('memberships').upsert", cases.indexOf('for (const key of c.cohorts)'));
+  const cohortAt = cases.indexOf("from('participations').upsert", cases.indexOf('for (const key of c.cohorts)'));
+
+  assert.ok(membershipAt > 0 && membershipAt < cohortAt, 'the membership has to come first');
+});
+
+test('one scene writes one participation row', () => {
+  /* `participations` is unique on `(project_id, program_id)`, and a scene has
+     one program. Before the merge, attaching a project to a cohort and
+     entering it were two tables, so a course scene wrote to both; afterwards
+     that is the same row twice and the reset dies on
+     `participations_project_id_program_id_key` -- which is exactly how it
+     died, after every local test passed.
+
+     Counted rather than reasoned about, because the two writes sat two
+     hundred lines apart in different branches and neither looked wrong on
+     its own. */
+  const writes = [...seed.matchAll(/from\('participations'\)\s*\.\s*(insert|upsert)/g)];
+
+  /* Two, and they must be for *different* programs: the cohort the entry
+     went through, and the entry itself. What this is guarding against is two
+     writes naming the same `program_id`, which is one row written twice and
+     is how the reset died. */
+  assert.equal(
+    writes.length,
+    2,
+    `seed-scenarios writes participations ${writes.length} times per scene; ` +
+      'expected two, the via-cohort and the entry'
+  );
+
+  assert.ok(
+    seed.includes('program_id: viaCohort.id'),
+    'the first participation write is the cohort the entry goes through'
+  );
+  assert.ok(
+    seed.includes('program_id: scenePrograms.id'),
+    "the second is the scene's own program"
+  );
+
+  /* Upserts rather than inserts, since a scene may be re-run over a database
+     that already has it. */
+  assert.ok(
+    writes.every((w) => w[1] === 'upsert'),
+    'every participation write has to tolerate a re-run'
+  );
+});
+
+test('a seeded sponsor names a participation, not a project', () => {
+  /* The sponsor moved off the project (bug 1). A seed still writing
+     `project_id` would insert nothing and every scene would look sponsorless
+     in a way no page could explain. */
+  const sponsorAt = seed.indexOf("from('project_sponsors').insert");
+  assert.ok(sponsorAt > 0, 'the scenarios still have to seed a sponsor');
+
+  const block = seed.slice(sponsorAt, sponsorAt + 400);
+  assert.match(block, /participation_id:/);
+  assert.doesNotMatch(block, /^\s*project_id:/m);
+
+  /* And after the participation exists, or there is no id to name. */
+  const participationAt = seed.search(/from\('participations'\)\s*\.\s*upsert/);
+  assert.ok(
+    participationAt > 0 && participationAt < sponsorAt,
+    'the participation has to be written before the sponsor that hangs off it'
+  );
+});
+
+test('an advancement entry names a different program from the first', () => {
+  /* `second: true` sat in the case data and nothing read it, so both of case
+     10's entries resolved to the same program: one row written twice, which
+     the unique key on `(project_id, program_id)` refuses. It survived that
+     long only because the school had no fair to enter at all. */
+  assert.match(cases, /second:\s*true/, 'case 10 still declares an advancement');
+  assert.ok(
+    cases.includes('e.second ?'),
+    'seed-cases has to read `second` and resolve a different program for it'
+  );
+});
+
+test('the state fair says its dates are invented', () => {
+  /* CSEF has not published a 2027 calendar. The dates in the template are
+     guesses, and a guess that stops saying so becomes a fact the next person
+     plans a season around. One anchor is derived from the regional and is
+     allowed to be; the rest have to stay marked.
+
+     Checked here rather than trusted to review, because the marker is a
+     comment and comments are what get tidied. */
+  const csef = fs.readFileSync('src/config/programs/csef-2027.yaml', 'utf8');
+
+  assert.match(csef, /\[FIXTURE\]/, 'the file has to say the dates are invented');
+  assert.match(
+    csef,
+    /signup: 2027-03-18/,
+    'signup is two weeks after the regional judges, and moves with it'
+  );
+
+  /* Every anchor except `signup` is invented, and the block that holds them
+     has to carry the marker. */
+  const anchors = csef.slice(csef.indexOf('anchors:'), csef.indexOf('unscheduled:'));
+  assert.match(anchors, /\[FIXTURE\]/, 'the anchor block has to be marked');
+});
+
+test('a project can hold a sponsor per place, and the pages say so', () => {
+  /* Three teachers, three roles: the one who runs the class, the one who
+     approves entry to the club, and the one a student asks to sponsor their
+     own work at the fair. They are not interchangeable and a project has all
+     three at once.
+
+     The failure this guards against is not the model but the reporting: a
+     page that reads one sponsor and renders "None named" tells a student to
+     go and ask somebody they have already asked. */
+  const team = fs.readFileSync('src/pages/app/project/[id]/team.astro', 'utf8');
+  const page = fs.readFileSync('src/pages/app/project/[id]/in/[program].astro', 'utf8');
+
+  /* The team page lists every place, not one. */
+  assert.match(team, /sponsorRows/, 'the team page has to show a row per place');
+  assert.doesNotMatch(
+    team,
+    /\.limit\(1\)\s*\n\s*\.maybeSingle\(\)/,
+    'reading one sponsor for a project is what hid the other two'
+  );
+
+  /* The participation page reads its own, and names the others. */
+  assert.match(page, /\.eq\('participation_id', id\)/, 'its own sponsor');
+  /* Matched on the query rather than on a variable name: renaming
+     `elsewhere` to `elsewhereX` left a substring that still matched, so the
+     check passed with the feature removed. `neq` on the participation is the
+     part that actually means "the other places". */
+  assert.match(
+    page,
+    /\.neq\('participation_id', id\)/,
+    'and whoever sponsors this project in its other places'
+  );
 });
 
 console.log(`${passed} fixture assertions passed. ${scenarios.length} scenarios read.`);

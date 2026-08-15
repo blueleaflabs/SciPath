@@ -184,10 +184,10 @@ select id as course_project from public.projects where title = 'Course project' 
 \set QUIET off
 
 update public.programs set joining = 'approval', places = 2 where id = :'course_id';
-update public.entries set status = 'requested' where project_id = :'course_project';
+update public.participations set status = 'requested' where project_id = :'course_project';
 
 \set QUIET on
-select id as request from public.entries where project_id = :'course_project' \gset
+select id as request from public.participations where project_id = :'course_project' \gset
 \set QUIET off
 
 select pg_temp.refuses(
@@ -211,7 +211,7 @@ select pg_temp.allows(
 do $$
 begin
   if not exists (
-    select 1 from public.entries
+    select 1 from public.participations
      where status = 'declined' and decided_by is not null and decided_note is not null
   ) then
     raise exception 'FAIL: a refusal was recorded with no name and no reason on it';
@@ -228,8 +228,8 @@ select pg_temp.allows(
 do $$
 begin
   if not exists (
-    select 1 from public.entries
-     where id = (select id from public.entries where status = 'entered' limit 1)
+    select 1 from public.participations
+     where id = (select id from public.participations where status = 'entered' limit 1)
   ) then
     raise exception 'FAIL: reversing a refusal did not grant the place';
   end if;
@@ -243,7 +243,7 @@ insert into public.user_roles (org_id, user_id, role, scope_id)
 select org_id, :'officer', 'advisor', (select id from public.programs where slug = 'fair-2027')
   from public.users where id = :'officer';
 
-update public.entries set status = 'requested' where project_id = :'course_project';
+update public.participations set status = 'requested' where project_id = :'course_project';
 
 select pg_temp.refuses(
   'an advisor scoped to another program cannot decide this one', :'officer',
@@ -410,6 +410,316 @@ begin
 
   raise notice '  ok   the outbox row carries the event, not a rendered message';
 end $$;
+
+-- ── A person joins a cohort; a project enters an opportunity ──────────────
+--
+-- Both point at `programs` while the split is under way, so a foreign key
+-- cannot say this and the old conflation could be recreated one row at a
+-- time: a student "enrolled in" a regional fair, or a project "entered into"
+-- a class (22.5).
+
+\set QUIET on
+select id as a_cohort from public.programs where slug = 'irpd-2027' \gset
+select id as a_fair   from public.programs where slug = 'fair-2027' \gset
+\set QUIET off
+
+update public.programs set program_role = 'cohort'      where id = :'a_cohort';
+update public.programs set program_role = 'opportunity' where id = :'a_fair';
+
+/* psql substitutes `:'name'` before the server sees it, so the ids are
+   formatted into the block rather than read back out of a setting. */
+select format($fmt$
+do $body$
+declare
+  v_org uuid;
+  v_who uuid;
+begin
+  select org_id into v_org from public.programs limit 1;
+  select id into v_who from public.users limit 1;
+
+  insert into public.memberships (org_id, user_id, cohort_id)
+  values (v_org, v_who, %L::uuid);
+
+  raise notice '  ok   a person can join a cohort';
+
+  begin
+    insert into public.memberships (org_id, user_id, cohort_id)
+    values (v_org, v_who, %L::uuid);
+
+    raise exception 'FAIL a person was enrolled in a regional fair';
+  exception when others then
+    if sqlerrm like 'FAIL%%' then raise; end if;
+    raise notice '  ok   and cannot be enrolled in an opportunity';
+  end;
+end $body$;
+$fmt$, :'a_cohort', :'a_fair') \gexec
+
+-- ── Joining is not entering ────────────────────────────────────────────────
+--
+-- `join_cohort` creates no project, which is the whole of the split:
+-- `start_entry` had to invent one in order to have somewhere to hang an
+-- enrolment, and that is how a class and a regional fair came to sit at one
+-- level (22.1).
+
+select format($fmt$
+do $body$
+declare
+  v_before int;
+  v_after  int;
+begin
+  perform set_config('request.jwt.claim.sub', %L, true);
+
+  select count(*) into v_before from public.projects;
+  perform public.join_cohort(%L::uuid);
+  select count(*) into v_after from public.projects;
+
+  if v_after <> v_before then
+    raise exception 'FAIL joining a cohort invented %% projects', v_after - v_before;
+  end if;
+
+  raise notice '  ok   joining a cohort creates no project';
+
+  if not exists (
+    select 1 from public.memberships
+     where user_id = %L::uuid and cohort_id = %L::uuid
+  ) then
+    raise exception 'FAIL joining recorded no membership';
+  end if;
+
+  raise notice '  ok   and does record a membership';
+end $body$;
+$fmt$, :'author', :'a_cohort', :'author', :'a_cohort') \gexec
+
+-- And a project can be started with no program in sight, which is the solo
+-- path and the reason `independent-research` could be deleted (22.10).
+select format($fmt$
+do $body$
+declare
+  v_project uuid;
+  v_process text;
+begin
+  perform set_config('request.jwt.claim.sub', %L, true);
+
+  v_project := public.start_project('A project with no cohort', null, null);
+
+  select process_id into v_process from public.projects where id = v_project;
+
+  if v_process is null then
+    raise exception 'FAIL a solo project has no process, so it has no calendar';
+  end if;
+
+  if exists (select 1 from public.participations where project_id = v_project) then
+    raise exception 'FAIL a project with no cohort was given one';
+  end if;
+
+  raise notice '  ok   a project can be started with no cohort, and still has a process';
+end $body$;
+$fmt$, :'author') \gexec
+
+-- ── One piece of work, several outcomes ────────────────────────────────────
+--
+-- A project record used to name only the project, and a second was refused
+-- outright. One piece of work goes to Synopsys, MTFC and Genius Olympiad in
+-- different forms, and advancing from SCVSEFA to CSEF is a second entry with
+-- its own judging. Each is its own outcome and its own record (22.8).
+
+select format($fmt$
+do $body$
+declare
+  v_org     uuid;
+  v_project uuid;
+  v_a       uuid;
+  v_b       uuid;
+begin
+  select org_id into v_org from public.projects limit 1;
+  select id into v_project from public.projects limit 1;
+
+  /* Two participations of one project, each with a result. */
+  insert into public.participations (org_id, project_id, program_id, status, result_recorded_at)
+  values (v_org, v_project, %L::uuid, 'competed', now())
+  on conflict do nothing
+  returning id into v_a;
+
+  if v_a is null then
+    select id into v_a from public.participations
+     where project_id = v_project and result_recorded_at is not null limit 1;
+  end if;
+
+  if v_a is null then
+    raise exception 'FAIL could not make a participation with a result';
+  end if;
+
+  /* Direct inserts, deliberately: what is being checked here is that the
+     *table* permits a record per participation. Whether the function that
+     mints one enforces the same rule is checked below, by calling it. */
+  insert into public.records
+    (id, org_id, record_kind, project_id, participation_id, slug, year, title,
+     discipline, published_on, date_precision, source, reviewed, body_format, license)
+  values ('TEST-2027-0001', v_org, 'project', v_project, v_a, 'a', 2027, 'A',
+          'other', current_date, 'day', 'workbench', false, 'none', 'cc-by-4.0');
+
+  /* Through the view, not the table. "Any other participation of this
+     project" was safe while `entries` held only entries; post-merge it can
+     return the IRPD row, and a record does not come out of a class. This is
+     the 22.5 cost showing up in the first query that reads the table raw. */
+  select id into v_b from public.opportunity_participations
+   where project_id = v_project and id <> v_a limit 1;
+
+  if v_b is not null then
+    insert into public.records
+      (id, org_id, record_kind, project_id, participation_id, slug, year, title,
+       discipline, published_on, date_precision, source, reviewed, body_format, license)
+    values ('TEST-2027-0002', v_org, 'project', v_project, v_b, 'b', 2027, 'B',
+            'other', current_date, 'day', 'workbench', false, 'none', 'cc-by-4.0');
+
+    raise notice '  ok   one project can carry a record per participation';
+  else
+    raise notice '  ok   a record names the participation it came from';
+  end if;
+end $body$;
+$fmt$, :'a_fair') \gexec
+
+-- And the function that mints an identifier holds the same rule. Inserting
+-- rows by hand proves the table allows it; only calling `generate_project_record`
+-- twice proves the guard inside it counts entries rather than projects.
+select format($fmt$
+do $body$
+declare
+  v_project uuid;
+  v_first   text;
+begin
+  perform set_config('request.jwt.claim.sub', %L, true);
+
+  select r.project_id into v_project
+    from public.records r where r.id = 'TEST-2027-0001';
+
+  begin
+    v_first := public.generate_project_record(v_project, 'again', 'TEST', null, %L::uuid);
+    raise exception 'FAIL a second identifier was minted for one participation';
+  exception when others then
+    if sqlerrm like 'FAIL%%' then raise; end if;
+
+    /* The refusal has to be the *right* refusal. Without this the check
+       passes on `not authenticated`, which is what it did the first time it
+       was written: the call never reached the guard, and a broken guard
+       would have looked exactly like a working one. */
+    if sqlerrm not like '%%already has a record%%' then
+      raise exception 'FAIL refused for the wrong reason: %%', sqlerrm;
+    end if;
+
+    raise notice '  ok   and the same participation cannot be minted twice';
+  end;
+end $body$;
+$fmt$, :'officer', (select participation_id from public.records where id = 'TEST-2027-0001')) \gexec
+
+-- ── This is my IRPD project ────────────────────────────────────────────────
+--
+-- The third relationship, and the two rules that make it worth having: a
+-- project belongs to a cohort somebody is actually in, and belonging is a
+-- fact about the project rather than something read off its authors (22.5).
+
+select format($fmt$
+do $body$
+declare
+  v_project uuid;
+begin
+  perform set_config('request.jwt.claim.sub', %L, true);
+
+  select p.id into v_project
+    from public.projects p
+    join public.project_authors a on a.project_id = p.id and a.user_id = %L::uuid
+   limit 1;
+
+  if v_project is null then
+    raise exception 'FAIL that fixture authors nothing, so this checks nothing';
+  end if;
+
+  /* Not a member, so claiming the project for it is refused. Without this a
+     student could put work into a class they never joined, and the roster is
+     what a teacher reads. */
+  delete from public.memberships
+   where user_id = %L::uuid and cohort_id = %L::uuid;
+
+  begin
+    perform public.set_project_cohort(v_project, %L::uuid, true);
+    raise exception 'FAIL a project was put in a cohort nobody had joined';
+  exception when others then
+    if sqlerrm like 'FAIL%%' then raise; end if;
+    if sqlerrm not like '%%join that first%%' then
+      raise exception 'FAIL refused for the wrong reason: %%', sqlerrm;
+    end if;
+    raise notice '  ok   a project cannot be put in a cohort nobody joined';
+  end;
+
+  /* Joining a cohort that decides leaves you *requested*, not a member, and
+     a project belongs to a cohort you are actually in. Granting the place is
+     the teacher's act; this stands in for it. */
+  perform public.join_cohort(%L::uuid);
+
+  update public.memberships set state = 'member'
+   where user_id = %L::uuid and cohort_id = %L::uuid;
+
+  perform public.set_project_cohort(v_project, %L::uuid, true);
+
+  if not exists (
+    select 1 from public.participations
+     where project_id = v_project and program_id = %L::uuid
+  ) then
+    raise exception 'FAIL joining then claiming recorded nothing';
+  end if;
+
+  raise notice '  ok   and can once they are in it';
+
+  perform public.set_project_cohort(v_project, %L::uuid, false);
+
+  if exists (
+    select 1 from public.participations
+     where project_id = v_project and program_id = %L::uuid
+  ) then
+    raise exception 'FAIL taking it out left it in';
+  end if;
+
+  raise notice '  ok   and can take it out again';
+end $body$;
+$fmt$, :'author', :'author', :'author', :'a_cohort', :'a_cohort', :'a_cohort',
+      :'author', :'a_cohort', :'a_cohort', :'a_cohort', :'a_cohort',
+      :'a_cohort', :'a_cohort') \gexec
+
+-- ── A class's showcase is for the class ────────────────────────────────────
+
+select format($fmt$
+do $body$
+declare
+  v_org  uuid;
+  v_show uuid;
+begin
+  select org_id into v_org from public.programs limit 1;
+
+  /* An opportunity open only to one cohort's members. */
+  insert into public.programs (org_id, slug, name, season_year, kind, status, program_role, open_to_cohort)
+  values (v_org, 'showcase-test', 'A showcase', 2027, 'showcase', 'open', 'opportunity', %L::uuid)
+  returning id into v_show;
+
+  perform set_config('request.jwt.claim.sub', %L, true);
+
+  delete from public.memberships
+   where user_id = %L::uuid and cohort_id = %L::uuid;
+
+  begin
+    perform public.start_entry(v_show, 'Something', null);
+    raise exception 'FAIL somebody outside the class entered its showcase';
+  exception when others then
+    if sqlerrm like 'FAIL%%' then raise; end if;
+    /* Matched on the part that tells the student what to do, not on the
+       whole sentence: the gates moved into `app.entry_gate` and now name
+       the class rather than saying "that class". */
+    if sqlerrm not like '%%can enter its showcase%%' then
+      raise exception 'FAIL refused for the wrong reason: %%', sqlerrm;
+    end if;
+    raise notice '  ok   only the class can enter its own showcase';
+  end;
+end $body$;
+$fmt$, :'a_cohort', :'author', :'author', :'a_cohort') \gexec
 
 \echo ''
 \echo '  All function assertions passed.'

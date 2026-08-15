@@ -437,7 +437,8 @@ begin
       t || '_set_updated_at', t
     );
   end loop;
-end $$;
+end;
+$$;
 
 
 -- ===========================================================================
@@ -1008,6 +1009,14 @@ alter table public.notification_settings enable row level security;
 grant usage on schema public to authenticated, service_role;
 grant usage on schema app to service_role;
 
+/* `on all tables` means every table that exists **at this point in the
+   file**, not every table the file eventually creates. Two tables added for
+   the cohort model were declared below this line and received nothing, so a
+   seed running as the service role was told `permission denied` by a table
+   it had just created.
+ 
+   The blanket grant stays for everything above; anything created below has
+   to say so, and a check refuses a table that does not. */
 grant select, insert, update on all tables in schema public
   to authenticated, service_role;
 
@@ -1270,8 +1279,51 @@ create table public.programs (
 
   -- The research process this program prescribes for a project started in
   -- it, or null where it prescribes none. A cohort may; an opportunity may
-  -- not, and a check refuses one that tries (22.4).
+  -- not, and the check at the foot of this table refuses one that tries
+  -- (22.4).
+  --
+  -- The check is written there rather than here because it reads
+  -- `program_role`, which is declared below.
   process_id    text,
+
+  -- Which of the two things this is: a group you belong to, or something a
+  -- project enters (22.2).
+  --
+  -- One table for now, deliberately. Splitting the rows and splitting the
+  -- tables at once means every page breaks in two ways and neither can be
+  -- diagnosed from the other. This column is what lets `memberships` refuse
+  -- an opportunity and `entries` refuse a cohort, which is the correctness
+  -- that mattered; the tables can follow.
+  --
+  -- `none` is `independent-research`, which is neither and is being deleted.
+  program_role  text not null default 'opportunity'
+                check (program_role in ('cohort', 'opportunity', 'none')),
+
+  -- An opportunity only one cohort's members may enter, naming that cohort.
+  -- A class's showcase is where the class shows its work, and a student who
+  -- never took the class has nothing to show there.
+  open_to_cohort uuid references public.programs on delete restrict,
+
+  -- What a cohort prepares its members for, where its own deadlines are
+  -- offsets from somebody else's calendar. **The anchors come from that
+  -- opportunity directly, not through a member's entry**: a club member who
+  -- works all year and is not selected still needs the deadlines they were
+  -- working toward (22.6).
+  prepares_for  uuid references public.programs on delete restrict,
+
+  -- **You arrive here by advancing, not by applying.**
+  --
+  -- A state fair takes the projects a regional puts forward. Offering its
+  -- entry form to everybody is offering a door that is not there: a student
+  -- fills it in, is entered, and finds out in May that the fair never had
+  -- their name.
+  --
+  -- Set from the templates, where `advances_to` already names the chain, so
+  -- this is a fact restated for the database rather than a second place to
+  -- maintain it. Derived at seed time rather than matched on display names,
+  -- because "California Science and Engineering Fair" being equal to itself
+  -- is the sort of join that survives until somebody renames a fair.
+  reached_by_advancing boolean not null default false,
 
   version       int not null default 1,
   level         text,
@@ -1336,7 +1388,33 @@ create table public.programs (
   -- case — every school has an `independent-research` — and a global
   -- uniqueness made the second one to seed fail. The slug comes from the
   -- template, so it is only unique within a school by construction.
-  unique (org_id, slug, season_year)
+  unique (org_id, slug, season_year),
+
+  -- **Only a cohort may prescribe a research process, and grants. 22.4.**
+  --
+  -- The comment on `process_id` claimed this check existed for the whole of
+  -- the previous design, and it did not.
+  --
+  -- The rule it enforces is that a *venue* may not impose a *way of doing
+  -- research*: a fair's science and engineering tracks are categories, and
+  -- letting one choose would ask a student who enters two to have done the
+  -- work two ways. It stops being harmless the moment resolution becomes a
+  -- precedence, because an opportunity carrying a stray `process_id` would
+  -- then silently overwrite the work's own process.
+  --
+  -- **A grant is genuinely outside that rule, and is permitted here.**
+  -- `process-grant` is not a way of doing research; it is how you apply for
+  -- money -- find it, propose, be decided on, report on what you spent --
+  -- and those steps belong to the opportunity and to nothing else. See the
+  -- note at the head of `grant-mvhs-micro-2027.yaml`, which says the same
+  -- thing and calls moving these steps into the file the honest fix, at
+  -- which point this clause goes.
+  --
+  -- Written on `kind` rather than as a list of process ids, because the
+  -- exception is a property of what the program *is*, and an id list would
+  -- have to be edited every time a school adds a funder.
+  constraint programs_only_cohorts_prescribe_process
+    check (process_id is null or program_role = 'cohort' or kind = 'grant')
 );
 
 comment on column public.programs.org_id is
@@ -1479,11 +1557,151 @@ create table public.project_authors (
 
 create index project_authors_user_idx on public.project_authors (user_id);
 
-create table public.entries (
+/**
+ * A membership points at a cohort; an entry points at an opportunity.
+ *
+ * A foreign key cannot say this, because both point at `programs` while the
+ * split is under way. Without it the old conflation can be recreated one row
+ * at a time: a student "enrolled in" a regional fair, or a project "entered
+ * into" a class.
+ */
+create or replace function app.membership_is_cohort()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_role text;
+begin
+  select p.program_role into v_role
+    from public.programs p
+   where p.id = new.cohort_id;
+
+  if v_role is distinct from 'cohort' then
+    raise exception 'that is an %, not a cohort. A person joins a cohort; a project enters an opportunity.',
+      coalesce(v_role, 'unknown thing');
+  end if;
+
+  return new;
+end;
+$$;
+
+-- ---------------------------------------------------------------------------
+-- memberships : a person is in a cohort. 22.5.
+--
+-- `entries` used to carry this, which is how a class and a regional fair came
+-- to sit at one level. Joining IRPD is a person enrolling; entering Synopsys
+-- is a project being submitted. The same row modelled both, and `start_entry`
+-- had to invent a project in order to have something to hang an enrolment on.
+--
+-- **A membership needs no project.** A club member who never starts one is
+-- rare and real, and requiring one is what created the conflation.
+-- ---------------------------------------------------------------------------
+create table public.memberships (
   id          uuid primary key default gen_random_uuid(),
   org_id      uuid not null references public.organizations on delete restrict,
-  project_id  uuid not null references public.projects on delete restrict,
+  user_id     uuid not null references public.users on delete restrict,
+
+  -- A cohort. `programs` still holds both kinds while the split is under way;
+  -- `app.is_cohort` refuses an opportunity here.
+  cohort_id   uuid not null references public.programs on delete restrict,
+
+  state       text not null default 'member'
+              check (state in ('requested', 'member', 'declined', 'left')),
+
+  joined_at   timestamptz not null default now(),
+  decided_at  timestamptz,
+  decided_by  uuid references public.users on delete restrict,
+  left_at     timestamptz,
+  note        text,
+
+  created_at  timestamptz not null default now(),
+  updated_at  timestamptz not null default now(),
+
+  -- One membership per person per cohort. Leaving and rejoining is a state
+  -- change rather than a second row, so that a roster cannot show somebody
+  -- twice.
+  unique (user_id, cohort_id)
+);
+
+create index memberships_cohort_idx on public.memberships (cohort_id);
+
+-- Created below the blanket grant above, so it grants for itself.
+grant select, insert, update on public.memberships to authenticated, service_role;
+
+create trigger memberships_cohort_only
+  before insert or update on public.memberships
+  for each row execute function app.membership_is_cohort();
+
+-- ---------------------------------------------------------------------------
+-- participations : this is my IRPD project, and this went to Synopsys. 22.5.
+--
+-- `project_cohorts` and `entries` were the same relationship wearing two
+-- table names. Both were project -> `programs`, separated only by
+-- `programs.program_role`, which is already a column with already-enforced
+-- triggers. Two tables for one relationship is what forced two pages, and it
+-- is why four tables -- `entry_milestones`, `deliverables`, `records` and the
+-- sponsor -- could not share a participation id.
+--
+-- The word is `participation` and not `entry` because "entry" is the word
+-- 22.1 killed: calling the IRPD row an entry puts a class and a regional fair
+-- back on one level.
+--
+-- Two real cases forced this relationship to exist at all, and both still
+-- hold:
+--
+-- **A partner from another school.** A student enters Toshiba Exploravision
+-- with somebody in no cohort at all, so a project's cohort cannot be
+-- inferred from its authors.
+--
+-- **One person, three cohorts, different projects in each.** IRPD, the
+-- research club and MV Environmental Science. Which cohort a project belongs
+-- to is a fact about the project.
+--
+-- This is also where a project's supervisor and its role word come from,
+-- which is what lets one project say Elder, another Officer, and a third
+-- Mentor, for one person.
+--
+-- **What differs between the two cases is rules, not columns.** Attaching a
+-- project to a cohort requires an accepted membership; entering an
+-- opportunity does not. Leaving a cohort deletes the row, because a project
+-- that was never in a class should leave no trace of having been; withdrawing
+-- an entry is a state change, because it happened. Both are enforced on
+-- `program_role`, in one table.
+--
+-- **The cost, recorded so it is not discovered later.** A query reading this
+-- table raw counts IRPD as a fair -- 22.1's conflation returning through the
+-- data-access layer instead of the schema. The mitigation is structural
+-- rather than disciplinary: the two views below, and no page code selecting
+-- from this table directly.
+-- ---------------------------------------------------------------------------
+create table public.participations (
+  id          uuid primary key default gen_random_uuid(),
+  org_id      uuid not null references public.organizations on delete restrict,
+  project_id  uuid not null references public.projects on delete cascade,
   program_id  uuid not null references public.programs on delete restrict,
+
+  -- ── via_id : with my research, in my club. 22.6 ─────────────────────────
+  --
+  -- The cohort participation an entry went through. *I entered Synopsys WITH
+  -- my research and IN the club.* That **in** had no place in the model, and
+  -- three questions were unanswerable without it: which cohort's officer
+  -- looks after an entry, whose `selection_cap` it counts against, and which
+  -- `source = 'school'` milestones layer on top.
+  --
+  -- `on delete set null`, because leaving the club in March must not unmake
+  -- the Synopsys entry made in November. The entry happened; the club's
+  -- involvement ending is a later fact about the club.
+  --
+  -- Null is ordinary and means the entry was made on the work's own account:
+  -- the solo student entering SCVSEFA with no school infrastructure at all
+  -- (22.14), which the model must carry the whole way.
+  via_id      uuid references public.participations on delete set null,
+
+  -- Who attached this, and when. On the cohort side this is the person who
+  -- put the project in the class; on the opportunity side, who entered it.
+  added_by    uuid references public.users on delete restrict,
   -- `requested` is a place asked for and not yet granted. IRPD takes a
   -- handful of students and the club has a signup, so joining is a request
   -- at some programs and immediate at others.
@@ -1542,10 +1760,129 @@ create table public.entries (
   unique (project_id, program_id)
 );
 
+create index participations_program_idx on public.participations (program_id);
+create index participations_via_idx
+  on public.participations (via_id) where via_id is not null;
+
+grant select, insert, update on public.participations to authenticated, service_role;
+
+-- Leaving a cohort is a delete rather than a state change, because a project
+-- that was never in a class should leave no trace of having been. Withdrawing
+-- an entry is a state change, because it happened.
+grant delete on public.participations to authenticated, service_role;
+
+/**
+ * A participation names a cohort or an opportunity, never `none`.
+ *
+ * `none` is `independent-research`, which is neither and is being deleted.
+ * Without this a row could name it and belong to neither view, which is the
+ * one way a participation can become invisible to every page at once.
+ */
+create or replace function app.participation_role_ok()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_role text;
+begin
+  select p.program_role into v_role
+    from public.programs p
+   where p.id = new.program_id;
+
+  if v_role is distinct from 'cohort' and v_role is distinct from 'opportunity' then
+    raise exception 'a project participates in a cohort or an opportunity, not in %',
+      coalesce(v_role, 'an unknown thing');
+  end if;
+
+  return new;
+end;
+$$;
+
+/**
+ * `via_id` points at a cohort participation on the same project. 22.6.
+ *
+ * Constrained rather than documented, because the whole value of the column
+ * is that the answer to "which club looked after this entry" is a fact and
+ * not a guess. A row pointing at another project's cohort, at an
+ * opportunity, or at itself would each answer that question wrongly while
+ * looking well-formed.
+ */
+create or replace function app.participation_via_ok()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_role    text;
+  v_project uuid;
+begin
+  if new.via_id is null then
+    return new;
+  end if;
+
+  if new.via_id = new.id then
+    raise exception 'a participation cannot be made through itself';
+  end if;
+
+  select pr.program_role, pa.project_id into v_role, v_project
+    from public.participations pa
+    join public.programs pr on pr.id = pa.program_id
+   where pa.id = new.via_id;
+
+  if v_project is null then
+    raise exception 'no such participation to have gone through';
+  end if;
+
+  if v_project is distinct from new.project_id then
+    raise exception 'an entry goes through a cohort on the same project';
+  end if;
+
+  if v_role is distinct from 'cohort' then
+    raise exception 'an entry goes through a cohort, not through another opportunity';
+  end if;
+
+  return new;
+end;
+$$;
+
+create trigger participations_role_ok
+  before insert or update on public.participations
+  for each row execute function app.participation_role_ok();
+
+create trigger participations_via_ok
+  before insert or update on public.participations
+  for each row execute function app.participation_via_ok();
+
+-- ---------------------------------------------------------------------------
+-- The two read views. 22.5.
+--
+-- Page code selects from these and never from `participations` directly,
+-- because the one failure the merge introduces is a query that counts IRPD as
+-- a fair. Built here, in the same migration as the table, rather than after:
+-- a view added later is a view some page was written without.
+-- ---------------------------------------------------------------------------
+create view public.cohort_participations as
+  select pa.*
+    from public.participations pa
+    join public.programs pr on pr.id = pa.program_id
+   where pr.program_role = 'cohort';
+
+create view public.opportunity_participations as
+  select pa.*
+    from public.participations pa
+    join public.programs pr on pr.id = pa.program_id
+   where pr.program_role = 'opportunity';
+
+grant select on public.cohort_participations to authenticated, service_role;
+grant select on public.opportunity_participations to authenticated, service_role;
+
 create table public.entry_milestones (
   id                   uuid primary key default gen_random_uuid(),
   org_id               uuid not null references public.organizations on delete restrict,
-  entry_id             uuid not null references public.entries on delete restrict,
+  participation_id     uuid not null references public.participations on delete restrict,
   program_milestone_id uuid references public.program_milestones on delete restrict,
   name                 text not null,
   kind                 text not null,
@@ -1566,15 +1903,15 @@ create table public.entry_milestones (
   satisfied_by  text check (satisfied_by in ('sponsor', 'officer', 'start_date'))
 );
 
-create index entry_milestones_entry_idx
-  on public.entry_milestones (entry_id, sort_order);
+create index entry_milestones_participation_idx
+  on public.entry_milestones (participation_id, sort_order);
 
 do $$
 declare t text;
 begin
   foreach t in array array[
     'programs', 'program_milestones', 'projects', 'project_authors',
-    'entries', 'entry_milestones'
+    'participations', 'entry_milestones'
   ] loop
     execute format(
       'create trigger %I before update on public.%I
@@ -1582,7 +1919,8 @@ begin
       t || '_set_updated_at', t
     );
   end loop;
-end $$;
+end;
+$$;
 
 
 -- ---------------------------------------------------------------------------
@@ -1591,11 +1929,232 @@ end $$;
 -- A copy rather than a reference, because a program that moves a date in
 -- February must not silently rewrite what a student was told in September.
 -- The copy is what they are held to; the program is what the fair publishes.
+
+-- ---------------------------------------------------------------------------
+-- WHAT STANDS BETWEEN A PROJECT AND AN OPPORTUNITY. 22.13.
+--
+-- Three gates, and the reason they are one function is that all three have to
+-- answer the same question in the same words wherever it is asked: on the
+-- overview that decides whether to draw a form, and in the two functions that
+-- would otherwise let a POST through anyway.
+--
+-- Returns null when the way is clear, and a sentence a student can act on
+-- when it is not. **A student told "not allowed" learns nothing; one told to
+-- join the club knows what to do.**
+--
+-- The third gate is the one the model gained with shared programs. A regional
+-- fair has a null `org_id` and one row serves every school, so
+-- `open_to_cohort` cannot express "Monta Vista's students go through the
+-- club" -- naming Monta Vista's club on the shared row would lock Lynbrook
+-- and the Open Program out of a fair neither of them runs a club for.
+--
+-- So it is derived per school, from `prepares_for`, which the club already
+-- declares: *if your school runs a cohort that prepares for this, you go
+-- through it.* A school with no such cohort has no gate, which is exactly
+-- the Open Program -- no club, nobody to ask, and 22.10's point that the
+-- absence should be visible rather than papered over.
+-- ---------------------------------------------------------------------------
+create or replace function app.entry_gate(
+  p_program_id uuid,
+  p_project_id uuid default null,
+  p_user_id    uuid default null
+)
+returns text
+language plpgsql
+stable
+security definer
+set search_path = ''
+as $$
+declare
+  v_uid     uuid := coalesce(p_user_id, auth.uid());
+  v_org     uuid;
+  v_program public.programs%rowtype;
+  v_cohort  text;
+  v_from    text;
+begin
+  select * into v_program from public.programs where id = p_program_id;
+
+  if v_program.id is null then
+    return 'no such program';
+  end if;
+
+  select u.org_id into v_org from public.users u where u.id = v_uid;
+
+  /* 1. Open to one named cohort. The class's own showcase. */
+  if v_program.open_to_cohort is not null
+     and not exists (
+       select 1 from public.memberships m
+        where m.user_id = v_uid
+          and m.cohort_id = v_program.open_to_cohort
+          and m.state = 'member'
+     )
+  then
+    select p.name into v_cohort
+      from public.programs p where p.id = v_program.open_to_cohort;
+
+    return format('Only members of %s can enter its showcase. Join it first.',
+                  coalesce(v_cohort, 'that class'));
+  end if;
+
+  /* 2. A cohort at this school prepares for it, so entry goes through the
+        cohort. Any one of them is enough: a school may run two. */
+  if exists (
+    select 1 from public.programs c
+     where c.prepares_for = p_program_id
+       and c.program_role = 'cohort'
+       and c.org_id = v_org
+       and c.status = 'open'
+  ) and not exists (
+    select 1
+      from public.programs c
+      join public.memberships m on m.cohort_id = c.id
+     where c.prepares_for = p_program_id
+       and c.program_role = 'cohort'
+       and c.org_id = v_org
+       and m.user_id = v_uid
+       and m.state = 'member'
+  ) then
+    select string_agg(c.name, ' or ' order by c.name) into v_cohort
+      from public.programs c
+     where c.prepares_for = p_program_id
+       and c.program_role = 'cohort'
+       and c.org_id = v_org
+       and c.status = 'open';
+
+    /* Asked and not yet granted is a different sentence from never asked:
+       one of them is waiting on somebody else. */
+    if exists (
+      select 1
+        from public.programs c
+        join public.memberships m on m.cohort_id = c.id
+       where c.prepares_for = p_program_id
+         and c.org_id = v_org
+         and m.user_id = v_uid
+         and m.state = 'requested'
+    ) then
+      return format('You have asked to join %s. Once they accept, you can enter this.',
+                    coalesce(v_cohort, 'the club'));
+    end if;
+
+    return format('Your school enters this through %s. Ask to join first.',
+                  coalesce(v_cohort, 'a club'));
+  end if;
+
+  /* 3. Reached by advancing. Needs a project, because the question is about
+        what that project has already done. */
+  if v_program.reached_by_advancing then
+    if p_project_id is null then
+      return 'This fair takes projects that advanced from another one, so it cannot be a project''s first entry.';
+    end if;
+
+    if not exists (
+      select 1
+        from public.participations pa
+        join public.programs p on p.id = pa.program_id
+       where pa.project_id = p_project_id
+         and pa.advanced_to is not null
+         and p.advances_to_fairs @> array[v_program.name]
+    ) then
+      select string_agg(p.name, ' or ') into v_from
+        from public.programs p
+       where p.advances_to_fairs @> array[v_program.name]
+         and (p.org_id is null or p.org_id = v_org);
+
+      return format('This fair takes projects that advanced from %s. It opens once a result says so.',
+                    coalesce(v_from, 'another fair'));
+    end if;
+  end if;
+
+  return null;
+end;
+$$;
+
+grant execute on function app.entry_gate(uuid, uuid, uuid) to authenticated;
+
+/**
+ * Every gate at once, for the page that decides what to draw.
+ *
+ * One call rather than one per program, and the same function the two write
+ * paths call, so a form the overview draws is a form that will be accepted
+ * and a form it withholds is one that would have been refused. Drawing a
+ * door and then refusing at it is the failure this is here to prevent.
+ */
+create or replace function public.entry_gates()
+returns table (program_id uuid, reason text)
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select p.id, app.entry_gate(p.id, null, auth.uid())
+    from public.programs p
+   where p.program_role = 'opportunity'
+     and p.status = 'open'
+     and (p.org_id is null
+          or p.org_id = (select u.org_id from public.users u where u.id = auth.uid()))
+     and app.entry_gate(p.id, null, auth.uid()) is not null;
+$$;
+
+grant execute on function public.entry_gates() to authenticated;
+
+
+/**
+ * THE PROGRAM'S DEADLINES, COPIED ONTO A PARTICIPATION.
+ *
+ * A copy rather than a reference, because a program that moves a date in
+ * February must not silently rewrite what a student was told in September.
+ * The copy is what they are held to; the program is what the fair publishes.
+ *
+ * Extracted because **a class has deadlines too, and nothing was copying
+ * them.** `enter_program` did this inline, and `set_project_cohort` attached
+ * the project and stopped -- so a project in IRPD had a participation, a
+ * supervisor and a page, and an empty calendar. It went unnoticed because
+ * the only page a cohort had resolved its dates from the template at render
+ * time and never read this table, which also meant a class's deadlines had
+ * no state: nothing could be marked done, because there was no row to mark.
+ *
+ * `org_id is null or org_id = v_org` is the school layer (6.8): the fair's
+ * own dates, plus this school's own on top of them.
+ */
+create or replace function app.copy_milestones(
+  p_participation_id uuid,
+  p_program_id       uuid,
+  p_org_id           uuid
+)
+returns int
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_copied int;
+begin
+  insert into public.entry_milestones
+    (org_id, participation_id, program_milestone_id, name, kind, due_on, required,
+     blocks_experimentation, sort_order, source, phase)
+  select p_org_id, p_participation_id, m.id, m.name, m.kind, m.due_on, m.required,
+         m.blocks_experimentation, m.sort_order, m.source, m.phase
+    from public.program_milestones m
+   where m.program_id = p_program_id
+     and (m.org_id is null or m.org_id = p_org_id)
+     and not exists (
+       select 1 from public.entry_milestones e
+        where e.participation_id = p_participation_id
+          and e.program_milestone_id = m.id
+     );
+
+  get diagnostics v_copied = row_count;
+  return v_copied;
+end;
+$$;
+
+
 -- ---------------------------------------------------------------------------
 
 create or replace function public.enter_program(
   p_project_id uuid,
-  p_program_id uuid
+  p_program_id uuid,
+  p_via_id     uuid default null
 )
 returns uuid
 language plpgsql
@@ -1605,6 +2164,7 @@ as $$
 declare
   v_uid   uuid := auth.uid();
   v_org   uuid;
+  v_gate  text;
   v_entry uuid;
 begin
   if v_uid is null then
@@ -1623,6 +2183,33 @@ begin
     raise exception 'not an author on that project';
   end if;
 
+  /* **A project enters an opportunity; a person joins a cohort.**
+
+     This guard did not exist before the merge, and its absence was a real
+     hole: `enter_program` would happily make an entry out of IRPD, which is
+     the 22.1 conflation by another route. The merge does not create the hole
+     -- it changes what the correct guard is, because one table now holds
+     both kinds and `program_role` is the only thing telling them apart.
+
+     Said here as well as in the trigger because the message is the point: a
+     student told "not allowed" learns nothing, and one told to join the
+     class knows what to do. */
+  if exists (
+    select 1 from public.programs p
+     where p.id = p_program_id and p.program_role = 'cohort'
+  ) then
+    raise exception 'that is a class or a club, not something a project is entered into. Join it, then add the project to it.';
+  end if;
+
+  /* The same gates the overview drew the form against. Passed the project,
+     because a fair reached by advancing is asking what this project has
+     already done. */
+  v_gate := app.entry_gate(p_program_id, p_project_id, v_uid);
+
+  if v_gate is not null then
+    raise exception '%', v_gate;
+  end if;
+
   /* Asked for, or joined. A program that takes a handful of students grants
      places; a fair takes everybody who turns up. The template says which,
      and it is a fact about the program rather than a setting.
@@ -1630,9 +2217,10 @@ begin
      `on conflict` restores a withdrawn place to whatever joining that
      program does, so somebody who left and came back does not skip a queue
      they were meant to be in. */
-  insert into public.entries (org_id, project_id, program_id, status)
+  insert into public.participations (org_id, project_id, program_id, status, via_id)
   select v_org, p_project_id, p_program_id,
-         case when p.joining = 'approval' then 'requested' else 'entered' end
+         case when p.joining = 'approval' then 'requested' else 'entered' end,
+         p_via_id
     from public.programs p
    where p.id = p_program_id
   on conflict (project_id, program_id) do update
@@ -1640,30 +2228,23 @@ begin
                     when (select joining from public.programs where id = p_program_id)
                          = 'approval' then 'requested'
                     else 'entered'
-                  end
+                  end,
+         /* Re-entering may name the club it went through; it must not erase
+            one already recorded by passing null. */
+         via_id = coalesce(excluded.via_id, public.participations.via_id)
   returning id into v_entry;
 
-  insert into public.entry_milestones
-    (org_id, entry_id, program_milestone_id, name, kind, due_on, required,
-     blocks_experimentation, sort_order, source, phase)
-  select v_org, v_entry, m.id, m.name, m.kind, m.due_on, m.required,
-         m.blocks_experimentation, m.sort_order, m.source, m.phase
-    from public.program_milestones m
-   where m.program_id = p_program_id
-     and (m.org_id is null or m.org_id = v_org)
-     and not exists (
-       select 1 from public.entry_milestones e
-        where e.entry_id = v_entry and e.program_milestone_id = m.id
-     );
+  perform app.copy_milestones(v_entry, p_program_id, v_org);
 
-  perform app.audit(v_org, 'entry.created', 'entries', v_entry, null,
-    jsonb_build_object('project_id', p_project_id, 'program_id', p_program_id));
+  perform app.audit(v_org, 'entry.created', 'participations', v_entry, null,
+    jsonb_build_object('project_id', p_project_id, 'program_id', p_program_id,
+                       'via_id', p_via_id));
 
   return v_entry;
 end;
 $$;
 
-grant execute on function public.enter_program(uuid, uuid) to authenticated;
+grant execute on function public.enter_program(uuid, uuid, uuid) to authenticated;
 
 
 -- ---------------------------------------------------------------------------
@@ -1674,14 +2255,18 @@ alter table public.programs           enable row level security;
 alter table public.program_milestones enable row level security;
 alter table public.projects           enable row level security;
 alter table public.project_authors    enable row level security;
-alter table public.entries            enable row level security;
+alter table public.memberships        enable row level security;
+alter table public.participations     enable row level security;
 alter table public.entry_milestones   enable row level security;
 
 grant select, insert, update on public.programs, public.program_milestones,
-  public.projects, public.project_authors, public.entries,
+  public.projects, public.project_authors, public.participations,
   public.entry_milestones to authenticated, service_role;
+-- `participations` is deliberately absent: leaving a cohort deletes the row,
+-- because a project that was never in a class should leave no trace of having
+-- been (22.5). The grant above it stands.
 revoke delete on public.programs, public.program_milestones, public.projects,
-  public.project_authors, public.entries, public.entry_milestones
+  public.project_authors, public.entry_milestones
   from authenticated, service_role;
 
 -- A program with no org is a fair many schools enter, so everyone signed in
@@ -1749,7 +2334,7 @@ comment on column public.user_roles.scope_id is
 -- here: it touches every page and carries no behavior with it, and mixing a
 -- rename into a policy rewrite is how a policy rewrite goes wrong unnoticed.
 -- ---------------------------------------------------------------------------
-comment on table public.entries is
+comment on table public.participations is
   'One project participating in one program. A competition entry is one kind; '
   'a course enrollment and a journal submission are others. To be renamed to '
   'participations, open item 52.';
@@ -1854,7 +2439,7 @@ as $$
     -- Staff of any current program in a family this project participates in.
     or exists (
       select 1
-        from public.entries e
+        from public.participations e
         join public.programs mine on mine.id = e.program_id
         join public.programs theirs
           on theirs.org_id = mine.org_id
@@ -1937,21 +2522,56 @@ create policy project_authors_update on public.project_authors
   for update to authenticated
   using ((select app.can_edit_project(project_authors.project_id)));
 
-create policy entries_read on public.entries
+create policy participations_read on public.participations
   for select to authenticated
-  using ((select app.can_see_project(entries.project_id)));
+  using ((select app.can_see_project(participations.project_id)));
 
-create policy entries_write on public.entries
+create policy participations_write on public.participations
   for update to authenticated
-  using ((select app.can_edit_project(entries.project_id)));
+  using ((select app.can_edit_project(participations.project_id)));
+
+-- memberships ---------------------------------------------------------------
+--
+-- A roster is not a secret inside a school: a club member may see who else is
+-- in the club, which is what makes a club a thing rather than a list held by
+-- a teacher. Across schools it is nobody's business, so the tenant boundary
+-- is the whole of the rule.
+create policy memberships_read on public.memberships
+  for select to authenticated
+  using (org_id = (select app.org_id()));
+
+-- Asking to join is a student's own act, and only their own.
+create policy memberships_request on public.memberships
+  for insert to authenticated
+  with check (
+    org_id = (select app.org_id())
+    and user_id = (select auth.uid())
+    and state = 'requested'
+  );
+
+-- Deciding belongs to whoever runs the cohort, and goes through a function
+-- rather than a policy: granting a place has to check places remaining and
+-- write an audit row, and a policy can do neither.
+
+-- participations ------------------------------------------------------------
+--
+-- Which cohort a project belongs to is as visible as the project, which is
+-- `participations_read` above and not a second policy.
+--
+-- `project_cohorts_read` used to grant this org-wide. Two permissive select
+-- policies on one table are OR-ed, so keeping both would have made every
+-- cohort row in the school readable by everyone -- a visibility regression
+-- the merge would have introduced silently. Writing still goes through a
+-- function, because it has to hold that the person is a member of the cohort
+-- they are claiming.
 
 create policy entry_milestones_read on public.entry_milestones
   for select to authenticated
-  using ((select app.can_see_project((select e.project_id from public.entries e where e.id = entry_milestones.entry_id))));
+  using ((select app.can_see_project((select e.project_id from public.participations e where e.id = entry_milestones.participation_id))));
 
 create policy entry_milestones_update on public.entry_milestones
   for update to authenticated
-  using ((select app.can_edit_project((select e.project_id from public.entries e where e.id = entry_milestones.entry_id))));
+  using ((select app.can_edit_project((select e.project_id from public.participations e where e.id = entry_milestones.participation_id))));
 
 
 -- ===========================================================================
@@ -2011,9 +2631,319 @@ as $$
   select p.process_id
     from public.programs p
    where p.id = p_program_id
+     and (p.program_role = 'cohort' or p.kind = 'grant')
 $$;
 
 -- ---------------------------------------------------------------------------
+
+/**
+ * JOINING A COHORT.
+ *
+ * A person enrolls in a class or a club. **No project is created**, which is
+ * the whole point: `start_entry` had to invent one in order to have
+ * something to hang an enrolment on, and that is how a class and a regional
+ * fair came to sit at one level (22.1).
+ *
+ * A cohort that admits anybody grants the place here; one that decides
+ * records the request and waits.
+ */
+create or replace function public.join_cohort(p_cohort_id uuid)
+returns uuid
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_uid    uuid := auth.uid();
+  v_org    uuid;
+  v_status text;
+  v_role   text;
+  v_joining text;
+  v_id     uuid;
+begin
+  if v_uid is null then
+    raise exception 'not authenticated';
+  end if;
+
+  select u.org_id, u.status into v_org, v_status
+    from public.users u where u.id = v_uid;
+
+  if v_org is null then
+    raise exception 'finish signing up first';
+  end if;
+
+  if v_status = 'suspended' then
+    raise exception 'this account is suspended';
+  end if;
+
+  select p.program_role, p.joining into v_role, v_joining
+    from public.programs p
+   where p.id = p_cohort_id
+     and p.status = 'open'
+     and (p.org_id is null or p.org_id = v_org);
+
+  if v_role is null then
+    raise exception 'that is not open to this school';
+  end if;
+
+  /* The trigger on `memberships` would refuse this too. Saying it here means
+     a person reads why rather than reading a constraint's name. */
+  if v_role <> 'cohort' then
+    raise exception 'a project enters that; a person does not join it';
+  end if;
+
+  insert into public.memberships (org_id, user_id, cohort_id, state)
+  values (v_org, v_uid, p_cohort_id,
+          case when v_joining = 'approval' then 'requested' else 'member' end)
+  on conflict (user_id, cohort_id) do update
+    set state = case
+                  when public.memberships.state = 'left' then excluded.state
+                  else public.memberships.state
+                end
+  returning id into v_id;
+
+  perform app.audit(v_org, 'membership.requested', 'memberships', v_id, null,
+    jsonb_build_object('cohort_id', p_cohort_id));
+
+  return v_id;
+end;
+$$;
+
+/**
+ * STARTING A PROJECT, WITH NO PROGRAM IN SIGHT.
+ *
+ * The solo path, and the ordinary one: a project exists because somebody
+ * started work, not because they joined something. Where a cohort is named
+ * the project is attached to it and takes its process; where none is, the
+ * project keeps the default and belongs to nobody, which is the truth about
+ * a student with no class and no club (22.10).
+ */
+/**
+ * PUTTING A PROJECT IN A COHORT, OR TAKING IT OUT.
+ *
+ * The relationship the model needed a name for: *this is my IRPD project*
+ * (22.5). Separate from joining, because a person may be in a cohort for a
+ * year before starting anything, and separate from entering, because a class
+ * is not somewhere work is submitted.
+ *
+ * **The author has to be a member.** Not the other way round: a partner from
+ * another school authors the work without being in anybody's class, and
+ * inferring the cohort from the authors is exactly what the third
+ * relationship exists to avoid. What is required is that whoever claims the
+ * project for a cohort is in it.
+ */
+/**
+ * DECIDING WHETHER SOMEBODY IS IN A COHORT.
+ *
+ * `decide_place` does this for an entry, and a membership needed its own
+ * because the two stopped being one row (22.5). The rule is the same one the
+ * approval queue has always used: whoever holds a role on that cohort, or an
+ * advisor whose role names no cohort and therefore covers the school.
+ */
+create or replace function public.decide_membership(
+  p_membership_id uuid,
+  p_grant         boolean,
+  p_note          text default null
+)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_uid    uuid := auth.uid();
+  v_org    uuid;
+  v_cohort uuid;
+  v_state  text;
+begin
+  if v_uid is null then
+    raise exception 'not authenticated';
+  end if;
+
+  select m.org_id, m.cohort_id, m.state
+    into v_org, v_cohort, v_state
+    from public.memberships m
+   where m.id = p_membership_id;
+
+  if v_org is null then
+    raise exception 'no such request';
+  end if;
+
+  /* A role scoped to a cohort means that cohort; an unscoped advisor covers
+     the school. A club officer must not decide who is in the class. */
+  if not exists (
+    select 1 from public.user_roles r
+     where r.user_id = v_uid
+       and r.org_id = v_org
+       and r.revoked_at is null
+       and r.role in ('officer', 'advisor')
+       and (r.scope_id = v_cohort or (r.scope_id is null and r.role = 'advisor'))
+  ) then
+    raise exception 'that is not yours to decide';
+  end if;
+
+  if v_state <> 'requested' then
+    raise exception 'that has already been decided';
+  end if;
+
+  update public.memberships
+     set state = case when p_grant then 'member' else 'declined' end,
+         decided_at = now(),
+         decided_by = v_uid,
+         note = p_note
+   where id = p_membership_id;
+
+  perform app.audit(v_org, case when p_grant then 'membership.granted' else 'membership.declined' end,
+    'memberships', p_membership_id, null, jsonb_build_object('cohort_id', v_cohort));
+end;
+$$;
+
+create or replace function public.set_project_cohort(
+  p_project_id uuid,
+  p_cohort_id  uuid,
+  p_in         boolean default true
+)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_participation uuid;
+  v_uid uuid := auth.uid();
+  v_org uuid;
+begin
+  if v_uid is null then
+    raise exception 'not authenticated';
+  end if;
+
+  select p.org_id into v_org from public.projects p where p.id = p_project_id;
+
+  if v_org is null then
+    raise exception 'no such project';
+  end if;
+
+  /* An author of the work, or somebody who runs the school. A club officer
+     may put a project in their own club's list; a passing student may not. */
+  if not exists (
+    select 1 from public.project_authors a
+     where a.project_id = p_project_id
+       and a.user_id = v_uid
+       and a.role = 'author'
+       and a.accepted_at is not null
+  ) and not app.is_staff() then
+    raise exception 'only an author of this project, or the school, can do that';
+  end if;
+
+  if not p_in then
+    delete from public.participations
+     where project_id = p_project_id and program_id = p_cohort_id;
+
+    perform app.audit(v_org, 'project.left_cohort', 'projects', p_project_id, null,
+      jsonb_build_object('cohort_id', p_cohort_id));
+    return;
+  end if;
+
+  /* Claiming a project for a cohort you are not in would let somebody put
+     work into a class they never joined, and the roster is what a teacher
+     reads. Staff are exempt: an advisor tidying up is the ordinary case. */
+  if not exists (
+    select 1 from public.memberships m
+     where m.user_id = v_uid
+       and m.cohort_id = p_cohort_id
+       and m.state = 'member'
+  ) and not app.is_staff() then
+    raise exception 'join that first. A project belongs to a cohort you are in.';
+  end if;
+
+  insert into public.participations (org_id, project_id, program_id, added_by)
+  values (v_org, p_project_id, p_cohort_id, v_uid)
+  on conflict (project_id, program_id) do nothing
+  returning id into v_participation;
+
+  /* Re-attaching after leaving finds the row already there and returns
+     nothing, so the id is looked up rather than assumed. */
+  if v_participation is null then
+    select pa.id into v_participation
+      from public.participations pa
+     where pa.project_id = p_project_id and pa.program_id = p_cohort_id;
+  end if;
+
+  /* **The class's deadlines, frozen at the moment of joining**, exactly as
+     an entry's are. Without this the page for a class was a page with a
+     calendar and nothing in it. */
+  perform app.copy_milestones(v_participation, p_cohort_id, v_org);
+
+  perform app.audit(v_org, 'project.joined_cohort', 'projects', p_project_id, null,
+    jsonb_build_object('cohort_id', p_cohort_id));
+end;
+$$;
+
+create or replace function public.start_project(
+  p_title      text,
+  p_started_on date,
+  p_cohort_id  uuid default null
+)
+returns uuid
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_uid     uuid := auth.uid();
+  v_org     uuid;
+  v_status  text;
+  v_project uuid;
+begin
+  if v_uid is null then
+    raise exception 'not authenticated';
+  end if;
+
+  select u.org_id, u.status into v_org, v_status
+    from public.users u where u.id = v_uid;
+
+  if v_org is null then
+    raise exception 'finish signing up first';
+  end if;
+
+  if v_status = 'suspended' then
+    raise exception 'this account is suspended';
+  end if;
+
+  if coalesce(trim(p_title), '') = '' then
+    raise exception 'give the project a working title';
+  end if;
+
+  /* A cohort may prescribe the process; anything else takes the default,
+     which is what stops a fourteen year old's first screen being a question
+     about research methodology (22.4). */
+  insert into public.projects (org_id, title, started_on, created_by, process_id)
+  values (v_org, trim(p_title), p_started_on, v_uid,
+          coalesce(app.process_for(p_cohort_id), 'process-science'))
+  returning id into v_project;
+
+  insert into public.project_authors
+    (org_id, project_id, user_id, role, accepted_at)
+  values (v_org, v_project, v_uid, 'author', now());
+
+  if p_cohort_id is not null then
+    /* Which cohort's project this is. Not inferred from the author, because
+       a partner may be in no cohort at all and somebody in three may have a
+       different project in each (22.5). */
+    insert into public.participations (org_id, project_id, program_id, added_by)
+    values (v_org, v_project, p_cohort_id, v_uid)
+    on conflict (project_id, program_id) do nothing;
+  end if;
+
+  perform app.audit(v_org, 'project.created', 'projects', v_project, null,
+    jsonb_build_object('cohort_id', p_cohort_id));
+
+  return v_project;
+end;
+$$;
+
+
+
 
 create or replace function public.start_entry(
   p_program_id uuid,
@@ -2026,6 +2956,7 @@ security definer
 set search_path = ''
 as $$
 declare
+  v_gate    text;
   v_uid     uuid := auth.uid();
   v_org     uuid;
   v_status  text;
@@ -2061,6 +2992,15 @@ begin
     raise exception 'that fair is not open to this school';
   end if;
 
+  /* Every gate, in one place, in the words the page uses. `start_entry`
+     makes the project as it goes, so there is nothing yet to have advanced:
+     a fair reached by advancing refuses this path by construction. */
+  v_gate := app.entry_gate(p_program_id, null, v_uid);
+
+  if v_gate is not null then
+    raise exception '%', v_gate;
+  end if;
+
   /* Coalesced rather than assumed: a program that prescribes nothing leaves
      the column default in place. */
   insert into public.projects (org_id, title, started_on, created_by, process_id)
@@ -2075,7 +3015,7 @@ begin
   /* Asked for, or joined, depending on what the program does. This is the
      path a student takes on their first day, which is where it matters
      most. */
-  insert into public.entries (org_id, project_id, program_id, status)
+  insert into public.participations (org_id, project_id, program_id, status)
   select v_org, v_project, p_program_id,
          case when p.joining = 'approval' then 'requested' else 'entered' end
     from public.programs p
@@ -2083,7 +3023,7 @@ begin
   returning id into v_entry;
 
   insert into public.entry_milestones
-    (org_id, entry_id, program_milestone_id, name, kind, due_on, required,
+    (org_id, participation_id, program_milestone_id, name, kind, due_on, required,
      blocks_experimentation, sort_order, source, phase)
   select v_org, v_entry, m.id, m.name, m.kind, m.due_on, m.required,
          m.blocks_experimentation, m.sort_order, m.source, m.phase
@@ -2098,6 +3038,10 @@ begin
 end;
 $$;
 
+grant execute on function public.join_cohort(uuid) to authenticated;
+grant execute on function public.decide_membership(uuid, boolean, text) to authenticated;
+grant execute on function public.set_project_cohort(uuid, uuid, boolean) to authenticated;
+grant execute on function public.start_project(text, date, uuid) to authenticated;
 grant execute on function public.start_entry(uuid, text, date) to authenticated;
 
 -- PostgREST caches the schema. A function added by a migration is invisible
@@ -2209,7 +3153,7 @@ begin
 
   select e.project_id, m.org_id, m.name into v_project, v_org, v_name
     from public.entry_milestones m
-    join public.entries e on e.id = m.entry_id
+    join public.participations e on e.id = m.participation_id
    where m.id = p_milestone_id;
 
   if v_project is null then
@@ -2316,8 +3260,8 @@ begin
   if p_role = 'mentor' then
     update public.entry_milestones em
        set completed_on = v_on, completed_by = auth.uid()
-      from public.entries e
-     where e.id = em.entry_id
+      from public.participations e
+     where e.id = em.participation_id
        and e.project_id = p_project_id
        and em.kind = 'approval'
        and em.completed_on is null;
@@ -2402,7 +3346,7 @@ notify pgrst, 'reload schema';
 create table public.deliverables (
   id           uuid primary key default gen_random_uuid(),
   org_id       uuid not null references public.organizations on delete restrict,
-  entry_id     uuid not null references public.entries on delete restrict,
+  participation_id     uuid not null references public.participations on delete restrict,
   milestone_id uuid references public.entry_milestones on delete restrict,
 
   type         text not null,          -- form_1|form_1a|form_1b|abstract|...
@@ -2425,7 +3369,7 @@ create table public.deliverables (
   updated_at   timestamptz not null default now()
 );
 
-create index deliverables_entry_idx on public.deliverables (entry_id);
+create index deliverables_entry_idx on public.deliverables (participation_id);
 create index deliverables_milestone_idx on public.deliverables (milestone_id);
 
 create table public.field_notes (
@@ -2488,7 +3432,8 @@ begin
       t || '_set_updated_at', t
     );
   end loop;
-end $$;
+end;
+$$;
 
 
 -- ---------------------------------------------------------------------------
@@ -2521,15 +3466,15 @@ revoke delete on public.deliverables, public.project_links
 -- question in one more place.
 create policy deliverables_read on public.deliverables
   for select to authenticated
-  using ((select app.can_see_project((select e.project_id from public.entries e where e.id = deliverables.entry_id))));
+  using ((select app.can_see_project((select e.project_id from public.participations e where e.id = deliverables.participation_id))));
 
 create policy deliverables_write on public.deliverables
   for insert to authenticated
-  with check ((select app.can_edit_project((select e.project_id from public.entries e where e.id = deliverables.entry_id))));
+  with check ((select app.can_edit_project((select e.project_id from public.participations e where e.id = deliverables.participation_id))));
 
 create policy deliverables_update on public.deliverables
   for update to authenticated
-  using ((select app.can_edit_project((select e.project_id from public.entries e where e.id = deliverables.entry_id))));
+  using ((select app.can_edit_project((select e.project_id from public.participations e where e.id = deliverables.participation_id))));
 
 create policy field_notes_read on public.field_notes
   for select to authenticated
@@ -2654,7 +3599,7 @@ end;
 $$;
 
 create or replace function public.record_deliverable(
-  p_entry_id     uuid,
+  p_participation_id     uuid,
   p_milestone_id uuid,
   p_type         text,
   p_label        text,
@@ -2677,7 +3622,7 @@ begin
   end if;
 
   select e.org_id, e.project_id into v_org, v_project
-    from public.entries e where e.id = p_entry_id;
+    from public.participations e where e.id = p_participation_id;
 
   if v_org is null then
     raise exception 'no such entry';
@@ -2695,10 +3640,10 @@ begin
   end if;
 
   insert into public.deliverables
-    (org_id, entry_id, milestone_id, type, label, signed_on,
+    (org_id, participation_id, milestone_id, type, label, signed_on,
      external_url, storage_path, submitted_at, created_by)
   values
-    (v_org, p_entry_id, p_milestone_id, p_type, trim(p_label), p_signed_on,
+    (v_org, p_participation_id, p_milestone_id, p_type, trim(p_label), p_signed_on,
      nullif(trim(coalesce(p_external_url, '')), ''),
      nullif(trim(coalesce(p_storage_path, '')), ''),
      now(), auth.uid())
@@ -2800,7 +3745,7 @@ notify pgrst, 'reload schema';
 -- ---------------------------------------------------------------------------
 
 create or replace function public.record_deliverable(
-  p_entry_id     uuid,
+  p_participation_id     uuid,
   p_milestone_id uuid,
   p_type         text,
   p_label        text,
@@ -2823,7 +3768,7 @@ begin
   end if;
 
   select e.org_id, e.project_id into v_org, v_project
-    from public.entries e where e.id = p_entry_id;
+    from public.participations e where e.id = p_participation_id;
 
   if v_org is null then
     raise exception 'no such entry';
@@ -2840,10 +3785,10 @@ begin
   end if;
 
   insert into public.deliverables
-    (org_id, entry_id, milestone_id, type, label, signed_on,
+    (org_id, participation_id, milestone_id, type, label, signed_on,
      external_url, storage_path, submitted_at, created_by)
   values
-    (v_org, p_entry_id, p_milestone_id, p_type, trim(p_label), p_signed_on,
+    (v_org, p_participation_id, p_milestone_id, p_type, trim(p_label), p_signed_on,
      nullif(trim(coalesce(p_external_url, '')), ''),
      nullif(trim(coalesce(p_storage_path, '')), ''),
      now(), auth.uid())
@@ -3073,7 +4018,19 @@ notify pgrst, 'reload schema';
 create table public.project_sponsors (
   id            uuid primary key default gen_random_uuid(),
   org_id        uuid not null references public.organizations on delete restrict,
-  project_id    uuid not null references public.projects on delete restrict,
+
+  -- **Which participation this sponsor is for.**
+  --
+  -- It was `project_id`, and that was the bug: recording a sponsoring teacher
+  -- for IRPD attached them to the project, so they showed on every cohort and
+  -- every entry the project had. A sponsor is a fact about one participation
+  -- -- the teacher who signed for *this* fair, in *this* class -- and the
+  -- approval obligation it clears belongs to that participation's calendar.
+  --
+  -- This is one of the four tables that wanted a single participation id and
+  -- could not have one while `entries` and `project_cohorts` were separate
+  -- tables (22.5).
+  participation_id uuid not null references public.participations on delete restrict,
 
   teacher_name  text not null,
   teacher_email text not null,
@@ -3095,8 +4052,8 @@ create table public.project_sponsors (
   updated_at    timestamptz not null default now()
 );
 
-create index project_sponsors_project_idx
-  on public.project_sponsors (project_id) where superseded_at is null;
+create index project_sponsors_participation_idx
+  on public.project_sponsors (participation_id) where superseded_at is null;
 
 create index project_sponsors_email_idx
   on public.project_sponsors (lower(teacher_email)) where superseded_at is null;
@@ -3166,9 +4123,10 @@ as $$
   select exists (
     select 1
       from public.project_sponsors s
+      join public.participations pa on pa.id = s.participation_id
       join public.identities i
         on lower(i.email) = lower(s.teacher_email)
-     where s.project_id = p_project_id
+     where pa.project_id = p_project_id
        and s.superseded_at is null
        and i.user_id = auth.uid()
        and i.revoked_at is null
@@ -3183,7 +4141,7 @@ grant execute on function app.is_advisor(), app.sponsors_project(uuid) to authen
 -- ---------------------------------------------------------------------------
 
 create or replace function public.record_sponsor(
-  p_project_id    uuid,
+  p_participation_id uuid,
   p_teacher_name  text,
   p_teacher_email text,
   p_signed_on     date default null
@@ -3195,6 +4153,7 @@ set search_path = ''
 as $$
 declare
   v_org      uuid;
+  v_project  uuid;
   v_previous uuid;
   v_id       uuid;
   v_marked   int := 0;
@@ -3203,7 +4162,17 @@ begin
     raise exception 'not authenticated';
   end if;
 
-  if not (app.authors_project(p_project_id) or app.is_staff()) then
+  /* The participation names the project; the project is what authorship is
+     checked against. Resolved first because everything below needs it. */
+  select pa.project_id, pa.org_id into v_project, v_org
+    from public.participations pa
+   where pa.id = p_participation_id;
+
+  if v_project is null then
+    raise exception 'no such participation';
+  end if;
+
+  if not (app.authors_project(v_project) or app.is_staff()) then
     raise exception 'only an author on this project may record its sponsor';
   end if;
 
@@ -3215,17 +4184,15 @@ begin
     raise exception 'that does not look like an email address';
   end if;
 
-  select p.org_id into v_org from public.projects p where p.id = p_project_id;
-
   select s.id into v_previous
     from public.project_sponsors s
-   where s.project_id = p_project_id and s.superseded_at is null
+   where s.participation_id = p_participation_id and s.superseded_at is null
    limit 1;
 
   insert into public.project_sponsors
-    (org_id, project_id, teacher_name, teacher_email, signed_on, recorded_by)
+    (org_id, participation_id, teacher_name, teacher_email, signed_on, recorded_by)
   values
-    (v_org, p_project_id, trim(p_teacher_name), lower(trim(p_teacher_email)),
+    (v_org, p_participation_id, trim(p_teacher_name), lower(trim(p_teacher_email)),
      p_signed_on, auth.uid())
   returning id into v_id;
 
@@ -3239,11 +4206,14 @@ begin
 
   /* Naming a sponsor is what the fair's approval obligation is asking for. */
   if p_signed_on is not null then
+    /* **This participation's approval, not the project's.** Scoped through
+       `em.participation_id` directly rather than through the project: a
+       teacher signing for the club's showcase does not clear the approval
+       Synopsys is waiting on, and before the sponsor moved off the project
+       it did exactly that. */
     update public.entry_milestones em
        set completed_on = p_signed_on, completed_by = auth.uid()
-      from public.entries e
-     where e.id = em.entry_id
-       and e.project_id = p_project_id
+     where em.participation_id = p_participation_id
        and em.kind = 'approval'
        and em.completed_on is null;
     get diagnostics v_marked = row_count;
@@ -3254,12 +4224,12 @@ begin
          affiliation_verified_at = now(),
          status = case when u.status = 'unaffiliated' then 'active' else u.status end
     from public.project_authors a
-   where a.project_id = p_project_id
+   where a.project_id = v_project
      and a.role = 'author'
      and a.user_id = u.id
      and u.affiliation_state = 'unverified';
 
-  perform app.audit(v_org, 'sponsor.recorded', 'projects', p_project_id,
+  perform app.audit(v_org, 'sponsor.recorded', 'participations', p_participation_id,
     case when v_previous is null then null
          else jsonb_build_object('superseded', v_previous) end,
     jsonb_build_object('teacher', trim(p_teacher_name),
@@ -3281,8 +4251,10 @@ as $$
 declare
   v_project uuid;
 begin
-  select s.project_id into v_project
-    from public.project_sponsors s where s.id = p_sponsor_id;
+  select pa.project_id into v_project
+    from public.project_sponsors s
+    join public.participations pa on pa.id = s.participation_id
+   where s.id = p_sponsor_id;
 
   if v_project is null or not app.sponsors_project(v_project) then
     raise exception 'only the named sponsor may confirm this';
@@ -3385,7 +4357,7 @@ end;
 $$;
 
 create or replace function public.set_selection(
-  p_entry_id uuid,
+  p_participation_id uuid,
   p_state    text,
   p_note     text default null
 )
@@ -3405,20 +4377,20 @@ begin
     raise exception 'unknown selection state';
   end if;
 
-  select e.org_id into v_org from public.entries e where e.id = p_entry_id;
+  select e.org_id into v_org from public.participations e where e.id = p_participation_id;
 
   if v_org is null or v_org is distinct from app.org_id() then
     raise exception 'no such entry at this school';
   end if;
 
-  update public.entries
+  update public.participations
      set selection_state = p_state,
          selection_decided_at = case when p_state = 'candidate' then null else now() end,
          selection_decided_by = case when p_state = 'candidate' then null else auth.uid() end,
          selection_note = p_note
-   where id = p_entry_id;
+   where id = p_participation_id;
 
-  perform app.audit(v_org, 'selection.' || p_state, 'entries', p_entry_id,
+  perform app.audit(v_org, 'selection.' || p_state, 'entries', p_participation_id,
     null, jsonb_build_object('note', p_note));
 end;
 $$;
@@ -3451,21 +4423,23 @@ create policy field_notes_read on public.field_notes
   for select to authenticated
   using ((select app.can_see_project(field_notes.project_id)));
 
-drop policy if exists entries_read on public.entries;
+drop policy if exists participations_read on public.participations;
 
-create policy entries_read on public.entries
+create policy participations_read on public.participations
   for select to authenticated
-  using ((select app.can_see_project(entries.project_id)));
+  using ((select app.can_see_project(participations.project_id)));
 
 drop policy if exists entry_milestones_read on public.entry_milestones;
 
 create policy entry_milestones_read on public.entry_milestones
   for select to authenticated
-  using ((select app.can_see_project((select e.project_id from public.entries e where e.id = entry_milestones.entry_id))));
+  using ((select app.can_see_project((select e.project_id from public.participations e where e.id = entry_milestones.participation_id))));
 
 create policy project_sponsors_read on public.project_sponsors
   for select to authenticated
-  using ((select app.can_see_project(project_sponsors.project_id)));
+  using ((select app.can_see_project(
+    (select pa.project_id from public.participations pa
+      where pa.id = project_sponsors.participation_id))));
 
 /* A sponsor writes an observation like anyone else who can read the project.
    add_field_note already asks the reading question; it just has to ask the
@@ -3734,6 +4708,7 @@ security definer
 set search_path = ''
 as $$
 declare
+  v_gate    text;
   v_uid     uuid := auth.uid();
   v_org     uuid;
   v_status  text;
@@ -3768,6 +4743,15 @@ begin
     raise exception 'that fair is not open to this school';
   end if;
 
+  /* Every gate, in one place, in the words the page uses. `start_entry`
+     makes the project as it goes, so there is nothing yet to have advanced:
+     a fair reached by advancing refuses this path by construction. */
+  v_gate := app.entry_gate(p_program_id, null, v_uid);
+
+  if v_gate is not null then
+    raise exception '%', v_gate;
+  end if;
+
   /* Coalesced rather than assumed: a program that prescribes nothing leaves
      the column default in place. */
   insert into public.projects (org_id, title, started_on, created_by, process_id)
@@ -3782,7 +4766,7 @@ begin
   /* Asked for, or joined, depending on what the program does. This is the
      path a student takes on their first day, which is where it matters
      most. */
-  insert into public.entries (org_id, project_id, program_id, status)
+  insert into public.participations (org_id, project_id, program_id, status)
   select v_org, v_project, p_program_id,
          case when p.joining = 'approval' then 'requested' else 'entered' end
     from public.programs p
@@ -3790,7 +4774,7 @@ begin
   returning id into v_entry;
 
   insert into public.entry_milestones
-    (org_id, entry_id, program_milestone_id, name, kind, due_on, required,
+    (org_id, participation_id, program_milestone_id, name, kind, due_on, required,
      blocks_experimentation, satisfied_by, sort_order, source, phase)
   select v_org, v_entry, m.id, m.name, m.kind, m.due_on, m.required,
          m.blocks_experimentation, m.satisfied_by, m.sort_order, m.source, m.phase
@@ -3805,6 +4789,10 @@ begin
 end;
 $$;
 
+grant execute on function public.join_cohort(uuid) to authenticated;
+grant execute on function public.decide_membership(uuid, boolean, text) to authenticated;
+grant execute on function public.set_project_cohort(uuid, uuid, boolean) to authenticated;
+grant execute on function public.start_project(text, date, uuid) to authenticated;
 grant execute on function public.start_entry(uuid, text, date) to authenticated;
 
 
@@ -3828,9 +4816,16 @@ declare
   v_start   date;
   v_touched int := 0;
 begin
+  /* Any current sponsor on any of the project's participations. This is a
+     derived date for the ordering check, which asks "was a sponsor named
+     before work started" -- a question about the project, not about one
+     venue. Per-participation scoping belongs on the pages that display the
+     sponsor, not here. */
   select s.signed_on, s.recorded_at::date into v_sponsor, v_officer
     from public.project_sponsors s
-   where s.project_id = p_project_id and s.superseded_at is null
+    join public.participations pa on pa.id = s.participation_id
+   where pa.project_id = p_project_id and s.superseded_at is null
+   order by s.recorded_at desc
    limit 1;
 
   /* A sponsor with no signature date still counts as named; the date it was
@@ -3852,8 +4847,8 @@ begin
                           when 'start_date' then v_start
                         end,
          completed_by = null
-    from public.entries e
-   where e.id = em.entry_id
+    from public.participations e
+   where e.id = em.participation_id
      and e.project_id = p_project_id
      and em.satisfied_by is not null
      and em.completed_on is distinct from
@@ -3876,7 +4871,7 @@ grant execute on function app.sync_derived(uuid) to authenticated;
 -- ---------------------------------------------------------------------------
 
 create or replace function public.record_sponsor(
-  p_project_id    uuid,
+  p_participation_id uuid,
   p_teacher_name  text,
   p_teacher_email text,
   p_signed_on     date default null
@@ -3888,6 +4883,7 @@ set search_path = ''
 as $$
 declare
   v_org      uuid;
+  v_project  uuid;
   v_previous uuid;
   v_id       uuid;
 begin
@@ -3895,7 +4891,17 @@ begin
     raise exception 'not authenticated';
   end if;
 
-  if not (app.authors_project(p_project_id) or app.is_staff()) then
+  /* The participation names the project; the project is what authorship is
+     checked against. Resolved first because everything below needs it. */
+  select pa.project_id, pa.org_id into v_project, v_org
+    from public.participations pa
+   where pa.id = p_participation_id;
+
+  if v_project is null then
+    raise exception 'no such participation';
+  end if;
+
+  if not (app.authors_project(v_project) or app.is_staff()) then
     raise exception 'only an author on this project may record its sponsor';
   end if;
 
@@ -3907,17 +4913,15 @@ begin
     raise exception 'that does not look like an email address';
   end if;
 
-  select p.org_id into v_org from public.projects p where p.id = p_project_id;
-
   select s.id into v_previous
     from public.project_sponsors s
-   where s.project_id = p_project_id and s.superseded_at is null
+   where s.participation_id = p_participation_id and s.superseded_at is null
    limit 1;
 
   insert into public.project_sponsors
-    (org_id, project_id, teacher_name, teacher_email, signed_on, recorded_by)
+    (org_id, participation_id, teacher_name, teacher_email, signed_on, recorded_by)
   values
-    (v_org, p_project_id, trim(p_teacher_name), lower(trim(p_teacher_email)),
+    (v_org, p_participation_id, trim(p_teacher_name), lower(trim(p_teacher_email)),
      p_signed_on, auth.uid())
   returning id into v_id;
 
@@ -3927,19 +4931,19 @@ begin
      where id = v_previous;
   end if;
 
-  perform app.sync_derived(p_project_id);
+  perform app.sync_derived(v_project);
 
   update public.users u
      set affiliation_state = 'mentor_verified',
          affiliation_verified_at = now(),
          status = case when u.status = 'unaffiliated' then 'active' else u.status end
     from public.project_authors a
-   where a.project_id = p_project_id
+   where a.project_id = v_project
      and a.role = 'author'
      and a.user_id = u.id
      and u.affiliation_state = 'unverified';
 
-  perform app.audit(v_org, 'sponsor.recorded', 'projects', p_project_id,
+  perform app.audit(v_org, 'sponsor.recorded', 'participations', p_participation_id,
     case when v_previous is null then null
          else jsonb_build_object('superseded', v_previous) end,
     jsonb_build_object('teacher', trim(p_teacher_name),
@@ -4060,10 +5064,11 @@ begin
   execute
     'create trigger step_warnings_set_updated_at before update on public.step_warnings
        for each row execute function app.set_updated_at()';
-end $$;
+end;
+$$;
 
 create or replace function public.decide_place(
-  p_entry_id uuid,
+  p_participation_id uuid,
   p_grant    boolean,
   p_note     text default null
 )
@@ -4079,8 +5084,8 @@ declare
   v_taken   int;
 begin
   select e.org_id, e.program_id into v_org, v_program
-    from public.entries e
-   where e.id = p_entry_id;
+    from public.participations e
+   where e.id = p_participation_id;
 
   if v_org is null or v_org is distinct from app.org_id() then
     raise exception 'no such request at this school';
@@ -4102,7 +5107,7 @@ begin
 
     if v_places is not null then
       select count(*) into v_taken
-        from public.entries e
+        from public.participations e
        where e.program_id = v_program
          and e.status in ('entered', 'competed');
 
@@ -4115,18 +5120,18 @@ begin
     end if;
   end if;
 
-  update public.entries
+  update public.participations
      set status = case when p_grant then 'entered' else 'declined' end,
          decided_by = auth.uid(),
          decided_at = now(),
          decided_note = nullif(trim(coalesce(p_note, '')), '')
-   where id = p_entry_id;
+   where id = p_participation_id;
 
   perform app.audit(
     v_org,
     case when p_grant then 'place.granted' else 'place.declined' end,
     'entries',
-    p_entry_id,
+    p_participation_id,
     null,
     jsonb_build_object('note', p_note)
   );
@@ -4318,7 +5323,7 @@ begin
   select e.project_id, m.org_id, m.name, m.satisfied_by
     into v_project, v_org, v_name, v_derived
     from public.entry_milestones m
-    join public.entries e on e.id = m.entry_id
+    join public.participations e on e.id = m.participation_id
    where m.id = p_milestone_id;
 
   if v_project is null then
@@ -4395,8 +5400,23 @@ stable
 security definer
 set search_path = ''
 as $$
+  /* **Opportunities only, and the view is how that is said. 22.5.**
+
+     One student may not enter the same fair with two projects: they would
+     compete against themselves for one place, which is the rule this
+     expresses and the reason the message says "in this fair".
+
+     A class is not a fair. Somebody may be in IRPD and the club with a
+     different project in each, and nothing says a class holds only one
+     piece of a student's work.
+
+     This read `entries`, which excluded cohorts by construction. Once
+     `entries` and `project_cohorts` became one table the same query started
+     counting IRPD as a fair -- the conflation 22.5 predicted would return
+     through the data-access layer, arriving through a trigger rather than a
+     page. It refused a student a second project in their own class. */
   select e.project_id
-    from public.entries e
+    from public.opportunity_participations e
     join public.project_authors a
       on a.project_id = e.project_id and a.role = 'author'
    where e.program_id = p_program_id
@@ -4436,10 +5456,10 @@ begin
 end;
 $$;
 
-drop trigger if exists entries_one_per_student on public.entries;
+drop trigger if exists entries_one_per_student on public.participations;
 
 create trigger entries_one_per_student
-  before insert on public.entries
+  before insert on public.participations
   for each row execute function app.guard_one_entry_per_student();
 
 create or replace function app.guard_author_entry_clash()
@@ -4456,9 +5476,11 @@ begin
     return new;
   end if;
 
+  /* Through the view, for the reason given on `app.entry_conflict`: adding
+     an author to a project in a class is not adding them to a fair. */
   select app.entry_conflict(e.project_id, e.program_id, new.user_id)
     into v_clash
-    from public.entries e
+    from public.opportunity_participations e
    where e.project_id = new.project_id
      and app.entry_conflict(e.project_id, e.program_id, new.user_id) is not null
    limit 1;
@@ -4493,6 +5515,7 @@ security definer
 set search_path = ''
 as $$
 declare
+  v_gate    text;
   v_uid     uuid := auth.uid();
   v_org     uuid;
   v_status  text;
@@ -4528,6 +5551,15 @@ begin
     raise exception 'that fair is not open to this school';
   end if;
 
+  /* Every gate, in one place, in the words the page uses. `start_entry`
+     makes the project as it goes, so there is nothing yet to have advanced:
+     a fair reached by advancing refuses this path by construction. */
+  v_gate := app.entry_gate(p_program_id, null, v_uid);
+
+  if v_gate is not null then
+    raise exception '%', v_gate;
+  end if;
+
   v_clash := app.entry_conflict(gen_random_uuid(), p_program_id, v_uid);
 
   if v_clash is not null then
@@ -4550,7 +5582,7 @@ begin
   /* Asked for, or joined, depending on what the program does. This is the
      path a student takes on their first day, which is where it matters
      most. */
-  insert into public.entries (org_id, project_id, program_id, status)
+  insert into public.participations (org_id, project_id, program_id, status)
   select v_org, v_project, p_program_id,
          case when p.joining = 'approval' then 'requested' else 'entered' end
     from public.programs p
@@ -4558,7 +5590,7 @@ begin
   returning id into v_entry;
 
   insert into public.entry_milestones
-    (org_id, entry_id, program_milestone_id, name, kind, due_on, required,
+    (org_id, participation_id, program_milestone_id, name, kind, due_on, required,
      blocks_experimentation, satisfied_by, sort_order, source, phase)
   select v_org, v_entry, m.id, m.name, m.kind, m.due_on, m.required,
          m.blocks_experimentation, m.satisfied_by, m.sort_order, m.source, m.phase
@@ -4573,6 +5605,10 @@ begin
 end;
 $$;
 
+grant execute on function public.join_cohort(uuid) to authenticated;
+grant execute on function public.decide_membership(uuid, boolean, text) to authenticated;
+grant execute on function public.set_project_cohort(uuid, uuid, boolean) to authenticated;
+grant execute on function public.start_project(text, date, uuid) to authenticated;
 grant execute on function public.start_entry(uuid, text, date) to authenticated;
 
 notify pgrst, 'reload schema';
@@ -5251,7 +6287,7 @@ create policy manuscript_references_delete on public.manuscript_references
 -- ---------------------------------------------------------------------------
 
 create or replace function public.record_entry_result(
-  p_entry_id    uuid,
+  p_participation_id    uuid,
   p_category    text default null,
   p_entry_code  text default null,
   p_placement   text default null,
@@ -5266,6 +6302,7 @@ as $$
 declare
   v_uid     uuid := auth.uid();
   v_org     uuid;
+  v_gate    text;
   v_project uuid;
 begin
   if v_uid is null then
@@ -5273,7 +6310,7 @@ begin
   end if;
 
   select e.org_id, e.project_id into v_org, v_project
-    from public.entries e where e.id = p_entry_id;
+    from public.participations e where e.id = p_participation_id;
 
   if v_org is null then
     raise exception 'no such entry';
@@ -5287,7 +6324,7 @@ begin
     raise exception 'only an author or somebody running the club can record a result';
   end if;
 
-  update public.entries
+  update public.participations
      set category    = nullif(btrim(coalesce(p_category, '')), ''),
          entry_code  = nullif(btrim(coalesce(p_entry_code, '')), ''),
          placement   = nullif(btrim(coalesce(p_placement, '')), ''),
@@ -5295,9 +6332,9 @@ begin
          advanced_to = nullif(btrim(coalesce(p_advanced_to, '')), ''),
          result_recorded_at = now(),
          result_recorded_by = v_uid
-   where id = p_entry_id;
+   where id = p_participation_id;
 
-  perform app.audit(v_org, 'entry.result_recorded', 'entries', p_entry_id, null,
+  perform app.audit(v_org, 'entry.result_recorded', 'entries', p_participation_id, null,
     jsonb_build_object('placement', p_placement, 'awards', p_awards));
 end;
 $$;
@@ -7026,6 +8063,21 @@ create table public.records (
   project_id     uuid references public.projects on delete restrict,
   manuscript_id  uuid references public.manuscripts on delete restrict,
 
+  -- Which participation this record came out of. 22.8.
+  --
+  -- A fair record used to name only the project, which was right while a
+  -- project entered one thing. It does not: OsmoFlux went to Synopsys, MTFC
+  -- and Genius Olympiad in different forms, and each is a separate outcome
+  -- with its own board, its own deadlines and its own judging.
+  --
+  -- Advancement is the same shape: SCVSEFA then CSEF is two entries, so it
+  -- is two records rather than one with a field appended.
+  --
+  -- Nullable, because an article's record comes from a submission and a
+  -- migrated record predates entries entirely. A check below holds that a
+  -- project record made from here on names one.
+  participation_id       uuid references public.participations on delete restrict,
+
   slug           text not null,
   year           int  not null,
 
@@ -7070,6 +8122,49 @@ create table public.records (
 );
 
 create index records_org_idx on public.records (org_id, published_on desc);
+
+/**
+ * A record comes out of an opportunity, never out of a cohort. 22.8.
+ *
+ * Being in IRPD is not something a project carries afterwards; presenting at
+ * the IRPD Community Showcase is, which is why the showcase is an opportunity
+ * by 22.2's test and the class is not.
+ *
+ * Before the merge this was structural: `records.entry_id` pointed at
+ * `entries`, and a cohort had no row there to point at. One table means one
+ * id, so the guarantee has to be written down. This mirrors
+ * `app.membership_is_cohort()` in the opposite direction.
+ */
+create or replace function app.record_is_opportunity()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_role text;
+begin
+  if new.participation_id is null then
+    return new;
+  end if;
+
+  select pr.program_role into v_role
+    from public.participations pa
+    join public.programs pr on pr.id = pa.program_id
+   where pa.id = new.participation_id;
+
+  if v_role is distinct from 'opportunity' then
+    raise exception 'a record comes out of an opportunity, not out of a %',
+      coalesce(v_role, 'unknown thing');
+  end if;
+
+  return new;
+end;
+$$;
+
+create trigger records_opportunity_only
+  before insert or update on public.records
+  for each row execute function app.record_is_opportunity();
 
 
 create table public.record_authors (
@@ -7211,12 +8306,14 @@ begin
   end loop;
 
   insert into public.records (
-    id, org_id, record_kind, submission_id, project_id, manuscript_id,
+    id, org_id, record_kind, submission_id, project_id, participation_id, manuscript_id,
     slug, year, title, abstract, keywords, discipline, contributions,
     published_on, date_precision, source, reviewed, body_format,
     external_url, pdf_path, pdf_text, license, generated_by
   ) values (
-    v_id, v_org, v_kind, p_submission_id, v_pid, v_mid,
+    /* An article's record comes from a submission rather than from a
+       participation, so it names no entry (22.8). */
+    v_id, v_org, v_kind, p_submission_id, v_pid, null, v_mid,
     v_slug, v_year, m.title, m.abstract, m.keywords,
     coalesce(m.discipline, 'unclassified'), m.contributions,
     coalesce(p_published_on, current_date), m.date_precision,
@@ -7376,7 +8473,11 @@ create or replace function public.generate_project_record(
   p_project_id   uuid,
   p_slug         text,
   p_prefix       text,
-  p_published_on date default null
+  p_published_on date default null,
+  /* Which participation this is the record of. Optional while older callers
+     catch up; where it is absent the single entry with a result is used,
+     which is the one project one fair case (22.8). */
+  p_participation_id     uuid default null
 )
 returns text
 language plpgsql
@@ -7384,6 +8485,7 @@ security definer
 set search_path = ''
 as $$
 declare
+  v_entry  uuid;
   v_org    uuid;
   v_year   int;
   v_seq    int;
@@ -7402,18 +8504,42 @@ begin
     raise exception 'no such project';
   end if;
 
+  /* Which entry this record is of. Named, or the only one with a result.
+  
+     A project used to have one, so the record named the project and a second
+     identifier was refused outright. It does not: one piece of work goes to
+     Synopsys, MTFC and Genius Olympiad in different forms, and advancing
+     from SCVSEFA to CSEF is a second entry with its own judging. Each is its
+     own outcome and its own record (22.8). */
+  if p_participation_id is not null then
+    v_entry := p_participation_id;
+  else
+    select e.id into v_entry
+      from public.participations e
+     where e.project_id = p_project_id
+       and e.result_recorded_at is not null
+     order by e.result_recorded_at
+     limit 1;
+  end if;
+
+  /* One record per participation, still. Regenerating the files is safe;
+     allocating a second identifier for the same entry is not. */
   if exists (
     select 1 from public.records r
-     where r.project_id = p_project_id and r.record_kind = 'project'
+     where r.record_kind = 'project'
+       and (
+         (v_entry is not null and r.participation_id = v_entry)
+         or (v_entry is null and r.project_id = p_project_id and r.participation_id is null)
+       )
   ) then
     raise exception
-      'this project already has an entry. Regenerating the files is safe; allocating a second identifier is not.';
+      'that entry already has a record. Regenerating the files is safe; allocating a second identifier is not.';
   end if;
 
   /* Something to show. A page with no result on it is the project page with
      a permanent URL, which is not worth minting an identifier for. */
   select count(*) into v_result
-    from public.entries e
+    from public.participations e
    where e.project_id = p_project_id and e.result_recorded_at is not null;
 
   if v_result = 0 then
@@ -7460,12 +8586,12 @@ begin
   end loop;
 
   insert into public.records (
-    id, org_id, record_kind, submission_id, project_id, manuscript_id,
+    id, org_id, record_kind, submission_id, project_id, participation_id, manuscript_id,
     slug, year, title, abstract, keywords, discipline, contributions,
     published_on, date_precision, source, reviewed, body_format,
     external_url, pdf_path, pdf_text, license, generated_by
   ) values (
-    v_id, v_org, 'project', null, p_project_id, m.id,
+    v_id, v_org, 'project', null, p_project_id, v_entry, m.id,
     v_slug, v_year, m.title, m.abstract, m.keywords,
     m.discipline, m.contributions,
     coalesce(p_published_on, current_date), 'day',
@@ -7499,7 +8625,7 @@ begin
 end;
 $$;
 
-grant execute on function public.generate_project_record(uuid, text, text, date) to authenticated;
+grant execute on function public.generate_project_record(uuid, text, text, date, uuid) to authenticated;
 
 /* The manuscript is the paper. It was carrying a kind, which is a property of
    a record rather than of the writing. */

@@ -110,8 +110,8 @@ export async function assembleRecord(
             .eq('manuscript_id', record.manuscript_id)
             .order('sort_order'),
       supabase
-        .from('entries')
-        .select('placement, category, entry_code, awards, advanced_to, programs(name, season_year)')
+        .from('opportunity_participations')
+        .select('placement, category, entry_code, awards, advanced_to, programs:program_id(name, season_year)')
         .eq('project_id', record.project_id),
       supabase
         .from('project_links')

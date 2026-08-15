@@ -19,13 +19,30 @@ kind: grant
 # than a placement.
 role: opportunity
 
+# ── This one names a process, and it is the exception ──────────────────────
+#
+# 22.4 says an opportunity may not prescribe a research process, because a
+# fair's science and engineering tracks are categories rather than ways of
+# working, and letting a venue choose would ask a student who enters two to
+# have done the work two ways.
+#
+# `process-grant` is not a way of doing research. It is how you apply for
+# money: write the proposal, cost it, be decided on, report on what you
+# spent. Those steps belong to *this* opportunity and to nothing else, and
+# they are in a process file only because that is where shared step lists
+# live.
+#
+# So the rule holds and this is genuinely outside it. It is named in
+# `tests/templates.mjs` rather than tolerated, and the honest fix is to move
+# these steps into this file, at which point the name goes.
+process: grant
+
 name: Research Micro-Grant
 authority: Monta Vista High School
 level: school
 season: 2027
 version: 1
 
-process: grant
 
 uses:
   deliverables: [deliverables-grant, deliverables-common]

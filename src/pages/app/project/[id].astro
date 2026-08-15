@@ -5,7 +5,7 @@ import Base from '../../../layouts/Base.astro';
 import { formatDate } from '../../../lib/dates';
 import AppShell from '../../../components/AppShell.astro';
 import { activeOrg } from '../../../lib/tenant';
-import { programTitle, programKind, sharedStaffWord } from '../../../lib/program-names';
+import { programTitle, staffWord } from '../../../lib/program-names';
 import { serverClient } from '../../../lib/supabase';
 import { standing, isAuthorOf, attachmentLabel } from '../../../lib/roles';
 import { renderNote } from '../../../lib/notes';
@@ -41,6 +41,19 @@ if (Astro.request.method === 'POST') {
 
   for (const [k, v] of form.entries()) {
     if (typeof v === 'string') sent[k] = v;
+  }
+
+  /* Putting this project in a cohort, or taking it out. The relationship is
+     the project's rather than the author's, so it is set here rather than
+     inferred from who wrote it (22.5). */
+  if (action === 'cohort') {
+    const { error: e } = await supabase.rpc('set_project_cohort', {
+      p_project_id: id,
+      p_cohort_id: String(form.get('cohort_id') ?? ''),
+      p_in: form.get('leave') !== 'yes',
+    });
+
+    if (e) error = e.message;
   }
 
   if (action === 'note') {
@@ -117,12 +130,76 @@ const { data: media } = noteIds.length
 const mediaUrl = (path: string) => `/app/media/${path}`;
 
 
+/**
+ * The two things a project belongs to, read separately because they are two
+ * different relationships (22.5).
+ *
+ * A **cohort** is a group of people with a supervisor, and this is where a
+ * project's role word comes from: one project says Elder, another Officer,
+ * another Mentor, for the same person in three cohorts. It is read from the
+ * project rather than inferred from its authors, because a partner may be in
+ * no cohort at all.
+ *
+ * An **entry** is somewhere the work went. A project may have several, and
+ * each carries its own deadlines, its own deliverables and its own outcome.
+ */
+const { data: cohorts } = await supabase
+  .from('cohort_participations')
+  .select('program_id, programs:program_id(id, name, season_year, kind, roles, prepares_for)')
+  .eq('project_id', id);
+
 const { data: entries } = await supabase
-  .from('entries')
-  .select('id, programs(name, season_year, kind, roles)')
+  .from('opportunity_participations')
+  .select('id, status, program_id, result_recorded_at, programs:program_id(id, name, season_year, kind, roles)')
   .eq('project_id', id);
 
 const entryIds = (entries ?? []).map((e: any) => e.id);
+
+/**
+ * What this project calls the person looking after it.
+ *
+ * **From the cohorts, not the entries.** A word was being read off the fairs
+ * a project had been entered in, which is a venue's vocabulary rather than a
+ * school's: a supervisor belongs to a class or a club, and a regional fair
+ * has no opinion about what a school calls its officers (22.9).
+ *
+ * Where a project is in more than one cohort with different words, there is
+ * no single right answer and the schema's own word is the one nobody is
+ * wrong to read. The blocks below say each cohort's own.
+ */
+/* Cohorts this person is in that the project is not already in. A project
+   belongs to a cohort you are in, so there is nothing to offer somebody who
+   has joined nothing. */
+const { data: myCohorts } = await supabase
+  .from('memberships')
+  .select('cohort_id, programs:cohort_id(id, name, season_year)')
+  .eq('user_id', account.id)
+  .eq('state', 'member');
+
+const alreadyIn = new Set((cohorts ?? []).map((c: any) => c.program_id));
+const couldJoin = (myCohorts ?? []).filter((m: any) => !alreadyIn.has(m.cohort_id));
+
+/**
+ * Places asked for and not yet granted.
+ *
+ * **The merge does not fix this one.** A pending request is a membership in
+ * `requested`, and `set_project_cohort` refuses to attach a project until it
+ * is accepted -- so a pending cohort has no participation row *by
+ * construction*, and every block on this page reads participations.
+ *
+ * The student therefore asked to join IRPD, saw nothing here, and had no way
+ * to tell whether the request had gone anywhere. Which is the thing this
+ * software is supposed to be better at than a paper form.
+ */
+const { data: pendingCohorts } = await supabase
+  .from('memberships')
+  .select('cohort_id, programs:cohort_id(id, name, season_year)')
+  .eq('user_id', account.id)
+  .eq('state', 'requested');
+
+const cohortPrograms = (cohorts ?? []).map((c: any) => c.programs);
+const projectStaffWord =
+  cohortPrograms.length === 1 ? staffWord(cohortPrograms[0]) : 'Officer';
 
 
 /* The manuscript is one row per project and the project page only needs to
@@ -148,9 +225,10 @@ const officers = attachments.filter((a: any) => a.role === 'officer');
 
 const { data: sponsor } = await supabase
   .from('project_sponsors')
-  .select('teacher_name, confirmed_at')
-  .eq('project_id', id)
+  .select('teacher_name, confirmed_at, participations!inner(project_id)')
+  .eq('participations.project_id', id)
   .is('superseded_at', null)
+  .limit(1)
   .maybeSingle();
 
 /* Does the work, or watches it. Everything on this page follows from that. */
@@ -187,13 +265,15 @@ const fmt = (d: string | null) =>
         <p class="t-lbl">
           {entries && entries.length > 0
             ? entries.map((e: any) => programTitle(e.programs)).join(' · ')
-            : 'Not in a program yet'}
+            : (cohorts ?? []).length > 0
+              ? (cohorts ?? []).map((c: any) => programTitle(c.programs)).join(' · ')
+              : 'Not in a class, and not entered anywhere'}
         </p>
         <h1 class="t-big">{project.title}</h1>
         <p class="lede">
           {authors.map((a: any) => a.users?.display_name).join(', ') || 'No authors'}
           {officers.length > 0 &&
-            ` · ${(sharedStaffWord((entries ?? []).map((e: any) => e.programs)) ?? 'Officer').toLowerCase()} ${officers
+            ` · ${projectStaffWord.toLowerCase()} ${officers
               .map((m: any) => m.users?.display_name)
               .join(', ')}`}
           {sponsor && ` · sponsored by ${sponsor.teacher_name}`}
@@ -217,19 +297,128 @@ const fmt = (d: string | null) =>
           Where a project is in more than one program there is more than one
           hub, so the kind names which — one word each, and short by
           construction. */}
-      <div class="actions">
-        {entries && entries.length > 1 ? (
-          entries.map((e: any) => (
-            <a class="btn" href={`/app/entry/${e.id}/`}>
-              {programKind(e.programs)}
-            </a>
-          ))
-        ) : entries && entries.length === 1 ? (
-          <a class="btn" href={`/app/entry/${entries[0].id}/`}>Return to project</a>
-        ) : (
-          <a class="btn" href="/app/#join">Join a program</a>
-        )}
+    </section>
+
+    {/* ── Where this work belongs, and where it went ──────────────────────
+    
+        The payoff of the model. A project in three cohorts is three blocks
+        on one page, each naming its own supervisor with its own word, and a
+        project entered in three competitions is three entries with their own
+        deadlines and outcomes (22.9).
+    
+        Before this, a project in two programs had two hubs showing the same
+        authors and the same export twice, because the hub was keyed on a
+        participation rather than on the work. */}
+    <section class="sec" id="belongs">
+      <div class="sec-h">
+        <b>Where this belongs</b>
+        <span>
+          {(cohorts ?? []).length === 0 && (entries ?? []).length === 0
+            ? 'nowhere yet'
+            : `${(cohorts ?? []).length} ${(cohorts ?? []).length === 1 ? 'cohort' : 'cohorts'} · ${(entries ?? []).length} ${(entries ?? []).length === 1 ? 'entry' : 'entries'}`}
+        </span>
       </div>
+
+      {(cohorts ?? []).length > 0 && (
+        <ul class="belongs">
+          {(cohorts ?? []).map((c: any) => (
+            <li>
+              <span class="b-what">{programTitle(c.programs)}</span>
+              <span class="b-who">
+                {/* The cohort's own word. Elder in a class, Officer in a
+                    club, Mentor elsewhere, all for one person (22.9). */}
+                {staffWord(c.programs)}
+              </span>
+              <span class="b-do">
+                <a class="btn btn-sm" href={`/app/project/${id}/in/${c.program_id}/`}>
+                  Deadlines
+                </a>
+                <a class="btn btn-sm" href={`/app/project/${id}/team/`}>Who is on it</a>
+                {iAuthor && (
+                  <form method="POST" action="#outcome" class="inline">
+                    <input type="hidden" name="action" value="cohort" />
+                    <input type="hidden" name="cohort_id" value={c.program_id} />
+                    <input type="hidden" name="leave" value="yes" />
+                    <button class="btn btn-sm" type="submit">Remove</button>
+                  </form>
+                )}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {(entries ?? []).length > 0 && (
+        <ul class="belongs">
+          {(entries ?? []).map((e: any) => (
+            <li>
+              <span class="b-what">{programTitle(e.programs)}</span>
+              <span class="b-who">
+                {e.result_recorded_at
+                  ? 'result recorded'
+                  : e.status === 'requested'
+                    ? 'waiting on a decision'
+                    : e.status === 'declined'
+                      ? 'not selected'
+                      : 'entered'}
+              </span>
+              <span class="b-do">
+                <a class="btn btn-sm" href={`/app/project/${id}/in/${e.program_id}/`}>Deadlines</a>
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {/* Only an author moves a project between cohorts. Somebody watching
+          reads where it belongs and changes nothing. */}
+      {iAuthor && couldJoin.length > 0 && (
+        <form method="POST" action="#outcome" class="inline" style="margin-top:14px">
+          <input type="hidden" name="action" value="cohort" />
+          {/* Labelled by the button beside it, which says what happens.
+              A visible label would repeat the verb twice in four words. */}
+          <select name="cohort_id" aria-label="Add this project to">
+            {couldJoin.map((m: any) => (
+              <option value={m.cohort_id}>{programTitle(m.programs)}</option>
+            ))}
+          </select>
+          <button class="btn btn-sm" type="submit">Add Project Here</button>
+        </form>
+      )}
+
+      {/* Asked for, not yet granted. See the query above: a pending place
+          has no participation row, so without this block the request is
+          invisible on the one page the student is looking at. */}
+      {iAuthor && (pendingCohorts ?? []).length > 0 && (
+        <p class="t-sm" style="max-width:var(--measure-text); margin-top:14px">
+          You asked to join{' '}
+          {(pendingCohorts ?? []).map((m: any, i: number) => (
+            <>
+              {i > 0 ? ', ' : ''}
+              <b>{programTitle(m.programs)}</b>
+            </>
+          ))}
+          . When they accept, you can add this project there.
+        </p>
+      )}
+
+      {/* A project with no cohort has nobody looking after it, and the page
+          says so rather than implying otherwise. `independent-research`
+          existed to hide exactly this, and hiding it is what made the case
+          for a staffed Open Program invisible (22.10). */}
+      {(cohorts ?? []).length === 0 && (
+        <p class="t-sm" style="max-width:var(--measure-text)">
+          This project is not in a class or a club, so nobody at the school is
+          looking after it. That is allowed, and the work counts the same.
+        </p>
+      )}
+
+      {(entries ?? []).length === 0 && (
+        <p class="t-sm" style="margin-top:10px">
+          <a href="/app/#join">Enter it somewhere</a> when it is ready. A fair,
+          a grant, or the journal.
+        </p>
+      )}
     </section>
 
     {/* Anchored, and every form on this page posts to it. These pages
@@ -568,5 +757,45 @@ const fmt = (d: string | null) =>
     letter-spacing: 0.08em;
     text-transform: uppercase;
     color: var(--ink-2);
+  }
+</style>
+
+<style>
+  /* Where this work belongs, and where it went. One row per cohort and per
+     entry, because a project in three clubs is three blocks rather than a
+     sentence trying to hold all three (22.9). */
+  .belongs { list-style: none; margin: 0 0 4px; padding: 0; }
+
+  /* Three columns rather than a flex row that wraps where it likes: the
+     name, what it calls the supervisor, and what you can do. Aligned down
+     the page so three rows read as three of the same thing. */
+  .belongs li {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 7rem max-content;
+    gap: 10px 18px;
+    align-items: center;
+    padding: 12px 0;
+    border-bottom: 1px solid var(--rule-fine);
+  }
+
+  .b-what { min-width: 0; }
+
+  .b-who {
+    font-family: var(--face-ui);
+    font-size: 0.84rem;
+    color: var(--ink-3);
+  }
+
+  /* Every action the same weight and on one line. A quiet Remove beside two
+     solid buttons reads as disabled rather than as different. */
+  .b-do { display: flex; gap: 8px; align-items: center; }
+  .b-do .btn { white-space: nowrap; }
+
+  @media (max-width: 720px) {
+    .belongs li { grid-template-columns: minmax(0, 1fr); }
+  }
+
+  @media (max-width: 640px) {
+    .b-what { flex: 1 1 100%; }
   }
 </style>

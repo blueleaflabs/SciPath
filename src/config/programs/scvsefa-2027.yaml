@@ -30,7 +30,6 @@ uses:
 url: https://science-fair.org/
 publishes_to: mvrj
 
-process: science
 
 # ── When a step starts being mentioned ────────────────────────────────────
 #

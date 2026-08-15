@@ -102,11 +102,11 @@ function originFor(slug) {
    per project: a season is a few hundred rows, and a query per entry is how
    a script that runs in a second starts taking a minute. */
 const { data: entries, error } = await db
-  .from('entries')
+  .from('opportunity_participations')
   .select(
     'id, project_id, status, org_id, ' +
       'programs(id, name, season_year, template_id), ' +
-      'projects(id, title, facts, project_authors(role, accepted_at, self_managed_at, users(id, display_name)))'
+      'projects(id, title, facts, process_id, project_authors(role, accepted_at, self_managed_at, users(id, display_name)))'
   )
   .in('status', ['entered', 'competed']);
 
@@ -180,14 +180,14 @@ if ((entries?.length ?? 0) === 0) {
 const ids = (entries ?? []).map((e) => e.id);
 
 const { data: recorded } = ids.length
-  ? await db.from('deliverables').select('entry_id, type').in('entry_id', ids)
+  ? await db.from('deliverables').select('participation_id, type').in('participation_id', ids)
   : { data: [] };
 
 const recordedFor = new Map();
 for (const row of recorded ?? []) {
-  const held = recordedFor.get(row.entry_id) ?? new Set();
+  const held = recordedFor.get(row.participation_id) ?? new Set();
   held.add(row.type);
-  recordedFor.set(row.entry_id, held);
+  recordedFor.set(row.participation_id, held);
 }
 
 /* Resolved once per template rather than once per entry. Fifteen entries in
@@ -195,19 +195,32 @@ for (const row of recorded ?? []) {
 const templates = new Map();
 const dueByTemplate = new Map();
 
-function templateFor(id) {
-  if (!id) return null;
-  if (!templates.has(id)) {
+/**
+ * The program as this project sees it.
+ *
+ * Keyed on both, because the same fair resolves differently for a scientific
+ * project and an engineering one: the process comes from the work rather
+ * than from the venue (22.4). Resolved once per pair rather than once per
+ * entry, since fifteen projects in one program with one process is one
+ * resolution.
+ */
+function templateFor(programTemplate, processId) {
+  if (!programTemplate) return null;
+
+  const key = `${programTemplate}::${processId ?? ''}`;
+
+  if (!templates.has(key)) {
     try {
-      const resolved = resolveProgram(id, library);
-      templates.set(id, resolved);
-      dueByTemplate.set(id, new Map(datesFor(resolved).map((d) => [d.step.id, d.date])));
+      const resolved = resolveProgram(programTemplate, library, processId);
+      templates.set(key, resolved);
+      dueByTemplate.set(key, new Map(datesFor(resolved).map((d) => [d.step.id, d.date])));
     } catch {
-      templates.set(id, null);
-      dueByTemplate.set(id, new Map());
+      templates.set(key, null);
+      dueByTemplate.set(key, new Map());
     }
   }
-  return templates.get(id);
+
+  return { template: templates.get(key), dueBy: dueByTemplate.get(key) ?? new Map() };
 }
 
 /**
@@ -244,17 +257,17 @@ for (const entry of entries ?? []) {
   const program = entry.programs;
   if (!project) continue;
 
-  const template = templateFor(program?.template_id);
+  const resolvedFor = templateFor(program?.template_id, project.process_id);
 
   const status = projectStatus({
     entryId: entry.id,
     projectId: project.id,
     title: project.title,
     programName: program ? `${program.name}, ${program.season_year}` : 'No program',
-    template,
+    template: resolvedFor?.template ?? null,
     facts: project.facts ?? {},
     recorded: recordedFor.get(entry.id) ?? new Set(),
-    dueBy: dueByTemplate.get(program?.template_id) ?? new Map(),
+    dueBy: resolvedFor?.dueBy ?? new Map(),
   });
 
   const slug = slugOf.get(entry.org_id) ?? 'montavista';

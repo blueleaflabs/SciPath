@@ -311,6 +311,64 @@ test('no column carries two check constraints', () => {
   assert.deepEqual(problems, []);
 });
 
+
+test('every function body ends where this file can see it', () => {
+  /* The checks above find a body by matching to `\n$$;`, so a function closed
+     with `end $$;` on one line is invisible to them: the match runs on to the
+     *next* function's delimiter and reports that function's calls as this
+     one's. Three were written that way, two of them while the model was being
+     split, and an ordering error inside any of them would have waited for a
+     fresh reset.
+   
+     Counting bodies cannot catch it — a lazy match always finds some later
+     delimiter, so the counts always agree. What can be checked is the shape
+     itself: every body ends with the delimiter alone on its line. */
+  const problems = [];
+
+  for (const m of sql.matchAll(/\bend\s+\$\$;/g)) {
+    problems.push(`line ${lineOf(m.index)}: close with \`end;\` then \`$$;\` on its own line`);
+  }
+
+  assert.deepEqual(problems, [], 'a body ending this way is invisible to the checks above');
+});
+
+
+test('a table created after the blanket grant grants for itself', () => {
+  /* `grant select, insert, update on all tables in schema public` means
+     every table that exists **at that point in the file**, not every table
+     the file eventually creates.
+   
+     Two tables added for the cohort model were declared below it and
+     received nothing, so a seed running as the service role was told
+     `permission denied` by a table it had just created. The database suite
+     cannot catch this: it runs as superuser, which has every privilege
+     whether it was granted or not, so the first thing to notice was a reset
+     failing on a laptop. */
+  const blanket = sql.indexOf('grant select, insert, update on all tables in schema public');
+  assert.ok(blanket > 0, 'the blanket grant is gone; this check no longer applies');
+
+  const problems = [];
+
+  for (const m of sql.matchAll(/^create table public\.(\w+) \(/gm)) {
+    if (m.index < blanket) continue;
+
+    const table = m[1];
+
+    /* A grant may name several tables across several lines —
+       `grant ... on public.a, public.b\n  public.c to ...` — so the whole
+       statement is searched rather than a single line. The first version of
+       this check matched line by line and reported twelve tables that are
+       granted perfectly well, which would have taught somebody to ignore it. */
+    const granted = [...sql.matchAll(/^grant\s[\s\S]*?;/gm)].some((g) =>
+      new RegExp(`\\bpublic\\.${table}\\b`).test(g[0])
+    );
+
+    if (!granted) problems.push(`${table} (line ${lineOf(m.index)})`);
+  }
+
+  assert.deepEqual(problems, [], 'grant on it where it is created, or nothing may write to it');
+});
+
 console.log(
   `${passed} ordering assertions passed. ${tables.size} tables, ${functions.size} functions.`
 );
