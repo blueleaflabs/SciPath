@@ -108,6 +108,19 @@ const { data: entries } = ids.length
  *
  * `competed` counts, because a finished season still had an officer.
  */
+/**
+ * **A class is a place too.**
+ *
+ * This read entries alone, which was the only thing it could read while a
+ * class and a fair lived in different tables. After the merge a project in
+ * IRPD has a participation exactly as an entered one does, and it was still
+ * invisible here -- so an advisor who had just accepted a student into the
+ * class, and watched them add their project to it, found no row to assign an
+ * Elder against. The queue said the school had nothing to look after.
+ *
+ * 22.5's cost again, in the one place that decides what a school is
+ * responsible for. Filled below, once the cohorts are read.
+ */
 const participating = new Set(
   (entries ?? [])
     .filter((e: any) => ['entered', 'competed'].includes(e.status))
@@ -126,14 +139,31 @@ const participating = new Set(
  * them Elders and a club calling them Officers — no single word is right and
  * the header says what the column is for instead.
  */
-const { data: cohortRows } = await supabase
-  .from('cohort_participations')
-  .select('programs:program_id(roles)');
+const { data: cohortRows } = ids.length
+  ? await supabase
+      .from('cohort_participations')
+      .select('id, project_id, program_id, programs:program_id(name, season_year, roles)')
+      .in('project_id', ids)
+  : { data: [] as any[] };
+
+/* Being in a class or a club is a place, with no status to qualify it:
+   `set_project_cohort` refuses to attach a project until the membership is
+   accepted, so a row here already means somebody said yes. Leaving deletes
+   it rather than marking it, so there is no withdrawn case to exclude. */
+for (const c of cohortRows ?? []) participating.add(c.project_id);
 
 const staffHeader =
   sharedStaffWord((cohortRows ?? []).map((c: any) => c.programs)) ?? 'Looked after by';
 
-const entryIds = (entries ?? []).map((e: any) => e.id);
+/* Every participation these projects have, both kinds. The date-order check
+   below asks whether a project started before the things that must precede
+   it, and a class's deadlines are exactly such things -- read from entries
+   alone, a project whose only obligations come from IRPD looked
+   unencumbered. */
+const entryIds = [
+  ...(entries ?? []).map((e: any) => e.id),
+  ...(cohortRows ?? []).map((c: any) => c.id),
+];
 
 const { data: milestones } = entryIds.length
   ? await supabase
@@ -258,9 +288,14 @@ const refused = (pending ?? [])
   .sort((a: any, b: any) => (b.decided_at ?? '').localeCompare(a.decided_at ?? ''));
 
 /* Which programs each project is in, so a row offers the officers of that
-   program rather than every officer at the school. 6.4. */
+   program rather than every officer at the school. 6.4.
+ 
+   Cohorts included, and they are the important half: an Elder is a role in
+   the class, so a project whose only place is IRPD offered an empty list of
+   people to look after it -- which is what an advisor sees as "I cannot
+   assign anybody". */
 const programsOf = new Map<string, string[]>();
-for (const e of entries ?? []) {
+for (const e of [...(entries ?? []), ...(cohortRows ?? [])]) {
   programsOf.set(e.project_id, [...(programsOf.get(e.project_id) ?? []), e.program_id]);
 }
 
@@ -292,7 +327,17 @@ const rows = (projects ?? [])
   .filter((p: any) => participating.has(p.id))
   .map((p: any) => {
   const entry = (entries ?? []).find((e: any) => e.project_id === p.id);
-  const mine = (milestones ?? []).filter((m: any) => m.participation_id === entry?.id);
+
+  /* All of this project's places, so the queue shows what the school is
+     actually looking after: a project may be in the class and at the fair,
+     and an advisor deciding who looks after it wants both. */
+  const placesHere = [
+    ...(cohortRows ?? []).filter((c: any) => c.project_id === p.id),
+    ...(entries ?? []).filter((e: any) => e.project_id === p.id),
+  ];
+
+  const placeIdsHere = new Set(placesHere.map((x: any) => x.id));
+  const mine = (milestones ?? []).filter((m: any) => placeIdsHere.has(m.participation_id));
 
   const findings = checkDateOrder({
     startedOn: p.started_on,
@@ -310,6 +355,7 @@ const rows = (projects ?? [])
   return {
     ...p,
     entry,
+    places: placesHere,
     authors: (p.project_authors ?? []).filter((a: any) => a.role === 'author'),
     officers: (p.project_authors ?? []).filter((a: any) => a.role === 'officer'),
     selfManaged: (p.project_authors ?? []).filter(
@@ -483,6 +529,18 @@ const fmt = (d: string | null) =>
               <a class="q-title" href={`/app/project/${r.id}/`}>{r.title}</a>
               <span class="q-sub">
                 {r.authors.map((a: any) => a.users?.display_name).join(', ') || 'No authors'}
+                {/* Where it belongs, because that is what somebody is being
+                    asked to look after. A project in the class and at the
+                    fair names both. */}
+                {(r.places ?? []).length > 0 && (
+                  <>
+                    {' · '}
+                    {(r.places ?? [])
+                      .map((place: any) => (place.programs as any)?.name)
+                      .filter(Boolean)
+                      .join(', ')}
+                  </>
+                )}
                 {' · registered '}{fmt(r.created_at)}
                 {' · '}
                 {r.sponsor ? r.sponsor.teacher_name : <span class="miss">no sponsor</span>}

@@ -619,4 +619,30 @@ test('a project can hold a sponsor per place, and the pages say so', () => {
   );
 });
 
+test('the assign queue counts a class as a place', () => {
+  /* An advisor accepts a student into IRPD, the student adds their project
+     to it, and the advisor goes to assign an Elder. If "in a program" means
+     "has an entry", there is no row and the school appears to be looking
+     after nothing.
+
+     That definition was right while a class and a fair were different
+     tables. It is 22.5's cost in the one page that decides what a school is
+     responsible for. */
+  const assign = fs.readFileSync('src/pages/app/assign.astro', 'utf8');
+
+  assert.match(
+    assign,
+    /for \(const c of cohortRows \?\? \[\]\) participating\.add\(c\.project_id\)/,
+    'a cohort participation has to count as a place'
+  );
+
+  /* And the officer list has to include the cohort's, since an Elder is a
+     role in the class and nowhere else. */
+  assert.match(
+    assign,
+    /for \(const e of \[\.\.\.\(entries \?\? \[\]\), \.\.\.\(cohortRows \?\? \[\]\)\]\)/,
+    'the people offered have to come from the cohort too'
+  );
+});
+
 console.log(`${passed} fixture assertions passed. ${scenarios.length} scenarios read.`);
