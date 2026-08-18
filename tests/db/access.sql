@@ -19,7 +19,7 @@ select id as officer  from public.users where display_name = 'Fair officer' \gse
 select id as elder    from public.users where display_name = 'Elder' \gset
 select id as grad     from public.users where display_name = 'Graduated officer' \gset
 select id as student  from public.users where display_name = 'Another student' \gset
-select id as outsider from public.users where display_name = 'Lynbrook student' \gset
+select id as outsider from public.users where display_name = 'Other school student' \gset
 select id as advisor_user from public.users where display_name = 'Advisor' \gset
 select id as fair     from public.programs where slug = 'fair-2027' \gset
 \set QUIET off

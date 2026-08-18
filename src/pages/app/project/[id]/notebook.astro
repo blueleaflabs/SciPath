@@ -53,21 +53,77 @@ const { data: links } = await supabase
   .select('label, url')
   .eq('project_id', id);
 
-const { data: entries } = await supabase
-  .from('opportunity_participations')
-  .select('id, programs:program_id(name, season_year, kind, phases, fair_date)')
+/**
+ * Every place this project takes part, both kinds.
+ *
+ * **This read `opportunity_participations`**, which is the view that excludes
+ * classes — so a project in IRPD and nothing else exported no deadlines and
+ * no deliverables at all, and because both sections are wrapped in a length
+ * check they did not render empty, they vanished. A class has twenty-two
+ * deliverables and twenty-nine dated steps and none of them reached the
+ * paper. The merge's cost in one more place (22.19, 22.5): the export was
+ * written when only entries existed and nobody came back to it.
+ *
+ * The table rather than either view, because the question here is "everywhere
+ * this work is answerable", which is what a judge is reading. `programs(...)`
+ * resolves without naming the key because this is a table and carries its own
+ * constraints; on a view it would have to be spelled `programs:program_id`
+ * (19.9).
+ */
+const { data: places } = await supabase
+  .from('participations')
+  .select('id, program_id, programs(id, name, season_year, kind, phases, fair_date, program_role)')
   .eq('project_id', id);
 
-const entryIds = (entries ?? []).map((e: any) => e.id);
+/* Sorted so the paper reads the same way twice: the class before the fair it
+   feeds, and within a kind by season. `program_role` is the discriminator
+   rather than `kind`, because a club template extends the fair it prepares
+   for and inherits its word (1.62). */
+const participations = [...(places ?? [])].sort((a: any, b: any) => {
+  const rank = (p: any) => (p.programs?.program_role === 'cohort' ? 0 : 1);
+  return rank(a) - rank(b) ||
+    (a.programs?.season_year ?? 0) - (b.programs?.season_year ?? 0) ||
+    String(a.programs?.name ?? '').localeCompare(String(b.programs?.name ?? ''));
+});
 
+const entryIds = participations.map((e: any) => e.id);
+
+/* Where a row came from, so a table spanning two programs can say which one
+   each line belongs to. A judge handed one sheet of thirty obligations with
+   no column for the body that set them cannot act on it. */
+const placeById = new Map(participations.map((e: any) => [e.id, e]));
+
+/**
+ * The paperwork, including what it replaced.
+ *
+ * **Superseded rows are kept**, which is a departure from every other reader.
+ * The participation page, the notebook's own working view and the digest all
+ * filter them out, and they are right to: those answer *what is outstanding*,
+ * and a replaced row is not outstanding.
+ *
+ * This answers a different question. The notebook's stated discipline is that
+ * a correction is visible — a field note that corrects another appears as a
+ * later entry naming it, rather than the earlier one disappearing — and a
+ * deliverable superseded under 22.20 has exactly that shape, the old row
+ * keeping its own date and pointing forward. Showing only the survivor would
+ * hide the thing this document elsewhere insists on showing.
+ *
+ * It is also the history a disqualification argument turns on. 22.20 records
+ * that the earlier row keeps its date *because `checkDateOrder` reads dates
+ * against signatures*: a research plan recorded in October and replaced in
+ * November after a committee refused it is a different account from one
+ * recorded in November, and the second is what the old query printed.
+ *
+ * Ordered by when each was recorded, so a replacement follows what it
+ * replaced.
+ */
 const { data: deliverables } = entryIds.length
   ? await supabase
       .from('deliverables')
-      .select('label, type, signed_on, external_url, verified_at')
+      .select('participation_id, label, type, signed_on, external_url, verified_at, superseded_at, created_at')
       .in('participation_id', entryIds)
-      /* The current version of each, not every draft of it. */
-      .is('superseded_at', null)
-      .order('signed_on', { ascending: true })
+      .order('signed_on', { ascending: true, nullsFirst: true })
+      .order('created_at', { ascending: true })
   : { data: [] as any[] };
 
 /**
@@ -80,7 +136,7 @@ const { data: deliverables } = entryIds.length
 const { data: milestones } = entryIds.length
   ? await supabase
       .from('entry_milestones')
-      .select('name, kind, due_on, completed_on, blocks_experimentation, source, phase')
+      .select('participation_id, name, kind, due_on, completed_on, blocks_experimentation, source, phase, program_milestones(deliverable_ref)')
       .in('participation_id', entryIds)
       .order('due_on', { ascending: true, nullsFirst: false })
   : { data: [] as any[] };
@@ -94,37 +150,117 @@ const { data: images } = await supabase
 
 const savedVideo = parseVideo(project.video_url);
 
-/* A course's deadlines are set by the class, not a club. Same reasoning as
-   the entry page: naming a body that does not exist is worse than vague. */
-const isCourse = (entries ?? []).some((e: any) => e.programs?.kind === 'course');
+/**
+ * Who set a deadline, read per row rather than per project.
+ *
+ * `isCourse` used to be computed once for the whole export — and off the
+ * opportunity view, where `kind: course` cannot appear, so it was permanently
+ * false and every row read *The fair* or *The club*. Now that a class's
+ * deadlines are exported the label has to follow the row: a project in IRPD
+ * and at the fair has both, and one word cannot be right for both.
+ */
+const whoseFor = (place: any): Record<string, string> => {
+  const course = place?.programs?.kind === 'course';
+  return {
+    process: 'Research',
+    program: course ? 'The class' : 'The fair',
+    school: course ? 'The class' : 'The club',
+  };
+};
 
-/* The same grouping the entry page uses. A printed list of nineteen rows is
-   a list; five named stretches is a plan, and a judge reads it once. */
-const phaseList: any[] = (entries ?? [])
-  .flatMap((e: any) => e.programs?.phases ?? []);
-
-const milestoneGroups = (() => {
+/**
+ * One block per place, rather than one table for the project.
+ *
+ * A project in the class and at the fair has two calendars set by two bodies,
+ * and merging them produces a list of fifty obligations in which the reader
+ * cannot tell which deadline belongs to whom or which of two people to ask
+ * about it. The same argument as 22.18 and 22.18a, applied to paper.
+ *
+ * The phase grouping stays inside each place, because phase ids merge in
+ * chain order and the class prefixes its own (22.24) — two programs' phases
+ * flattened into one ordering is a heading sequence that belongs to neither.
+ */
+const groupPhases = (place: any, rows: any[]) => {
+  const phaseList: any[] = place?.programs?.phases ?? [];
   const order = new Map(phaseList.map((p: any, i: number) => [p.id, i]));
   const buckets = new Map<string, any[]>();
 
-  for (const m of milestones ?? []) {
+  for (const m of rows) {
     const key = m.phase && order.has(m.phase) ? m.phase : '';
     buckets.set(key, [...(buckets.get(key) ?? []), m]);
   }
 
   return [...buckets.entries()]
-    .map(([id, rows]) => {
-      const phase = phaseList.find((p: any) => p.id === id);
-      return { id, name: phase?.name ?? 'Everything else', window: phase?.window ?? null, rows };
+    .map(([pid, group]) => {
+      const phase = phaseList.find((p: any) => p.id === pid);
+      return {
+        id: pid,
+        name: phase?.name ?? 'Everything else',
+        window: phase?.window ?? null,
+        rows: group,
+      };
     })
     .sort((a, b) => (order.get(a.id) ?? 999) - (order.get(b.id) ?? 999));
-})();
-
-const whose: Record<string, string> = {
-  process: 'Research',
-  program: isCourse ? 'The class' : 'The fair',
-  school: isCourse ? 'The class' : 'The club',
 };
+
+/**
+ * The appendix, assembled per place.
+ *
+ * A place with neither a deadline nor a deliverable is dropped rather than
+ * printed as an empty heading — a school's fair layer that a project has only
+ * just entered is a real row with nothing under it yet, and a heading over
+ * nothing reads as something lost.
+ */
+const placeBlocks = participations
+  .map((place: any) => {
+    const own = (milestones ?? []).filter((m: any) => m.participation_id === place.id);
+    const papers = (deliverables ?? []).filter((d: any) => d.participation_id === place.id);
+
+    /**
+     * The artifact that satisfied each deadline, on the deadline.
+     *
+     * **The two tables cannot be joined by eye.** A deadline reads *Settle
+     * the question with an officer* and the artifact it wanted is labeled
+     * *The research question*, so a reader holding this on paper and asking
+     * the ordinary question — this was due the nineteenth, what date is
+     * actually on it — has no key to follow. 22.21 moved the recording onto
+     * the row for the same reason it is read there; a printed page cannot
+     * click, so the round trip it removed is worse here, not better.
+     *
+     * Paired on `deliverable_ref`, which 22.22 put on the step precisely so
+     * that nothing downstream has to guess which artifact a deadline wants.
+     * `milestone_id` on the deliverable would be the direct key and is null
+     * for everything the scenario seed writes, so pairing on it would look
+     * correct against fixtures thinner than reality (19.9).
+     *
+     * Only the current row. What it replaced is in the table below, which is
+     * where the history belongs: a deadline row carrying three versions is a
+     * calendar nobody can scan, and *when was this handed in* has one answer.
+     */
+    const current = new Map<string, any>();
+    for (const d of papers) if (!d.superseded_at) current.set(d.type, d);
+
+    const withArtifact = own.map((m: any) => ({
+      ...m,
+      artifact: current.get((m.program_milestones as any)?.deliverable_ref) ?? null,
+    }));
+
+    return {
+      id: place.id,
+      title: programTitle(place.programs),
+      isCohort: place.programs?.program_role === 'cohort',
+      whose: whoseFor(place),
+      groups: groupPhases(place, withArtifact),
+      milestones: withArtifact,
+      deliverables: papers,
+    };
+  })
+  .filter((b) => b.milestones.length > 0 || b.deliverables.length > 0);
+
+/* Whether the appendix needs to say which place each block is, which it only
+   does when there is more than one. A single heading naming the only program
+   there is above the only calendar there is is noise. */
+const severalPlaces = placeBlocks.length > 1;
 
 const attachments = project.project_authors ?? [];
 const authors = attachments.filter((a: any) => a.role === 'author');
@@ -196,8 +332,11 @@ const printedOn = new Date().toLocaleDateString('en-US', {
           <dt>School</dt>
           <dd>{org.name}</dd>
 
-          {entries && entries.length > 0 && (<><dt>Entered</dt>
-          <dd>{entries.map((e: any) => programTitle(e.programs)).join(', ')}</dd></>)}
+          {/* Every place, not only the fairs. A project's class is as much a
+              part of where the work sits as the competition it went to, and
+              this line read "Entered" over a list that silently excluded it. */}
+          {participations.length > 0 && (<><dt>Part of</dt>
+          <dd>{participations.map((e: any) => programTitle(e.programs)).join(', ')}</dd></>)}
 
           <dt>Work began</dt>
           <dd>{fmt(project.started_on)}</dd>
@@ -286,59 +425,120 @@ const printedOn = new Date().toLocaleDateString('en-US', {
         </section>
       )}
 
-      {milestones && milestones.length > 0 && (
-        <section class="appendix">
-          <h2>Deadlines</h2>
-          <table>
-            <thead>
-              <tr><th>Due</th><th>Obligation</th><th>Set by</th><th>Done</th></tr>
-            </thead>
-            <tbody>
-              {milestoneGroups.map((group) => (
-                <>
-                  <tr class="phase-row">
-                    <th colspan="4" scope="colgroup">
-                      {group.name}
-                      {group.window && ` · ${group.window.from} to ${group.window.to}`}
-                    </th>
-                  </tr>
-              {group.rows.map((m: any) => (
-                <tr>
-                  <td>{fmt(m.due_on)}</td>
-                  <td>
-                    {m.name}
-                    {m.blocks_experimentation && ' — must precede work'}
-                  </td>
-                  <td>{whose[m.source] ?? 'The program'}</td>
-                  <td>{m.completed_on ? fmt(m.completed_on) : '—'}</td>
-                </tr>
-              ))}
-                </>
-              ))}
-            </tbody>
-          </table>
-        </section>
-      )}
+      {placeBlocks.map((block) => (
+        <>
+          {block.milestones.length > 0 && (
+            <section class="appendix">
+              <h2>
+                Deadlines
+                {severalPlaces && <span class="place"> · {block.title}</span>}
+              </h2>
+              <table>
+                <thead>
+                  <tr><th>Due</th><th>Obligation</th><th>Set by</th><th>Done</th></tr>
+                </thead>
+                <tbody>
+                  {block.groups.map((group) => (
+                    <>
+                      <tr class="phase-row">
+                        <th colspan="4" scope="colgroup">
+                          {group.name}
+                          {group.window && ` · ${group.window.from} to ${group.window.to}`}
+                        </th>
+                      </tr>
+                      {group.rows.map((m: any) => (
+                        <tr>
+                          <td>{fmt(m.due_on)}</td>
+                          <td>
+                            {m.name}
+                            {m.blocks_experimentation && ' — must precede work'}
+                            {/* What satisfied it, under the thing it
+                                satisfied. Not a fifth column: the label, the
+                                date and the address are one answer to one
+                                question, and three narrow columns of mostly
+                                empty cells is the flat table 15.9 was
+                                about. */}
+                            {m.artifact && (
+                              <span class="met">
+                                {m.artifact.label}
+                                {m.artifact.signed_on && ` · ${fmt(m.artifact.signed_on)}`}
+                                {m.artifact.external_url && (
+                                  <> · <a href={m.artifact.external_url} target="_blank" rel="noopener noreferrer">{m.artifact.external_url}</a></>
+                                )}
+                              </span>
+                            )}
+                          </td>
+                          <td>{block.whose[m.source] ?? 'The program'}</td>
+                          <td>{m.completed_on ? fmt(m.completed_on) : '—'}</td>
+                        </tr>
+                      ))}
+                    </>
+                  ))}
+                </tbody>
+              </table>
+            </section>
+          )}
 
-      {deliverables && deliverables.length > 0 && (
-        <section class="appendix">
-          <h2>Deliverables</h2>
-          <table>
-            <thead>
-              <tr><th>Signed</th><th>Deliverable</th><th>Verified</th></tr>
-            </thead>
-            <tbody>
-              {deliverables.map((d: any) => (
-                <tr>
-                  <td>{fmt(d.signed_on)}</td>
-                  <td>{d.label}</td>
-                  <td>{d.verified_at ? 'Yes' : 'No'}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </section>
-      )}
+          {block.deliverables.length > 0 && (
+            <section class="appendix">
+              {/**
+                * The full record, kept even though the current artifact now
+                * sits on the deadline it satisfied.
+                *
+                * Not a duplicate, because the two answer different questions.
+                * The deadline row answers *this was due the nineteenth, what
+                * is actually on it* — one artifact, one date. This answers
+                * *what was handed in over the season*, which is a question
+                * about the collection: every version including the ones
+                * replaced, in order, plus anything handed in that no deadline
+                * on this calendar asked for.
+                *
+                * It is also the only place supersession can live. A deadline
+                * carrying three versions is a calendar nobody can scan, and
+                * dropping the earlier ones would lose the history 22.20 keeps
+                * the dates for.
+                */}
+              <h2>
+                Every version handed in
+                {severalPlaces && <span class="place"> · {block.title}</span>}
+              </h2>
+              <table>
+                <thead>
+                  <tr><th>Signed</th><th>Deliverable</th><th>Where it is</th><th>Verified</th></tr>
+                </thead>
+                <tbody>
+                  {block.deliverables.map((d: any) => (
+                    <tr class={d.superseded_at ? 'row-old' : ''}>
+                      <td>{fmt(d.signed_on)}</td>
+                      <td>
+                        {d.label}
+                        {/* Said on the row rather than by leaving the row out.
+                            A correction is visible in this document (the
+                            entries above name what they correct), and a
+                            deliverable replaced under 22.20 is the same act. */}
+                        {d.superseded_at && (
+                          <span class="replaced">Replaced {fmt(d.superseded_at.slice(0, 10))}</span>
+                        )}
+                      </td>
+                      {/* Printed in full, because a reader holding this on
+                          paper cannot follow a link and a student reading it
+                          on a screen should not have to go hunting for their
+                          own document. The address is the answer to "where is
+                          it", so an abbreviated one answers nothing. */}
+                      <td class="where">
+                        {d.external_url
+                          ? <a href={d.external_url} target="_blank" rel="noopener noreferrer">{d.external_url}</a>
+                          : 'Held here'}
+                      </td>
+                      <td>{d.verified_at ? 'Yes' : 'No'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </section>
+          )}
+        </>
+      ))}
 
       {links && links.length > 0 && (
         <section class="appendix">
@@ -515,6 +715,43 @@ const printedOn = new Date().toLocaleDateString('en-US', {
   .appendix table { border-collapse: collapse; width: 100%; font-size: 0.95rem; }
   .appendix th, .appendix td { border-bottom: 1px solid var(--rule); padding: 7px 4px; text-align: left; }
   .appendix ul { margin: 0; padding-left: 1.2rem; }
+
+  /* Which class or fair this block belongs to, quieter than the heading it
+     qualifies: the reader is looking for "Deliverables" and then for which. */
+  .appendix h2 .place { font-weight: 400; color: var(--ink-3); }
+
+  /* What satisfied an obligation, under it. Quieter than the obligation and
+     indented off it, so the eye reads the calendar first and the evidence
+     second rather than a table of forty equal lines. */
+  .appendix .met {
+    display: block;
+    margin-top: 3px;
+    padding-left: 12px;
+    border-left: 2px solid var(--rule);
+    font-size: 0.85rem;
+    color: var(--ink-3);
+  }
+  .appendix .met a { word-break: break-all; }
+
+  /* A replaced row stays legible rather than being struck through. It is a
+     fact about what happened, not a deletion, and a judge reading a struck
+     line reads it as withdrawn. */
+  .appendix .row-old td { color: var(--ink-3); }
+  .appendix .replaced {
+    display: block;
+    font-size: 0.85rem;
+    font-style: italic;
+    color: var(--ink-3);
+  }
+
+  /* An address is long and must not push the dates around, so it wraps
+     anywhere rather than widening the column. */
+  .appendix .where {
+    font-family: var(--face-num);
+    font-size: 0.8rem;
+    word-break: break-all;
+    max-width: 26ch;
+  }
   .fine { font-size: 0.9rem; color: var(--ink-3); }
   .empty { color: var(--ink-3); }
 
@@ -555,5 +792,9 @@ const printedOn = new Date().toLocaleDateString('en-US', {
       color: var(--ink-3);
       word-break: break-all;
     }
+
+    /* Except in the deliverables column, where the address *is* the link
+       text. Without this every row prints it twice. */
+    .where a[href^='http']::after { content: none; }
   }
 </style>

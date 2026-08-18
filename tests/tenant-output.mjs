@@ -12,6 +12,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import yaml from 'js-yaml';
 
 const DIST = 'dist';
 
@@ -21,18 +22,31 @@ if (!fs.existsSync(DIST)) {
 }
 
 /* Slug to name, read from the org config, so this test carries no literals
-   of its own and cannot go stale when a tenant is added. */
-const source = fs.readFileSync('src/config/orgs.ts', 'utf8');
+   of its own and cannot go stale when a tenant is added.
+
+   **Read from `src/config/orgs/*.yaml`, which is where a school has been
+   described since 1.65.** This parsed `orgs.ts` for the literal object the
+   file used to hold, and after the move that pattern matched nothing: the
+   list of names went to zero and every assertion below became vacuously
+   true. Silent, and the exact 1.12 fault this file exists to catch — a test
+   passing because it compared nothing. Hence the floor: it fails if it reads
+   no tenants rather than reporting a pass over an empty list (19.9). */
+const dir = 'src/config/orgs';
 const nameBySlug = {};
-for (const m of source.matchAll(/^\s{2}(\w+):\s*\{([\s\S]*?)^\s{2}\},/gm)) {
-  const body = m[2];
-  /* ^\s+name: so hostname: does not match. */
-  const name = body.match(/^\s+name:\s*'([^']+)'/m);
+
+for (const file of fs.readdirSync(dir).filter((f) => f.endsWith('.yaml'))) {
+  const doc = yaml.load(fs.readFileSync(path.join(dir, file), 'utf8'));
   /* The platform record's name appears in every tenant's footer by design
      ("on SciPath"), so it is not a tenant name and cannot be compared. */
-  if (name && !/isPlatform:\s*true/.test(body)) nameBySlug[m[1]] = name[1];
+  if (doc?.name && !doc.is_platform) nameBySlug[doc.id] = doc.name;
 }
+
 const names = Object.values(nameBySlug);
+
+if (names.length === 0) {
+  console.error(`No tenant names read from ${dir}/. This test would compare nothing.`);
+  process.exit(1);
+}
 
 const tenants = fs
   .readdirSync(DIST, { withFileTypes: true })
@@ -57,10 +71,34 @@ for (const tenant of tenants) {
   const own = nameBySlug[tenant];
   if (!own) continue;
 
-  /* Without this, a build where every page rendered the same fallback would
-     pass: no tenant names another when no tenant names anyone. */
-  if (!fileMentions(path.join(dir, 'index.html'), own)) {
-    problems.push(`${tenant}/index.html does not name ${own}`);
+  /**
+   * Without this, a build where every page rendered the same fallback would
+   * pass: no tenant names another when no tenant names anyone. 1.12 added it
+   * after exactly that.
+   *
+   * **Anchored on `about/index.html`, not `index.html`.** The home page moved
+   * outside the tenant tree and became on demand at 1.39, so `{tenant}/
+   * index.html` has not existed since — and this reported its absence as
+   * *does not name Monta Vista High School*, which reads as a leak and is
+   * not one. Open decision 64. The about page is prerendered per tenant and
+   * carries the lockup, which is the property this assertion actually needs.
+   *
+   * If it ever stops being prerendered, this must be re-anchored again
+   * rather than dropped, so the file is named rather than globbed: a missing
+   * anchor has to be loud.
+   */
+  const anchor = path.join(dir, 'about', 'index.html');
+
+  if (!fs.existsSync(anchor)) {
+    problems.push(
+      `${tenant}/about/index.html is not in the build, so nothing anchors this tenant. ` +
+        `Re-anchor onto a page that is still prerendered per tenant.`
+    );
+    continue;
+  }
+
+  if (!fileMentions(anchor, own)) {
+    problems.push(`${tenant}/about/index.html does not name ${own}`);
     continue;
   }
 

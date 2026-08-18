@@ -707,7 +707,43 @@ const warningsFor = (stepId: string) =>
 const recorded = new Map<string, any>();
 for (const d of deliverables ?? []) recorded.set(d.type, d);
 
-const phaseList: any[] = (entry?.programs as any)?.phases ?? [];
+/**
+ * The phases, from the resolved template rather than from the seeded row.
+ *
+ * **`programs.phases` is empty for every fair.** `seed-programs.mjs` resolves
+ * each template with no process argument, and the fair templates declare no
+ * phases of their own — they tag their steps with `process-science`'s ids and
+ * have always borrowed that vocabulary (23.3). Resolved with no floor there
+ * is nothing to borrow, so the column is written as `[]`, every milestone
+ * falls into the unnamed bucket, and the club's calendar renders as sixteen
+ * rows under *Everything else*: the flattest possible version of the one
+ * table a student reads most (15.9).
+ *
+ * The column cannot be right, and not because the seed is careless. A
+ * program row is seeded before any project exists, and the process is a fact
+ * about the project (22.4) — so the same fair genuinely has different phases
+ * for a scientific project and an engineering one, and no single snapshot
+ * taken at seed time can hold both. This page already resolves `template`
+ * against `processFor`, which is the precedence that knows. Read it from
+ * there.
+ *
+ * The seeded column stays as the fallback for the window a teacher published
+ * on a phase, which travels with the row and is not in the resolved chain.
+ */
+const phaseList: any[] = (() => {
+  const resolved = template?.phases ?? [];
+  const seeded: any[] = (entry?.programs as any)?.phases ?? [];
+
+  if (resolved.length === 0) return seeded;
+
+  const windowOf = new Map(seeded.map((p: any) => [p.id, p.window ?? null]));
+
+  return resolved.map((p: any) => ({
+    id: p.id,
+    name: p.name ?? p.id,
+    window: p.window ?? windowOf.get(p.id) ?? null,
+  }));
+})();
 
 /**
  * Whether a deadline has been met.
@@ -1322,7 +1358,43 @@ const sectionNo = new Map(sections.map((section, i) => [section.id, String(i + 1
                          twenty-nine open forms is not a table anybody can
                          scan. */
                       wantedBy(m).every((d: any) => recorded.has(d.id)) ? (
-                        <a class="linkish" href={`#d-${wantedBy(m)[0]?.id}`}>Recorded</a>
+                        /* **What was recorded, not that something was.**
+                        
+                           This said *Recorded* and nothing else, so the one
+                           question a student actually has at this row — what
+                           date is on it and where did I put it — took a jump
+                           to another section and a scan for the right line.
+                           The date is the fact the fair cares about
+                           (`checkDateOrder` reads signatures, not ticks), and
+                           the address is the thing they would otherwise go
+                           hunting for.
+                        
+                           Same words as the section below, deliberately:
+                           *Recorded {date}* and *Where it lives* are already
+                           this page's vocabulary and a second phrasing for
+                           one fact reads as a second fact. */
+                        <div class="rec-done">
+                          {wantedBy(m).map((d: any) => {
+                            const have = recorded.get(d.id);
+                            return (
+                              <p class="rec-one">
+                                {wantedBy(m).length > 1 && <span class="rec-n">{d.name}</span>}
+                                <a class="linkish" href={`#d-${d.id}`}>
+                                  Recorded {have?.signed_on ? fmt(have.signed_on) : ''}
+                                </a>
+                                {have?.external_url && (
+                                  <a
+                                    class="rec-at"
+                                    href={have.external_url}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                  >{linkDomain(have.external_url)}</a>
+                                )}
+                                {have?.verified_at && <span class="rec-ok">Checked</span>}
+                              </p>
+                            );
+                          })}
+                        </div>
                       ) : (
                         <details class="rec">
                           <summary>Record it</summary>
@@ -1355,10 +1427,41 @@ const sectionNo = new Map(sections.map((section, i) => [section.id, String(i + 1
                          forms for one obligation meant a deadline could be
                          ticked complete with nothing behind it, and a
                          deliverable could exist against a deadline still
-                         reading open. */
-                      <a class="linkish" href={`#d-${wantedBy(m)[0]?.id ?? ''}`}>
-                        {satisfied(m) ? 'Recorded' : 'Record it below'}
-                      </a>
+                         reading open.
+                         
+                         The date and the address still show here, because
+                         where the artifact is recorded and where a student
+                         reads what happened are different questions: the
+                         first has one answer per obligation, the second is
+                         asked at every row. */
+                      satisfied(m) ? (
+                        <div class="rec-done">
+                          {wantedBy(m)
+                            .filter((d: any) => recorded.has(d.id))
+                            .map((d: any) => {
+                              const have = recorded.get(d.id);
+                              return (
+                                <p class="rec-one">
+                                  <a class="linkish" href={`#d-${d.id}`}>
+                                    Recorded {have?.signed_on ? fmt(have.signed_on) : ''}
+                                  </a>
+                                  {have?.external_url && (
+                                    <a
+                                      class="rec-at"
+                                      href={have.external_url}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                    >{linkDomain(have.external_url)}</a>
+                                  )}
+                                </p>
+                              );
+                            })}
+                        </div>
+                      ) : (
+                        <a class="linkish" href={`#d-${wantedBy(m)[0]?.id ?? ''}`}>
+                          Record it below
+                        </a>
+                      )
                     )
                   ) : (
                     /* A step with nothing to hand in still has to be
@@ -2336,6 +2439,28 @@ const sectionNo = new Map(sections.map((section, i) => [section.id, String(i + 1
   .rec[open] > summary::after { content: ' \2212'; }
 
   .recf { margin-top: 10px; max-width: 26rem; }
+
+  /* What was recorded, on the row that owed it. Stacked rather than run on
+     one line, because the status column is the narrowest in the table and a
+     date plus an address wrapping mid-word reads as damage. */
+  .rec-done { display: flex; flex-direction: column; gap: 4px; }
+  .rec-one { margin: 0; display: flex; flex-direction: column; gap: 2px; }
+  .rec-n {
+    font-family: var(--face-ui);
+    font-size: 0.76rem;
+    color: var(--ink-3);
+  }
+  .rec-at {
+    font-family: var(--face-num);
+    font-size: 0.78rem;
+    color: var(--ink-3);
+    word-break: break-all;
+  }
+  .rec-ok {
+    font-family: var(--face-ui);
+    font-size: 0.76rem;
+    color: var(--ink-3);
+  }
   .recf-n { margin: 0 0 6px; font-weight: 600; font-size: 0.92rem; }
   .recf label { display: block; margin-bottom: 8px; }
   .recf label > span {

@@ -290,6 +290,89 @@ test('every module a script imports can actually be loaded by node', () => {
   assert.deepEqual([...new Set(problems)], [], 'node needs the extension');
 });
 
+test('no script reaches a module only Vite can run', () => {
+  /**
+   * The same fault as the check above, a size larger.
+   *
+   * `import.meta.glob` is a Vite transform and not a runtime API, so under
+   * plain node it is not a function at all — and `import.meta.env` is simply
+   * undefined, which throws on the property access. Both have now killed a
+   * reset partway through, after seed scripts had already written into a
+   * database that had just been dropped. The reset is destructive and not
+   * resumable, so the cost is the whole sequence rather than the one import.
+   *
+   * The resolution is the split the template library already had:
+   * `template-resolve.ts` holds the logic and does no I/O, `templates.ts`
+   * does the glob for the application, and `template-library.mjs` reads the
+   * directory for a script. `org-shape.ts` and `orgs-library.mjs` are that
+   * arrangement for organizations.
+   *
+   * Transitive on purpose. Neither failure was a script calling these
+   * directly; both were a script importing a module that did.
+   */
+  /* A mention inside a comment explaining this rule is not a use, and this
+     file and the two modules below contain several. */
+  const stripComments = (text) =>
+    text.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/^\s*\/\/.*$/gm, ' ');
+
+  const VITE_ONLY = [
+    ['import.meta.glob', 'a Vite transform, not a function at run time'],
+    ['import.meta.env', 'undefined under node, so the property access throws'],
+  ];
+
+  const problems = [];
+  const seen = new Set();
+
+  const withoutTypeOnly = (text) =>
+    text.replace(/^\s*(?:import|export)\s+type\s[^\n]*$/gm, '');
+
+  /* Reported against the script rather than the module, because the script is
+     what has to change and the module is usually right to be doing it. */
+  const walk = (file, entry, chain) => {
+    const key = `${entry}::${file}`;
+    if (seen.has(key) || !fs.existsSync(file)) return;
+    seen.add(key);
+
+    const text = fs.readFileSync(file, 'utf8');
+
+    for (const [api, why] of VITE_ONLY) {
+      /**
+       * The API followed by something that makes it a use.
+       *
+       * `import.meta.glob(` is a call; `import.meta.env.PUBLIC_ORG` and
+       * `typeof import.meta.env !== 'undefined'` are reads. Prose naming the
+       * API — of which this file and the two modules it points at have
+       * several — is followed by an ordinary word and does not match, and
+       * comments are stripped before the test regardless. Two independent
+       * reasons, because a guard that fires on its own documentation is a
+       * guard somebody deletes.
+       */
+      const escaped = api.replace(/\./g, '\\.');
+      const uses = new RegExp(`${escaped}\\s*[(!.\\[]`);
+
+      if (uses.test(stripComments(text))) {
+        problems.push(
+          `${entry} reaches ${path.relative('.', file)}, which uses ${api} — ${why}` +
+            (chain.length ? `\n          via ${chain.join(' -> ')}` : '')
+        );
+      }
+    }
+
+    for (const m of withoutTypeOnly(text).matchAll(/from\s+'(\.[^']+)'/g)) {
+      const resolved = path.resolve(path.dirname(file), m[1]);
+      if (fs.existsSync(resolved)) walk(resolved, entry, [...chain, path.relative('.', file)]);
+    }
+  };
+
+  for (const file of files) walk(file, file, []);
+
+  assert.deepEqual(
+    [...new Set(problems)],
+    [],
+    'a script must not import a module that only builds under Vite'
+  );
+});
+
 test('no test helper swallows an async assertion', () => {
   /* `fn()` without `await` counts an async assertion as passed the moment it
      starts, and a rejection surfaces later as an unhandled promise nothing is

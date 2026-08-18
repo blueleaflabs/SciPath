@@ -909,8 +909,15 @@ const grouped = () => {
                             <a href={w.entry ? `/app/entry/${w.entry.id}/` : `/app/project/${w.id}/`}>
                               {w.title}
                             </a>
+                            {/* Export beside the notebook rather than on a
+                                row of its own: it is the notebook printed,
+                                and the reason it is offered here as well as
+                                on the participation page is that somebody
+                                assembling paperwork for several projects
+                                should not have to open each one to find it. */}
                             <span class="sub">
                               <a href={`/app/project/${w.id}/`}>notebook</a> ·{' '}
+                              <a href={`/app/project/${w.id}/notebook/`}>export</a> ·{' '}
                               <a href={`/app/project/${w.id}/team/`}>who is on it</a>
                             </span>
                           </td>
@@ -1052,6 +1059,15 @@ const grouped = () => {
                            runs a fair, a class, or both. */
                         <span class="t-sm"> · not in a class or entered anywhere yet</span>
                       )}
+
+                      {/* The export, from the overview as well as from the
+                          participation page. A student assembling paperwork
+                          the night before a fair should not have to open a
+                          project and then a program to reach the one thing
+                          they came for. It carries every place the work sits,
+                          so it is a fact about the project rather than about
+                          whichever program they happened to open. */}
+                      <span class="t-sm"> · <a href={`/app/project/${e.project.id}/notebook/`}>export</a></span>
                     </li>
                   ))}
                 </ul>

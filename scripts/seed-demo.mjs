@@ -27,6 +27,7 @@
 
 import { createClient } from '@supabase/supabase-js';
 import { loadDevVars } from './dev-vars.mjs';
+import { originFor } from '../src/lib/deployment.ts';
 
 /* Read the file before reading the environment. A script that needs a file
    should read the file rather than print instructions for loading it. */
@@ -36,7 +37,7 @@ const URL = process.env.PUBLIC_SUPABASE_URL ?? '';
 const KEY = process.env.SUPABASE_SECRET_KEY ?? '';
 /* Every tenant gets fixtures, so switching schools in the UI actually has
    something to show on the other side. */
-const ORG_SLUGS = (process.env.DEMO_ORGS ?? 'montavista,lynbrook,blueleaflabs')
+const ORG_SLUGS = (process.env.DEMO_ORGS ?? 'montavista,svslc,scipath')
   .split(',')
   .map((s) => s.trim())
   .filter(Boolean);
@@ -169,7 +170,7 @@ const ROLES = [
  *
  * So a fixture is now named for what it is. `mv_officer1` on a page tells
  * you the tenant, the role and which one, without looking anything up, and
- * the leak test is stronger than it ever was with invented names: a `lyn_`
+ * the leak test is stronger than it ever was with invented names: a `svs_`
  * anywhere on a Monta Vista page is wrong on sight.
  *
  * Every name is still obviously fictional, which is what 12.11 asks for, and
@@ -177,8 +178,8 @@ const ROLES = [
  */
 const PREFIX = {
   montavista: 'mv',
-  lynbrook: 'lyn',
-  blueleaflabs: 'open',
+  svslc: 'svs',
+  scipath: 'sp',
 };
 
 /* `advisor` is bare and the rest carry a letter. Both become a number, so
@@ -212,7 +213,7 @@ function fail(message) {
 async function seedOrg(slug) {
   const { data: org, error: orgError } = await db
     .from('organizations')
-    .select('id, slug, lockup_name, hostname, requires_mentor')
+    .select('id, slug, lockup_name, subdomain, requires_mentor')
     .eq('slug', slug)
     .single();
 
@@ -242,7 +243,9 @@ async function seedOrg(slug) {
     );
   }
 
-  console.log(`\n${org.lockup_name}  ->  http://${org.hostname}:4321/app/`);
+  /* Where to sign in, in this environment. Fixtures never reach a deployed
+     project (12.11a), so in practice this is always the local one. */
+  console.log(`\n${org.lockup_name}  ->  ${originFor(org.subdomain)}/app/`);
 
   for (const person of castFor(slug)) {
     /* Namespaced per tenant. The handle is the same at every school and the

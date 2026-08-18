@@ -61,11 +61,36 @@ $$;
 create table public.organizations (
   id             uuid primary key default gen_random_uuid(),
   slug           text not null unique,
-  -- Tenancy is resolved by hostname, not by email domain. Two schools in one
-  -- district share student.fuhsd.org, so a domain cannot say which school.
-  hostname       text not null unique,
+  /* The label this tenant answers on, not a whole hostname: `montavista`,
+     served as montavista.localhost while developing and
+     montavista.scipath.org in production. Storing the hostname meant the
+     database held a fact about one deployment, so the same migration could
+     not seed both and a mailed link was right in only one of them. The root
+     domain is configuration; the label is the tenant.
+
+     Tenancy is resolved by this and never by email domain: two schools in one
+     district share student.fuhsd.org, so a domain cannot say which school. */
+  subdomain      text not null unique,
   lockup_name    text not null,
-  mark           text not null check (char_length(mark) between 2 and 4),
+  /* Two to six.
+
+     This has widened twice, both times because a real organization's mark did
+     not fit and the mark is theirs rather than ours: `MVHS` broke a ceiling of
+     three, and `SVSLC` broke a ceiling of four. Widened rather than the mark
+     being cut to fit, which is the precedent 1.5 set and the right direction —
+     an organization does not get told its own abbreviation is too long by a
+     database.
+
+     Six rather than eight, because the badge in `ui.css` is a block and a mark
+     wide enough to turn it into a bar has stopped being a mark. `SCVSEFA` is
+     seven and would not fit; that is a conversation to have with SCVSEFA
+     rather than a ceiling to guess at now, and `tests/orgs.mjs` makes it a
+     visible one-line widening rather than a discovery halfway through a reset.
+
+     `tests/orgs.mjs` parses these two numbers out of this line and checks
+     every organization file against them, so this is the one place they
+     exist. */
+  mark           text not null check (char_length(mark) between 2 and 6),
   theme          text not null check (theme in ('entry', 'proceedings')),
   postal_address text,
   phone          text,
@@ -876,7 +901,7 @@ to authenticated;
 
 create or replace function app.provision_org(
   p_slug        text,
-  p_hostname    text,
+  p_subdomain   text,
   p_lockup_name text,
   p_mark        text,
   p_theme       text,
@@ -896,12 +921,12 @@ declare
   d     jsonb;
 begin
   insert into public.organizations
-    (slug, hostname, lockup_name, mark, theme, signup_mode,
+    (slug, subdomain, lockup_name, mark, theme, signup_mode,
      requires_mentor, postal_address, phone, status)
   values
-    (p_slug, p_hostname, p_lockup_name, p_mark, p_theme, p_signup_mode,
+    (p_slug, p_subdomain, p_lockup_name, p_mark, p_theme, p_signup_mode,
      p_requires_mentor, p_address, p_phone, 'active')
-  on conflict (slug) do update set hostname = excluded.hostname
+  on conflict (slug) do update set subdomain = excluded.subdomain
   returning id into v_org;
 
   for d in select * from jsonb_array_elements(p_domains)
@@ -915,6 +940,48 @@ begin
   return v_org;
 end;
 $$;
+
+/* **Provisioning, over the API, for the secret key alone.**
+ *
+ * `app` is not an exposed schema, so a script cannot call the function above
+ * through PostgREST — and the scripts are how a school reaches the database
+ * now that each one is a file rather than a line in this migration.
+ *
+ * Granted to `service_role` and to nothing else. `authenticated` must never
+ * hold this: creating an organization is a deliberate act, never self-serve,
+ * and a signed-in student holding it could mint a tenant. The absence of a
+ * grant to `authenticated` is the whole of the access control here, which is
+ * why it is stated rather than left to be inferred. */
+create or replace function public.provision_org(
+  p_slug        text,
+  p_subdomain   text,
+  p_lockup_name text,
+  p_mark        text,
+  p_theme       text,
+  p_signup_mode text  default 'domain',
+  p_domains     jsonb default '[]'::jsonb,
+  p_address     text  default null,
+  p_phone       text  default null,
+  p_requires_mentor boolean default true
+)
+returns uuid
+language sql
+security definer
+set search_path = ''
+as $$
+  select app.provision_org(
+    p_slug, p_subdomain, p_lockup_name, p_mark, p_theme, p_signup_mode,
+    p_domains, p_address, p_phone, p_requires_mentor
+  );
+$$;
+
+revoke all on function public.provision_org(
+  text, text, text, text, text, text, jsonb, text, text, boolean
+) from public, anon, authenticated;
+
+grant execute on function public.provision_org(
+  text, text, text, text, text, text, jsonb, text, text, boolean
+) to service_role;
 
 
 -- ===========================================================================
@@ -1219,54 +1286,18 @@ create policy notification_settings_update_own on public.notification_settings
 -- for a person who has never authenticated, because users.id is auth.users.id.
 -- ===========================================================================
 
--- Tenant one. Domain signup only. Students and staff on separate domains,
--- both granting affiliation without a club mentor.
-select app.provision_org(
-  p_slug        => 'montavista',
-  p_hostname    => 'montavista.localhost',
-  p_lockup_name => 'Monta Vista High School',
-  p_mark        => 'MVHS',
-  p_theme       => 'proceedings',
-  p_signup_mode => 'domain',
-  p_domains     => '[
-    {"domain": "student.fuhsd.org", "population": "student"},
-    {"domain": "fuhsd.org",         "population": "staff"}
-  ]'::jsonb,
-  p_address     => '21840 McClellan Road, Cupertino, CA 95014',
-  p_phone       => '408.366.7600'
-);
-
--- Tenant two. Exactly the same two domains, deliberately. This is the case
--- that proves a domain cannot identify a school, and it is the reason
--- org_domains stopped keying on the domain alone.
-select app.provision_org(
-  p_slug        => 'lynbrook',
-  p_hostname    => 'lynbrook.localhost',
-  p_lockup_name => 'Lynbrook High School',
-  p_mark        => 'LHS',
-  p_theme       => 'proceedings',
-  p_signup_mode => 'domain',
-  p_domains     => '[
-    {"domain": "student.fuhsd.org", "population": "student"},
-    {"domain": "fuhsd.org",         "population": "staff"}
-  ]'::jsonb
-);
-
--- Tenant three. Open signup: no domain, no district, no club mentor.
--- Anyone may create an account and track a project. Many high schoolers are
--- already adults, which is why the age gate carries three bands rather than
--- one checkbox.
-select app.provision_org(
-  p_slug             => 'blueleaflabs',
-  p_hostname         => 'open.localhost',
-  p_lockup_name      => 'Open Program',
-  p_mark             => 'OPEN',
-  p_theme            => 'entry',
-  p_signup_mode      => 'open',
-  p_domains          => '[]'::jsonb,
-  p_requires_mentor => false
-);
-
+-- Tenants are not listed here.
+--
+-- They were: three `provision_org` calls naming eight facts about each school,
+-- while `src/config/orgs.ts` named the same eight again, under a comment
+-- saying the two must not be allowed to drift. A rule stated in a comment is
+-- not a rule (19.9), and the hostnames in them were `.localhost`, so the same
+-- migration could not seed a laptop and production.
+--
+-- Each school is one file in `src/config/orgs/` now, read by the application
+-- and by `scripts/seed-orgs.mjs`, which provisions the rows through the
+-- wrapper below. That step runs in every environment including production,
+-- and is idempotent.
 
 -- ===========================================================================
 -- PROGRAMS, PROJECTS, ENTRIES, MILESTONES

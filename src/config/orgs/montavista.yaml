@@ -1,0 +1,53 @@
+# Tenant one. Domain signup only. Students and staff on separate domains,
+# both granting affiliation without a club mentor.
+#
+# **One file per school, and it is the only place the school is described.**
+# These eight facts used to exist twice — here in TypeScript and again as a
+# `provision_org` call in migration 0001 — with a comment above them saying
+# the two must not be allowed to drift. A rule stated in a comment is not a
+# rule (19.9). The application reads this file and `seed-orgs` provisions the
+# row from it, so adding a school is a file rather than an edit in two places
+# that have to agree.
+
+id: montavista
+
+# The label this school answers on: montavista.localhost:4321 while
+# developing, montavista.scipath.org in production. Only the label is stored,
+# because the domain belongs to the deployment and not to the school.
+# Omitted where it equals the id, which is the ordinary case.
+
+name: Monta Vista High School
+mark: MVHS
+theme: proceedings
+record_prefix: MVRJ
+timezone: America/Los_Angeles
+
+signup_mode: domain
+verified_domains: [student.fuhsd.org, fuhsd.org]
+
+# Both domains grant affiliation on their own, which is what `population`
+# distinguishes: a student address and a staff address are not the same claim.
+domains:
+  - { domain: student.fuhsd.org, population: student }
+  - { domain: fuhsd.org, population: staff }
+
+address: 21840 McClellan Road, Cupertino, CA 95014
+phone: 408.366.7600
+
+contact_email: hello@blueleaflabs.org
+editorial_review: true
+showcase_note: >-
+  Work by students at this school, published as a permanent, citable record.
+
+programs:
+  # The regional fair, which this school enters rather than runs. Its `org_id`
+  # is null and one row serves every school; listing it here says Monta Vista
+  # takes part, and is what layers the club's own dates onto it.
+  - scvsefa-2027
+  # The state fair the regional advances to. Shared like the regional, and
+  # listed because Monta Vista has students who advance.
+  - csef-2027
+  - mvhs-scvsefa-2027
+  - irpd-mvhs-2027
+  - grant-mvhs-micro-2027
+  - mvrj-2027

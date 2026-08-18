@@ -27,7 +27,10 @@ import { resolveProgram, datesFor } from '../src/lib/template-resolve.ts';
 import { projectStatus } from '../src/lib/status.ts';
 import { renderDigest, cadenceNeeded } from '../src/lib/notify/digest.ts';
 import { transportFor } from '../src/lib/notify/transport.ts';
-import { orgs } from '../src/config/orgs.ts';
+import { loadOrgs } from './orgs-library.mjs';
+import { originFor } from '../src/lib/deployment.ts';
+
+const orgs = loadOrgs();
 
 loadDevVars();
 
@@ -84,19 +87,14 @@ const db = createClient(URL_, KEY, { auth: { persistSession: false } });
 const library = loadLibrary();
 
 /**
- * Where a link should point.
+ * Where a link should point: the tenant's label, on this deployment's domain.
  *
- * Built from the organization record rather than a constant, for the same
- * reason no page contains a school's name. Local development has no scheme
- * on the hostname, so one is added: a link in a message has to be absolute
- * or it is not a link.
+ * `originFor` comes from `src/lib/deployment.ts` and is shared, because the
+ * seed prints the same addresses and two copies of "how do I write an
+ * absolute URL here" is how one of them comes to say `.localhost` in a
+ * production email.
  */
-function originFor(slug) {
-  const org = orgs[slug];
-  const host = org?.hostname ?? `${slug}.localhost`;
-  const local = host.endsWith('.localhost') || host.startsWith('localhost');
-  return local ? `http://${host}:4321` : `https://${host}`;
-}
+const originForSlug = (slug) => originFor(orgs[slug]?.subdomain ?? slug);
 
 /* Everything the status computation needs, in four queries rather than four
    per project: a season is a few hundred rows, and a query per entry is how
@@ -306,7 +304,7 @@ let quiet = 0;
 const why = [];
 
 for (const person of people.values()) {
-  const origin = originFor(person.slug ?? 'montavista');
+  const origin = originForSlug(person.slug ?? 'montavista');
 
   const input = {
     mine: person.mine,

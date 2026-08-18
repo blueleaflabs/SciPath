@@ -108,14 +108,14 @@ export const onRequest = defineMiddleware(async (context, next) => {
 
   if (!needsSession) {
     /* Every public route is prerendered once per tenant under /[org]/, so a
-       request for lynbrook.scipath.org/articles/ is served the file built at
-       /lynbrook/articles/. The slug never appears in a URL anyone sees.
+       request for svslc.scipath.org/articles/ is served the file built at
+       /svslc/articles/. The slug never appears in a URL anyone sees.
 
        Assets, the shared 404, and the search index are not tenant scoped and
        pass through untouched. */
     /* Middleware runs during prerendering as well as at request time, and a
        prerendered path already carries its tenant segment. Rewriting one
-       again produces /scipath/lynbrook/about/, which matches no route and
+       again produces /scipath/svslc/about/, which matches no route and
        writes the 404 page into every tenant's files. Any path that already
        begins with a tenant slug passes through untouched. */
     const first = url.pathname.split('/')[1];

@@ -101,7 +101,19 @@ const dateLabel =
 ---
 
 <Base title={programTitle(program)} noindex={true}>
-  <AppShell org={org} account={account} roles={roles} here="/app/">
+  <div class="wrap">
+    {/* Self-closing, and the content is a sibling rather than a child.
+    
+        `AppShell` renders a nav bar and has no `<slot />`, so this page —
+        the only one of the eleven that wrapped its content in it — had
+        every one of those children silently discarded. The nav rendered,
+        the page did not, and nothing errored: an unrendered slot is not a
+        mistake Astro reports. `tests/ordering.mjs` refuses it now.
+    
+        The `.wrap` came with it. Without the container every sibling page
+        has, the content had no measure and no centering. */}
+    <AppShell org={org} account={account} roles={roles} here="/app/" />
+
     <p class="crumb"><a href="/app/#join">Back to the overview</a></p>
 
     <p class="season">{programKind(program)} · {program.season_year} season</p>
@@ -187,7 +199,7 @@ const dateLabel =
         <p><a class="btn" href="/app/#join">See how to take part</a></p>
       )}
     </section>
-  </AppShell>
+  </div>
 </Base>
 
 <style>

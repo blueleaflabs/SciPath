@@ -7,8 +7,23 @@ import cloudflare from '@astrojs/cloudflare';
 // opts out with `export const prerender = false`, which keeps the archive
 // static by default rather than by discipline. The adapter arrived with the
 // first route under app/, exactly as 12.12 deviation 1 said it would.
+/* localhost is not reachable over TLS, and a canonical tag saying https to a
+   laptop is a broken link. Everything else is. */
+function siteUrl() {
+  const root = process.env.PUBLIC_ROOT_DOMAIN ?? 'localhost:4321';
+  const local = root.startsWith('localhost') || root.endsWith('.localhost');
+  return `${local ? 'http' : 'https'}://${root}`;
+}
+
 export default defineConfig({
-  site: 'https://scipath.pages.dev',
+  /* Where this deployment lives, for canonical tags and the sitemap.
+   *
+   * Derived from PUBLIC_ROOT_DOMAIN, which is the single thing that differs
+   * between where this runs. It was briefly three values in three committed
+   * YAML files; two of them were derivable from the third, and a committed
+   * file describing a deployment is configuration in source control. One
+   * variable, set on the deployment. */
+  site: siteUrl(),
   output: 'static',
   adapter: cloudflare({
     imageService: 'compile',

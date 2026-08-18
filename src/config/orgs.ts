@@ -11,209 +11,62 @@
  * self-hosted instance running without a database.
  */
 
-import type { ThemeId } from './fonts';
+import yaml from 'js-yaml';
 
-export interface Org {
-  /** Stable identifier. Becomes the organizations.slug. Never reused. */
-  id: string;
-  /**
-   * The hostname that resolves this tenant. Tenancy is never resolved from
-   * an email domain: two schools in one district share the same domains.
-   */
-  hostname?: string;
-  /**
-   * domain : only an address on a listed domain may sign up
-   * open   : anyone may sign up. No domain, no district, no club mentor
-   * invite : signup requires a pending grant
-   */
-  signupMode?: 'domain' | 'open' | 'invite';
-  /** False for an open program with no school behind it. */
-  requiresMentor?: boolean;
-  /** Full name, rendered in the lockup. */
-  name: string;
-  /** Two to four characters for the lockup badge. */
-  mark: string;
-  /** Which shipped theme this organization renders in. */
-  theme: ThemeId;
-  /**
-   * True only for the instance the platform runs for itself. Suppresses the
-   * "on SciPath" line, because naming the platform under the platform reads
-   * as a mistake.
-   */
-  isPlatform?: boolean;
-  /** Prefix for permanent record identifiers, e.g. SP-2026-0001. */
-  recordPrefix: string;
-  /**
-   * Where the school is, as an IANA zone.
-   *
-   * Cron runs in UTC and nothing else in the system has needed a zone,
-   * because a due date is a date rather than a moment. A digest meant to
-   * arrive before school is the first thing that does: without this, seven
-   * in the morning is eleven the previous night somewhere (20.10).
-   */
-  timezone: string;
+import { shapeOrg, type Org } from './org-shape';
 
-  /**
-   * The programs this organization runs, by template id.
-   *
-   * Here rather than in the seed script, which held its own copy: the public
-   * calendar is prerendered and cannot ask a database, and two lists of the
-   * same fact drift the moment somebody adds a program to one of them.
-   */
-  programs: string[];
-  /** Where a reader writes to. Never an individual student address. */
-  contactEmail: string;
-  /** Domains whose sign-in confirms affiliation without a club mentor. */
-  verifiedDomains: string[];
-  /** Whether publication passes through editorial review before going live. */
-  editorialReview: boolean;
-  /** One sentence describing what this organization publishes. */
-  showcaseNote: string;
+/* Re-exported because every component imports the type from here. */
+export type { Org };
+
+/**
+ * The records, from `orgs/*.yaml`.
+ *
+ * **One file per organization, and it is the only description of it.** These
+ * facts used to exist twice — as literals here and again as a `provision_org`
+ * call in migration 0001 — under a comment saying the two must not be allowed
+ * to drift. A rule stated in a comment is not a rule (19.9), and eight facts
+ * about a school in two hand-maintained places is a drift waiting for the
+ * week somebody is in a hurry.
+ *
+ * `scripts/seed-orgs.mjs` provisions the rows from these same files, so
+ * adding a school is a file rather than an edit in two places that have to
+ * agree.
+ *
+ * Bundled with `import.meta.glob` like the template registry, so this
+ * resolves inside a Worker with no filesystem: tenancy is decided per request
+ * and cannot wait for a file read.
+ */
+const files = import.meta.glob('/src/config/orgs/*.yaml', {
+  query: '?raw',
+  import: 'default',
+  eager: true,
+}) as Record<string, string>;
+
+export const orgs: Record<string, Org> = {};
+
+for (const [path, text] of Object.entries(files)) {
+  const doc = yaml.load(text) as any;
+  if (!doc?.id) throw new Error(`${path} has no id`);
+  orgs[doc.id] = shapeOrg(doc);
 }
-
-export const orgs: Record<string, Org> = {
-  scipath: {
-    id: 'scipath',
-    name: 'SciPath',
-    mark: 'SP',
-    theme: 'entry',
-    isPlatform: true,
-    recordPrefix: 'SP',
-    timezone: 'America/Los_Angeles',
-    programs: [],
-    contactEmail: 'hello@example.org',
-    verifiedDomains: [],
-    editorialReview: true,
-    showcaseNote:
-      'Published records from organizations running this software. Reading anything here never requires an account.',
-  },
-
-  /**
-   * Tenant one. The lockup names the school and not the journal: the
-   * research journal is one artifact the school produces, and naming the
-   * tenant after it would make the showcase larger than the institution
-   * that owns it.
-   *
-   * These four facts also exist as a row in the organizations table, seeded
-   * by migration 0001. The config record is what the static build reads,
-   * since a prerendered route may not touch the database; the table is what
-   * row level security reads. They must not be allowed to drift.
-   */
-  montavista: {
-    id: 'montavista',
-    hostname: 'montavista.localhost',
-    signupMode: 'domain',
-    name: 'Monta Vista High School',
-    mark: 'MVHS',
-    theme: 'proceedings',
-    recordPrefix: 'MVRJ',
-    timezone: 'America/Los_Angeles',
-    programs: [
-      /* The regional fair, which this school enters rather than runs. Its
-         `org_id` is null and one row serves every school; listing it here
-         says Monta Vista takes part, and is what layers the club's own
-         dates onto it. */
-      'scvsefa-2027',
-      /* The state fair the regional advances to. Shared like the regional,
-         and listed here because Monta Vista has students who advance. */
-      'csef-2027',
-      'mvhs-scvsefa-2027',
-      'irpd-mvhs-2027',
-      'grant-mvhs-micro-2027',
-      'mvrj-2027',
-    ],
-    contactEmail: 'hello@example.org',
-    verifiedDomains: ['student.fuhsd.org', 'fuhsd.org'],
-    editorialReview: true,
-    showcaseNote:
-      'Work by students at this school, published as a permanent, citable record.',
-  },
-
-  /**
-   * Tenant two, and the reason tenancy moved to the hostname. Lynbrook holds
-   * exactly the same two district domains as Monta Vista. A sign-in on
-   * student.fuhsd.org is a student at one of five schools and the address
-   * cannot say which, so the URL does.
-   */
-  lynbrook: {
-    id: 'lynbrook',
-    hostname: 'lynbrook.localhost',
-    signupMode: 'domain',
-    name: 'Lynbrook High School',
-    mark: 'LHS',
-    theme: 'proceedings',
-    recordPrefix: 'LHSR',
-    timezone: 'America/Los_Angeles',
-    programs: ['scvsefa-2027'],
-    contactEmail: 'hello@example.org',
-    verifiedDomains: ['student.fuhsd.org', 'fuhsd.org'],
-    editorialReview: true,
-    showcaseNote:
-      'Work by students at this school, published as a permanent, citable record.',
-  },
-
-  /**
-   * Tenant three. Open signup, no district, no club mentor. Anyone may
-   * create an account and track a project.
-   */
-  blueleaflabs: {
-    id: 'blueleaflabs',
-    hostname: 'open.localhost',
-    signupMode: 'open',
-    requiresMentor: false,
-    name: 'Open Program',
-    mark: 'OPEN',
-    theme: 'entry',
-    recordPrefix: 'OPN',
-    timezone: 'America/Los_Angeles',
-    /* Nothing yet, and that is the honest state.
-    
-       This tenant ran `independent-research`, a program with no teacher and
-       no members that existed so a solo student had something to join. The
-       process now attaches to the project, so they get the same eleven steps
-       by starting a project (22.10).
-    
-       What belongs here is a staffed cohort with Blue Leaf Labs mentors, for
-       the student 2.5 is about. Until somebody staffs it, an empty list says
-       so rather than a placeholder implying otherwise. */
-    programs: [],
-    contactEmail: 'hello@example.org',
-    verifiedDomains: [],
-    editorialReview: false,
-    showcaseNote:
-      'Projects tracked by students working independently, with no school program behind them.',
-  },
-
-  /**
-   * A second record, so the alternate theme can be reviewed and contrast
-   * checked in CI. Replace or delete when a real organization is
-   * provisioned. Holds no student data of any kind.
-   */
-  example: {
-    id: 'example',
-    name: 'Example Research Program',
-    mark: 'EX',
-    theme: 'proceedings',
-    recordPrefix: 'EXP',
-    timezone: 'America/Los_Angeles',
-    contactEmail: 'research@example.org',
-    verifiedDomains: ['students.example.org', 'example.org'],
-    editorialReview: true,
-    showcaseNote:
-      'Work by students at this organization, published as a permanent, citable record.',
-  },
-};
 
 /**
  * The active organization. Selected by environment variable so a preview
  * deployment can render another tenant without a code change, and never by
  * a hardcoded constant inside a component.
  *
- * Read two ways because two runtimes read this file. Vite replaces
+ * Read two ways because this used to be read by two runtimes. Vite replaces
  * `import.meta.env` at build; plain Node leaves it undefined, and a script
  * importing this file died on the property access before it reached the
- * fallback. That is why the seed scripts held their own copies of the
- * prefix and the program list, and why one of those copies was wrong.
+ * fallback. That is why the seed scripts held their own copies of the prefix
+ * and the program list, and why one of those copies was wrong.
+ *
+ * **No script imports this file any more, and none should.** The glob above
+ * is a Vite transform that plain Node cannot run at all, which is the same
+ * fault a size larger: `scripts/orgs-library.mjs` reads the same directory
+ * off the disk and hands it to the same `shapeOrg`. The dual read here stays
+ * because a preview deployment still sets `PUBLIC_ORG` in an environment
+ * neither half covers alone.
  */
 const fromVite = typeof import.meta.env !== 'undefined' ? import.meta.env.PUBLIC_ORG : undefined;
 const fromNode = typeof process !== 'undefined' ? process.env?.PUBLIC_ORG : undefined;

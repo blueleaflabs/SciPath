@@ -84,7 +84,7 @@ const CASES = [
   {
     n: 2,
     who: 'student.j',
-    with: { school: 'lynbrook', handle: 'student.a' },
+    with: { school: 'svslc', handle: 'student.a' },
     what: 'Water reuse in a school greenhouse',
     cohorts: ['irpd'],
     entries: [{ program: 'fair', result: 'competed' }],
@@ -182,7 +182,7 @@ async function seedSchool(slug) {
      assuming an order. */
   const byName = new Map((people ?? []).map((u) => [u.display_name, u.id]));
 
-  const prefix = { montavista: 'mv', lynbrook: 'lyn', blueleaflabs: 'open' }[slug];
+  const prefix = { montavista: 'mv', svslc: 'svs', scipath: 'sp' }[slug];
   const handleTo = (handle) => {
     const [kind, letter] = handle.split('.');
     const n = letter ? letter.charCodeAt(0) - 96 : 1;
@@ -216,7 +216,7 @@ async function seedSchool(slug) {
 
 async function main() {
   const mv = await seedSchool('montavista');
-  const lyn = await seedSchool('lynbrook');
+  const svs = await seedSchool('svslc');
 
   let projects = 0;
   let memberships = 0;
@@ -281,7 +281,7 @@ async function main() {
     /* A co-author from another school, who is in no cohort here and whose
        school this project does not belong to. */
     if (c.with) {
-      const partner = (c.with.school === 'lynbrook' ? lyn : mv).handleTo(c.with.handle);
+      const partner = (c.with.school === 'svslc' ? svs : mv).handleTo(c.with.handle);
 
       if (partner) {
         await must(
@@ -392,7 +392,7 @@ async function main() {
                 calendar comes from the work, and IRPD teaches its own.
 
  CASE 2 · a partner from another school
-   sign in as   mv_student10, then lyn_student10 at lynbrook.localhost:4321
+   sign in as   mv_student10, then svs_student10 at svslc.localhost:4321
    what it is   Two authors, one at each school. The project is Monta
                 Vista's and belongs to IRPD; the partner is in no cohort
                 here at all.

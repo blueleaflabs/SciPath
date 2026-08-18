@@ -164,7 +164,7 @@ site_url = "http://localhost:4321"
 # back. A redirect_to that is not on this list is silently discarded and
 # the user lands on site_url with an unexchanged ?code= in the address
 # bar, which looks like nothing happened at all.
-additional_redirect_urls = ["http://localhost:4321", "http://localhost:4321/**", "http://127.0.0.1:4321/**", "http://montavista.localhost:4321/**", "http://lynbrook.localhost:4321/**", "http://open.localhost:4321/**"]
+additional_redirect_urls = ["http://localhost:4321", "http://localhost:4321/**", "http://127.0.0.1:4321/**", "http://montavista.localhost:4321/**", "http://svslc.localhost:4321/**"]
 # How long tokens are valid for, in seconds. Defaults to 3600 (1 hour), maximum 604,800 (1 week).
 jwt_expiry = 3600
 # JWT issuer URL. If not set, defaults to auth.external_url.

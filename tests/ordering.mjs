@@ -1236,4 +1236,63 @@ test('the project page shows when a project belongs nowhere', () => {
   assert.match(page, /'nowhere yet'/);
 });
 
+test('no page hands children to a component that cannot render them', () => {
+  /**
+   * A component with no `<slot />` discards everything written inside it.
+   *
+   * `AppShell` is a nav bar and has no slot. Ten pages used it self-closing
+   * and one wrapped its whole body in it, so that page rendered the nav and
+   * nothing else — no error, no warning, no blank-page exception. **Astro
+   * does not report an unrendered slot**, because passing children to a
+   * component that ignores them is legal, and the failure is therefore
+   * visible only to somebody who opens the page.
+   *
+   * Checked by pairing an opening tag with its closing tag rather than by
+   * looking for children, because that is the thing that would break: a
+   * `</Component>` anywhere means somebody wrote a body.
+   *
+   * Reports how many components it resolved, so a rename that stops the
+   * import matching shows as a drop rather than as a pass (19.9).
+   */
+  const components = fs
+    .readdirSync('src/components')
+    .filter((f) => f.endsWith('.astro'))
+    .map((f) => f.replace(/\.astro$/, ''));
+
+  const slotless = new Set(
+    components.filter(
+      (name) => !/<slot\b/.test(fs.readFileSync(`src/components/${name}.astro`, 'utf8'))
+    )
+  );
+
+  assert.ok(components.length > 0, 'read no components — widen the pattern');
+
+  const problems = [];
+  let resolved = 0;
+
+  for (const file of [...pages, ...components.map((c) => `src/components/${c}.astro`)]) {
+    const text = fs.readFileSync(file, 'utf8');
+
+    for (const name of components) {
+      /* Imported here, so a word that merely appears in prose is not a use. */
+      if (!new RegExp(`import\\s+${name}\\s+from`).test(text)) continue;
+      resolved += 1;
+
+      if (slotless.has(name) && new RegExp(`</${name}>`).test(text)) {
+        problems.push(
+          `${file} wraps content in <${name}>, which has no <slot /> and drops it`
+        );
+      }
+    }
+  }
+
+  assert.ok(resolved > 0, 'matched no component imports — widen the pattern');
+
+  assert.deepEqual(
+    [...new Set(problems)],
+    [],
+    'give the component a <slot />, or close the tag and make the content a sibling'
+  );
+});
+
 console.log(`${passed} ordering assertions passed. ${pages.length} pages read.`);

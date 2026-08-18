@@ -189,7 +189,7 @@
    block and wins on specificity.
    --------------------------------------------------------------------------- */
 
-[data-school='lynbrook'] {
+[data-school='svslc'] {
   --brand: #14504a;
   --brand-deep: #0b322e;
   --brand-mark: #c08a2b;
@@ -197,7 +197,7 @@
   --focus: var(--brand-mark);
 }
 
-[data-school='blueleaflabs'] {
+[data-school='scipath'] {
   --brand: #1f4f7a;
   --brand-deep: #14324d;
   --brand-mark: #3f7fae;

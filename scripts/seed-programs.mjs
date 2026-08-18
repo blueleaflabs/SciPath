@@ -21,8 +21,10 @@
 import { createClient } from '@supabase/supabase-js';
 import { loadDevVars } from './dev-vars.mjs';
 import { loadLibrary } from './template-library.mjs';
-import { orgs as ORG_RECORDS } from '../src/config/orgs.ts';
+import { loadOrgs } from './orgs-library.mjs';
 import { resolveProgram, datesFor } from '../src/lib/template-resolve.ts';
+
+const ORG_RECORDS = loadOrgs();
 
 loadDevVars();
 
@@ -118,7 +120,7 @@ const isShared = (file) => (file?.level ?? 'school') !== 'school';
  *
  * `orgs.ts` lists programs per school, in the order a school thinks about
  * them, and nothing there knows that Monta Vista's club depends on a fair
- * Lynbrook happens to list. Sorting here rather than reordering `orgs.ts`
+ * the council happens to list. Sorting here rather than reordering `orgs.ts`
  * keeps that ordering a fact about seeding instead of a trap in the config.
  */
 function orderedSeasons(library) {
@@ -236,15 +238,25 @@ async function main() {
   if (existing?.length) {
     const ids = existing.map((p) => p.id);
 
-    /* Anything already taking part stops this. `entries` references
+    /* Anything already taking part stops this. `participations` references
        `programs` with ON DELETE RESTRICT, deliberately: a program with
        projects in it is not something to quietly replace, because the
        participations and their copied deadlines hang off it.
        
        So say what is in the way rather than deleting what can be deleted and
-       colliding on the insert. */
+       colliding on the insert.
+       
+       **This counted `opportunity_participations`**, which is the view that
+       excludes classes — so a project attached to a class or a club passed
+       the guard unseen, and the delete below then hit the restrict and
+       failed with a foreign key message naming a constraint instead of the
+       sentence written here to explain it. Same blind spot as the notebook
+       export had (22.25) and as 22.19's silent skip: after the merge, every
+       reader of the narrower thing has to be found rather than the ones
+       somebody noticed. The table, because the question is "is anything
+       attached", and both kinds are. */
     const { count: participations } = await db
-      .from('opportunity_participations')
+      .from('participations')
       .select('id', { count: 'exact', head: true })
       .in('program_id', ids);
 
@@ -321,7 +333,7 @@ async function main() {
    * Staff, scoped to one program and one school.
    *
    * Extracted because a shared program is seeded once and staffed many
-   * times: Lynbrook's fair officers are Lynbrook's, on the same row Monta
+   * times: the council's fair officers are its own, on the same row Monta
    * Vista's sit on, and `user_roles.org_id` is what keeps the two apart.
    * While this lived inline after the insert, the second school reached it
    * only through the branch that creates a program -- so the school that did
@@ -374,7 +386,36 @@ async function main() {
       continue;
     }
 
-    const resolved = resolveProgram(season.template, library);
+    /**
+     * Resolved against a floor, so `phases` is never empty.
+     *
+     * Resolved with no process at all, a template that declares no phases of
+     * its own gets none — and no fair declares any, because they tag their
+     * steps with `process-science` ids and borrow that vocabulary (23.3). The
+     * column was written as `[]` for every fair, and sixteen deadlines
+     * rendered under one unnamed heading.
+     *
+     * The floor is the default rather than a guess: a project that names no
+     * process gets `process-science` from `start_project`, so this row now
+     * agrees with what the ordinary project actually resolves.
+     *
+     * **It is still a snapshot and still cannot be right for everybody.** The
+     * process belongs to the project (22.4), so an engineering project reads
+     * different phases off the same fair — which is why the participation
+     * page resolves per project and reads this column only for the window a
+     * teacher published. This makes the fallback sensible instead of empty;
+     * it does not make it authoritative.
+     *
+     * `resolved.processId` is passed where the template names one, which
+     * keeps IRPD on its own steps: the resolver turns a process naming its
+     * own template into `own` rather than looking for `process-irpd`.
+     */
+    const declared = resolveProgram(season.template, library);
+    const resolved = resolveProgram(
+      season.template,
+      library,
+      declared.processId ?? 'science'
+    );
     const dates = datesFor(resolved);
     const file = library.programs.get(season.template);
     const shared = isShared(file);

@@ -4,7 +4,7 @@
  * Every other surface here is scoped by organization. Search was not: one
  * index was built over the whole of dist/, and `/pagefind/` was exempt from
  * the tenant rewrite, so all three schools loaded the same file and Monta
- * Vista's search box returned Lynbrook's articles. Search is the one place a
+ * Vista's search box returned another school's articles. Search is the one place a
  * visitor can enumerate an archive, which makes it the worst place to leak.
  *
  * This checks the two halves that have to stay true: the path is rewritten

@@ -3,12 +3,21 @@
  *
  * Every public route lives under src/pages/[org]/ and is prerendered once per
  * organization, so the build emits real HTML for /montavista/articles/ and
- * /lynbrook/articles/ alike. The middleware rewrites the hostname onto the
+ * /svslc/articles/ alike. The middleware rewrites the hostname onto the
  * front, so the slug never appears in a URL anyone sees.
  *
- * This is what keeps one deployment and static output from being a choice.
- * Rendering the archive per request would also serve many tenants, and it
- * would put a worker in front of a permanent record forever.
+ * **What this costs, stated plainly.** Adding a tenant needs a build, because
+ * these paths are enumerated from the config at build time. That is a
+ * deliberate trade for now and is written up in the brief (23.5): tenants in
+ * the database, read per request, is the intended direction and it has
+ * consequences worth testing before taking.
+ *
+ * The comment here used to argue that rendering per request "would put a
+ * worker in front of a permanent record forever". That is no longer true and
+ * was becoming misleading: `/records/`, `/showcase/`, `/articles/` and the
+ * home page are all on-demand already. What is prerendered per tenant is the
+ * chrome — about, contact, guides, policies, submit — none of which is a
+ * permanent record.
  */
 
 import { orgs } from '../config/orgs';

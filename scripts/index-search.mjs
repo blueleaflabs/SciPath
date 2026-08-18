@@ -3,7 +3,7 @@
  *
  * `pagefind --site dist` builds a single index over everything Astro emitted,
  * which is every school's archive in one directory. Monta Vista's search box
- * then returned Lynbrook's articles, and `/pagefind/` was exempt from the
+ * then returned another tenant's articles, and `/pagefind/` was exempt from the
  * tenant rewrite so all three schools loaded the same file. Every other part
  * of this system is scoped by organization; search was not, and search is the
  * one place a visitor can enumerate an archive.

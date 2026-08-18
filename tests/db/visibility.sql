@@ -17,9 +17,9 @@
 -- One school running two editions of a fair and a course, plus a second
 -- school that should see none of it.
 
-insert into public.organizations (id, slug, hostname, lockup_name, mark, theme, status) values
- ('11111111-1111-1111-1111-111111111111','mv','mv.test','Monta Vista','MV','entry','active'),
- ('22222222-2222-2222-2222-222222222222','lb','lb.test','Lynbrook','LB','entry','active');
+insert into public.organizations (id, slug, subdomain, lockup_name, mark, theme, status) values
+ ('11111111-1111-1111-1111-111111111111','mv','mv','Monta Vista','MV','entry','active'),
+ ('22222222-2222-2222-2222-222222222222','other','other','Other School','OS','entry','active');
 
 insert into auth.users (id) values
  ('a0000000-0000-0000-0000-000000000001'),
@@ -39,7 +39,7 @@ insert into public.users (id, org_id, display_name) values
  ('a0000000-0000-0000-0000-000000000004','11111111-1111-1111-1111-111111111111','Advisor'),
  ('a0000000-0000-0000-0000-000000000005','11111111-1111-1111-1111-111111111111','Graduated officer'),
  ('a0000000-0000-0000-0000-000000000006','11111111-1111-1111-1111-111111111111','Another student'),
- ('a0000000-0000-0000-0000-000000000007','22222222-2222-2222-2222-222222222222','Lynbrook student'),
+ ('a0000000-0000-0000-0000-000000000007','22222222-2222-2222-2222-222222222222','Other school student'),
  ('a0000000-0000-0000-0000-000000000008','11111111-1111-1111-1111-111111111111','Author two'),
  ('a0000000-0000-0000-0000-000000000009','11111111-1111-1111-1111-111111111111','Author three');
 
@@ -141,7 +141,7 @@ select pg_temp.expect('a graduated officer sees nothing',
   'Graduated officer', 'Last year''s fair project', false);
 
 select pg_temp.expect('another school sees nothing at all',
-  'Lynbrook student', 'Last year''s fair project', false);
+  'Other school student', 'Last year''s fair project', false);
 
 -- 6.6: the privacy switch keeps a project out of the browsable history, and
 -- cannot hide a running project from the people responsible for it.
@@ -185,7 +185,7 @@ select pg_temp.expect('an officer does not, because it is in no program',
   'Fair officer', 'In no program at all', false);
 
 select pg_temp.expect('and another school never does',
-  'Lynbrook student', 'In no program at all', false);
+  'Other school student', 'In no program at all', false);
 
 \echo ''
 \echo '  All visibility assertions passed.'

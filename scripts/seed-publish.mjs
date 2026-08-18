@@ -23,9 +23,11 @@ import yaml from 'js-yaml';
 import { createClient } from '@supabase/supabase-js';
 import { loadDevVars } from './dev-vars.mjs';
 import { actingAs, signOutAll } from './act-as.mjs';
-import { orgs } from '../src/config/orgs.ts';
+import { loadOrgs } from './orgs-library.mjs';
 import { assembleRecord } from '../src/lib/record-files.ts';
 import { readManifest, writeManifest, upsert } from '../src/lib/records-store.ts';
+
+const orgs = loadOrgs();
 
 loadDevVars();
 
@@ -106,7 +108,7 @@ async function main() {
   const prefix = orgs[org.slug]?.recordPrefix;
 
   if (!prefix) {
-    throw new Error(`No record prefix for "${org.slug}". Add it in src/config/orgs.ts.`);
+    throw new Error(`No record prefix for "${org.slug}". Add it in src/config/orgs/.`);
   }
 
   /* ── A paper, through review ─────────────────────────────────────────── */

@@ -459,7 +459,7 @@ test('the cases still cover what the model was walked against', () => {
      Asserted by the property each case exists to exercise, not by counting:
      a count goes stale the moment somebody adds a fifteenth. */
   const required = [
-    ['a co-author at another school', /with: \{ school: 'lynbrook'/],
+    ['a co-author at another school', /with: \{ school: 'svslc'/],
     ['a club member with no entry', /entries: \[\],/],
     ['advancement as a second entry', /second: true/],
     ['one project in two cohorts', /cohorts: \['irpd', 'club'\]/],

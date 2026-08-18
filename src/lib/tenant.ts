@@ -17,15 +17,32 @@ import { orgs, type Org } from '../config/orgs';
 /** Slug for a hostname, or null when nothing matches. */
 export function slugForHostname(hostname: string): string | null {
   const host = hostname.toLowerCase().split(':')[0];
-
-  for (const [slug, record] of Object.entries(orgs)) {
-    if (record.hostname && record.hostname.toLowerCase() === host) return slug;
-  }
-
-  /* First label of the hostname, so montavista.scipath.org and
-     montavista.localhost both resolve without a second table. */
   const label = host.split('.')[0];
-  if (label && orgs[label]) return label;
+
+  if (!label) return null;
+
+  /* **The subdomain, not the hostname.**
+   *
+   * Each tenant used to name a whole hostname, and every one of them named a
+   * `.localhost` — so the same build could not serve development and
+   * production, and going live meant editing the config, which is the kind of
+   * edit that gets made on the wrong branch at midnight.
+   *
+   * What is actually stable about a tenant is its label: `montavista` is
+   * `montavista.localhost:4321` while developing, `montavista.scipath.org` in
+   * production, and `montavista.<anything>` on a preview deployment. Matching
+   * the label makes all three the same rule, and the deployment stops being a
+   * thing the source has an opinion about.
+   *
+   * `subdomain` exists for a tenant whose label differs from its id. None does
+   * today — the Open Program used to be `blueleaflabs` at `open.` and is now
+   * the base tenant on the bare domain — and the field stays because the next
+   * organization to want a label that is not its id should not need a code
+   * change to get one.
+   */
+  for (const [slug, record] of Object.entries(orgs)) {
+    if ((record.subdomain ?? slug).toLowerCase() === label) return slug;
+  }
 
   return null;
 }

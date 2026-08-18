@@ -190,10 +190,22 @@
   letter-spacing: -0.03em;
 }
 
-/* Four characters need to step down a size to keep the block square-ish. */
+/* Longer marks step down so the block stays a block rather than becoming a
+   bar. The schema allows two to six; `tests/orgs.mjs` reads that range off
+   the migration and fails if a length here has no rule. */
 .lockup .badge[data-len='4'] {
   font-size: 0.82rem;
   letter-spacing: -0.04em;
+}
+
+.lockup .badge[data-len='5'] {
+  font-size: 0.72rem;
+  letter-spacing: -0.05em;
+}
+
+.lockup .badge[data-len='6'] {
+  font-size: 0.64rem;
+  letter-spacing: -0.05em;
 }
 
 .lockup .names {

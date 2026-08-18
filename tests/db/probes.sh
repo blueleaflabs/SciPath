@@ -84,8 +84,8 @@ refuse() {
 # A fixture to hang the probes on.
 apply /dev/stdin <<'SEED'
 insert into public.organizations
-  (id, slug, hostname, lockup_name, mark, theme, status)
-values ('00000000-0000-0000-0000-0000000000aa', 'probe', 'probe.test',
+  (id, slug, subdomain, lockup_name, mark, theme, status)
+values ('00000000-0000-0000-0000-0000000000aa', 'probe', 'probe',
         'Probe School', 'PR', 'entry', 'active');
 
 insert into auth.users (id) values ('00000000-0000-0000-0000-0000000000e1');
@@ -241,8 +241,8 @@ accept "one author with a second project in the same cohort" \
 # second school that runs no club at all.
 apply /dev/stdin <<'GATES'
 insert into public.organizations
-  (id, slug, hostname, lockup_name, mark, theme, status)
-values ('00000000-0000-0000-0000-0000000000ab', 'open', 'open.test',
+  (id, slug, subdomain, lockup_name, mark, theme, status)
+values ('00000000-0000-0000-0000-0000000000ab', 'open', 'probe-open',
         'Open Program', 'OP', 'entry', 'active');
 
 insert into auth.users (id) values ('00000000-0000-0000-0000-0000000000e2');

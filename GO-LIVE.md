@@ -1,0 +1,326 @@
+# Going live on scipath.org
+
+Follow in order. Each step says what it needs from the one before, so a step
+that fails is a step you can stop on rather than one you have to unwind.
+
+Times are wall clock, mostly waiting on DNS and certificates.
+
+**Before anything.** Four suites green locally, and a full `npm run reset` that
+completes. If `reset` does not finish on your laptop it will not finish
+anywhere.
+
+```bash
+npm test && npm run build && npm run test:db && npm run test:probes
+npm run reset
+```
+
+---
+
+## 0. What is actually being deployed
+
+One build serves every tenant. A tenant stores only its label — `montavista` —
+and `PUBLIC_ROOT_DOMAIN` supplies the other half of the address. Nothing in the
+source names a hostname.
+
+| Label | Address in production | Signup |
+|---|---|---|
+| `montavista` | `montavista.scipath.org` | by school domain |
+| `svslc` | `svslc.scipath.org` | by invitation |
+| `scipath` | `scipath.org`, `www`, and any name matching no tenant | open |
+
+`example` is a fourth record in `src/config/orgs/` marked `provisioned: false`.
+It gets prerendered pages so the alternate theme is contrast-checked in CI, and
+it has no database row. `example.scipath.org` will therefore serve pages and
+fail at sign-in. Harmless, and worth knowing before somebody finds it.
+
+---
+
+## 1. Merge to `main`
+
+CI runs on `main` and on pull requests, and it is green today — including
+`test:output`, which was red from 1.39 until this session. So open the pull
+request and let it run rather than pushing straight.
+
+```bash
+git checkout feat/workbench-0001
+git status                    # nothing uncommitted, and .dev.vars must not appear
+git push origin feat/workbench-0001
+```
+
+Then on GitHub: open a pull request into `main`, wait for **CI** to pass, merge.
+
+**Check `.dev.vars` is not in the diff.** It is gitignored, and the one time
+that matters is the day somebody runs `git add -f`. `npm test` includes
+`test:config`, which scans all 220 committed files for secret literals, so a
+key committed by accident fails CI rather than reaching the repository — but
+look anyway.
+
+CI does not deploy. Cloudflare does that, in step 5.
+
+---
+
+## 2. Supabase
+
+**2.1 Create the project.** A new project in the Blue Leaf Labs org. Region
+`us-west-1`. Save the database password in the password manager; you will not
+be shown it again.
+
+**2.2 Link and push the schema.**
+
+```bash
+npx supabase login
+npx supabase link --project-ref <the new ref>
+npx supabase db push
+```
+
+`db push` applies `0001_identity_and_tenancy.sql`. There is no down migration.
+The nine `does not exist, skipping` notices are expected — they are
+`drop ... if exists` against an empty database.
+
+**2.3 Create the organization rows.** This is the only seed that runs in
+production. It writes organizations and nothing else, and running it twice
+changes nothing the second time.
+
+```bash
+PUBLIC_SUPABASE_URL=https://<ref>.supabase.co \
+SUPABASE_SECRET_KEY=<secret key> \
+node scripts/seed-orgs.mjs
+```
+
+Set them inline like this, exported into that one command. **Do not put
+production credentials in `.dev.vars`** — `npm run reset` runs `db reset`
+against whatever that file says, and `db reset` drops everything.
+
+Expect: three organizations provisioned, one not provisioned by declaration.
+
+**2.4 Collect the keys.** Project Settings → API keys.
+
+| Key | Where it goes |
+|---|---|
+| Project URL | `PUBLIC_SUPABASE_URL` |
+| Publishable key | `PUBLIC_SUPABASE_PUBLISHABLE_KEY` |
+| Secret key | `SUPABASE_SECRET_KEY` — a secret, never a build variable |
+
+The secret key bypasses row level security entirely. It goes in Cloudflare as
+an encrypted secret and nowhere else.
+
+**2.5 Auth URLs.** Authentication → URL Configuration.
+
+- Site URL: `https://scipath.org`
+- Redirect URLs, one line each:
+  - `https://scipath.org/auth/callback`
+  - `https://www.scipath.org/auth/callback`
+  - `https://montavista.scipath.org/auth/callback`
+  - `https://svslc.scipath.org/auth/callback`
+
+Supabase does not accept a wildcard subdomain here reliably, so list them. A
+tenant added later needs a line added here — put that on the checklist for
+adding a school.
+
+**2.6 Google sign-in.** A **new** OAuth client in Google Cloud, separate from
+your local one. Authorized redirect URI is Supabase's, not ours:
+
+```
+https://<ref>.supabase.co/auth/v1/callback
+```
+
+The client id and secret go in Supabase's Google provider settings. They never
+go in Cloudflare — the Worker does not talk to Google.
+
+Publish the OAuth app rather than leaving it in Testing. An app in Testing
+issues seven-day refresh tokens, which present as students being randomly
+logged out.
+
+Password sign-in works without any of this, which is what the fixtures use.
+
+---
+
+## 3. Cloudflare: keep Pages
+
+**Do not delete anything and do not move to Workers.** Pages does everything
+this needs — R2 bindings, build variables, encrypted secrets, wildcard custom
+domains — and the README and the brief both describe Pages. Switching platforms
+on deployment day is a second unfamiliar thing to debug at the same time as the
+first.
+
+**One trap.** `wrangler.jsonc` in the repository is read by the Astro adapter's
+platform proxy **in local development only**. It has no `pages_build_output_dir`,
+so the Pages build ignores it. The R2 binding in that file does not reach
+production; you configure it in the dashboard in 3.2. Expect this to be
+counterintuitive.
+
+**3.1 Connect the project.** Workers & Pages → your Pages project → Settings →
+Builds. If you are creating it fresh, connect it to `blueleaflabs/SciPath`.
+
+| Field | Value |
+|---|---|
+| Production branch | `main` |
+| Build command | `npm run build` |
+| Build output directory | `dist` |
+| Node version | 22 |
+
+Node 22 is set as a build variable, `NODE_VERSION = 22`. Local, CI and
+Cloudflare must agree; a mismatch produces a failure that appears only here.
+
+**3.2 Build variables** — Settings → Environment variables → Production.
+These are read at **build** time and inlined.
+
+```
+NODE_VERSION                      22
+PUBLIC_ROOT_DOMAIN                scipath.org
+PUBLIC_SUPABASE_URL               https://<ref>.supabase.co
+PUBLIC_SUPABASE_PUBLISHABLE_KEY   <publishable key>
+```
+
+`PUBLIC_ROOT_DOMAIN` **must** be a build variable. `src/lib/deployment.ts`
+reads it from `import.meta.env`, and `astro.config.mjs` reads it from
+`process.env` to set the canonical URL and the sitemap. There is no runtime
+binding for it. Set it as a runtime secret only and every mailed link and
+canonical tag will say `localhost:4321`.
+
+**Do not set `PUBLIC_ORG`.** It pins the whole deployment to one tenant. It
+exists for a single-tenant install on a bare domain, which this is not.
+
+**3.3 Secrets** — same screen, marked encrypted.
+
+```
+SUPABASE_SECRET_KEY               <secret key>
+```
+
+Later, not needed on day one: `GITHUB_DISPATCH_TOKEN`, `GITHUB_REPO`,
+`MAIL_TRANSPORT`, `MAIL_FROM`, `MAIL_ALLOWLIST`, `RESEND_API_KEY`.
+
+---
+
+## 4. R2 storage
+
+Notebook photographs and signed forms. Private — no public URL, no custom
+domain. Every read goes through `/app/media/`, which checks project membership
+before serving a byte.
+
+**4.1 Create the bucket.** R2 → Create bucket, named **exactly**:
+
+```
+scipath-notebook
+```
+
+The name is not arbitrary: it is what the code binds. Public access stays
+disabled.
+
+**4.2 Bind it to the Pages project.** Settings → Functions → R2 bucket
+bindings → Add:
+
+| Variable name | Bucket |
+|---|---|
+| `NOTEBOOK` | `scipath-notebook` |
+
+Add it for **Production**. The variable name must be `NOTEBOOK` — that is what
+`src/lib/blob.ts` and `src/lib/records-store.ts` read off
+`locals.runtime.env`.
+
+Without this binding, pages render and every upload and every published record
+file fails. It is the easiest thing on this page to forget.
+
+---
+
+## 5. DNS and the subdomains
+
+**5.1 Add the zone.** If `scipath.org` is not already in this Cloudflare
+account, add it and change the nameservers at Namecheap to the two Cloudflare
+gives you. Propagation is usually under an hour.
+
+**5.2 Custom domains.** Pages project → Custom domains → Set up a custom
+domain, three times:
+
+```
+scipath.org
+www.scipath.org
+*.scipath.org
+```
+
+Cloudflare creates the records itself. The wildcard is the one that matters:
+every school is a subdomain, so tenancy is entirely hostname-based.
+
+**5.3 THE THING TO ACTUALLY TEST.** Wait for all three custom domains to read
+**Active**, then open a subdomain, not the apex:
+
+```
+https://montavista.scipath.org/
+```
+
+**If the wildcard certificate does not come up, the apex looks perfectly fine
+and every school is unreachable.** The apex is not evidence. A wildcard
+certificate can take 15 minutes; if it is still pending after an hour, the
+fallback is to name `montavista.scipath.org` and `svslc.scipath.org`
+individually as custom domains and revisit the wildcard later.
+
+---
+
+## 6. Deploy and verify
+
+Merging to `main` triggers the build. Watch it in the Pages dashboard.
+
+Then walk this, in order. Each one fails differently, which is the point.
+
+1. **`https://scipath.org/`** — the base tenant's home page. If this 500s, the
+   build variables are wrong.
+2. **`https://montavista.scipath.org/`** — the masthead reads *Monta Vista High
+   School · MVHS*. If it reads *SciPath*, the wildcard is not resolving or
+   `PUBLIC_ORG` got set.
+3. **`https://svslc.scipath.org/about/`** — reads *Silicon Valley Student
+   Leadership Council*, badge `SVSLC`. Proves the second tenant and the
+   five-character mark.
+4. **View source on any page** — the canonical tag says `https://scipath.org`,
+   not `localhost:4321`. That is `PUBLIC_ROOT_DOMAIN` proven.
+5. **`https://montavista.scipath.org/app/`** — redirects to sign-in rather than
+   erroring. Proves Supabase is reachable.
+6. **Sign in with Google**, as yourself. Proves the OAuth client and the
+   redirect URLs.
+7. **Open a project, add a notebook entry with a photograph.** Proves the R2
+   binding. This is the step that catches a missing `NOTEBOOK`.
+8. **`https://scipath.org/showcase/`** — published records render.
+
+---
+
+## 7. Fixtures in production, and how they leave
+
+The demo accounts are in production deliberately for now, because a demo needs
+something to show. That is a knowing departure from 12.11a.
+
+They are seeded by `npm run reset`, which you must **never** point at the cloud
+project. To get fixtures into production, run the individual seeds against the
+production URL with the credentials inline, the way `seed-orgs` was run in 2.3
+— not through `reset`.
+
+When they go:
+
+```bash
+node scripts/wipe-demo.mjs            # dry run, prints what it would remove
+node scripts/wipe-demo.mjs --yes      # acts
+```
+
+It finds them by the `@demo.invalid` domain through the admin API, unwinds
+children before parents, and refuses to delete a project a real person has
+joined unless told twice.
+
+---
+
+## 8. Not needed today
+
+- **Search index rebuilds.** `GITHUB_DISPATCH_TOKEN` (fine-grained, Contents:
+  read and write, this repository only) and `GITHUB_REPO=blueleaflabs/SciPath`
+  as Pages secrets, plus `R2_ACCOUNT_ID`, `R2_BUCKET`, `R2_ACCESS_KEY_ID`,
+  `R2_SECRET_ACCESS_KEY` as GitHub Actions secrets for `index-records.yml`.
+  Without them publishing still works and the index updates on the nightly run
+  at 06:17 UTC.
+- **Mail.** Nothing sends until something drains the notifications outbox, which
+  does not exist yet (open decision 69). Setting `RESEND_API_KEY` today would
+  change nothing.
+
+---
+
+## Afterwards
+
+Two things to write down while they are fresh: the Supabase project ref, and
+the date. The brief's 19.11b is the reference version of this document; if
+anything here was wrong, fix it there rather than in your memory.

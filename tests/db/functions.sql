@@ -13,7 +13,7 @@
 
 \set QUIET on
 select id as author   from public.users where display_name = 'Author one' \gset
-select id as outsider from public.users where display_name = 'Lynbrook student' \gset
+select id as outsider from public.users where display_name = 'Other school student' \gset
 select id as project  from public.projects where title like 'Last year%' \gset
 select id as advisor  from public.users where display_name = 'Advisor' \gset
 select id as officer  from public.users where display_name = 'Fair officer' \gset

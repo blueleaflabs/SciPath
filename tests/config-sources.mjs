@@ -170,6 +170,13 @@ test('every documented variable is read by something', () => {
   const everywhere = [
     ...scriptFiles.map((f) => fs.readFileSync(f, 'utf8')),
     fs.readFileSync('supabase/config.toml', 'utf8'),
+    /* The build's own configuration reads the environment too, and reporting
+       a variable as unread because this list stopped at `scripts/` would push
+       somebody to delete the documentation for a variable that is doing its
+       job. `PUBLIC_SITE_URL` is read here and nowhere else, by design: it is
+       the deployment's own origin, needed at build time for canonical tags
+       and the sitemap. */
+    fs.readFileSync('astro.config.mjs', 'utf8'),
   ];
 
   const walk = (dir) => {
