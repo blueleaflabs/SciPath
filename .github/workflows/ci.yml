@@ -70,12 +70,17 @@ jobs:
 
       - name: Check the archive actually rendered
         run: |
-          test -f dist/index.html
-          test -f dist/articles/index.html
-          test -f dist/robots.txt
+          test -d dist/_worker.js
+          test -f dist/_routes.json
           test -f dist/sitemap-index.xml
-          test -d dist/pagefind
-
+          test -f dist/404.html
+          for tenant in montavista svslc scipath example; do
+            test -f "dist/$tenant/about/index.html"
+            test -f "dist/$tenant/policies/index.html"
+            test -f "dist/$tenant/robots.txt"
+            test -d "dist/$tenant/pagefind"
+          done
+          
       # The second theme has to build too, not just parse.
       # Reads the built HTML rather than the source, so it catches a tenant
       # leak however it was caused.
