@@ -32,15 +32,19 @@ const isEditor = me.isEditor;
    beside the overview's own list of them, and Selection listed the school's
    projects beside the overview's, differing by one column. A student's nav
    is one item now, which is right, because a student navigates from their
-   project rather than from a bar. */
+   project rather than from a bar.
+
+   `What goes wrong` went for the same reason and one better. It was a raw
+   list of every warning the club had ever written, which is a page nobody
+   reads before they need it and cannot find the right line in once they do.
+   The warnings themselves are not gone: they are written on a step and shown
+   on that step, next to the work they are warning about, which is the only
+   moment they are worth reading. */
 const nav = [
   { href: '/app/', label: 'Overview' },
   ...(isEditor ? [{ href: '/app/editorial/', label: 'Editorial' }] : []),
   ...(isEditor ? [{ href: '/app/publish/', label: 'Publish' }] : []),
   ...(me.runsTheClub ? [{ href: '/app/assign/', label: 'Assign' }] : []),
-  /* Everybody, not just officers: reading what the club has learned is the
-     point, and writing it is the part that is restricted. */
-  { href: '/app/warnings/', label: 'What goes wrong' },
   ...(me.isAdvisor ? [{ href: '/app/roles/', label: 'Roles' }] : []),
 ];
 ---

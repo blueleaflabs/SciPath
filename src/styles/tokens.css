@@ -23,6 +23,30 @@
   --measure-text: 66ch;
   --measure-lede: 74ch;
 
+  /* ── DEPTH ──────────────────────────────────────────────────────────────
+   
+     Shared by every theme, because depth is structure rather than identity:
+     a card is lifted off the page in the same way whichever school is
+     looking at it.
+   
+     Kept very quiet on purpose. The point is an edge the eye resolves, not a
+     product that looks like it has floating panels: a one pixel border still
+     does the drawing and the shadow only says which side is on top. Two
+     steps, and no third — a page with three depths has none.
+   
+     Expressed as a shadow rather than a heavier border because a border
+     darkens a card's edge on all four sides equally, which reads as a box
+     around content, while light falling from above reads as a sheet resting
+     on a surface. Neutral rather than tinted: a colored shadow at this
+     opacity muddies rather than warms. */
+  --lift: 0 1px 2px rgba(23, 17, 34, 0.05), 0 2px 8px rgba(23, 17, 34, 0.04);
+  --lift-2: 0 2px 4px rgba(23, 17, 34, 0.06), 0 8px 24px rgba(23, 17, 34, 0.07);
+
+  /* The colored edge that says what kind of thing a card is. One value, so
+     a stage edge on a record and a kind edge on a program card are the same
+     gesture at the same weight. */
+  --edge: 4px;
+
   /* Forms. Wider than the reading measure because a form has labels, help
      text, and two column rows to fit, and narrower than the column because a
      textarea is proofread as well as typed into: at the full 1080px a line
@@ -97,9 +121,20 @@
    only.
    ─────────────────────────────────────────────────────────────── */
 [data-theme='proceedings'] {
-  --paper: #faf9fb;
+  /* Paper sits below the card, and did not.
+  
+     `#faf9fb` against a white card is a contrast ratio of 1.05 — a difference
+     of one percent, which no eye resolves as an edge. Every card, every table
+     and every panel floated on a field of the same value, so the page had no
+     surfaces on it, only hairlines. The whole complaint that this product
+     looks uniform starts here.
+  
+     1.22 now, which is the separation the entry theme already had, tinted
+     toward the school's own hue so the field reads as paper rather than as
+     grey. Ink on it still clears AA with room: 15.1, 8.7 and 5.9. */
+  --paper: #ece6f2;
   --card: #ffffff;
-  --sunk: #f1ecf7;
+  --sunk: #f6f2fa;
 
   --ink: #171122;
   --ink-2: #453a51;

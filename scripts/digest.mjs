@@ -106,7 +106,7 @@ const { data: entries, error } = await db
   .select(
     'id, project_id, status, org_id, ' +
       'programs(id, name, season_year, template_id), ' +
-      'projects(id, title, facts, process_id, project_authors(role, accepted_at, self_managed_at, users(id, display_name)))'
+      'projects(id, title, facts, process_id, project_authors(role, participation_id, accepted_at, self_managed_at, users(id, display_name)))'
   )
   .in('status', ['entered', 'competed']);
 
@@ -180,7 +180,14 @@ if ((entries?.length ?? 0) === 0) {
 const ids = (entries ?? []).map((e) => e.id);
 
 const { data: recorded } = ids.length
-  ? await db.from('deliverables').select('participation_id, type').in('participation_id', ids)
+  ? await db
+      .from('deliverables')
+      .select('participation_id, type')
+      .in('participation_id', ids)
+      /* Superseded rows would answer "this is already recorded" with a
+         version that has been replaced, and the digest would go quiet about
+         an obligation nobody had met. */
+      .is('superseded_at', null)
   : { data: [] };
 
 const recordedFor = new Map();
@@ -274,7 +281,13 @@ for (const entry of entries ?? []) {
 
   for (const attachment of project.project_authors ?? []) {
     const isAuthor = attachment.role === 'author' && attachment.accepted_at;
-    const looksAfter = attachment.role === 'officer' || attachment.self_managed_at;
+
+    /* The officer of *this* place. Oversight names a participation now, so
+       the club's officer is not sent the class's deadlines — which is what
+       "any officer row on the project" produced while it was project wide. */
+    const looksAfter =
+      attachment.role === 'officer' && attachment.participation_id === entry.id;
+
     if (!isAuthor && !looksAfter) continue;
 
     note(attachment.users, slug, status, Boolean(isAuthor));

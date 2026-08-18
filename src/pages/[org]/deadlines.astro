@@ -1,169 +1,25 @@
 ---
-import { orgPaths } from '../../lib/tenant-paths';
-export const getStaticPaths = orgPaths;
-
-import Base from '../../layouts/Base.astro';
-import PageHead from '../../components/PageHead.astro';
-import Empty from '../../components/Empty.astro';
-import { activeOrg } from '../../lib/tenant';
-import { resolveProgram, datesFor } from '../../lib/templates';
-import { formatDate } from '../../lib/dates';
-
-const org = activeOrg(Astro);
+export const prerender = false;
 
 /**
- * The season, for somebody without an account.
+ * WITHDRAWN, AND STILL ANSWERING.
  *
- * Read from the same templates the working surface resolves, so the dates a
- * student sees before signing up are the dates they will be held to. This
- * page rendered an empty state for months because the programs it needed did
- * not exist yet; they do now.
+ * This listed every step of every program the school runs, grouped by phase,
+ * for somebody without an account. It was accurate and it was a reference
+ * document: a reader arriving at a school's site is asking what they could
+ * be part of, which is a list of names and dates, not four calendars of
+ * milestones they have no project to hang on.
  *
- * The signed-in version of this shows progress against these dates. This one
- * shows the dates, which is what somebody deciding whether to sign up needs.
+ * The short answer moved to the school's own home page, per tenant. The long
+ * answer is where it was always most useful: on the program's page, once
+ * there is a project, next to the work each date governs.
+ *
+ * **Recorded in the brief rather than deleted quietly.** If a public calendar
+ * turns out to be what a parent or a teacher actually wants, everything it
+ * needs still resolves from the templates and this file is a `git log` away.
+ *
+ * The route redirects rather than 404s, as `/app/fairs/` does: a dead link is
+ * a worse answer than a moved one, and this one has been in a footer.
  */
-const programs = (org.programs ?? [])
-  .map((id: string) => {
-    try {
-      const resolved = resolveProgram(id);
-      const phases = resolved.phases ?? [];
-      const dated = datesFor(resolved).filter((d) => d.date);
-
-      /* Grouped the way the working surface groups them, so the calendar a
-         student reads here is the calendar they meet later. */
-      const groups = phases
-        .map((phase: any) => ({
-          name: phase.name ?? phase.id,
-          window: phase.window ?? null,
-          rows: dated
-            .filter((d) => d.step.phase === phase.id)
-            .sort((a, b) => (a.date ?? '').localeCompare(b.date ?? '')),
-        }))
-        .filter((g) => g.rows.length > 0);
-
-      return {
-        id,
-        name: resolved.name,
-        kind: resolved.kind,
-        version: resolved.version,
-        groups,
-        count: dated.length,
-      };
-    } catch {
-      /* A template named by an organization and not present. Skipped rather
-         than rendering a program with no contents. */
-      return null;
-    }
-  })
-  .filter(Boolean)
-  /* Anything with no published dates is not a calendar. Independent research
-     has none by design and belongs on this page as an option rather than as
-     an empty table. */
-  .filter((p: any) => p.count > 0);
+return Astro.redirect('/', 301);
 ---
-
-<Base
-  title="Deadlines"
-  description="Every deadline for the season, and the order the forms have to be signed in."
->
-  <PageHead
-    eyebrow="Calendar"
-    title="Deadlines"
-    lede="The dates that decide whether an entry is eligible, with the one ordering rule that disqualifies more projects than any other. Reading this needs no account."
-  />
-
-  <div class="wrap">
-    <div class="note stop">
-      <h4>The rule that ends entries before they start</h4>
-      <p>
-        The required forms have to be signed and dated <b>before</b> experimentation
-        begins, and the adult sponsor's signature has to precede the start date you record.
-        Signing them afterward cannot be fixed later, no matter how good the work is. The
-        working surface checks this ordering for you and warns while it is still fixable.
-      </p>
-    </div>
-
-    {programs.map((program: any) => (
-      <div class="sec">
-        <div class="sec-h">
-          <b>{program.name}</b>
-          <span>{program.count} dated</span>
-        </div>
-
-        {program.groups.map((group: any) => (
-          <div class="phase">
-            <h2 class="t-h2">
-              {group.name}
-              {group.window && (
-                <span class="when"> · {group.window.from} to {group.window.to}</span>
-              )}
-            </h2>
-
-            <table class="tbl">
-              <tbody>
-                {group.rows.map((row: any) => (
-                  <tr>
-                    <td class="n">{formatDate(row.date, 'short')}</td>
-                    <td>
-                      {row.step.name}
-                      {row.step.consequence === 'blocks_experimentation' && (
-                        <span class="gate">must precede work</span>
-                      )}
-                    </td>
-                    <td class="by">
-                      {row.step.source === 'school'
-                        ? 'this school'
-                        : row.step.source === 'process'
-                          ? 'the research itself'
-                          : 'the program'}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        ))}
-      </div>
-    ))}
-
-    {programs.length === 0 && (
-      <Empty
-        title="No dates published yet"
-        body="Each program appears here with its own calendar, taken from the rules the program published. A date the program has not published yet says so rather than showing a guess."
-      />
-    )}
-
-    {/* Everything above is readable by anybody. What an account adds is the
-        other half: which of these apply to your project, what you still owe,
-        and a warning while a mistake is still fixable. */}
-    <div class="sec cta">
-      <h2 class="t-h2">These are the dates. The rest is knowing where you are in them.</h2>
-      <p>
-        Signing in puts your own project against this calendar: what is next,
-        what is late, what each deadline actually wants handed in, and the
-        ordering rule above checked for you while it can still be fixed.
-      </p>
-      <p class="go">
-        <a class="btn" href="/app/">Start a project</a>
-        <a class="btn btn-2" href="/mistakes/">What usually goes wrong</a>
-      </p>
-    </div>
-  </div>
-</Base>
-
-<style>
-  .phase { margin-bottom: 26px; }
-  .phase .t-h2 { margin-bottom: 8px; }
-  .when {
-    font-family: var(--face-mono);
-    font-size: 0.8rem;
-    font-weight: 400;
-    color: var(--ink-3);
-    text-transform: none;
-    letter-spacing: 0;
-  }
-  .by { font-family: var(--face-ui); font-size: 0.86rem; color: var(--ink-3); }
-  .cta { border-top: 2px solid var(--ink); padding-top: 22px; max-width: 74ch; }
-  .cta p { margin-top: 10px; }
-  .go { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 18px; }
-</style>

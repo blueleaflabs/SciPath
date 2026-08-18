@@ -118,8 +118,13 @@ const band = sent.age_band ?? '';
       </div>
     ) : (
     <form method="POST" action="#outcome" class="stack">
+      {/* "Your name, as it should appear on a byline" explained a consequence
+          to somebody who has not published anything and may not know what a
+          byline is. It is asking for a name. The consequence is true and
+          belongs where it applies: on the profile, where somebody editing a
+          name they already have is deciding whether to change it. */}
       <label>
-        <span>Your name, as it should appear on a byline</span>
+        <span>Your full name</span>
         <input name="display_name" required value={suggestedName} autocomplete="name" />
       </label>
 

@@ -254,33 +254,89 @@ const consentLabel: Record<string, string> = {
 
     <section class="sec">
       <div class="sec-h"><b>Confirmations</b><span>Not editable here</span></div>
-      <dl class="record">
-        <dt>School affiliation</dt>
-        <dd>{affiliationLabel[person.affiliation_state] ?? person.affiliation_state}</dd>
 
-        <dt>Parent or guardian</dt>
-        <dd>
-          {consentLabel[person.consent_state] ?? person.consent_state}
-          {guardian && person.consent_state !== 'not_required' && (
-            <> · {guardian.guardian_email}</>
-          )}
-        </dd>
+      {/* Four facts about an account, which is a different thing from the
+          panels `.record` styles — that class carries a stage color on its
+          left edge, and none of these has a stage. Borrowing it left a `dl`
+          at browser defaults: the label and the answer in the same face at
+          the same size, the answer indented under it, and eight lines where
+          there are four facts.
 
-        <dt>Club mentor</dt>
-        <dd>
-          {mentors.length
-            ? mentors.map((m: any) => `${m.users?.display_name} · ${m.projects?.title}`).join(', ')
-            : 'None attached yet. A club officer or the mentor attaches one to your project.'}
-        </dd>
+          Two columns, and the label is set apart by face and size rather
+          than by indentation, so a reader scans the left edge for the thing
+          they came to check and reads across once. No measure on the
+          container: one of these values is a link. */}
+      <dl class="confirm">
+        <div>
+          <dt>School affiliation</dt>
+          <dd>{affiliationLabel[person.affiliation_state] ?? person.affiliation_state}</dd>
+        </div>
 
-        <dt>Author page</dt>
-        <dd>{person.author_slug ? <a href={`/authors/${person.author_slug}/`}>View</a> : 'Created when you first publish'}</dd>
+        <div>
+          <dt>Parent or guardian</dt>
+          <dd>
+            {consentLabel[person.consent_state] ?? person.consent_state}
+            {guardian && person.consent_state !== 'not_required' && (
+              <> · {guardian.guardian_email}</>
+            )}
+          </dd>
+        </div>
+
+        <div>
+          <dt>Club mentor</dt>
+          <dd>
+            {mentors.length
+              ? mentors.map((m: any) => `${m.users?.display_name} · ${m.projects?.title}`).join(', ')
+              : 'None attached yet. A club officer or the mentor attaches one to your project.'}
+          </dd>
+        </div>
+
+        <div>
+          <dt>Author page</dt>
+          <dd>{person.author_slug ? <a href={`/authors/${person.author_slug}/`}>View</a> : 'Created when you first publish'}</dd>
+        </div>
       </dl>
     </section>
   </div>
 </Base>
 
 <style>
+  .confirm {
+    margin: 0;
+    border: 1px solid var(--rule);
+    background: var(--card);
+  }
+  .confirm > div {
+    display: grid;
+    grid-template-columns: 13rem 1fr;
+    gap: 4px 24px;
+    padding: 13px 18px;
+  }
+  /* Between the rows rather than around each, so four facts read as one
+     panel and not as four cards. */
+  .confirm > div + div { border-top: 1px solid var(--rule-fine); }
+  .confirm dt {
+    font-family: var(--face-ui);
+    font-size: 0.78rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    /* The label sits on the same line as the first line of the answer, which
+       is what makes the left edge scannable when one answer runs to two
+       lines and its neighbor to one. */
+    align-self: baseline;
+  }
+  .confirm dd {
+    margin: 0;
+    max-width: var(--measure-text);
+  }
+
+  /* One column when there is no room for two. A 13rem label column next to a
+     wrapped answer is worse than a label above it. */
+  @media (max-width: 44rem) {
+    .confirm > div { grid-template-columns: 1fr; gap: 3px; }
+  }
+
   .hero { padding: 44px 0 28px; max-width: 74ch; }
   .hero .t-lbl { margin-bottom: 14px; }
   form.stack { max-width: 52ch; }

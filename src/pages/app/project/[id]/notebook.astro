@@ -65,6 +65,8 @@ const { data: deliverables } = entryIds.length
       .from('deliverables')
       .select('label, type, signed_on, external_url, verified_at')
       .in('participation_id', entryIds)
+      /* The current version of each, not every draft of it. */
+      .is('superseded_at', null)
       .order('signed_on', { ascending: true })
   : { data: [] as any[] };
 

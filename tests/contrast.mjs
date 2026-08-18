@@ -79,6 +79,16 @@ const PAIRS = [
   ['--masthead-ink-2', '--masthead-bg'],
   ['--brand-contrast', '--brand'],
   ['--card', '--ink'],
+
+  /* Section numbers and folios are set in the school's own hue on a card and
+     on the wash. They were briefly set in `--brand-mark`, which is 3.2:1 —
+     under this floor for text at that size, and invisible to this file
+     because the pair was not in it. A colour used as text belongs here; the
+     mark stays an edge colour, and edges are exempt because nobody reads
+     them. */
+  ['--brand', '--card'],
+  ['--brand', '--sunk'],
+  ['--brand', '--paper'],
   ['--stage-draft', '--card'],
   ['--stage-work', '--card'],
   ['--stage-ready', '--card'],

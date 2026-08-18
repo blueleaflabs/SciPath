@@ -12,6 +12,13 @@ export interface NamedProgram {
   season_year?: number | null;
   kind?: string | null;
   /**
+   * Cohort or opportunity (22.5). Optional for the same reason `roles` is: a
+   * page may select the row without asking for it. Where it is absent the
+   * kind decides on its own, which is what every caller did before this
+   * mattered.
+   */
+  program_role?: string | null;
+  /**
    * What this program calls its people, resolved from its template and
    * stored on the row. Optional because a page may select the row without
    * asking for it, and because a row written before the column existed has
@@ -40,6 +47,18 @@ export function programTitle(program: NamedProgram | null | undefined): string {
  * cannot do for a mixed list.
  */
 export function programKind(program: NamedProgram | null | undefined): string {
+  /* A club is a club, whatever it prepares for.
+  
+     A school's club template typically extends the fair it prepares for and
+     declares no `kind` of its own, so it inherits `competition` -- and the
+     card for the club read FAIR, sitting next to the actual fair, which is
+     precisely the distinction a student needs to make here. The role is the
+     thing that differs: you join a cohort and you enter an opportunity, and
+     the word should say which. */
+  if (program?.program_role === 'cohort') {
+    return program?.kind === 'course' ? 'Class' : 'Club';
+  }
+
   switch (program?.kind) {
     case 'course':
       return 'Class';
@@ -49,6 +68,8 @@ export function programKind(program: NamedProgram | null | undefined): string {
       return 'Grant';
     case 'independent':
       return 'Independent';
+    case 'showcase':
+      return 'Showcase';
     default:
       return 'Fair';
   }

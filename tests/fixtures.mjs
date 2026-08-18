@@ -212,10 +212,17 @@ test('every deliverable says whether it is required', () => {
   }
 });
 
-test('the write-up is optional and carries the right shape for its program', () => {
+test('the write-up is optional everywhere, and carries the shape its program reads in', () => {
   /* Optional at every fair here and required by none of them, which is why
-     most students never write one. IRPD's is required and is not a
-     scientific paper. */
+     most students never write one.
+
+     IRPD's was written as required, from a guess made before the class
+     published anything. Its roadmap and its calendar ask for a prototype, a
+     journey map, a presentation, a researcher profile and a showcase, and
+     for no paper at all — the class is design work, and the write-up exists
+     here only as the road to the journal, which is a separate thing a
+     student may choose. The shape stays `design-research`, because the one
+     somebody does write is not a scientific paper. */
   const { resolveProgram: resolve } = templateResolve;
 
   const fair = resolve('mvhs-scvsefa-2027', library).deliverables.get('manuscript');
@@ -223,7 +230,7 @@ test('the write-up is optional and carries the right shape for its program', () 
   assert.equal(fair.shape, 'imrad');
 
   const course = resolve('irpd-mvhs-2027', library).deliverables.get('manuscript');
-  assert.equal(course.requirement, 'required');
+  assert.equal(course.requirement, 'optional');
   assert.equal(course.shape, 'design-research');
 });
 

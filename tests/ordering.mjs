@@ -129,16 +129,30 @@ test('the deadline row is laid out as one line', () => {
 
 test('a copied milestone keeps the layer it came from', () => {
   /* `org_id` cannot say it: on a copied milestone it is always the school's,
-     whether the deadline came from the fair or the club. Both copies in the
-     migration have to carry `source` or a real entry loses it, and a student
+     whether the deadline came from the fair or the club. Every copy in the
+     migration has to carry `source` or a real entry loses it, and a student
      who cannot tell a club deadline from a fair rule starts treating real
      deadlines as advisory. */
   const sql = fs.readFileSync('supabase/migrations/0001_identity_and_tenancy.sql', 'utf8');
 
-  /* There are four, in four functions, and I updated two by string match
-     and missed two. Count them and check each. */
+  /* There were four, in four functions, and I updated two by string match and
+     missed two. Two of those four were dead: `start_entry` had been declared
+     three times and only the last one ran, so this count included bodies that
+     had not executed since the change that superseded them.
+
+     Then there was one. `app.copy_milestones` was extracted so that joining a
+     class and entering a fair shared it, and `start_entry` went on doing its
+     own copy beside it — which is how the two drifted: the inline one carried
+     `satisfied_by` and the shared one did not, so whether a sponsor could
+     close an approval depended on which path had made the entry.
+     `start_entry` delegates to `enter_program` now, and the copy happens in
+     exactly one statement.
+
+     The number is asserted rather than bounded, because a second copy site
+     appearing is the thing that goes wrong here: the fix is always to call
+     `copy_milestones` rather than write another insert. */
   const starts = [...sql.matchAll(/insert into public\.entry_milestones\b/g)].map((m) => m.index);
-  assert.ok(starts.length >= 4, `found ${starts.length} copies, expected at least 4`);
+  assert.equal(starts.length, 1, `found ${starts.length} copies, expected 1`);
 
   const missing = [];
   for (const at of starts) {
@@ -509,6 +523,7 @@ const everything = [...pages, ...components];
  */
 const DELIBERATE = new Set([
   'mnav-out', // sign out, in the masthead, which reads as a nav item
+  'mnav-go',  // the magnifying glass, which is the search field's own edge
   'play',     // the video facade's play control
   'linkish',  // a secondary action inside a table row
 ]);
@@ -641,14 +656,32 @@ test('deliverables are recorded in one place', () => {
 
 /* ── The public pages read the same templates ────────────────────────────── */
 
-test('the public calendar comes from the templates', () => {
-  /* It rendered an empty state for months while the templates carried real,
-     verified dates. A student reading it before signing up should see the
-     dates they will be held to, not a placeholder. */
-  const page = fs.readFileSync('src/pages/[org]/deadlines.astro', 'utf8');
+test('the season on the front page comes from the templates, per tenant', () => {
+  /* `/deadlines/` carried this and rendered an empty state for months while
+     the templates held real, verified dates. It is withdrawn: it listed every
+     step of every program grouped by phase, which is a reference document,
+     and a reader arriving without an account is asking the shorter question
+     of what they could take part in.
+
+     What has to stay true is the half that mattered. The list is read from
+     the same templates the working surface resolves, so a name and a date
+     seen before signing up are the ones they will be held to, and it is read
+     from the organization record so that two schools see two seasons. */
+  const page = fs.readFileSync('src/pages/index.astro', 'utf8');
   assert.match(page, /resolveProgram/);
-  assert.match(page, /datesFor/);
-  assert.doesNotMatch(page, /const programs: Array</, 'the hardcoded empty list is gone');
+  assert.match(page, /org\.programs/, 'the list must be per tenant');
+  assert.doesNotMatch(page, /const programs: Array</, 'no hardcoded list');
+});
+
+test('a withdrawn public page redirects rather than disappears', () => {
+  /* Both have been in a footer, and one has been in the masthead since the
+     site had a masthead. A dead link is a worse answer than a moved one, so
+     they answer the way `/app/fairs/` does. 23.4 says why each went. */
+  for (const file of ['src/pages/[org]/deadlines.astro', 'src/pages/[org]/for-schools.astro']) {
+    const page = fs.readFileSync(file, 'utf8');
+    assert.match(page, /Astro\.redirect/, `${file} should redirect`);
+    assert.match(page, /301/, `${file} should say the move is permanent`);
+  }
 });
 
 test('the public mistakes page shows no club-authored warning', () => {
@@ -665,35 +698,35 @@ test('neither page claims a process nobody runs', () => {
   assert.doesNotMatch(page, /Collected from mentors and judges/);
 });
 
-test('both end with a way in', () => {
-  for (const file of ['src/pages/[org]/deadlines.astro', 'src/pages/[org]/mistakes.astro']) {
+test('a public page ends with a way in', () => {
+  /* One file rather than two: `/deadlines/` is withdrawn. The rule is
+     unchanged — a page that explains the work and then stops is a page that
+     sends somebody back to a search engine. */
+  const page = fs.readFileSync('src/pages/[org]/mistakes.astro', 'utf8');
+  assert.match(page, /class="sec cta"/, 'no call to action');
+  assert.match(page, /href="\/app\//, 'no link to signing in');
+
+  /* And the season list on the front page, which is where the withdrawn one
+     sent people. */
+  const home = fs.readFileSync('src/pages/index.astro', 'utf8');
+  assert.match(home, /Sign in to join one/);
+});
+
+test('no public page claims what nothing has earned', () => {
+  /* This guarded `/for-schools/`, which is hidden: it was a pitch to a
+     teacher written before the product had met one, and a pitch that has
+     never met its audience is a guess (23.4). The rule outlives the page and
+     applies to every public page instead, which is where it should have been.
+
+     Numbers are the same argument. "28 deadlines across 3 programs" is a
+     claim, and a claim typed into a page drifts away from the software the
+     week somebody adds a program. */
+  for (const file of ['src/pages/index.astro', 'src/pages/[org]/about.astro',
+                      'src/pages/[org]/mistakes.astro']) {
     const page = fs.readFileSync(file, 'utf8');
-    assert.match(page, /class="sec cta"/, `${file} has no call to action`);
-    assert.match(page, /href="\/app\//, `${file} does not link to signing in`);
+    assert.doesNotMatch(page, /\b(hundreds|thousands|schools trust|trusted by)\b/i,
+      `${file}: nothing here has users yet, so nothing here may imply it`);
   }
-});
-
-test('the marketing claims are counted, not written down', () => {
-  /* "28 deadlines across 3 programs" is a claim, and a claim typed into a
-     page drifts away from the software the week somebody adds a program.
-     These are counted from the templates at build. */
-  const page = fs.readFileSync('src/pages/[org]/for-schools.astro', 'utf8');
-
-  assert.match(page, /resolveProgram/, 'the counts should come from the templates');
-  assert.doesNotMatch(page, /\b(hundreds|thousands|schools trust|trusted by)\b/i,
-    'nothing here has users yet, so nothing here may imply it');
-});
-
-test('the school page says what it does not do', () => {
-  /* A list of everything a product does is a list nobody believes, and the
-     limits are the part a teacher is actually trying to work out. */
-  const page = fs.readFileSync('src/pages/[org]/for-schools.astro', 'utf8');
-  assert.match(page, /What it does not do/);
-});
-
-test('the front page addresses both readers', () => {
-  const page = fs.readFileSync('src/pages/index.astro', 'utf8');
-  assert.match(page, /for-schools/, 'somebody running a club has nowhere to go');
 });
 
 /* ── A refused place is not a place ──────────────────────────────────────── */
@@ -803,7 +836,13 @@ test('a teacher is never offered as a project officer', () => {
   const assign = fs.readFileSync('src/pages/app/assign.astro', 'utf8');
   const team = fs.readFileSync('src/pages/app/project/[id]/team.astro', 'utf8');
 
-  assert.match(assign, /if \(r\.role !== 'officer'\) return false;/,
+  /* Matched on the exclusion rather than on the statement that carried it.
+     This read `if (r.role !== 'officer') return false;`, which was the shape
+     of a `.filter` callback, and broke when the same rule moved into a loop
+     that gathers every scope a person holds. The rule is that a
+     non-officer is excluded; whether that is a `return false` or a
+     `continue` is not the thing worth pinning. */
+  assert.match(assign, /r\.role !== 'officer'/,
     'the assignable list should exclude anybody who is not an officer');
   assert.match(team, /\.eq\('role', 'officer'\)/,
     'the team page should ask for officers only');
@@ -1178,14 +1217,23 @@ test('no page reads a role word off an entry', () => {
   assert.deepEqual(problems, [], 'read the word from project_cohorts, not from where the work went');
 });
 
-test('the project page says when nobody is looking after a project', () => {
+test('the project page shows when a project belongs nowhere', () => {
   /* `independent-research` existed so a solo student had something to join,
      and it hid the fact that nobody was answerable for their work. Deleting
      it makes the absence visible, which is the argument for a staffed Open
      Program cohort rather than a placeholder that made it look handled
-     (22.10). */
+     (22.10).
+
+     What is asserted is that the state is legible, not the wording. A
+     paragraph saying "nobody at the school is looking after it. That is
+     allowed, and the work counts the same" used to sit under the picker and
+     has gone: the eyebrow above the title and the count beside the section
+     header both say it already, and a third telling — phrased as an absence
+     and then a reassurance — read as a warning about a state the student had
+     chosen. Two places still say it plainly, and this checks they do. */
   const page = fs.readFileSync('src/pages/app/project/[id].astro', 'utf8');
-  assert.match(page, /nobody at the school is\s*\n?\s*looking after it/);
+  assert.match(page, /Not in a class, and not entered anywhere/);
+  assert.match(page, /'nowhere yet'/);
 });
 
 console.log(`${passed} ordering assertions passed. ${pages.length} pages read.`);

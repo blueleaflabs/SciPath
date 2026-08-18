@@ -11,6 +11,19 @@
 .card {
   background: var(--card);
   border: 1px solid var(--rule);
+  /* See --lift. The border draws the edge; the shadow says which side is on
+     top. Together they are what makes a grid of cards read as objects rather
+     than as text in a wireframe. */
+  box-shadow: var(--lift);
+}
+
+/* A card that is the subject of its section, rather than one of several.
+   Used sparingly: the empty state a student lands on, the panel a form sits
+   in. It carries the school's own hue on its top edge, which is the one
+   place identity belongs on a working surface. */
+.card.lead {
+  border-top: var(--edge) solid var(--brand);
+  box-shadow: var(--lift-2);
 }
 
 .pad {
@@ -86,22 +99,43 @@
   padding-top: 26px;
 }
 
+/* ── SECTION HEADS ─────────────────────────────────────────────
+ 
+   Every section on every page carried the same two pixel black rule under
+   the same small caps, so a reader scrolling saw one texture from top to
+   bottom and had nothing to navigate by. A page is a sequence of sections,
+   and the head should say which one you are in.
+ 
+   Three changes, all structural rather than decorative. The label is set in
+   the utility face, which is the only typographic contrast this theme has
+   and was being spent on nothing. The rule is the school's own hue rather
+   than black, so it reads as a division rather than as an underline. And
+   the count on the right keeps the numeric face, which is what it is.
+ 
+   The number is the signature: proceedings number their sections, and this
+   page genuinely is a numbered sequence — start date, the project, the
+   deadlines, what has been handed in. It sits in the gutter at the size of
+   a folio, in the mark colour, and it is the one loud thing here. */
 .sec-h {
   display: flex;
   justify-content: space-between;
   align-items: baseline;
   gap: 14px;
-  border-bottom: 2px solid var(--ink);
+  border-bottom: 2px solid var(--brand);
   padding-bottom: 8px;
-  margin: 0 0 14px;
+  margin: 0 0 16px;
 }
 
 .sec-h b {
-  font-family: var(--face-ui);
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  font-family: var(--face-num);
   font-weight: 700;
-  font-size: 0.88rem;
-  letter-spacing: 0.1em;
+  font-size: 0.86rem;
+  letter-spacing: 0.12em;
   text-transform: uppercase;
+  color: var(--ink);
 }
 
 .sec-h span {
@@ -763,6 +797,25 @@ select {
   max-width: var(--measure-form);
 }
 
+/* A one line outcome is not a panel.
+ *
+ * `.note` is capped at the width a form wants to be, which is right for a box
+ * holding fields and wrong for a sentence: "Request to join Independent
+ * Research and Project Design sent. You can start a project while you wait for
+ * approval." wrapped inside a tall narrow box, so the answer to what just
+ * happened took more vertical space than the thing it was answering about.
+ *
+ * The cap is removed rather than raised. Both measures are narrower than this
+ * needs -- `--measure-text` is 66ch and `--measure-form` 72ch, so either one
+ * would have made it narrower, which is how the first attempt at this got it
+ * backwards. A flash spans the column it sits in, like the section rules
+ * above and below it, and takes one line of padding instead of a panel's. */
+.note.flash {
+  max-width: none;
+  padding: 10px 16px;
+  margin: 0 0 14px;
+}
+
 .card.pad .prose,
 .card.pad .lede,
 .note .prose,
@@ -802,29 +855,57 @@ select {
 }
 
 /* ── TABLE ─────────────────────────────────────────────────── */
+/* ── TABLES ────────────────────────────────────────────────────
+ 
+   A table of twenty-nine deadlines, every row the same weight on the same
+   white, separated by the same hairline, is the flattest surface in the
+   product and the one a student spends the most time reading. Three things
+   give it rhythm without decorating it.
+ 
+   The head sits on its own tint, so it stays legible as a heading when the
+   table is long. Rows alternate, which is what lets an eye track across four
+   columns without losing the line — the whole reason ledgers have ruled
+   paper. And the row under the cursor lifts, so the thing you are about to
+   act on is the thing that looks active. */
 .tbl {
   width: 100%;
   border-collapse: collapse;
   background: var(--card);
+  border: 1px solid var(--rule);
+  box-shadow: var(--lift);
   font-family: var(--face-ui);
   font-size: 0.92rem;
 }
 
 .tbl th {
   text-align: left;
+  font-family: var(--face-num);
   font-weight: 700;
-  font-size: 0.84rem;
-  letter-spacing: 0.07em;
+  font-size: 0.8rem;
+  letter-spacing: 0.09em;
   text-transform: uppercase;
   color: var(--ink-2);
+  background: var(--sunk);
   padding: 11px 12px;
-  border-bottom: 2px solid var(--ink);
+  border-bottom: 2px solid var(--brand);
 }
 
 .tbl td {
   padding: 12px;
   border-bottom: 1px solid var(--rule-fine);
   vertical-align: top;
+}
+
+.tbl tbody tr:nth-child(even) td {
+  background: var(--sunk);
+}
+
+.tbl tbody tr:hover td {
+  background: var(--ready-bg);
+}
+
+.tbl tbody tr:last-child td {
+  border-bottom: 0;
 }
 
 .tbl .n {
@@ -885,10 +966,16 @@ mark {
 }
 
 /* ── EMPTY STATE ───────────────────────────────────────────── */
+/* An empty screen is an invitation to act, so it is a surface with something
+   on it rather than an outline of a missing thing. The dashed border said
+   "content should be here and is not"; the sheet with a mark coloured top
+   edge says "this is where it will be". */
 .void {
-  border: 2px dashed var(--rule);
+  border: 1px solid var(--rule);
+  border-top: var(--edge) solid var(--brand-mark);
   background: var(--card);
-  padding: 40px 24px;
+  box-shadow: var(--lift);
+  padding: 44px 24px;
   text-align: center;
 }
 

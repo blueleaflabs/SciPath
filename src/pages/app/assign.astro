@@ -38,7 +38,10 @@ let decided = false;
 
 if (Astro.request.method === 'POST') {
   const form = await Astro.request.formData();
-  const projectId = String(form.get('project_id') ?? '');
+  /* The place, not the project. Oversight belongs to the participation now:
+     assigning somebody to a project made them the Elder of the class and the
+     officer of the club at once. */
+  const placeId = String(form.get('place_id') ?? '');
   const userId = String(form.get('user_id') ?? '');
 
   if (String(form.get('action')) === 'place') {
@@ -63,14 +66,14 @@ if (Astro.request.method === 'POST') {
     /* Sending it back to the queue. The person to detach is whoever is on it,
        which the form carries so the page does not have to look it up again. */
     const { error: e } = await supabase.rpc('detach_from_project', {
-      p_project_id: projectId,
+      p_participation_id: placeId,
       p_user_id: String(form.get('current_id') ?? ''),
     });
     if (e) error = e.message;
     else unassignedNow = true;
   } else {
     const { error: e } = await supabase.rpc('assign_officer', {
-      p_project_id: projectId,
+      p_participation_id: placeId,
       p_user_id: userId,
     });
     if (e) error = e.message;
@@ -85,7 +88,7 @@ const today = new Date().toISOString().slice(0, 10);
 
 const { data: projects } = await supabase
   .from('projects')
-  .select('id, title, created_at, started_on, project_authors(role, self_managed_at, users(id, display_name, grad_year))')
+  .select('id, title, created_at, started_on, project_authors(role, participation_id, self_managed_at, users(id, display_name, grad_year))')
   .is('archived_at', null)
   .order('created_at', { ascending: true });
 
@@ -299,27 +302,51 @@ for (const e of [...(entries ?? []), ...(cohortRows ?? [])]) {
   programsOf.set(e.project_id, [...(programsOf.get(e.project_id) ?? []), e.program_id]);
 }
 
-const seen = new Set<string>();
-/* Officers only.
+/* **Everyone who runs something, with everything they run.**
  *
- * A club officer is a student who looks after somebody else's project. An
- * advisor is a teacher, and a teacher is not an officer: they oversee the
- * whole club rather than being assigned three projects out of forty. Offering
- * them in this dropdown invited a category error and made the load counts
- * meaningless, because a teacher's count is not comparable to a student's.
+ * A person is one row in this list and holds many rows in `user_roles`: an
+ * officer of the club who is also an Elder of the class holds the role twice,
+ * scoped to each. This deduplicated by person and kept the first row it saw,
+ * which silently threw the rest of their scopes away — so whether an officer
+ * could be assigned to a class project depended on the order the database
+ * returned two rows in. Every officer of the class also ran something else,
+ * so the class offered nobody, and the page said *nobody holds that role in
+ * this program* to an advisor looking at a list of people who do.
  *
- * The database still permits it. A very small school where a teacher really
- * does look after a project directly is a real arrangement, and refusing it
- * outright would be this product deciding how a school is organized. What we
- * do is stop suggesting it.
+ * Officers only. An advisor is a teacher, and a teacher is not an officer:
+ * they oversee the whole club rather than being assigned three projects out
+ * of forty, and offering them here invited a category error and made the load
+ * counts meaningless, because a teacher's count is not comparable to a
+ * student's. The database still permits it — a very small school where a
+ * teacher really does look after a project is a real arrangement, and
+ * refusing it outright would be this product deciding how a school is
+ * organized. What we do is stop suggesting it.
  */
-const holders = (clubRoles ?? []).filter((r: any) => {
-  const uid = r.users?.id;
-  if (!uid || seen.has(uid)) return false;
-  if (r.role !== 'officer') return false;
-  seen.add(uid);
-  return true;
-});
+const byPerson = new Map<string, any>();
+
+for (const r of clubRoles ?? []) {
+  if (r.role !== 'officer') continue;
+
+  const person = (r as any).users;
+  if (!person?.id) continue;
+
+  const held = byPerson.get(person.id) ?? {
+    id: person.id,
+    name: person.display_name,
+    role: 'officer',
+    scopes: new Set<string>(),
+    /* An unscoped role belongs to somebody who runs the school's research
+       rather than one program of it, and fits any project. */
+    anywhere: false,
+  };
+
+  if (r.scope_id) held.scopes.add(r.scope_id);
+  else held.anywhere = true;
+
+  byPerson.set(person.id, held);
+}
+
+const holders = [...byPerson.values()];
 
 const rows = (projects ?? [])
   /* Only projects with a place in something. A refused request has no
@@ -352,14 +379,25 @@ const rows = (projects ?? [])
     })),
   });
 
+  /* **Oversight, per place.** A project in the class and the club has two,
+     and which one answers depends on which place is being asked about. */
+  const overseerOf = new Map<string, any>();
+  for (const a of p.project_authors ?? []) {
+    if (a.role === 'officer' && a.participation_id) overseerOf.set(a.participation_id, a);
+  }
+
   return {
     ...p,
     entry,
     places: placesHere,
+    overseerOf,
+    /* The places nobody is looking after. The queue's unit of work: a
+       project is not "assigned" or "unassigned", each of its places is. */
+    open: placesHere.filter((x: any) => !overseerOf.has(x.id)),
     authors: (p.project_authors ?? []).filter((a: any) => a.role === 'author'),
     officers: (p.project_authors ?? []).filter((a: any) => a.role === 'officer'),
     selfManaged: (p.project_authors ?? []).filter(
-      (a: any) => a.role === 'author' && a.self_managed_at
+      (a: any) => a.role === 'officer' && a.self_managed_at
     ),
     /* A sponsor hangs off a participation now, so the project it belongs to
        comes through the embedded row. Any current sponsor on any of the
@@ -371,20 +409,61 @@ const rows = (projects ?? [])
   };
 });
 
-const looked = (r: any) => r.officers.length > 0 || r.selfManaged.length > 0;
+/**
+ * **Looked after in every program it is in, not in one of them.**
+ *
+ * This asked whether the project had an officer at all. A project in the
+ * class and the club has two programs and needs two people — the Elder and
+ * the club's officer are different roles held by different students, the way
+ * the class teacher and the fair's sponsor are different teachers (22.18).
+ * Assigning one dropped the project off this queue entirely, and the other
+ * program was left with nobody while the page said it was handled.
+ *
+ * Coverage is read off the officer's own role scope, which is the same
+ * question `canTake` asks when deciding who may be offered — so the queue
+ * and the dropdown now agree about what an assignment means. An unscoped
+ * officer covers anything; an author looking after their own work covers the
+ * project, because nobody was assigned anywhere.
+ */
+/* Looked after in every place it is in.
+ 
+   This once asked whether the project had an officer at all, then briefly
+   inferred coverage from the officer's own role scope. Both were workarounds
+   for oversight not naming a place. It does now, so the question is the
+   simple one: has each of this project's places got somebody. */
+const looked = (r: any) => r.open.length === 0;
 const unassigned = rows.filter((r) => !looked(r));
 const assignedRows = rows.filter(looked);
 
 const load = holders.map((h: any) => ({
-  id: h.users.id,
-  name: h.users.display_name,
+  id: h.id,
+  name: h.name,
   role: h.role,
-  scope: h.scope_id,
+  scopes: h.scopes,
+  anywhere: h.anywhere,
   count: assignedRows.filter((r) =>
-    r.officers.some((o: any) => o.users?.id === h.users.id) ||
-    r.selfManaged.some((o: any) => o.users?.id === h.users.id)
+    r.officers.some((o: any) => o.users?.id === h.id) ||
+    r.selfManaged.some((o: any) => o.users?.id === h.id)
   ).length,
 })).sort((a, b) => a.count - b.count);
+
+/**
+ * Whether this person may be put in charge of this project.
+ *
+ * The officers of the project's own programs, and nobody else: a fair officer
+ * has no business being made responsible for a project in a class they have
+ * nothing to do with, and a school-wide list is how that happens (6.4).
+ *
+ * Written once and called twice, by the test that decides whether to draw the
+ * dropdown at all and by the loop that fills it. They have to agree — a
+ * dropdown drawn because somebody qualifies and then filled with nobody is
+ * the emptier failure of the two.
+ */
+const canTake = (h: any, projectId: string, programId?: string) =>
+  h.anywhere ||
+  (programId
+    ? h.scopes.has(programId)
+    : (programsOf.get(projectId) ?? []).some((p: string) => h.scopes.has(p)));
 
 const fmt = (d: string | null) =>
   d ? new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '—';
@@ -524,22 +603,22 @@ const fmt = (d: string | null) =>
           row needs to say sits under its title. */}
       {unassigned.length > 0 ? (
         <ul class="queue">
-          {unassigned.map((r) => (
+          {unassigned.flatMap((r) =>
+            /* **One entry per place, not per project.** A project in the
+                class and the club appears twice here, because it is two
+                jobs: the Elder and the club's officer are different people
+                and are chosen by different people. It read as one row, and
+                filling it dropped the project off this queue with the other
+                program still unmanned. */
+            r.open.map((place: any) => (
             <li class={r.worst?.severity === 'disqualifying' ? 'row-bad' : ''}>
               <a class="q-title" href={`/app/project/${r.id}/`}>{r.title}</a>
               <span class="q-sub">
                 {r.authors.map((a: any) => a.users?.display_name).join(', ') || 'No authors'}
-                {/* Where it belongs, because that is what somebody is being
-                    asked to look after. A project in the class and at the
-                    fair names both. */}
-                {(r.places ?? []).length > 0 && (
-                  <>
-                    {' · '}
-                    {(r.places ?? [])
-                      .map((place: any) => (place.programs as any)?.name)
-                      .filter(Boolean)
-                      .join(', ')}
-                  </>
+                {' · '}
+                <b>{(place.programs as any)?.name}</b>
+                {(r.places ?? []).length > 1 && (
+                  <> · also in {(r.places ?? []).length - 1} other {(r.places ?? []).length === 2 ? 'program' : 'programs'}</>
                 )}
                 {' · registered '}{fmt(r.created_at)}
                 {' · '}
@@ -547,26 +626,16 @@ const fmt = (d: string | null) =>
                 {r.total ? ` · ${r.done} of ${r.total} done` : ''}
               </span>
               <span class="q-do">
-                {load.filter(
-                  (h) => !h.scope || (programsOf.get(r.id) ?? []).includes(h.scope)
-                ).length > 0 ? (
+                {load.some((h) => canTake(h, r.id, place.program_id)) ? (
                   <form method="POST" action="#outcome" class="inline">
-                    <input type="hidden" name="project_id" value={r.id} />
+                    <input type="hidden" name="place_id" value={place.id} />
                     <select
                       name="user_id"
                       required
-                      aria-label={`${staffHeader} for ${r.title ?? 'this project'}`}
+                      aria-label={`${staffHeader} for ${r.title ?? 'this project'} in ${(place.programs as any)?.name}`}
                     >
-                      {/* The officers of this project's own programs. A fair
-                          officer has no business being put in charge of a
-                          project in a class they have nothing to do with,
-                          and a school-wide list is how that happens. An
-                          unscoped role belongs to the advisor and fits
-                          anything. */}
                       {load
-                        .filter(
-                          (h) => !h.scope || (programsOf.get(r.id) ?? []).includes(h.scope)
-                        )
+                        .filter((h) => canTake(h, r.id, place.program_id))
                         .map((h) => (
                           <option value={h.id}>{h.name} ({h.count})</option>
                         ))}
@@ -576,11 +645,11 @@ const fmt = (d: string | null) =>
                 ) : (
                   /* An empty dropdown is indistinguishable from a broken
                      one, so say what is missing instead of rendering one. */
-                  <span class="t-sm">Nobody holds that role in this program</span>
+                  <span class="t-sm">Nobody runs this program</span>
                 )}
               </span>
             </li>
-          ))}
+          )))}
         </ul>
       ) : (
         <div class="note">
@@ -610,44 +679,59 @@ const fmt = (d: string | null) =>
             </tr>
           </thead>
           <tbody>
-            {assignedRows.map((r) => (
+            {/* **A row per place.** The officer column showed every officer
+                on the project side by side with nothing saying which
+                belonged where, so an advisor had to know that one of them
+                was the class's. A project in two programs is two rows, each
+                naming its own program and its own person. */}
+            {assignedRows.flatMap((r) =>
+              (r.places ?? []).map((place: any) => {
+                const held = r.overseerOf.get(place.id);
+                return (
               <tr>
-                <td><a href={`/app/project/${r.id}/`}>{r.title}</a></td>
+                <td>
+                  <a href={`/app/project/${r.id}/`}>{r.title}</a>
+                  <span class="in">{(place.programs as any)?.name}</span>
+                </td>
                 <td class="who">
-                  {r.officers.length > 0
-                    ? r.officers.map((o: any) => o.users?.display_name).join(', ')
-                    : <>{r.selfManaged.map((o: any) => o.users?.display_name).join(', ')}
-                        <span class="self">self-managed</span></>}
+                  {held?.users?.display_name}
+                  {held?.self_managed_at && <span class="self">self-managed</span>}
                 </td>
                 <td class="spon">{r.sponsor ? r.sponsor.teacher_name : <span class="miss">none named</span>}</td>
                 <td>{r.total ? `${r.done} of ${r.total}` : '—'}</td>
                 <td>
                   <form method="POST" action="#outcome" class="inline">
-                    <input type="hidden" name="project_id" value={r.id} />
-                    <input
-                      type="hidden"
-                      name="current_id"
-                      value={r.officers[0]?.users?.id ?? r.selfManaged[0]?.users?.id ?? ''}
-                    />
+                    <input type="hidden" name="place_id" value={place.id} />
+                    <input type="hidden" name="current_id" value={held?.users?.id ?? ''} />
                     <select name="user_id" aria-label="Move to another officer">
-                      {load.map((h) => (
-                        <option
-                          value={h.id}
-                          selected={
-                            r.officers.some((o: any) => o.users?.id === h.id) ||
-                            r.selfManaged.some((o: any) => o.users?.id === h.id)
-                          }
-                        >
-                          {h.name} ({h.count})
-                        </option>
-                      ))}
+                      {/* The same rule as assigning, which this did not
+                          apply: it listed every officer at the school, so
+                          the fair's officers could be moved onto a class
+                          project through the reassign column while the
+                          assign column correctly refused them.
+
+                          Whoever holds it now is always listed, whatever
+                          their scope, because a select that cannot show its
+                          own current value silently proposes a change. */}
+                      {load
+                        .filter(
+                          (h) =>
+                            canTake(h, r.id, place.program_id) || h.id === held?.users?.id
+                        )
+                        .map((h) => (
+                          <option value={h.id} selected={h.id === held?.users?.id}>
+                            {h.name} ({h.count})
+                          </option>
+                        ))}
                       <option value="">Unassign</option>
                     </select>
                     <button class="btn btn-sm" type="submit">Move</button>
                   </form>
                 </td>
               </tr>
-            ))}
+                );
+              })
+            )}
           </tbody>
         </table>
       ) : (
@@ -762,6 +846,19 @@ const fmt = (d: string | null) =>
      noticeably taller than the seven around it. Inline, at the size of the
      surrounding text, it reads as part of the same fact and costs no
      height. */
+  /* Which place this row is about. A project in the class and the club is
+     two rows here, and without the program named they read as a duplicate
+     rather than as two jobs. Under the title rather than beside it, because
+     the title is the link and the program is the qualifier. */
+  .in {
+    display: block;
+    margin-top: 2px;
+    font-family: var(--face-num);
+    font-size: 0.78rem;
+    letter-spacing: 0.04em;
+    color: var(--ink-3);
+  }
+
   .self {
     white-space: nowrap;
     color: var(--ink-3);

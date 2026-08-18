@@ -109,6 +109,42 @@ if (Astro.request.method === 'POST') {
     else recordedNote = 'Written. Everybody in this program sees it on that step.';
   }
 
+  /* Keeping a warning honest, on the step it belongs to.
+  
+     These two lived on `/app/warnings/`, a page listing every warning the
+     program had ever collected. That page is gone: a raw list is read by
+     nobody before they need it and is the wrong shape for finding the one
+     line that matters once they do. But retiring and confirming are not the
+     list -- they are how the advice stops being stale, and losing them with
+     the page would have left a club unable to withdraw a warning that had
+     stopped being true.
+  
+     So they moved to where the warning is already shown. Retiring is not
+     deleting: the row is kept and marked, because "we used to warn about
+     this and it no longer applies" is itself worth knowing at handover. */
+  if (action === 'warning_state' && me.runsTheClub) {
+    const what = String(form.get('what') ?? '');
+    const warningId = String(form.get('warning_id') ?? '');
+
+    const patch =
+      what === 'retire'
+        ? { retired_at: new Date().toISOString(), retired_by: account.id }
+        : { confirmed_at: new Date().toISOString(), confirmed_by: account.id };
+
+    const { error: e } = await supabase
+      .from('step_warnings')
+      .update(patch)
+      .eq('id', warningId);
+
+    if (e) error = e.message;
+    else {
+      recordedNote =
+        what === 'retire'
+          ? 'Retired. It is kept, not deleted.'
+          : 'Confirmed for this season.';
+    }
+  }
+
   if (action === 'money') {
     const asNumber = (name: string) => {
       const raw = String(form.get(name) ?? '').trim();
@@ -333,10 +369,14 @@ const { data: milestones } = await supabase
   .order('due_on', { ascending: true, nullsFirst: false })
   .order('sort_order', { ascending: true });
 
+/* Current ones only. A superseded row is the version somebody replaced, and
+   reading it back would answer "what has been recorded" with a document that
+   is no longer the one. */
 const { data: deliverables } = await supabase
   .from('deliverables')
   .select('id, milestone_id, label, type, signed_on, external_url, verified_at')
-  .eq('participation_id', id);
+  .eq('participation_id', id)
+  .is('superseded_at', null);
 
 /* This participation's sponsor, not the project's. A teacher who signed for
    the class did not thereby sign for the fair, and the approval obligation
@@ -417,11 +457,25 @@ const savedVideo = parseVideo((entry?.projects as any)?.video_url);
 
 const { data: overseers } = await supabase
   .from('project_authors')
-  .select('role, self_managed_at, accepted_at, users(display_name)')
+  .select('user_id, role, participation_id, self_managed_at, accepted_at, users(display_name)')
   .eq('project_id', entry.project_id);
 
+/**
+ * **The officer of *this* place.**
+ *
+ * A project in the class and the club has an Elder and a club officer, and
+ * they are two different students — the same way it has two sponsors
+ * (22.18). Oversight names the participation now, so this is a lookup rather
+ * than a guess: it used to take the first officer row on the project and
+ * show that person on every participation page, and briefly inferred
+ * coverage from the officer's standing role, which could not tell "assigned
+ * here" from "runs this program".
+ *
+ * An author looking after their own work is an oversight row like any other,
+ * marked self managed.
+ */
 const officer = (overseers ?? []).find(
-  (a: any) => a.role === 'officer' || (a.role === 'author' && a.self_managed_at)
+  (a: any) => a.role === 'officer' && a.participation_id === entry.id
 );
 
 /* Accepted authors only. An invitation nobody answered is not a byline, and
@@ -577,6 +631,41 @@ const expected = (() => {
 
   return [...byId.values()];
 })();
+
+/**
+ * Whether a deliverable belongs on its deadline row or in a section of its
+ * own.
+ *
+ * One rule, applied to what the program actually asks for: **an artifact is
+ * shown where it is owed, and an artifact owed in several places gets one
+ * home so it cannot be recorded twice.**
+ *
+ * A class asks for twenty-two things across twenty-nine steps and shares
+ * none of them, so *record it below* sent a student away from the row they
+ * were reading to a list where the same words appeared again. A fair shares
+ * three — one research plan satisfies the process, the club's reading and
+ * the fair's submission (6.8) — and folding those into rows would put the
+ * same form under three deadlines.
+ *
+ * So the question is asked of the program rather than settled once. It is
+ * also the honest reading of 11.8b either way: doneness is derived from the
+ * artifact existing, and only one form writes it.
+ */
+const sharedDeliverable = expected.some((d: any) => d.steps.length > 1);
+const inline = !sharedDeliverable;
+
+/**
+ * What this deadline owes, resolved through the step it came from.
+ *
+ * Through `expected` rather than through the template again, so the row and
+ * the section below are answering out of one list — including the fact that
+ * a conditional deliverable this project does not need is not in it.
+ */
+const wantedBy = (m: any): any[] => {
+  const step = stepFor(m.name);
+  if (!step) return [];
+  return expected.filter((d: any) => d.steps.some((s: any) => s.id === step.id));
+};
 
 
 /* The milestone row a template step became. Recording a deliverable marks
@@ -889,7 +978,7 @@ const sectionNo = new Map(sections.map((section, i) => [section.id, String(i + 1
             {of?.met ? (
               <span>
                 {of.says}
-                {key === 'officer' && officer?.role === 'author' && officer?.self_managed_at
+                {key === 'officer' && officer?.self_managed_at
                   ? ', self managed'
                   : ''}
               </span>
@@ -1217,14 +1306,60 @@ const sectionNo = new Map(sections.map((section, i) => [section.id, String(i + 1
                       </form>
                     ) : null
                   ) : stepFor(m.name) && (stepFor(m.name).deliverables ?? []).length > 0 ? (
-                    /* Its deliverables are recorded in one place, below.
-                       Two forms for one obligation meant a deadline could be
-                       ticked complete with nothing behind it, and a
-                       deliverable could exist against a deadline still
-                       reading open. */
-                    <a class="linkish" href="#deliverables">
-                      {satisfied(m) ? 'Recorded' : 'Record it below'}
-                    </a>
+                    inline ? (
+                      /* **Where it is owed.**
+                      
+                         The row said *record it below* and sent somebody to a
+                         section listing the same obligation again, which for
+                         a class is twenty-two round trips through one page.
+                         The form is small — a date and an address — so it
+                         fits where the deadline is.
+                      
+                         Still one form, and still no status control: the row
+                         does not offer to be ticked, it offers to be
+                         satisfied, and doneness is read back from the
+                         artifact existing (11.8b). Closed by default, because
+                         twenty-nine open forms is not a table anybody can
+                         scan. */
+                      wantedBy(m).every((d: any) => recorded.has(d.id)) ? (
+                        <a class="linkish" href={`#d-${wantedBy(m)[0]?.id}`}>Recorded</a>
+                      ) : (
+                        <details class="rec">
+                          <summary>Record it</summary>
+                          {wantedBy(m)
+                            .filter((d: any) => !recorded.has(d.id))
+                            .map((d: any) => (
+                              <form method="POST" action="#outcome" class="recf">
+                                <input type="hidden" name="action" value="deliverable" />
+                                <input type="hidden" name="deliverable" value={d.id} />
+                                <input type="hidden" name="label" value={d.name} />
+                                <input type="hidden" name="milestone" value={m.id} />
+
+                                {wantedBy(m).length > 1 && <p class="recf-n">{d.name}</p>}
+
+                                <label>
+                                  <span>Date on it</span>
+                                  <input class="in" type="date" name="signed_on" />
+                                </label>
+                                <label>
+                                  <span>Google Drive or other URL</span>
+                                  <input class="in" type="url" name="external_url" />
+                                </label>
+                                <button class="btn btn-sm" type="submit">Record it</button>
+                              </form>
+                            ))}
+                        </details>
+                      )
+                    ) : (
+                      /* Shared between steps, so it has one home below. Two
+                         forms for one obligation meant a deadline could be
+                         ticked complete with nothing behind it, and a
+                         deliverable could exist against a deadline still
+                         reading open. */
+                      <a class="linkish" href={`#d-${wantedBy(m)[0]?.id ?? ''}`}>
+                        {satisfied(m) ? 'Recorded' : 'Record it below'}
+                      </a>
+                    )
                   ) : (
                     /* A step with nothing to hand in still has to be
                        markable: practice judging, a board measured. */
@@ -1269,17 +1404,16 @@ const sectionNo = new Map(sections.map((section, i) => [section.id, String(i + 1
         </div>
 
         <p class="aside">
-          Everything this program asks for, in one place. Recording one here
-          completes the deadline it belongs to, which is why the deadlines
-          table has no controls on it: a thing is done when the thing exists,
-          not when somebody says so.
+          {inline
+            ? 'Everything this program asks for, with the guidance and anything the club has learned about each. Recording happens on the deadline it belongs to.'
+            : 'Everything this program asks for, in one place. Several deadlines want the same document here, so it is recorded once and completes all of them.'}
         </p>
 
         <ul class="dlist">
           {expected.map((d) => {
             const have = recorded.get(d.id);
             return (
-              <li class:list={['dl', have && 'have']}>
+              <li class:list={['dl', have && 'have']} id={`d-${d.id}`}>
                 <div class="dl-what">
                   <p class="dl-name">
                     {d.name}
@@ -1319,6 +1453,30 @@ const sectionNo = new Map(sections.map((section, i) => [section.id, String(i + 1
                             {w.users?.display_name ?? `A ${staffWord(program).toLowerCase()}`}, {fmt(w.created_at)}
                             {!w.confirmed_at && ', not confirmed this season'}
                           </span>
+
+                          {/* Only the people who run it, and only here: the
+                              judgment about whether advice still holds is
+                              made looking at the advice, not down a list. */}
+                          {me.runsTheClub && (
+                            <span class="dl-keep">
+                              {!w.confirmed_at && (
+                                <form method="POST" action="#outcome" class="inline">
+                                  <input type="hidden" name="action" value="warning_state" />
+                                  <input type="hidden" name="what" value="confirm" />
+                                  <input type="hidden" name="warning_id" value={w.id} />
+                                  <button class="btn btn-2 btn-sm" type="submit">
+                                    Still true
+                                  </button>
+                                </form>
+                              )}
+                              <form method="POST" action="#outcome" class="inline">
+                                <input type="hidden" name="action" value="warning_state" />
+                                <input type="hidden" name="what" value="retire" />
+                                <input type="hidden" name="warning_id" value={w.id} />
+                                <button class="btn btn-2 btn-sm" type="submit">Retire</button>
+                              </form>
+                            </span>
+                          )}
                         </p>
                       ))}
                     </div>
@@ -1389,7 +1547,7 @@ const sectionNo = new Map(sections.map((section, i) => [section.id, String(i + 1
                       )}
                       {have.verified_at && <p class="dl-ver">Checked by a {staffWord(program).toLowerCase()}</p>}
                     </>
-                  ) : iAuthor ? (
+                  ) : iAuthor && !inline ? (
                     <form method="POST" action="#outcome" class="dl-form-in">
                       <input type="hidden" name="action" value="deliverable" />
                       <input type="hidden" name="deliverable" value={d.id} />
@@ -1415,6 +1573,13 @@ const sectionNo = new Map(sections.map((section, i) => [section.id, String(i + 1
 
                       <button class="btn btn-sm" type="submit">Record it</button>
                     </form>
+                  ) : iAuthor ? (
+                    /* The form is on the deadline this belongs to. Two copies
+                       of one form on one page is how the two drift, and the
+                       row is where somebody is when they think of it. */
+                    <p class="dl-none">
+                      Record it on <a href="#deadlines">{d.steps[0]?.name ?? 'its deadline'}</a>
+                    </p>
                   ) : (
                     <p class="dl-none">Not recorded</p>
                   )}
@@ -1937,15 +2102,27 @@ const sectionNo = new Map(sections.map((section, i) => [section.id, String(i + 1
      window and progress — so the eye lands on five headings rather than
      reading nineteen lines to find where it is. */
   .phased .phase-row th {
-    padding: 22px 0 8px;
-    border-bottom: 1px solid var(--ink);
+    /* A band rather than a heavier line. Twenty-nine rows in one table need
+       the phase divisions to be visible from the corner of the eye, and a
+       rule under a bold line still reads as a row: the wash and the mark
+       coloured left edge are what make it a division. */
+    padding: 14px 12px 12px;
+    background: var(--sunk);
+    border-top: 1px solid var(--rule);
+    border-bottom: 2px solid var(--brand);
+    border-left: var(--edge) solid var(--brand-mark);
     text-align: left;
     font-family: var(--face-ui);
     font-weight: 600;
-    background: none;
   }
 
-  .phased tbody .phase-row:first-child th { padding-top: 6px; }
+  /* The zebra in ui.css counts every row, phase headings included, which put
+     a wash on half the data rows out of step with their own group. Each
+     phase starts its own count. */
+  .phased tbody tr td { background: var(--card); }
+  .phased tbody tr:hover td { background: var(--ready-bg); }
+
+  .phased tbody .phase-row:first-child th { padding-top: 10px; border-top: 0; }
 
   .phase-name {
     font-size: 1.02rem;
@@ -2071,6 +2248,14 @@ const sectionNo = new Map(sections.map((section, i) => [section.id, String(i + 1
     font-size: 0.76rem;
     color: var(--ink-3);
   }
+  /* Present without competing. Keeping the advice honest is an occasional
+     act by two or three people, and the warning is what everybody else is
+     here to read. */
+  .dl-keep {
+    display: flex;
+    gap: 6px;
+    margin-top: 6px;
+  }
   .dl-add { margin-top: 10px; }
   .dl-add summary {
     cursor: pointer;
@@ -2132,6 +2317,46 @@ const sectionNo = new Map(sections.map((section, i) => [section.id, String(i + 1
   }
 
   .statusf.simple { grid-template-columns: auto auto auto; }
+
+  /* Recording, on the row that asked for it.
+  
+     A disclosure rather than an open form, because the table has twenty-nine
+     rows and a table you can scan is the point of a table. The summary sits at
+     the size of the other controls in this column, so the row reads as one
+     thing rather than as a link with a widget stuck to it. */
+  .rec > summary {
+    font-family: var(--face-ui);
+    font-size: 0.9rem;
+    cursor: pointer;
+    color: var(--link);
+    list-style: none;
+  }
+  .rec > summary::-webkit-details-marker { display: none; }
+  .rec > summary::after { content: ' +'; color: var(--ink-3); }
+  .rec[open] > summary::after { content: ' \2212'; }
+
+  .recf { margin-top: 10px; max-width: 26rem; }
+  .recf-n { margin: 0 0 6px; font-weight: 600; font-size: 0.92rem; }
+  .recf label { display: block; margin-bottom: 8px; }
+  .recf label > span {
+    display: block;
+    margin-bottom: 3px;
+    font-family: var(--face-ui);
+    font-size: 0.82rem;
+    color: var(--ink-2);
+  }
+  .recf .in {
+    width: 100%;
+    padding: 6px 8px;
+    border: 1px solid var(--rule);
+    background: var(--card);
+    color: var(--ink);
+    font: inherit;
+    font-size: 0.9rem;
+  }
+  /* Two forms under one deadline happens where a step asks for two things.
+     Ruled apart so they do not read as one form with four fields. */
+  .recf + .recf { border-top: 1px solid var(--rule-fine); padding-top: 10px; }
 
   .statusf {
     display: grid;
@@ -2224,13 +2449,17 @@ const sectionNo = new Map(sections.map((section, i) => [section.id, String(i + 1
 
   /* The number above its heading, matching the rail exactly. */
   .sec-n {
-    display: block;
+    /* In line with the label rather than above it, at the weight of a folio
+       in the margin of a printed page. The one loud thing in the head. */
     font-family: var(--face-num);
-    font-size: 0.78rem;
-    font-weight: 400;
-    letter-spacing: 0.08em;
-    color: var(--ink-3);
-    margin-bottom: 2px;
+    font-size: 1.05rem;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    /* The school's hue, not the mark. The mark is 3.2:1 on a card, which is
+       under this project's AA floor for text at this size — it is an edge
+       colour, and edges are exempt because nobody reads them. */
+    color: var(--brand);
+    margin: 0;
   }
 
   /* A section landed on sits under the masthead otherwise, with its own

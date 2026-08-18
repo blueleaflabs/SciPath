@@ -685,6 +685,337 @@ $fmt$, :'author', :'author', :'author', :'a_cohort', :'a_cohort', :'a_cohort',
       :'author', :'a_cohort', :'a_cohort', :'a_cohort', :'a_cohort',
       :'a_cohort', :'a_cohort') \gexec
 
+-- ── Leaving a class that publishes dates ───────────────────────────────────
+--
+-- The assertion above passes on a cohort that publishes nothing, so nothing
+-- was ever copied onto the participation and the delete had no children to
+-- collide with. In the application every cohort has a calendar, and
+-- `entry_milestones.participation_id` is `on delete restrict`, so leaving
+-- failed on a constraint name the moment it was tried on real data.
+--
+-- Same shape as the four in 19.9: the check was real and the state it ran
+-- against was thinner than the state it was standing in for. This one gives
+-- the cohort dates first.
+
+select format($fmt$
+do $body$
+declare
+  v_org     uuid;
+  v_project uuid;
+  v_place   uuid;
+  v_copied  int;
+begin
+  select org_id into v_org from public.programs where id = %L::uuid;
+
+  insert into public.program_milestones (program_id, org_id, name, kind, due_on)
+  values (%L::uuid, v_org, 'Research plan due', 'submission', '2027-02-01')
+  on conflict do nothing;
+
+  /* A derived obligation, to prove the marker survives the copy. It did not:
+     `app.copy_milestones` was extracted from `enter_program` before
+     `satisfied_by` existed and never learned the column, while
+     `start_entry`'s own inline copy did -- so a sponsor could close an
+     approval only for an entry made by the one path that creates a project
+     and enters in a single act. Every class, and every entry made by adding
+     an existing project, carried obligations nothing could ever satisfy. */
+  insert into public.program_milestones (program_id, org_id, name, kind, due_on, satisfied_by)
+  values (%L::uuid, v_org, 'Teacher approval', 'approval', '2027-01-15', 'sponsor')
+  on conflict do nothing;
+
+  perform set_config('request.jwt.claim.sub', %L, true);
+
+  /* Started *in* the class, which is the path the picker now defaults to and
+     the one that copied nothing. */
+  v_project := public.start_project('Left and rejoined', null, %L::uuid);
+
+  select pa.id into v_place from public.participations pa
+   where pa.project_id = v_project and pa.program_id = %L::uuid;
+
+  if v_place is null then
+    raise exception 'FAIL starting a project in a cohort recorded no participation';
+  end if;
+
+  select count(*) into v_copied from public.entry_milestones
+   where participation_id = v_place;
+
+  if v_copied = 0 then
+    raise exception 'FAIL a project started in a class got no calendar';
+  end if;
+
+  if not exists (
+    select 1 from public.entry_milestones
+     where participation_id = v_place and satisfied_by = 'sponsor'
+  ) then
+    raise exception
+      'FAIL the copied calendar lost satisfied_by, so nothing can ever close it';
+  end if;
+
+  raise notice '  ok   a project started in a class carries the class calendar';
+  raise notice '  ok   and the obligations that follow from a fact stay marked';
+
+  perform public.set_project_cohort(v_project, %L::uuid, false);
+
+  if exists (select 1 from public.participations where id = v_place) then
+    raise exception 'FAIL leaving left the participation in place';
+  end if;
+
+  if exists (select 1 from public.entry_milestones where participation_id = v_place) then
+    raise exception 'FAIL leaving left the copied dates behind';
+  end if;
+
+  raise notice '  ok   and can leave, taking the copies with it';
+
+  /* Rejoining makes them again, which is what lets the copies be deleted
+     without ceremony. */
+  perform public.set_project_cohort(v_project, %L::uuid, true);
+
+  select pa.id into v_place from public.participations pa
+   where pa.project_id = v_project and pa.program_id = %L::uuid;
+
+  if (select count(*) from public.entry_milestones where participation_id = v_place) = 0 then
+    raise exception 'FAIL rejoining did not restore the calendar';
+  end if;
+
+  raise notice '  ok   and rejoining makes them afresh';
+
+  /* Evidence is refused rather than destroyed. A sponsor is a teacher's
+     signature and leaving must not silently take it with it. */
+  perform public.record_sponsor(v_place, 'K. Gupta', 'kgupta@fuhsd.org', '2026-09-01');
+
+  begin
+    perform public.set_project_cohort(v_project, %L::uuid, false);
+    raise exception 'FAIL leaving deleted a recorded sponsor';
+  exception when others then
+    if sqlerrm like 'FAIL%%' then raise; end if;
+    if sqlerrm not like '%%sponsoring this project here%%' then
+      raise exception 'FAIL refused for the wrong reason: %%', sqlerrm;
+    end if;
+    raise notice '  ok   and refuses while a sponsor is recorded, in words';
+  end;
+end $body$;
+$fmt$, :'a_cohort', :'a_cohort', :'a_cohort', :'author', :'a_cohort',
+      :'a_cohort', :'a_cohort', :'a_cohort', :'a_cohort', :'a_cohort') \gexec
+
+-- ── An entry records the cohort it went through ────────────────────────────
+--
+-- A second cohort, so that "exactly one prepares for it" has something to be
+-- exactly one of. The fixture school runs one class and one fair; a school
+-- running two clubs for the same fair is the case the rule declines to guess
+-- in, and it cannot be tested without the second club existing.
+
+insert into public.programs
+  (org_id, slug, name, season_year, family, kind, current, source, status, program_role)
+values
+  ('11111111-1111-1111-1111-111111111111', 'club-2027', 'Club 2027', 2027,
+   'scvsefa', 'competition', true, 'external', 'open', 'cohort')
+on conflict do nothing;
+
+\set QUIET on
+select id as second_cohort from public.programs where slug = 'club-2027' \gset
+\set QUIET off
+--
+-- 22.16 gave `participations` a `via_id` and nothing but the seed had ever
+-- written one, so the officer word, the selection cap and the school's own
+-- layer of dates could not resolve for anything a real person made.
+--
+-- The question `enter_program` asks is narrow on purpose: not which cohorts
+-- this student is in, but which of *this project's* cohorts prepares for
+-- *this* opportunity. A student in the class and the club, entering the fair
+-- the club prepares for, has one answer while being in two cohorts.
+
+select format($fmt$
+do $body$
+declare
+  v_project uuid;
+  v_place   uuid;
+  v_via     uuid;
+  v_entry   uuid;
+begin
+  perform set_config('request.jwt.claim.sub', %L, true);
+
+  /* The class prepares for nothing; it is the other cohort that does. */
+  update public.programs set prepares_for = %L::uuid where id = %L::uuid;
+
+  v_project := public.start_project('Entered through the club', null, %L::uuid);
+
+  select pa.id into v_place from public.participations pa
+   where pa.project_id = v_project and pa.program_id = %L::uuid;
+
+  v_entry := public.enter_program(v_project, %L::uuid);
+
+  select via_id into v_via from public.participations where id = v_entry;
+
+  if v_via is null then
+    raise exception 'FAIL the entry did not record the cohort it went through';
+  end if;
+
+  if v_via is distinct from v_place then
+    raise exception 'FAIL the entry named the wrong cohort';
+  end if;
+
+  raise notice '  ok   an entry records the cohort it was made through';
+
+  /* And declines to guess. A second cohort preparing for the same fair is a
+     school running two clubs for it, and either answer would put a project on
+     a roster somebody has to answer for. */
+  update public.participations set via_id = null where id = v_entry;
+  update public.programs set prepares_for = %L::uuid where id = %L::uuid;
+  insert into public.participations (org_id, project_id, program_id)
+  select org_id, v_project, %L::uuid from public.projects where id = v_project
+  on conflict do nothing;
+
+  perform public.enter_program(v_project, %L::uuid);
+  select via_id into v_via from public.participations where id = v_entry;
+
+  if v_via is not null then
+    raise exception 'FAIL two cohorts prepare for it and one was chosen anyway';
+  end if;
+
+  raise notice '  ok   and leaves it unanswered where two cohorts prepare for it';
+end $body$;
+$fmt$, :'author', :'a_fair', :'a_cohort', :'a_cohort', :'a_cohort', :'a_fair',
+      :'a_fair', :'second_cohort', :'second_cohort', :'a_fair') \gexec
+
+-- ── A deliverable recorded twice replaces the first ────────────────────────
+--
+-- `record_deliverable` inserted unconditionally, and the only thing stopping
+-- two live rows for one obligation was the page hiding the form once anything
+-- existed. A protection that lives in the markup ends the moment the markup
+-- moves — which is what putting the form on the deadline row does.
+--
+-- Correcting a record is ordinary: a link recorded, then the finished
+-- document; a form signed again after the first was refused. So the earlier
+-- row is kept and marked, as a sponsor is (22.18), and the date it carried
+-- stays readable because `checkDateOrder` reads dates against signatures.
+
+select format($fmt$
+do $body$
+declare
+  v_place uuid;
+  v_first uuid;
+  v_second uuid;
+  v_live  int;
+begin
+  /* A place on a project this person actually authors, since only an author
+     may record against it. */
+  perform set_config('request.jwt.claim.sub', %L, true);
+
+  select pa.id into v_place
+    from public.participations pa
+    join public.project_authors a
+      on a.project_id = pa.project_id and a.user_id = %L::uuid and a.role = 'author'
+   where pa.program_id = %L::uuid
+   limit 1;
+
+  if v_place is null then
+    raise exception 'FAIL the fixture has no place for this author';
+  end if;
+
+  delete from public.deliverables where participation_id = v_place and type = 'research_plan';
+
+  v_first := public.record_deliverable(
+    v_place, null, 'research_plan', 'Project plan', '2026-10-01',
+    'https://example.invalid/draft');
+
+  v_second := public.record_deliverable(
+    v_place, null, 'research_plan', 'Project plan', '2026-10-06',
+    'https://example.invalid/final');
+
+  select count(*) into v_live from public.deliverables
+   where participation_id = v_place and type = 'research_plan'
+     and superseded_at is null;
+
+  if v_live <> 1 then
+    raise exception 'FAIL %% live rows for one obligation', v_live;
+  end if;
+
+  raise notice '  ok   recording the same thing twice leaves one current row';
+
+  if not exists (
+    select 1 from public.deliverables
+     where id = v_first and superseded_at is not null and superseded_by = v_second
+  ) then
+    raise exception 'FAIL the replaced row does not point at what replaced it';
+  end if;
+
+  raise notice '  ok   and the one it replaced says so, with its own date kept';
+end $body$;
+$fmt$, :'author', :'author', :'a_cohort') \gexec
+
+-- ── The class's Elder is not the club's officer ────────────────────────────
+--
+-- Oversight was project level, so one assignment covered every program the
+-- project was in: the participation page named the same person in both, and
+-- the queue counted the project as looked after the moment anybody took it,
+-- leaving the other program with nobody while reporting it handled.
+--
+-- Same argument as 22.18 for sponsors, and now the same shape.
+
+select format($fmt$
+do $body$
+declare
+  v_project uuid;
+  v_class   uuid;
+  v_club    uuid;
+begin
+  perform set_config('request.jwt.claim.sub', %L, true);
+  v_project := public.start_project('Looked after in two places', null, %L::uuid);
+
+  select pa.id into v_class from public.participations pa
+   where pa.project_id = v_project and pa.program_id = %L::uuid;
+
+  insert into public.participations (org_id, project_id, program_id)
+  select org_id, v_project, %L::uuid from public.projects where id = v_project
+  returning id into v_club;
+
+  /* The advisor assigns, because an author does not appoint the officer for
+     their own project. */
+  perform set_config('request.jwt.claim.sub', %L, true);
+
+  perform public.assign_officer(v_class, %L::uuid);
+
+  if not exists (
+    select 1 from public.project_authors
+     where participation_id = v_class and role = 'officer'
+  ) then
+    raise exception 'FAIL the class got no officer';
+  end if;
+
+  if exists (
+    select 1 from public.project_authors
+     where participation_id = v_club and role = 'officer'
+  ) then
+    raise exception 'FAIL assigning in the class also staffed the club';
+  end if;
+
+  raise notice '  ok   an officer is assigned to one place, not to the project';
+
+  /* The same person may look after the same project in both, which is a
+     different fact from one assignment covering both. */
+  perform public.assign_officer(v_club, %L::uuid);
+
+  if (select count(*) from public.project_authors
+       where project_id = v_project and role = 'officer') <> 2 then
+    raise exception 'FAIL one person could not hold two places on one project';
+  end if;
+
+  raise notice '  ok   and the same person may hold two places, as two rows';
+
+  /* Taking them off one leaves the other. */
+  perform public.detach_from_project(v_club, %L::uuid);
+
+  if not exists (
+    select 1 from public.project_authors
+     where participation_id = v_class and role = 'officer'
+  ) then
+    raise exception 'FAIL detaching from the club also detached from the class';
+  end if;
+
+  raise notice '  ok   and detaching from one leaves the other';
+end $body$;
+$fmt$, :'author', :'a_cohort', :'a_cohort', :'second_cohort',
+      :'advisor', :'officer', :'officer', :'officer') \gexec
+
 -- ── A class's showcase is for the class ────────────────────────────────────
 
 select format($fmt$
@@ -720,6 +1051,92 @@ begin
   end;
 end $body$;
 $fmt$, :'a_cohort', :'author', :'author', :'a_cohort') \gexec
+
+-- ── A sponsor is named at one place, not at every place ────────────────────
+--
+-- 22.18: a student in the class, the club and a fair has three sponsors and
+-- they are three different people. `sync_derived` once resolved the sponsor
+-- as any current sponsor on any of the project's participations and wrote it
+-- onto every obligation, so naming the teacher who runs the class closed the
+-- fair's approval too -- and stamped it with a signature date the fair had
+-- never been given. Nothing failed: `satisfied_by` appeared in no test and
+-- `sponsor` in no assertion, so four green suites sat on top of it.
+--
+-- Asserted on the value rather than on an exception, because the wrong answer
+-- here is a row quietly closing, which raises nothing.
+
+\set QUIET on
+select id as both_project from public.projects
+ where title = 'In the fair and the course' \gset
+select id as both_author  from public.users
+ where display_name = 'Graduated officer' \gset
+\set QUIET off
+
+select format($fmt$
+do $body$
+declare
+  v_org      uuid;
+  v_course   uuid;
+  v_fair     uuid;
+  v_here     date;
+  v_there    date;
+begin
+  select org_id into v_org from public.projects where id = %L::uuid;
+
+  select pa.id into v_course from public.participations pa
+    join public.programs p on p.id = pa.program_id
+   where pa.project_id = %L::uuid and p.slug = 'irpd-2027';
+
+  select pa.id into v_fair from public.participations pa
+    join public.programs p on p.id = pa.program_id
+   where pa.project_id = %L::uuid and p.slug = 'fair-2027';
+
+  if v_course is null or v_fair is null then
+    raise exception 'FAIL the fixture project is not in both places';
+  end if;
+
+  /* From nothing, so an earlier assertion's sponsor cannot decide this one. */
+  delete from public.project_sponsors where participation_id in (v_course, v_fair);
+  delete from public.entry_milestones
+   where participation_id in (v_course, v_fair) and satisfied_by = 'sponsor';
+
+  insert into public.entry_milestones
+    (org_id, participation_id, name, kind, due_on, satisfied_by)
+  values
+    (v_org, v_course, 'Teacher approval',   'approval', '2027-01-15', 'sponsor'),
+    (v_org, v_fair,   'Adult sponsor form', 'approval', '2027-02-01', 'sponsor');
+
+  perform set_config('request.jwt.claim.sub', %L, true);
+  perform public.record_sponsor(v_course, 'K. Gupta', 'kgupta@fuhsd.org', '2026-09-01');
+
+  select completed_on into v_here  from public.entry_milestones
+   where participation_id = v_course and satisfied_by = 'sponsor';
+  select completed_on into v_there from public.entry_milestones
+   where participation_id = v_fair   and satisfied_by = 'sponsor';
+
+  if v_here is distinct from date '2026-09-01' then
+    raise exception 'FAIL the sponsor did not close the obligation where it was named: %%',
+      coalesce(v_here::text, 'null');
+  end if;
+  raise notice '  ok   a sponsor closes the approval at the place it was named';
+
+  if v_there is not null then
+    raise exception
+      'FAIL naming the class sponsor closed the fair approval too, as of %%', v_there;
+  end if;
+  raise notice '  ok   and leaves the other place waiting on its own teacher';
+
+  /* The consequence that matters. `checkDateOrder` reads signed_on or
+     completed_on per obligation, so a borrowed date reads as a sponsor found
+     before work began and suppresses the disqualifying finding. */
+  if exists (
+    select 1 from public.project_sponsors s where s.participation_id = v_fair
+  ) then
+    raise exception 'FAIL a sponsor row appeared at a place nobody signed for';
+  end if;
+  raise notice '  ok   and records no sponsor there';
+end $body$;
+$fmt$, :'both_project', :'both_project', :'both_project', :'both_author') \gexec
 
 \echo ''
 \echo '  All function assertions passed.'

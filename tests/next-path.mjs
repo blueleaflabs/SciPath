@@ -18,6 +18,7 @@
  */
 
 import assert from 'node:assert/strict';
+import { setSessionHint, SESSION_HINT } from '../src/lib/session-hint.ts';
 import fs from 'node:fs';
 import { safeNext, signInWith, HOME } from '../src/lib/next-path.ts';
 
@@ -194,6 +195,50 @@ test('nothing sets a Secure cookie without checking the connection', () => {
   }
 
   assert.deepEqual(problems, [], "secure follows url.protocol, it is not a constant");
+});
+
+test('the session hint survives a round trip through a cookie', () => {
+  /* The masthead on every public page read this and printed
+     `Rohan%20Agarwal`. The name was encoded in `setSessionHint` and encoded
+     again by Astro's cookie writer, whose default encoder is
+     `encodeURIComponent`, so the reader's single decode left one layer on —
+     and it read as a bug in somebody's name rather than in ours.
+
+     The function is called for real, against a jar that serializes the way
+     Astro's does, and the assertion is on the string a browser would hold.
+     An earlier version of this read the source for the word `encode` and
+     shaped its own expectation around what it found, which is a test that
+     agrees with whatever it is looking at: reverting the fix left it green.
+     19.9 — a check that cannot fail is worse than no check, because it is
+     counted.
+
+     A space is the character that exposes it, and every display name with two
+     words has one. */
+  /* A jar that behaves the way Astro's does: it encodes the value unless the
+     caller supplies an encoder. Modelled here rather than imported, because
+     `cookie` is a transitive dependency of the framework and this suite
+     refuses those a few tests above — a promise nobody made is not a promise.
+     One line of behavior is a fair thing to restate; the line is the whole
+     contract being tested. */
+  let stored = '';
+  setSessionHint(
+    {
+      set: (_name, value, options = {}) => {
+        const encode = options.encode ?? encodeURIComponent;
+        stored = encode(value);
+      },
+      delete: () => {},
+    },
+    'Rohan Agarwal',
+    false
+  );
+
+  assert.ok(SESSION_HINT, 'the cookie should have a name');
+  assert.equal(
+    decodeURIComponent(stored),
+    'Rohan Agarwal',
+    `one decode should give the name back, got "${decodeURIComponent(stored)}"`
+  );
 });
 
 if (process.exitCode) {

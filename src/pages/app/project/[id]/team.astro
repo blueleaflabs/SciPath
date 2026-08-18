@@ -40,7 +40,7 @@ if (Astro.request.method === 'POST') {
 
   if (action === 'detach') {
     const { error: e } = await supabase.rpc('detach_from_project', {
-      p_project_id: id,
+      p_participation_id: String(form.get('place_id') ?? ''),
       p_user_id: String(form.get('user_id') ?? ''),
     });
     if (e) error = e.message;
@@ -49,7 +49,7 @@ if (Astro.request.method === 'POST') {
 
   if (action === 'officer') {
     const { error: e } = await supabase.rpc('assign_officer', {
-      p_project_id: id,
+      p_participation_id: String(form.get('place_id') ?? ''),
       p_user_id: String(form.get('user_id') ?? ''),
     });
     if (e) error = e.message;
@@ -83,7 +83,7 @@ if (Astro.request.method === 'POST') {
 
 const { data: project } = await supabase
   .from('projects')
-  .select('id, title, started_on, project_authors(id, role, accepted_at, self_managed_at, users(id, display_name, grad_year))')
+  .select('id, title, started_on, project_authors(id, role, participation_id, accepted_at, self_managed_at, users(id, display_name, grad_year))')
   .eq('id', id)
   .maybeSingle();
 
@@ -93,7 +93,7 @@ const attachments = project.project_authors ?? [];
 const authors = attachments.filter((a: any) => a.role === 'author');
 const officers = attachments.filter((a: any) => a.role === 'officer');
 const selfManaged = attachments.filter(
-  (a: any) => a.role === 'author' && a.self_managed_at
+  (a: any) => a.role === 'officer' && a.self_managed_at
 );
 
 /**
@@ -115,6 +115,10 @@ const askedFor = Astro.url.searchParams.get('in');
 const forProgram =
   places.find((p) => p.programId === askedFor) ??
   (places.length === 1 ? places[0] : null);
+
+/* Where the reader came from, which is the parameter and nothing else. See
+   the back link below for why this is not `forProgram`. */
+const cameFrom = askedFor ? places.find((p) => p.programId === askedFor) ?? null : null;
 
 const placeIds = places.map((p) => p.id);
 
@@ -265,7 +269,31 @@ const fmt = (d: string | null) =>
         sponsors it, and the student is the one who asks.
       </p>
       <p style="margin-top:18px">
-        <a class="btn" href={`/app/project/${id}/`}>Back to the notebook</a>
+        {/* Back to where they came from, named for what it is.
+        
+            It read "Back to the notebook" and went to the project page, which
+            is not the notebook -- that is a tab on it -- and the notebook is
+            not where anybody arrives here from. Two ways in: the project page,
+            and the participation page's own Update link, which carries `?in=`
+            so that the sponsor is recorded against the right place. Where that
+            is present the reader came from the program's page and goes back to
+            it; otherwise the project.
+
+            Keyed on `?in=` and deliberately **not** on `forProgram`, which
+            falls back to the only place a project has when the parameter is
+            absent. That fallback is right for the sponsor form -- a project in
+            one class needs no asking -- and wrong here, because it would send
+            somebody who arrived from the project page onward to a page they
+            had not come from. Which place to record against and which page to
+            return to are two questions with one convenient answer, and they
+            come apart in exactly this case. */}
+        {cameFrom ? (
+          <a class="btn" href={`/app/project/${id}/in/${cameFrom.programId}/`}>
+            Back to {(cameFrom.row.programs as any)?.name}
+          </a>
+        ) : (
+          <a class="btn" href={`/app/project/${id}/`}>Back to the project</a>
+        )}
       </p>
     </section>
 
@@ -342,7 +370,7 @@ const fmt = (d: string | null) =>
           {forProgram ? (
             <>
               <input type="hidden" name="participation_id" value={forProgram.id} />
-              <p class="t-sm" style="margin:0 0 6px">
+              <p class="t-sm whole-row">
                 For <b>{(forProgram.row.programs as any)?.name}</b>.
               </p>
             </>
@@ -438,13 +466,27 @@ const fmt = (d: string | null) =>
               </td>
               <td>
                 {attachmentLabel[a.role] ?? a.role}
-                {a.self_managed_at && <span class="sub">also looking after it</span>}
+                {/* Which place, because a project in the class and the club
+                    has two officers and two rows here would otherwise read
+                    as the same person listed twice. An author has no place:
+                    authorship is project level (23.1). */}
+                {a.participation_id && (
+                  <span class="sub">
+                    {(places.find((x: any) => x.id === a.participation_id)?.row?.programs as any)
+                      ?.name ?? 'a place that has gone'}
+                  </span>
+                )}
+                {a.self_managed_at && <span class="sub">looking after their own work</span>}
               </td>
               <td>{fmt(a.accepted_at)}</td>
               <td>
                 {me.runsTheClub && a.role !== 'author' && (
                   <form method="POST" action="#outcome" class="inline">
                     <input type="hidden" name="action" value="detach" />
+                    {/* The place this oversight is for, carried by the row
+                        that shows it. Removing somebody used to take them
+                        off every program the project was in. */}
+                    <input type="hidden" name="place_id" value={a.participation_id} />
                     <input type="hidden" name="user_id" value={a.users?.id} />
                     <button type="submit" class="linkish">Remove</button>
                   </form>
@@ -485,9 +527,39 @@ const fmt = (d: string | null) =>
           <b>Assign a {staff.toLowerCase()}</b>
           <span>{staffPlural} and the advisor</span>
         </div>
-        {candidates.length > 0 ? (
+        {places.length === 0 ? (
+          <p class="t-sm" style="max-width:var(--measure-text)">
+            A {staff.toLowerCase()} looks after a project in a class or a fair,
+            and this project is in neither yet. Add it to one first.
+          </p>
+        ) : candidates.length > 0 ? (
           <form method="POST" action="#outcome" class="assign">
             <input type="hidden" name="action" value="officer" />
+            {/* **Which place.** Oversight belongs to the participation: the
+                class has an Elder and the club has an officer and they are
+                two people, so an assignment that did not say where covered
+                both. Asked the same way the sponsor above is asked, and for
+                the same reason — a project in one place is not asked, a
+                project in several has to say. */}
+            {forProgram ? (
+              <>
+                <input type="hidden" name="place_id" value={forProgram.id} />
+                <p class="t-sm whole-row">
+                  For <b>{(forProgram.row.programs as any)?.name}</b>.
+                </p>
+              </>
+            ) : (
+              <label>
+                <span>Which class or fair</span>
+                <select name="place_id" required>
+                  {places.map((place: any) => (
+                    <option value={place.id}>
+                      {(place.row.programs as any)?.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
             <label>
               <span>{staff}</span>
               <select name="user_id" required>
@@ -527,6 +599,25 @@ const fmt = (d: string | null) =>
   .assign small { display: block; margin-top: auto; padding-top: 4px; color: var(--ink-3); font-size: 0.84rem; }
   .assign select,
   .assign input { padding: 8px 10px; border: 1px solid var(--rule); background: var(--card); color: var(--ink); font: inherit; min-width: 20ch; }
-  .assign button { padding: 9px 16px; border: 1px solid var(--ink); background: var(--ink); color: var(--paper); font-family: var(--face-ui); font-size: 1rem; font-weight: 600; cursor: pointer; margin-top: 22px; }
+  /* `align-self` because the container stretches.
+  
+     The row is `align-items: stretch` so that the three labels grow to the
+     same height and push their hints to the bottom, which is what lines the
+     inputs up. A button is not a field and has no hint, so stretching gave it
+     the full height of the tallest label -- a submit control three lines tall
+     next to inputs one line tall. It sits at the top of the row instead, with
+     the same offset the inputs get from their own label. */
+  /* A sentence is not a field.
+  
+     `.assign` is a wrapping flex row of labels, and this paragraph was one of
+     its children — so "For Independent Research and Project Design." took a
+     field's slot on the first line and pushed the teacher's name to the right
+     of it, leaving the row half empty and the three inputs on two ragged
+     lines. It says which place the signature is for, which is context for the
+     whole form rather than a column in it, so it takes the whole row and the
+     fields start below. */
+  .assign .whole-row { flex: 1 0 100%; margin: 0 0 2px; }
+
+  .assign button { padding: 9px 16px; border: 1px solid var(--ink); background: var(--ink); color: var(--paper); font-family: var(--face-ui); font-size: 1rem; font-weight: 600; cursor: pointer; margin-top: 22px; align-self: flex-start; }
   .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
 </style>

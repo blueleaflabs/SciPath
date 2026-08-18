@@ -11,7 +11,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import yaml from 'js-yaml';
-import { resolveProgram, datesFor } from '../src/lib/template-resolve.ts';
+import { resolveProgram, datesFor, windowEnd } from '../src/lib/template-resolve.ts';
 import { loadLibrary } from '../scripts/template-library.mjs';
 
 let passed = 0;
@@ -160,29 +160,43 @@ test('every step in a course gets a date, from its phase where it has none', () 
   const dates = datesFor(irpd);
   assert.equal(dates.filter((d) => d.date).length, dates.length);
 
-  /* A fixed day is one the class named with an anchor rather than a month.
-     However many there are, each must be a showcase: those are the dates a
-     room is booked for, and everything else is a window a teacher can move
-     without telling anybody. */
+  /* **Most of these are published days now**, which is a change. The class
+     was carried here as six milestones against month windows, because that
+     was all we had; it has since published a semester calendar naming the
+     day each worksheet is due. So the ordinary case is `absolute`, the
+     windows carry what the calendar leaves open, and `relative` is reserved
+     for the two dates the class sets as a whole and can move as a unit. */
+  const named = dates.filter((d) => d.source === 'absolute');
+  assert.ok(named.length > 10, `only ${named.length} steps have a published day`);
+
   const fixed = dates.filter((d) => d.source === 'relative');
-  assert.ok(fixed.length >= 1, 'no step is pinned to a named day');
-  for (const d of fixed) assert.match(d.step.name, /showcase/i, d.step.name);
+  for (const d of fixed) assert.match(d.step.name, /showcase|feedback session/i, d.step.name);
 
   assert.ok(irpd.phases.every((p) => p.window), 'every phase says when');
 });
 
 test('a phase window resolves to the end of the month it names', () => {
+  /* The interviews have no day of their own: the calendar teaches how to run
+     one and leaves when to the student, which is exactly what a window is
+     for. */
   const dates = datesFor(irpd);
-  const empathy = dates.find((d) => d.step.id === 'm2_empathy');
-  assert.equal(empathy.source, 'window');
-  assert.equal(empathy.date, '2026-10-31', 'September to October ends in October');
+  const interviews = dates.find((d) => d.step.id === 'interviews');
+  assert.equal(interviews.source, 'window');
+  assert.equal(interviews.date, '2026-09-30', 'August to September ends in September');
 });
 
 test('and rolls into the next year when the school year does', () => {
-  /* The course starts in August. January is not four months earlier; it is
+  /* The course starts in August. April is not four months earlier; it is
      eight months later. */
-  const journey = datesFor(irpd).find((d) => d.step.id === 'm5_journey_map');
-  assert.equal(journey.date, '2027-02-28');
+  const notebook = datesFor(irpd).find((d) => d.step.id === 'notebook');
+  const scaling = irpd.phases.find((p) => p.id === 'irpd_scaling');
+  assert.equal(scaling.window.to, 'april');
+  assert.equal(
+    windowEnd(irpd, scaling.window),
+    '2027-04-30',
+    'November to April ends in the April after the course began'
+  );
+  assert.ok(notebook.date, 'the weekly journal step still resolves');
 });
 
 test('a step with neither a date nor a phase window stays undated', () => {

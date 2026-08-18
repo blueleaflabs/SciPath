@@ -54,15 +54,28 @@ const seq = d.recordId.split('-').pop();
 </article>
 
 <style>
-  .record { padding: 24px 0; border-bottom: 1px solid var(--rule-fine); }
+  /* A record is the thing this whole product exists to produce, and it was
+     rendered as a run of text between hairlines — indistinguishable from the
+     paragraph above it on a page where the background was the same white.
+     On the deeper paper it becomes what it is: a sheet, lifted, with the
+     published stage on its edge and its number set like a folio. */
+  .record {
+    padding: 22px 24px;
+    background: var(--card);
+    border: 1px solid var(--rule);
+    border-left: var(--edge) solid var(--stage-pub);
+    box-shadow: var(--lift);
+  }
   .record-top { display: flex; gap: 18px; align-items: baseline; }
   .record-no {
     font-family: var(--face-num);
     font-size: 1.3rem;
-    color: var(--ink-3);
+    /* See the folio on the participation page: the mark does not clear the
+       contrast floor as text. */
+    color: var(--brand);
     min-width: 4.5rem;
   }
-  .record-no small { display: block; font-size: 0.68rem; letter-spacing: 0.08em; text-transform: uppercase; }
+  .record-no small { display: block; font-size: 0.68rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-3); }
   .record-main { flex: 1; }
   .record-main h3 { margin: 0; font-size: 1.35rem; line-height: 1.25; }
   .by { margin: 5px 0 0; color: var(--ink-2); }

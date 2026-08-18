@@ -35,9 +35,7 @@ const org = Astro.props.org ?? activeOrg(Astro);
 const nav = [
   { href: '/showcase/', label: 'Showcase' },
   { href: '/guides/', label: 'Guides' },
-  { href: '/deadlines/', label: 'Deadlines' },
   { href: '/submit/', label: 'Publish' },
-  { href: '/search/', label: 'Search' },
 ];
 
 /* The working surface, reachable from every page. On a prerendered page
@@ -82,6 +80,35 @@ const isCurrent = (href: string) => here === href || (href !== '/' && here.start
             ))
           }
         </ul>
+
+        {/* Searching is a control, not a section.
+        
+            It sat in the link row as the word "Search", which is a page you
+            navigate to in order to reach a box. One fewer step: the box is
+            here, and it submits to the same page, which then does what it
+            always did. The magnifying glass is the submit control rather
+            than a decoration, so a keyboard reaches it and a screen reader
+            is told what it does.
+        
+            A plain GET form, so this works with no script at all — the page
+            it lands on reads `?q=` and runs the query. Nothing here needs to
+            know how the search itself works. */}
+        <form class="mnav-find" role="search" method="GET" action="/search/">
+          <label class="skip" for="mnav-q">Search</label>
+          <input
+            id="mnav-q"
+            type="search"
+            name="q"
+            autocomplete="off"
+            placeholder="Search"
+          />
+          <button class="mnav-go" type="submit" aria-label="Search">
+            <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+              <circle cx="7" cy="7" r="4.5" fill="none" stroke="currentColor" stroke-width="1.6" />
+              <line x1="10.4" y1="10.4" x2="14" y2="14" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+            </svg>
+          </button>
+        </form>
 
         {/* The account cluster is a separate group with a rule before it.
             Sections and "who am I" are different kinds of thing and should
@@ -176,7 +203,58 @@ const isCurrent = (href: string) => here === href || (href !== '/' && here.start
     align-items: center;
     padding-left: 22px;
     border-left: 1px solid var(--masthead-ink-2);
+    /* Never the thing that wraps. Adding the search field pushed this group
+       — the workbench link, or somebody's name and sign out — onto a second
+       line, which turned a one line bar into two and moved the rule that
+       separates the sections into the middle of nowhere. The field gives up
+       width instead; it is the only element here that can lose some without
+       losing meaning. */
+    flex: 0 0 auto;
+    white-space: nowrap;
   }
+
+  /* A control on a dark bar.
+  
+     Outlined rather than filled, so it reads as part of the masthead rather
+     than as a white box dropped on it, and the field and its button share one
+     border so they are one control rather than two. It shrinks before the
+     links do: a nav item that wraps loses a section, and a search field that
+     narrows loses nothing but characters. */
+  .mnav-find {
+    display: flex;
+    align-items: stretch;
+    flex: 1 1 8rem;
+    max-width: 14rem;
+    min-width: 4.5rem;
+    border: 1px solid var(--masthead-ink-2);
+  }
+  .mnav-find input {
+    flex: 1 1 auto;
+    min-width: 0;
+    padding: 5px 9px;
+    border: 0;
+    background: none;
+    color: var(--masthead-ink);
+    font-family: var(--face-ui);
+    font-size: 0.92rem;
+  }
+  .mnav-find input::placeholder { color: var(--masthead-ink-2); }
+  /* The field carries the outline, so the ring goes on the whole control
+     rather than inside it. */
+  .mnav-find input:focus { outline: none; }
+  .mnav-find:focus-within { border-color: var(--masthead-ink); }
+  .mnav-go {
+    display: flex;
+    align-items: center;
+    padding: 0 9px;
+    border: 0;
+    background: none;
+    color: var(--masthead-ink-2);
+    cursor: pointer;
+  }
+  .mnav-go:hover,
+  .mnav-go:focus-visible { color: var(--masthead-ink); }
+  .mnav-find svg { width: 15px; height: 15px; display: block; }
 
   .mnav-who { display: flex; align-items: center; gap: 8px; }
 

@@ -52,8 +52,20 @@ export function setSessionHint(
   secure = true
 ): void {
   /* Encoded, because a cookie value may not carry a comma, a semicolon or a
-     space, and a display name may carry all three. */
+     space, and a display name may carry all three.
+
+     **Encoded once.** Astro's cookie writer runs `encodeURIComponent` over
+     the value by default, so a name encoded here went out doubly encoded:
+     `Rohan Agarwal` became `Rohan%2520Agarwal` on the wire, the reader in the
+     masthead decoded it once, and every public page greeted somebody as
+     `Rohan%20Agarwal`. It read as a bug in their name rather than in ours.
+
+     The encoding stays here rather than being left to the writer, and the
+     writer is told not to repeat it. This way the value in the jar is the
+     value this module says it is, and the reader's single `decodeURIComponent`
+     is the exact inverse of the line above it. */
   cookies.set(SESSION_HINT, encodeURIComponent(displayName), {
+    encode: (value: string) => value,
     path: '/',
     /* Readable by the script in the masthead, which is the entire point. The
        session cookies beside it stay as Supabase set them, and anything able

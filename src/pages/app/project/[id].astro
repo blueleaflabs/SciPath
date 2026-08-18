@@ -330,10 +330,15 @@ const fmt = (d: string | null) =>
                 {staffWord(c.programs)}
               </span>
               <span class="b-do">
+                {/* "Deadlines" named one section of what is behind it. That
+                    page carries the calendar, the sponsor, the documents, the
+                    showcase and the entry's own details, so a student who
+                    wanted any of the other four had no reason to click. The
+                    row already names the program, so the verb does not have
+                    to repeat it. */}
                 <a class="btn btn-sm" href={`/app/project/${id}/in/${c.program_id}/`}>
-                  Deadlines
+                  Open
                 </a>
-                <a class="btn btn-sm" href={`/app/project/${id}/team/`}>Who is on it</a>
                 {iAuthor && (
                   <form method="POST" action="#outcome" class="inline">
                     <input type="hidden" name="action" value="cohort" />
@@ -363,7 +368,7 @@ const fmt = (d: string | null) =>
                       : 'entered'}
               </span>
               <span class="b-do">
-                <a class="btn btn-sm" href={`/app/project/${id}/in/${e.program_id}/`}>Deadlines</a>
+                <a class="btn btn-sm" href={`/app/project/${id}/in/${e.program_id}/`}>Open</a>
               </span>
             </li>
           ))}
@@ -402,16 +407,20 @@ const fmt = (d: string | null) =>
         </p>
       )}
 
-      {/* A project with no cohort has nobody looking after it, and the page
-          says so rather than implying otherwise. `independent-research`
-          existed to hide exactly this, and hiding it is what made the case
-          for a staffed Open Program invisible (22.10). */}
-      {(cohorts ?? []).length === 0 && (
-        <p class="t-sm" style="max-width:var(--measure-text)">
-          This project is not in a class or a club, so nobody at the school is
-          looking after it. That is allowed, and the work counts the same.
-        </p>
-      )}
+      {/* A project with no cohort once said so here, in a paragraph
+          explaining that nobody at the school was looking after it and that
+          this was allowed. It went because the page already says it twice
+          over: the section header reads "nowhere yet", the eyebrow above the
+          title reads "not in a class, and not entered anywhere", and the
+          picker offering a class to add it to is itself the statement that
+          it is in none. A third telling, phrased as an absence and a
+          reassurance, reads as a warning about a state the student chose.
+
+          22.10 is the reason it was written, and it is not lost: the case
+          for a staffed Open Program is made by what the school can see on
+          the assignment queue, not by a sentence on the student's own page.
+          `independent-research` hid the state; this shows it, in fewer
+          words. */}
 
       {(entries ?? []).length === 0 && (
         <p class="t-sm" style="margin-top:10px">

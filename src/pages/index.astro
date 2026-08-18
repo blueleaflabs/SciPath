@@ -21,6 +21,7 @@ import RecordCard from '../components/RecordCard.astro';
 import { activeOrg } from '../lib/tenant';
 import { platform } from '../config/site';
 import { resolveProgram } from '../lib/templates';
+import { formatDate } from '../lib/dates';
 
 /* The phases of the standard research process, read from the template rather
    than written here. There were five literals in `config/site.ts` describing
@@ -35,6 +36,50 @@ const org = archive.org;
 const published = archive.all;
 
 const latest = published.slice(0, 3);
+
+/**
+ * What this school takes part in, this season.
+ *
+ * `/deadlines/` used to carry this and carried far more: every step of every
+ * program, grouped by phase, which is a reference document rather than an
+ * answer to the question somebody arriving here is asking. That question is
+ * "what could I be part of", and it has a short answer.
+ *
+ * Per tenant, because `org.programs` is: one school lists its class, its
+ * club, the fairs it takes part in and its journal; another lists a single
+ * regional fair. Read from the same templates the working surface
+ * resolves, so a date seen before signing up is the date they will be held
+ * to.
+ *
+ * A template that fails to resolve is dropped rather than thrown: a public
+ * page is the wrong place to find out that a config file has a typo in it.
+ */
+const season = (org.programs ?? [])
+  .map((id: string) => {
+    try {
+      const p = resolveProgram(id) as any;
+      return {
+        id,
+        name: p.name,
+        kind: p.kind,
+        role: p.role ?? 'opportunity',
+        /* The same anchor the seed writes into `programs.fair_date`, so the
+           day shown here is the day the working surface shows. A class ends
+           rather than judges, and says so below. */
+        date: p.anchors?.fair ?? p.anchors?.community_showcase ?? null,
+        blurb: p.program?.description ?? null,
+      };
+    } catch {
+      return null;
+    }
+  })
+  .filter(Boolean) as any[];
+
+/* Classes and clubs first, then everything else, which is the order the
+   working surface groups them in and the order of the acts: you join one of
+   the first before you enter most of the second. */
+const cohorts = season.filter((p) => p.role === 'cohort');
+const venues = season.filter((p) => p.role !== 'cohort');
 const authorCount = new Set(
   published.flatMap((r) => r.authors.map((x) => x.displayName))
 ).size;
@@ -51,26 +96,17 @@ cachePublicPage(Astro);
   <div class="wrap">
     <section class="hero">
       <p class="t-lbl">{org.isPlatform ? platform.name : org.name}</p>
-      <h1 class="t-big">Get the science fair right the first time</h1>
-      <p class="lede">
-        Every deadline, every form, and every step from a first idea to a published paper.
-        The things that disqualify good projects are procedural, and they are all knowable
-        in advance. This is where they are written down.
-      </p>
+      <h1 class="t-big">From idea through publication</h1>
+      <p class="lede">Your high school science research companion</p>
       <div class="row" style="margin-top:24px">
+        {/* One way in.
+        
+            "See this season" pointed at `/deadlines/`, which is gone, and
+            "Read published work" pointed at `/articles/`, which is a filtered
+            view of the showcase already in the nav. Three buttons of equal
+            weight made the one that starts anything a third of the offer. */}
         <a class="btn" href="/app/">Start a project</a>
-        <a class="btn btn-2" href="/deadlines/">See this season</a>
-        <a class="btn btn-2" href="/articles/">Read published work</a>
       </div>
-
-      {/* Two readers arrive here and only one of them was addressed. A
-          student wants to know where to start; somebody running a club wants
-          to know whether this replaces the spreadsheet. Sending the second
-          one through a page written for the first is how they leave. */}
-      <p class="fork">
-        Running a club, a research class, or a fair season?
-        <a href="/for-schools/">Here is what it looks like from that side</a>.
-      </p>
     </section>
 
     <!-- The lifecycle is the product, so it is the first thing on the page. -->
@@ -125,39 +161,75 @@ cachePublicPage(Astro);
       </div>
     </section>
 
-    <section class="sec">
-      <div class="sec-h"><b>Two halves</b><span>Read freely, work signed in</span></div>
-      <p class="t-sm" style="max-width:74ch; margin-bottom:18px">
-        The guides, the deadline calendars, the mistakes other students have already made,
-        and every published record are open to read. Running your own project needs an
-        account, because it holds your work.
-      </p>
-      <table class="tbl">
-        <thead>
-          <tr>
-            <th scope="col">Surface</th>
-            <th scope="col">Holds</th>
-            <th scope="col">Account</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr>
-            <td>Public</td>
-            <td>Published records, guides, deadlines, common mistakes</td>
-            <td>Not needed</td>
-          </tr>
-          <tr>
-            <td>Working</td>
-            <td>Projects in progress, field notes, milestones, review</td>
-            <td>Required</td>
-          </tr>
-        </tbody>
-      </table>
-    </section>
+    {/* The "Two halves" section stood here: a heading, a paragraph and a
+        three column table explaining that reading needs no account and
+        working does. It was an explanation of the product's shape offered to
+        somebody who had not yet seen the product. A reader finds out which
+        half needs an account by clicking something and being asked, which is
+        one moment of friction against three paragraphs of preamble. */}
+
+    {season.length > 0 && (
+      <section class="sec">
+        <div class="sec-h">
+          <b>This season at {org.name}</b>
+          <span>{season.length} {season.length === 1 ? 'program' : 'programs'}</span>
+        </div>
+
+        {/* **Per tenant, because taking part is.**
+        
+            `/deadlines/` held this and held every step of every program
+            grouped by phase, which is a reference document. Somebody landing
+            here is asking a shorter question — what could I be part of — and
+            the answer is a list of names and dates. The steps are still
+            resolved from the same templates; they are read on the program's
+            own page once there is an account, next to the work they govern.
+        
+            One school sees its class, its club, the fairs it takes part in
+            and its journal; another sees a single regional fair. Neither
+            list is written here — both come from the organization record. */}
+        {cohorts.length > 0 && (
+          <>
+            <h3 class="t-lbl" style="margin:0 0 10px">Classes and clubs</h3>
+            <ul class="season">
+              {cohorts.map((p: any) => (
+                <li>
+                  <b>{p.name}</b>
+                  {p.blurb && <span class="sub">{p.blurb}</span>}
+                </li>
+              ))}
+            </ul>
+          </>
+        )}
+
+        {venues.length > 0 && (
+          <>
+            <h3 class="t-lbl" style="margin:18px 0 10px">Fairs, grants and the journal</h3>
+            <ul class="season">
+              {venues.map((p: any) => (
+                <li>
+                  <b>{p.name}</b>
+                  {p.date && <span class="when">{formatDate(p.date, 'long')}</span>}
+                  {p.blurb && <span class="sub">{p.blurb}</span>}
+                </li>
+              ))}
+            </ul>
+          </>
+        )}
+
+        {/* The way in, at the size of an invitation rather than a footnote.
+            It read "Sign in to join one, or start a project of your own and
+            enter it later" in the small size, under a list of things a reader
+            has just decided they want to be part of — the sentence that
+            answers "how" was the quietest thing on the page. */}
+        <p class="join-cta">
+          <a href="/app/">Sign in or sign up to join one</a>
+        </p>
+      </section>
+    )}
 
     <section class="sec">
       <div class="sec-h">
-        <b>Latest records</b>
+        <b>{org.name} project showcase</b>
         <span>{published.length ? `${published.length} published${span ? `, ${span}` : ''}` : 'nothing published yet'}</span>
       </div>
       {
@@ -175,11 +247,11 @@ cachePublicPage(Astro);
         ) : (
           <Empty
             title="Nothing is published here yet"
-            body="Published records appear as soon as the first project reaches the publication stage. The guides and the deadline calendars are already open."
+            body="Published records appear as soon as the first project reaches the publication stage. The guides are already open."
           >
             <div class="row" style="justify-content:center">
-              <a class="btn btn-2" href="/guides/">Read the guides</a>
-              <a class="btn btn-q" href="/submit/">How publishing works</a>
+              <a class="btn btn-2" href="/guides/">Research guide</a>
+              <a class="btn btn-q" href="/submit/">Publish with us</a>
             </div>
           </Empty>
         )
@@ -187,14 +259,11 @@ cachePublicPage(Astro);
       {authorCount > 0 && <p class="t-sm" style="margin-top:14px">{authorCount} authors</p>}
     </section>
 
-    <section class="sec" style="padding-bottom:8px">
-      <div class="sec-h"><b>Start here</b><span>Three ways in</span></div>
-      <div class="row">
-        <a class="btn btn-2" href="/deadlines/">See this season's deadlines</a>
-        <a class="btn btn-2" href="/guides/">Pick a research question</a>
-        <a class="btn btn-q" href="/mistakes/">What usually goes wrong</a>
-      </div>
-    </section>
+    {/* "Start here" offered the guides and the mistakes page as two more
+        buttons at the foot of the page. Both are in the nav, and the page
+        already asks once, above, for the thing that actually starts
+        something. A second call to action below a first one does not double
+        the invitation; it makes the first one look unsure. */}
   </div>
 </Base>
 
@@ -203,16 +272,55 @@ cachePublicPage(Astro);
     padding: 64px 0 44px;
     max-width: 74ch;
   }
+  /* One line, which is how a title of five words should read.
+  
+     `.t-big` is `clamp(1.8rem, 5vw, 2.8rem)`, so on a narrow window the
+     headline stayed large enough to break across two lines and the break
+     landed mid-phrase. Above the width where it fits, it is held on one
+     line; below it, it wraps and balances, because a headline running off
+     the side of a phone is worse than a headline on two lines. */
+  .hero h1 { text-wrap: balance; }
+  @media (min-width: 46rem) {
+    .hero h1 { white-space: nowrap; }
+  }
   .hero .t-lbl {
     margin-bottom: 14px;
   }
-  .fork {
-    margin-top: 20px;
-    padding-top: 16px;
+  /* `.fork` went with the paragraph it styled: it introduced
+     `/for-schools/`, which is hidden (23.4). */
+
+  /* The way in, sized to be seen. Larger than body text and set apart, so
+     the sentence answering "how do I take part" is not the smallest thing
+     under a list of things somebody has just decided they want. */
+  .join-cta {
+    margin-top: 22px;
+    font-size: 1.22rem;
+  }
+  .join-cta a { font-weight: 600; }
+
+  /* This school's season. A list rather than cards, because the answer to
+     "what could I take part in" is short and a card grid makes six names
+     look like a catalog. */
+  .season { list-style: none; margin: 0; padding: 0; }
+  .season li {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 4px 14px;
+    padding: 10px 0;
     border-top: 1px solid var(--rule-fine);
-    max-width: var(--measure-lede);
-    font-size: 0.98rem;
+  }
+  .season b { font-size: 1.02rem; }
+  .season .when {
+    font-family: var(--face-num);
+    font-size: 0.9rem;
     color: var(--ink-2);
+  }
+  .season .sub {
+    flex: 1 0 100%;
+    font-size: 0.9rem;
+    color: var(--ink-3);
+    max-width: var(--measure-text);
   }
 
   .hero .lede {

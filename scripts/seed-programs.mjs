@@ -140,6 +140,16 @@ function orderedSeasons(library) {
  * template author to classify a step into five buckets they did not choose
  * would be asking them to know about our schema.
  */
+/* The deliverable a step asks for, by the id the template uses.
+ *
+ * The first where a step wants several, because that is the one the deadline
+ * is named for and the one a reader is looking for on the row. Null where a
+ * step hands nothing over. */
+function deliverableRef(step) {
+  const first = (step.deliverables ?? [])[0];
+  return first ? (first.ref ?? first.id ?? null) : null;
+}
+
 function kindOf(step) {
   if (step.consequence === 'blocks_experimentation') return 'approval';
   if (step.consequence === 'blocks_registration') return 'registration';
@@ -297,6 +307,7 @@ async function main() {
         phase: d.step.phase ?? null,
         satisfied_by:
           d.step.id === 'club_sponsor' || d.step.id === 'sponsor' ? 'sponsor' : null,
+        deliverable_ref: deliverableRef(d.step),
       }));
 
     if (!rows.length) return 0;
@@ -479,6 +490,7 @@ async function main() {
         source: d.step.source ?? (d.step.internal ? 'school' : 'program'),
         phase: d.step.phase ?? null,
         satisfied_by: d.step.id === 'club_sponsor' || d.step.id === 'sponsor' ? 'sponsor' : null,
+        deliverable_ref: deliverableRef(d.step),
       }));
 
     if (rows.length) {

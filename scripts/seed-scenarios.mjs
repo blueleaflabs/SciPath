@@ -637,7 +637,7 @@ async function main() {
   for (const p of allPrograms ?? []) {
     const { data: rows } = await db
       .from('program_milestones')
-      .select('id, name, kind, due_on, required, blocks_experimentation, satisfied_by, sort_order, org_id, source')
+      .select('id, name, kind, due_on, required, blocks_experimentation, satisfied_by, sort_order, org_id, source, deliverable_ref')
       .eq('program_id', p.id)
       .order('sort_order');
 
@@ -729,6 +729,7 @@ async function main() {
       .select('id')
       .single();
 
+
     if (projectError) fail(`${scene.key}: ${projectError.message}`);
 
     for (const author of authors) {
@@ -743,6 +744,7 @@ async function main() {
         `writing project_authors`
       );
     }
+
 
     /* Pictures, where the scenario asks for them. */
     /* What the project says about itself. The conditional forms key off
@@ -764,35 +766,6 @@ async function main() {
         db.from('projects').update({ video_url: scene.video }).eq('id', project.id),
         `writing projects`
       );
-    }
-
-    /* An officer, or the author looking after it herself. */
-    if (scene.officer) {
-      const officer = byHandle.get(scene.officer);
-      const isAuthor = authors.some((a) => a.id === officer?.id);
-
-      if (officer && isAuthor) {
-        const { error: selfManagedError } = await db
-          .from('project_authors')
-          .update({ self_managed_at: new Date().toISOString() })
-          .eq('project_id', project.id)
-          .eq('user_id', officer.id);
-
-        if (selfManagedError) {
-          fail(`${scene.key}: could not mark it self managed (${selfManagedError.message})`);
-        }
-      } else if (officer) {
-        await must(
-          db.from('project_authors').insert({
-            org_id: org.id,
-            project_id: project.id,
-            user_id: officer.id,
-            role: 'officer',
-            accepted_at: new Date().toISOString(),
-          }),
-          `writing project_authors`
-        );
-      }
     }
 
     /* Which cohort's project this is, and who is in that cohort.
@@ -902,6 +875,39 @@ async function main() {
       fail(`${scene.key}: could not enter the program (${entryError?.message ?? 'no row'})`);
     }
 
+    /* **The officer of this place**, or the author looking after it herself.
+    
+       Written after the participation exists, because oversight names one
+       now: the Elder of the class and the officer of the club are two
+       people, so an assignment that did not say which place it was for
+       covered both (22.18 for sponsors, the same argument here).
+    
+       An author looking after their own work gets an ordinary oversight row
+       marked self managed. It used to be a flag on the authorship row,
+       because the unique key refused the same person twice on one project —
+       which also made self management project wide while everything else
+       became per place. */
+    if (scene.officer && entry) {
+      const officer = byHandle.get(scene.officer);
+
+      if (officer) {
+        await must(
+          db.from('project_authors').insert({
+            org_id: org.id,
+            project_id: project.id,
+            participation_id: entry.id,
+            user_id: officer.id,
+            role: 'officer',
+            accepted_at: new Date().toISOString(),
+            self_managed_at: authors.some((a) => a.id === officer.id)
+              ? new Date().toISOString()
+              : null,
+          }),
+          `writing project_authors`
+        );
+      }
+    }
+
     /* The sponsor, which hangs off the participation rather than the project.
     
        Written after the entry rather than before it, because there was
@@ -954,6 +960,11 @@ async function main() {
     let completed = 0;
     let overdueLeft = scene.overdue ?? 0;
 
+    /* Which artifacts this place already holds. Per participation, because
+       one deliverable of a kind is current per place and the same research
+       plan may legitimately be recorded at the class and at the fair. */
+    const handedIn = new Set();
+
     for (const [index, m] of ordered.entries()) {
       let dueOn = m.due_on;
       let completedOn = null;
@@ -994,13 +1005,31 @@ async function main() {
         `writing entry_milestones`
       );
 
-      if (completedOn && !isDerived) {
+      /* **What was handed in, by the id the template uses.**
+      
+         This wrote `m.kind`, which is one of seven buckets rather than a
+         deliverable — so a class with eleven `submission` steps produced
+         eleven rows all typed `submission`. Three things followed: the rows
+         matched no template id and so satisfied no obligation on the page,
+         a project seeded as half complete still read as nothing done, and
+         once one current row per kind was enforced the second insert failed
+         outright.
+      
+         Skipped where the step hands nothing over, and recorded once where
+         several steps want the same artifact — one research plan satisfies
+         the process, the club's reading and the fair's submission (6.8), and
+         seeding it three times would be inventing three documents. */
+      const ref = m.deliverable_ref;
+
+      if (completedOn && !isDerived && ref && !handedIn.has(ref)) {
+        handedIn.add(ref);
+
         await must(
           db.from('deliverables').insert({
             org_id: org.id,
             participation_id: entry.id,
             milestone_id: null,
-            type: m.kind,
+            type: ref,
             label: m.name,
             signed_on: completedOn,
             submitted_at: new Date().toISOString(),
