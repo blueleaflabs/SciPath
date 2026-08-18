@@ -1,0 +1,27 @@
+# Design research. IRPD's write-up, which is not a scientific paper and would
+# fail an IMRaD check on sections it has no reason to have.
+
+id: design-research
+name: Design research write-up
+parts:
+  - { id: background, name: Background and why it matters, min_words: 150 }
+  - { id: literature, name: What is already known, min_words: 150 }
+  - id: empathy
+    name: What the community said
+    min_words: 200
+    guidance: >-
+      What you heard, not what you concluded. Quotes and observations belong
+      here; your reading of them belongs under the problem.
+  - id: problem
+    name: The problem, defined
+    min_words: 100
+    guidance: >-
+      Defined from what people told you. A problem statement written before
+      the interviews is a statement about an assumed problem.
+  - { id: approach, name: Approach and journey, min_words: 200 }
+  - { id: findings, name: Findings, min_words: 150 }
+  - id: advocacy
+    name: What should change
+    min_words: 100
+    guidance: Who would have to do what, and what you are asking of them.
+  - { id: reflection, name: Reflection, min_words: 75 }

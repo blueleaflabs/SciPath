@@ -156,11 +156,15 @@ max_indexes = 5
 enabled = true
 # The base URL of your website. Used as an allow-list for redirects and for constructing URLs used
 # in emails.
-site_url = "http://127.0.0.1:3000"
+site_url = "http://localhost:4321"
 # The public URL that Auth serves on. Defaults to the API external URL with `/auth/v1` appended.
 # external_url = ""
 # A list of *exact* URLs that auth providers are permitted to redirect to post authentication.
-additional_redirect_urls = ["https://127.0.0.1:3000"]
+# Every tenant is its own hostname, so every tenant needs to be allowed
+# back. A redirect_to that is not on this list is silently discarded and
+# the user lands on site_url with an unexchanged ?code= in the address
+# bar, which looks like nothing happened at all.
+additional_redirect_urls = ["http://localhost:4321", "http://localhost:4321/**", "http://127.0.0.1:4321/**", "http://montavista.localhost:4321/**", "http://svslc.localhost:4321/**"]
 # How long tokens are valid for, in seconds. Defaults to 3600 (1 hour), maximum 604,800 (1 week).
 jwt_expiry = 3600
 # JWT issuer URL. If not set, defaults to auth.external_url.
@@ -176,8 +180,8 @@ refresh_token_reuse_interval = 10
 enable_signup = true
 # Allow/disallow anonymous sign-ins to your project.
 enable_anonymous_sign_ins = false
-# Allow/disallow testing manual linking of accounts
-enable_manual_linking = false
+# Manual linking is what "add a personal login" calls. Brief 6.3.
+enable_manual_linking = true
 # Passwords shorter than this value will be rejected as weak. Minimum 6, recommended 8 or more.
 minimum_password_length = 6
 # Passwords that do not meet the following requirements will be rejected as weak. Supported values
@@ -333,6 +337,25 @@ url = ""
 skip_nonce_check = false
 # If enabled, it will allow the user to successfully authenticate when the provider does not return an email address.
 email_optional = false
+
+# ---------------------------------------------------------------------------
+# The only provider this project uses. Three scopes, requested by the
+# application at sign-in: openid, email, profile. Nothing else, ever.
+#
+# Values are env(...) references and never literals. This file is committed,
+# the repository is public, and a pasted literal here is a rotation rather
+# than an edit. tests/config-secrets.mjs enforces it.
+#
+# Add the block header BEFORE the keys. A misplaced header drops these three
+# values into the preceding provider's table and TOML then reports a
+# redefinition pointing at that provider instead of at this one.
+# ---------------------------------------------------------------------------
+[auth.external.google]
+enabled = true
+client_id = "env(GOOGLE_CLIENT_ID)"
+secret = "env(GOOGLE_CLIENT_SECRET)"
+# Required for local sign in with Google.
+skip_nonce_check = true
 
 # Allow Solana wallet holders to sign in to your project via the Sign in with Solana (SIWS, EIP-4361) standard.
 # You can configure "web3" rate limit in the [auth.rate_limit] section and set up [auth.captcha] if self-hosting.

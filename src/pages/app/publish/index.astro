@@ -1,0 +1,611 @@
+---
+export const prerender = false;
+
+import Base from '../../../layouts/Base.astro';
+import AppShell from '../../../components/AppShell.astro';
+import { serverClient } from '../../../lib/supabase';
+import { standing } from '../../../lib/roles';
+import { formatDate } from '../../../lib/dates';
+import { slugify } from '../../../lib/publish';
+import { blobStore } from '../../../lib/blob';
+import { shape } from '../../../lib/templates';
+import { assembleRecord } from '../../../lib/record-files';
+import { requestReindex } from '../../../lib/reindex';
+import { bucketFrom, readManifest, writeManifest, upsert } from '../../../lib/records-store';
+import { activeOrg } from '../../../lib/tenant';
+import { afterPost, outcomeFrom } from '../../../lib/post-redirect';
+import { signInWith } from '../../../lib/next-path';
+
+const { session, account, roles } = Astro.locals;
+const org = activeOrg(Astro);
+
+/* Remembering where they were headed, so a link from a notification
+   survives the sign in it triggers (20.10). */
+if (!session) return Astro.redirect(signInWith(Astro.url));
+if (!account) return Astro.redirect('/app/welcome/');
+
+const me = standing(roles, account?.population);
+const supabase = serverClient(
+  Astro.request,
+  Astro.cookies,
+  (Astro.locals as any).runtime?.env
+);
+
+/* Seeded from the redirect a POST answers with. See
+   src/lib/post-redirect.ts. */
+let { error: error, note: done } = outcomeFrom(Astro.url);
+let generated: string | null = null;
+let committed: { files: number } | null = null;
+
+/* The record store. Without it, publishing falls back to a download, which
+   is right for a checkout with no bucket bound and wrong to ask of anybody
+   on the real site. */
+const bucket = bucketFrom(Astro.locals);
+
+if (Astro.request.method === 'POST' && me.isEditor) {
+  const form = await Astro.request.formData();
+  const action = String(form.get('action') ?? '');
+  const submissionId = String(form.get('submission_id') ?? '');
+
+  if (action === 'publish_entry') {
+    const { data: record } = await supabase
+      .from('records')
+      .select('*')
+      .eq('id', String(form.get('record_id') ?? ''))
+      .maybeSingle();
+
+    if (!record) error = 'No such record.';
+    else if (!bucket) error = 'No record store is bound to this deployment.';
+    else {
+      const { files, entry, missing } = await assembleRecord(
+        supabase,
+        blobStore(Astro.locals),
+        org.id,
+        record,
+        shape('imrad')
+      );
+
+      if (missing.length > 0) {
+        error = `Not published: ${missing.join(', ')} could not be read from storage.`;
+      } else {
+        try {
+          for (const file of files) {
+            await bucket.put(file.key, file.body as any, {
+              httpMetadata: { contentType: file.contentType },
+            });
+          }
+          const manifest = await readManifest(bucket, org.id);
+          await writeManifest(bucket, upsert(manifest, entry));
+
+          /* No decision to wait on and nobody to notify, so writing the files
+             and marking it live are one act. */
+          await supabase.rpc('mark_record_live', { p_record_id: record.id });
+          const indexed = await requestReindex(
+            (Astro.locals as any).runtime?.env,
+            `published ${record.id}`
+          );
+
+          /* Said in the reader's terms, not the operator's.
+          
+             An editor is usually a student officer, and telling them to run
+             a command they have never heard of and could not run is a
+             development note on a page a student reaches. What they need to
+             know is that the record is live and search will lag; whoever
+             can fix it is reading a terminal, so the instruction goes
+             there. */
+          if (!indexed) {
+            console.log(`Search was not scheduled for ${record.id}. Run: npm run index:records`);
+          }
+
+          done =
+            `${record.id} is live.` +
+            (indexed
+              ? ' Search catches up in a minute or two.'
+              : ' It may take a while to appear in search.');
+        } catch (e: any) {
+          error = `The store rejected it: ${e.message}`;
+        }
+      }
+    }
+  }
+
+  if (action === 'generate_entry') {
+    const { data, error: e } = await supabase.rpc('generate_project_record', {
+      p_project_id: String(form.get('project_id') ?? ''),
+      p_slug: slugify(String(form.get('title') ?? '')),
+      p_prefix: org.recordPrefix,
+      p_published_on: String(form.get('published_on') ?? '') || null,
+    });
+    if (e) error = e.message;
+    else {
+      generated = data as string;
+      done = `${generated} allocated for the fair entry. Publish it to put it live.`;
+    }
+  }
+
+  if (action === 'generate') {
+    const { data, error: e } = await supabase.rpc('generate_record', {
+      p_submission_id: submissionId,
+      p_slug: slugify(String(form.get('title') ?? '')),
+      /* From src/config/orgs.ts, which is the one place org strings live. */
+      p_prefix: org.recordPrefix,
+      p_published_on: String(form.get('published_on') ?? '') || null,
+    });
+    if (e) error = e.message;
+    else {
+      generated = data as string;
+      done = `${generated} allocated. Download the bundle and commit it.`;
+    }
+  }
+
+  if (action === 'doi') {
+    const { error: e } = await supabase.rpc('set_record_doi', {
+      p_record_id: String(form.get('record_id') ?? ''),
+      p_doi: String(form.get('doi') ?? ''),
+    });
+    if (e) error = e.message;
+    else done = 'DOI recorded. Regenerate the bundle and commit it again.';
+  }
+
+  if (action === 'commit') {
+    const { data: record } = await supabase
+      .from('records')
+      .select('*')
+      .eq('submission_id', submissionId)
+      .maybeSingle();
+
+    if (!record) error = 'No record has been generated for this yet.';
+    else if (!bucket) error = 'No record store is bound to this deployment.';
+    else {
+      const { files, entry, missing } = await assembleRecord(
+        supabase,
+        blobStore(Astro.locals),
+        org.id,
+        record,
+        shape('imrad')
+      );
+
+      /* Publishing a page that points at files which are not there is worse
+         than not publishing it. */
+      if (missing.length > 0) {
+        error = `Not published: ${missing.join(', ')} could not be read from storage.`;
+      } else {
+        try {
+          for (const file of files) {
+            await bucket.put(file.key, file.body as any, {
+              httpMetadata: { contentType: file.contentType },
+            });
+          }
+
+          /* The manifest last, so a reader never sees a listing pointing at a
+             record whose file has not landed. */
+          const manifest = await readManifest(bucket, org.id);
+          await writeManifest(bucket, upsert(manifest, entry));
+
+          committed = { files: files.length };
+
+          /* Not awaited for its result. The record is live either way, and a
+             search index that is a minute behind is the right kind of late. */
+          const queued = await requestReindex(
+            (Astro.locals as any).runtime?.env,
+            `published ${record.id}`
+          );
+
+          /* Say which happened. Silence when the dispatch is unconfigured
+             looked identical to success, so a record was live and unfindable
+             with nothing on the screen to suggest a step was outstanding.
+          
+             The instruction goes to the terminal rather than the page: an
+             editor is usually a student officer, and a command they cannot
+             run is a development note on a screen a student reaches. */
+          if (!queued) {
+            console.log(`Search was not scheduled for ${record.id}. Run: npm run index:records`);
+          }
+
+          done =
+            `Published. ${files.length} ${files.length === 1 ? 'file' : 'files'} written, and the record is live now.` +
+            (queued
+              ? ' Search catches up in a minute or two.'
+              : ' It may take a while to appear in search.');
+        } catch (e: any) {
+          error = `The store rejected it: ${e.message}`;
+        }
+      }
+    }
+  }
+
+  if (action === 'confirm') {
+    const { error: e } = await supabase.rpc('confirm_published', {
+      p_submission_id: submissionId,
+    });
+    if (e) error = e.message;
+    else done = 'Published. The authors have been told.';
+  }
+
+  /* A refresh should re-read this page, not send the form again. */
+  return afterPost(Astro.url, { error: error, note: done });
+}
+
+const { data: queue } = me.isEditor
+  ? await supabase
+      .from('submissions')
+      .select('id, state, record_kind, decided_at, manuscripts(title), projects(title)')
+      .in('state', ['accepted', 'scheduled', 'exported'])
+      .order('decided_at', { ascending: true })
+  : { data: [] };
+
+/* A fair result is a fact to record, not a claim to review, so a project
+   entry never enters the editorial queue. What gates it is an officer having
+   recorded the result. */
+const { data: candidates } = me.isEditor
+  ? await supabase
+      .from('opportunity_participations')
+      .select('project_id, placement, projects:project_id(title), programs:program_id(name, season_year)')
+      .not('result_recorded_at', 'is', null)
+      /* A result can only exist on a granted place, but say so rather than
+         relying on that: a refused request with a stale result would
+         otherwise be publishable. */
+      .in('status', ['entered', 'competed'])
+  : { data: [] };
+
+const { data: records } = me.isEditor
+  ? await supabase
+      .from('records')
+      .select('id, slug, year, record_kind, title, submission_id, project_id, confirmed_at, generated_at, doi')
+      .order('generated_at', { ascending: false })
+  : { data: [] };
+
+const recordFor = new Map((records ?? []).map((r: any) => [r.submission_id, r]));
+
+/**
+ * How many published pages each project has.
+ *
+ * A project can have both a paper and a fair entry. They are siblings — the
+ * paper is the claim and the entry is what happened at the fair — and the
+ * published pages already link to one another. This screen showed them as
+ * two rows with the same title and no way to tell which was which, which
+ * reads as a duplicate somebody made by mistake.
+ */
+/* Projects that already have a published paper, so the entry queue can say
+   so before somebody generates a second record rather than after. */
+const paperFor = new Set(
+  (records ?? []).filter((r: any) => r.record_kind !== 'project' && r.project_id).map((r: any) => r.project_id)
+);
+
+const companionCount = new Map<string, number>();
+for (const r of records ?? []) {
+  if (!r.project_id) continue;
+  companionCount.set(r.project_id, (companionCount.get(r.project_id) ?? 0) + 1);
+}
+
+const entryPublished = new Set(
+  (records ?? []).filter((r: any) => r.record_kind === 'project').map((r: any) => r.project_id)
+);
+
+/* One row per project, not per entry: a project at two fairs is still one
+   page, and its entries are listed on it. */
+/* Generated and not yet written to the store. */
+const entriesToPublish = (records ?? []).filter(
+  (r: any) => r.record_kind === 'project' && !r.confirmed_at
+);
+
+const entryQueue = [
+  ...new Map(
+    (candidates ?? [])
+      .filter((e: any) => !entryPublished.has(e.project_id))
+      .map((e: any) => [e.project_id, e])
+  ).values(),
+];
+const waiting = (queue ?? []).filter((s: any) => s.state !== 'exported');
+const exported = (queue ?? []).filter((s: any) => s.state === 'exported');
+const live = (records ?? []).filter((r: any) => r.confirmed_at);
+
+const today = new Date().toISOString().slice(0, 10);
+---
+
+<Base title="Publishing" noindex={true}>
+  <div class="wrap">
+    <AppShell org={org} account={account} roles={roles} here="/app/publish/" />
+
+    {!me.isEditor ? (
+      <section class="sec">
+        <p class="note">Publishing is for editors and the club advisor.</p>
+      </section>
+    ) : (
+      <>
+        <section class="hero">
+          <h1 class="t-big">Publish what is ready</h1>
+          <ul class="counts">
+            <li><b>{waiting.length}</b> to generate</li>
+            <li class={exported.length > 0 ? 'bad' : ''}>
+              <b>{exported.length}</b> awaiting confirmation
+            </li>
+            <li><b>{live.length}</b> published</li>
+          </ul>
+        </section>
+
+        {/* Anchored, and the form posts to it. The publish page is long, and
+            an outcome rendered at the top after a click three screens down
+            reads as nothing having happened — which is what a person then
+            reports, correctly. */}
+        <div id="outcome" tabindex="-1">
+          {error && <p class="note" role="alert">{error}</p>}
+          {done && !error && <p class="note" role="status">{done}</p>}
+        </div>
+
+        <!-- ── Step one ────────────────────────────────────────────────── -->
+        {waiting.length > 0 && (
+          <section class="sec">
+            <div class="sec-h"><b>Ready to generate</b><span>{waiting.length}</span></div>
+
+            {waiting.map((s: any) => {
+              const title = s.manuscripts?.title ?? s.projects?.title ?? 'Untitled';
+              const slug = slugify(title);
+              return (
+                <form method="POST" action="#outcome" class="mform item">
+                  <input type="hidden" name="action" value="generate" />
+                  <input type="hidden" name="submission_id" value={s.id} />
+                  <input type="hidden" name="title" value={title} />
+
+                  <h3>{title}</h3>
+
+                  <p class="path">
+                    /{s.record_kind === 'project' ? 'projects' : 'articles'}/{new Date().getFullYear()}/{slug}/
+                  </p>
+
+                  <div class="row-2">
+                    <label>
+                      <span>Published on</span>
+                      <input class="in" type="date" name="published_on" value={today} />
+                      <small>The date of record. It becomes part of the URL.</small>
+                    </label>
+                    <label>
+                      <span>Accepted</span>
+                      <input class="in" value={formatDate(s.decided_at, 'long', '')} disabled />
+                      <small>Nothing here can change after you generate.</small>
+                    </label>
+                  </div>
+
+                  <button class="btn" type="submit">Generate</button>
+                </form>
+              );
+            })}
+          </section>
+        )}
+
+        <!-- ── Fair entries ───────────────────────────────────────────── -->
+        {entryQueue.length > 0 && (
+          <section class="sec">
+            <div class="sec-h"><b>Fair entries ready to publish</b><span>{entryQueue.length}</span></div>
+            <p class="aside">
+              A project entry is a page for what happened at the fair: the
+              abstract, the category, the result. It is a sibling of the paper
+              rather than an alternative to it, and a project can have both.
+              It does not go through review, because a result is a fact rather
+              than a claim.
+            </p>
+
+            {entryQueue.map((e: any) => {
+              const title = e.projects?.title ?? 'Untitled';
+              return (
+                <form method="POST" action="#outcome" class="mform item">
+                  <input type="hidden" name="action" value="generate_entry" />
+                  <input type="hidden" name="project_id" value={e.project_id} />
+                  <input type="hidden" name="title" value={title} />
+                  <h3>{title}</h3>
+
+                  {/* Said before, not after. Somebody who has just published
+                      a paper and then finds a second record with the same
+                      title has no way to know whether they made a mistake.
+                      They did not — the two are different pages — but the
+                      screen has to be the thing that tells them. */}
+                  {paperFor.has(e.project_id) && (
+                    <p class="pair">
+                      This project already has a paper. A fair entry is a
+                      different page about the same work — what happened at
+                      the fair rather than what the work claims — and the two
+                      will link to each other.
+                    </p>
+                  )}
+                  <p class="path">
+                    /projects/{new Date().getFullYear()}/{slugify(title)}/
+                    {e.programs?.name ? ` · ${e.programs.name}` : ''}
+                    {e.placement ? ` · ${e.placement}` : ''}
+                  </p>
+                  <div class="row-2">
+                    <label>
+                      <span>Published on</span>
+                      <input class="in" type="date" name="published_on" value={today} />
+                    </label>
+                  </div>
+                  <button class="btn" type="submit">Generate</button>
+                </form>
+              );
+            })}
+          </section>
+        )}
+
+        {entriesToPublish.length > 0 && (
+          <section class="sec">
+            <div class="sec-h"><b>Entries ready to go live</b><span>{entriesToPublish.length}</span></div>
+            {entriesToPublish.map((r: any) => (
+              <div class="item">
+                <h3>{r.title}</h3>
+                <p class="path">{r.id} · /projects/{r.year}/{r.slug}/</p>
+                <form method="POST" action="#outcome" class="act">
+                  <input type="hidden" name="action" value="publish_entry" />
+                  <input type="hidden" name="record_id" value={r.id} />
+                  <button class="btn" type="submit">Publish</button>
+                </form>
+              </div>
+            ))}
+          </section>
+        )}
+
+        <!-- ── Step two ────────────────────────────────────────────────── -->
+        {exported.length > 0 && (
+          <section class="sec">
+            <div class="sec-h"><b>Generated, waiting on a commit</b><span>{exported.length}</span></div>
+
+            {exported.map((s: any) => {
+              const r: any = recordFor.get(s.id);
+              return (
+                <div class="item">
+                  <h3>{r?.title ?? s.manuscripts?.title}</h3>
+                  <p class="path">{r?.id}</p>
+
+                  {bucket ? (
+                    <>
+                      <form method="POST" action="#outcome" class="act">
+                        <input type="hidden" name="action" value="commit" />
+                        <input type="hidden" name="submission_id" value={s.id} />
+                        <button class="btn" type="submit">Publish</button>
+                      </form>
+
+                      <form method="POST" action="#outcome" class="act">
+                        <input type="hidden" name="action" value="confirm" />
+                        <input type="hidden" name="submission_id" value={s.id} />
+                        <button class="btn" type="submit">Confirm</button>
+                      </form>
+                    </>
+                  ) : (
+                    <>
+                      <p class="fine" style="margin-bottom:12px">
+                        No record store is bound to this deployment, so the
+                        files come as a download instead.
+                      </p>
+                      <form method="POST" action="#outcome" class="act">
+                        <a class="btn" href={`/app/publish/${s.id}/bundle`}>
+                          Download the files
+                        </a>
+                        <span class="fine">
+                          Every object is at the key it belongs at. Put them in
+                          the bucket and the record is live.
+                        </span>
+                      </form>
+                      <form method="POST" action="#outcome" class="act">
+                        <input type="hidden" name="action" value="confirm" />
+                        <input type="hidden" name="submission_id" value={s.id} />
+                        <button class="btn" type="submit">Confirm</button>
+                      </form>
+                    </>
+                  )}
+                </div>
+              );
+            })}
+          </section>
+        )}
+
+        {waiting.length === 0 && exported.length === 0 && (
+          <section class="sec">
+            <p class="note">
+              Nothing is accepted and unpublished. This is what the queue looks
+              like when it is up to date.
+            </p>
+          </section>
+        )}
+
+        {live.length > 0 && (
+          <section class="sec">
+            <div class="sec-h"><b>Published</b><span>{live.length}</span></div>
+            <p class="aside">
+              We mint no DOIs. If a fair, a preprint server, or an institution
+              issues one, record it here and the record is cited by it rather
+              than by a URL that depends on this site continuing to exist.
+              Adding one means regenerating the bundle and committing again.
+            </p>
+            <table class="tbl">
+              {/* The kind is a column, not a detail.
+               
+                  A project can have both a paper and a fair entry: they are
+                  siblings rather than alternatives, and the published pages
+                  link to each other. This table showed two rows with the
+                  same title and nothing to tell them apart, which reads as a
+                  duplicate somebody made by accident. */}
+              <thead>
+                <tr>
+                  <th>Record</th><th>Kind</th><th>Title</th><th>DOI</th><th>When</th>
+                </tr>
+              </thead>
+              <tbody>
+                {live.map((r: any) => (
+                  <tr>
+                    <td><code>{r.id}</code></td>
+                    <td class="kind">
+                      {r.record_kind === 'project' ? 'Fair entry' : 'Paper'}
+                    </td>
+                    <td>
+                      <a href={`/${r.record_kind === 'project' ? 'projects' : 'articles'}/${r.year}/${r.slug}/`}>
+                        {r.title}
+                      </a>
+                      {(companionCount.get(r.project_id) ?? 0) > 1 && (
+                        <span class="pair">
+                          {r.record_kind === 'project'
+                            ? 'This project also has a paper. Both are listed, and each page links to the other.'
+                            : 'This project also has a fair entry. Both are listed, and each page links to the other.'}
+                        </span>
+                      )}
+                    </td>
+                    <td>
+                      <form method="POST" action="#outcome" class="doi">
+                        <input type="hidden" name="action" value="doi" />
+                        <input type="hidden" name="record_id" value={r.id} />
+                        <input
+                          class="in"
+                          name="doi"
+                          value={r.doi ?? ''}
+                          aria-label={`DOI for ${r.id}`}
+                        />
+                        <button class="btn btn-q" type="submit">Save</button>
+                      </form>
+                    </td>
+                    <td>{formatDate(r.confirmed_at, 'short', '')}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </section>
+        )}
+      </>
+    )}
+  </div>
+</Base>
+
+<style>
+  .hero { padding: 34px 0 26px; }
+  .item {
+    max-width: var(--measure-form);
+    padding: 22px 0;
+    border-top: 1px solid var(--rule-fine);
+  }
+  .item h3 { margin: 0 0 4px; font-size: 1.15rem; }
+  .path {
+    margin: 0 0 16px;
+    font-family: var(--face-num);
+    font-size: 0.86rem;
+    color: var(--ink-3);
+  }
+  .act {
+    display: grid;
+    grid-template-columns: 14rem 1fr;
+    gap: 14px;
+    align-items: center;
+    margin-bottom: 14px;
+  }
+  .act .btn { width: 100%; }
+  .act code { font-size: 0.86rem; }
+  @media (max-width: 640px) {
+    .act { grid-template-columns: 1fr; }
+    .act .btn { width: auto; justify-self: start; }
+  }
+  .fine { margin: 8px 0 0; color: var(--ink-3); font-size: 0.88rem; }
+  .aside {
+    max-width: var(--measure-form);
+    margin: 0 0 20px;
+    color: var(--ink-3);
+    font-size: 0.9rem;
+    line-height: 1.55;
+  }
+  form.doi { display: flex; gap: 8px; align-items: center; }
+  form.doi .in { max-width: 20ch; }
+</style>

@@ -1,0 +1,44 @@
+---
+export const prerender = false;
+
+/**
+ * WHERE `/app/entry/{id}/` WENT.
+ *
+ * This was the rich participation page, keyed on the participation row. It
+ * now lives at `/app/project/{id}/in/{program}/`, keyed on the project and
+ * the program together, and serves a class as readily as a fair (22.5).
+ *
+ * This file stays because the old address is in sent mail, in the digest,
+ * and in anything queued. A link somebody was given in September should not
+ * stop working because the model was tidied in February.
+ *
+ * A lookup rather than a rewrite: the row knows its project and its program,
+ * which is exactly what the new address needs.
+ */
+
+import { serverClient } from '../../../lib/supabase';
+import { signInWith } from '../../../lib/next-path';
+import { participationById, participationPath } from '../../../lib/participation';
+
+const { session, account } = Astro.locals;
+const { id } = Astro.params;
+
+/* Signing in first, so a link from a notification survives the sign in it
+   triggers and lands here again rather than on the overview (20.10). */
+if (!session) return Astro.redirect(signInWith(Astro.url));
+if (!account) return Astro.redirect('/app/welcome/');
+
+const supabase = serverClient(
+  Astro.request,
+  Astro.cookies,
+  (Astro.locals as any).runtime?.env
+);
+
+const participation = await participationById(supabase, id);
+
+/* 302 rather than 301. A permanent redirect is cached by the browser and by
+   anything in front of it, and this address is one we may yet want back. */
+return participation
+  ? Astro.redirect(participationPath(participation.projectId, participation.programId), 302)
+  : Astro.redirect('/app/');
+---

@@ -11,6 +11,19 @@
 .card {
   background: var(--card);
   border: 1px solid var(--rule);
+  /* See --lift. The border draws the edge; the shadow says which side is on
+     top. Together they are what makes a grid of cards read as objects rather
+     than as text in a wireframe. */
+  box-shadow: var(--lift);
+}
+
+/* A card that is the subject of its section, rather than one of several.
+   Used sparingly: the empty state a student lands on, the panel a form sits
+   in. It carries the school's own hue on its top edge, which is the one
+   place identity belongs on a working surface. */
+.card.lead {
+  border-top: var(--edge) solid var(--brand);
+  box-shadow: var(--lift-2);
 }
 
 .pad {
@@ -65,27 +78,69 @@
   padding: 44px 0 0;
 }
 
+/* A hero directly after the working surface's tabs.
+ *
+ * Eight pages carried `style="padding-top:0"` on their hero, all of them
+ * under AppShell, which is the markup saying the default is wrong here: the
+ * tabs already provide the separation, and the hero's own padding pushed
+ * every page's title a screen below its navigation.
+ */
+.appnav + .hero {
+  padding-top: 0;
+}
+
+/* The first section after a hero, where two paddings stack.
+ *
+ * A hero already ends with space below it, so the full gap put the content
+ * of a page a screen down from its title. This is the same reasoning
+ * everywhere it applies, which is why it is here rather than in one page.
+ */
+.hero + .sec {
+  padding-top: 26px;
+}
+
+/* ── SECTION HEADS ─────────────────────────────────────────────
+ 
+   Every section on every page carried the same two pixel black rule under
+   the same small caps, so a reader scrolling saw one texture from top to
+   bottom and had nothing to navigate by. A page is a sequence of sections,
+   and the head should say which one you are in.
+ 
+   Three changes, all structural rather than decorative. The label is set in
+   the utility face, which is the only typographic contrast this theme has
+   and was being spent on nothing. The rule is the school's own hue rather
+   than black, so it reads as a division rather than as an underline. And
+   the count on the right keeps the numeric face, which is what it is.
+ 
+   The number is the signature: proceedings number their sections, and this
+   page genuinely is a numbered sequence — start date, the project, the
+   deadlines, what has been handed in. It sits in the gutter at the size of
+   a folio, in the mark colour, and it is the one loud thing here. */
 .sec-h {
   display: flex;
   justify-content: space-between;
   align-items: baseline;
   gap: 14px;
-  border-bottom: 2px solid var(--ink);
+  border-bottom: 2px solid var(--brand);
   padding-bottom: 8px;
-  margin: 0 0 14px;
+  margin: 0 0 16px;
 }
 
 .sec-h b {
-  font-family: var(--face-ui);
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  font-family: var(--face-num);
   font-weight: 700;
-  font-size: 0.82rem;
-  letter-spacing: 0.1em;
+  font-size: 0.86rem;
+  letter-spacing: 0.12em;
   text-transform: uppercase;
+  color: var(--ink);
 }
 
 .sec-h span {
   font-family: var(--face-num);
-  font-size: 0.78rem;
+  font-size: 0.84rem;
   color: var(--ink-3);
 }
 
@@ -117,8 +172,12 @@
 }
 
 .lockup .badge {
-  width: 36px;
+  /* min-width rather than width. A mark can be two, three, or four
+     characters, and a fixed square clips the four character case. */
+  min-width: 36px;
+  padding-inline: 5px;
   height: 36px;
+  box-sizing: border-box;
   background: var(--masthead-ink);
   color: var(--masthead-bg);
   flex: none;
@@ -129,6 +188,24 @@
   font-weight: 800;
   font-size: 0.9rem;
   letter-spacing: -0.03em;
+}
+
+/* Longer marks step down so the block stays a block rather than becoming a
+   bar. The schema allows two to six; `tests/orgs.mjs` reads that range off
+   the migration and fails if a length here has no rule. */
+.lockup .badge[data-len='4'] {
+  font-size: 0.82rem;
+  letter-spacing: -0.04em;
+}
+
+.lockup .badge[data-len='5'] {
+  font-size: 0.72rem;
+  letter-spacing: -0.05em;
+}
+
+.lockup .badge[data-len='6'] {
+  font-size: 0.64rem;
+  letter-spacing: -0.05em;
 }
 
 .lockup .names {
@@ -153,11 +230,13 @@
 
 .mnav {
   display: flex;
+  align-items: center;
   gap: 20px;
   list-style: none;
   margin: 0;
   padding: 0;
   flex-wrap: wrap;
+  line-height: 1.4;
 }
 
 .mnav a {
@@ -175,6 +254,11 @@
 }
 
 /* ── THE RECORD, SIGNATURE COMPONENT ───────────────────────── */
+.card > .record,
+.card .record {
+  padding: 14px 16px;
+}
+
 .record {
   background: var(--card);
   border: 1px solid var(--rule);
@@ -265,7 +349,12 @@
 
 /* Structural variant: proceedings hangs the number in the margin
    and drops the stage rule, the way a contents page would. */
-[data-theme='proceedings'] .record {
+[data-theme='proceedings'] .card > .record,
+.card .record {
+  padding: 14px 16px;
+}
+
+.record {
   border-left-width: 1px;
   border-left-color: var(--rule);
   border-top: 3px solid var(--brand);
@@ -356,7 +445,7 @@
   gap: 6px;
   font-family: var(--face-ui);
   font-weight: 600;
-  font-size: 0.78rem;
+  font-size: 0.84rem;
   padding: 4px 9px;
   border: 1px solid var(--rule);
   color: var(--ink-2);
@@ -436,8 +525,8 @@
   gap: 7px;
   font-family: var(--face-ui);
   font-weight: 600;
-  font-size: 0.92rem;
-  padding: 11px 18px;
+  font-size: 1rem;
+  padding: 12px 20px;
   border: 1.5px solid var(--ink);
   background: var(--ink);
   color: var(--card);
@@ -453,9 +542,157 @@
   text-decoration: none;
 }
 
+/* An anchor styled as a button was taking the link color from a later rule
+   and rendering dark text on a dark fill. Anchors need the explicit states. */
+a.btn,
+a.btn:link,
+a.btn:visited,
+a.btn:hover,
+a.btn:focus {
+  color: var(--card);
+}
+
+a.btn-2,
+a.btn-2:link,
+a.btn-2:visited,
+a.btn-q,
+a.btn-q:link,
+a.btn-q:visited {
+  color: var(--ink);
+}
+
 .btn-2 {
   background: transparent;
   color: var(--ink);
+}
+
+/* The file input's own button.
+ *
+ * It is the browser's until you say otherwise: grey, system font, and on a
+ * page where every other control carries the school's styling, the one that
+ * does not reads as broken. There are four of these across the app and they
+ * should not each decide for themselves.
+ */
+input[type='file'] {
+  padding: 6px;
+  font-size: 0.92rem;
+}
+
+input[type='file']::file-selector-button {
+  font-family: var(--face-ui);
+  font-weight: 600;
+  font-size: 0.9rem;
+  padding: 7px 14px;
+  margin-right: 10px;
+  border: 1.5px solid var(--ink);
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--ink);
+  cursor: pointer;
+}
+
+input[type='file']::file-selector-button:hover {
+  background: var(--sunk);
+}
+
+/* A button that reads as a link.
+ *
+ * For a secondary action inside a table row, where a bordered button on
+ * every line would turn the table into a wall of boxes: Verify, Remove.
+ * Still a button, and still the tenant's ink and face.
+ *
+ * It was defined three times in three files, one of them with `!important`
+ * to beat a rule in its own stylesheet, and the three had drifted to three
+ * different sizes.
+ */
+.linkish {
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  font-family: var(--face-ui);
+  font-size: 0.88rem;
+  color: var(--ink-3);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.linkish:hover {
+  color: var(--ink);
+}
+
+/* A text input, anywhere.
+ *
+ * Twenty-six pages set `class="in"` on an input and nothing defined it. They
+ * looked plausible because a browser's default input is not hideous, and
+ * beside a styled button on the same row the difference is obvious.
+ */
+.in {
+  font-family: inherit;
+  font-size: 0.94rem;
+  padding: 8px 10px;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background: var(--card);
+  color: var(--ink);
+  min-width: 0;
+}
+
+.in:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 1px;
+}
+
+/* A dropdown, anywhere.
+ *
+ * Same story as `.in` above, one control later: every `<select>` in the app
+ * was a raw browser control sitting beside a styled button, which reads as
+ * unfinished on the one row where a student picks the class to add their
+ * project to.
+ *
+ * Matched to `.in` rather than given its own look, because they appear on
+ * the same rows and the eye reads a difference in height or border as
+ * meaning something. The arrow stays native: drawing one means
+ * `appearance: none`, and every implementation of that has to reimplement
+ * the focus ring, the disabled state and the dark scheme by hand.
+ */
+select {
+  font-family: inherit;
+  font-size: 0.94rem;
+  padding: 7px 10px;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background: var(--card);
+  color: var(--ink);
+  min-width: 0;
+  max-width: 100%;
+}
+
+/* Read aloud, never drawn.
+ *
+ * Four pages label a control this way and nothing defined it, so the label
+ * rendered as ordinary text — which is how "Reason, optional" appeared above
+ * an input instead of beside it, pushing a row out of alignment.
+ *
+ * Clipped rather than `display: none`, which would take it out of the
+ * accessibility tree along with the layout.
+ */
+.sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Inside a table row, where the full size turns one line into two. */
+.btn-sm {
+  padding: 7px 14px;
+  font-size: 0.9rem;
 }
 
 .btn-2:hover {
@@ -501,7 +738,7 @@
 .req {
   font-family: var(--face-ui);
   font-weight: 600;
-  font-size: 0.76rem;
+  font-size: 0.82rem;
   color: var(--alert);
 }
 
@@ -541,6 +778,63 @@
   background: var(--card);
 }
 
+/* A failure looks like one.
+ *
+ * Every outcome on the working surface rendered in the same blue-barred
+ * panel, so "Recorded." and "That email and password did not match" were
+ * the same object in the same color, and the bar carried no information at
+ * all. The role is already on the element, because a screen reader has to
+ * be told the difference; this tells everybody else. */
+.note[role='alert'] {
+  border-left-color: var(--alert);
+  background: var(--alert-bg);
+}
+
+/* TEXT PANELS CARRY THE MEASURE, AND THE TEXT INSIDE FILLS THEM.
+ *
+ * The measure used to live on .prose and .lede, so a padded card stretched
+ * to the full 1080px column while the paragraph inside it wrapped two thirds
+ * of the way across. The box then looked half empty on the right and every
+ * one of these panels had the same fault, on twenty pages.
+ *
+ * The container is the right place for a measure: a box and the text in it
+ * cannot disagree if only one of them is constrained. .prose and .lede keep
+ * their own caps for published articles, where they are not inside a panel.
+ *
+ * Bare .card without .pad is a stat tile rather than a text panel and is left
+ * alone, since those sit in grid columns that are already narrower than this.
+ */
+.card.pad,
+.note {
+  max-width: var(--measure-form);
+}
+
+/* A one line outcome is not a panel.
+ *
+ * `.note` is capped at the width a form wants to be, which is right for a box
+ * holding fields and wrong for a sentence: "Request to join Independent
+ * Research and Project Design sent. You can start a project while you wait for
+ * approval." wrapped inside a tall narrow box, so the answer to what just
+ * happened took more vertical space than the thing it was answering about.
+ *
+ * The cap is removed rather than raised. Both measures are narrower than this
+ * needs -- `--measure-text` is 66ch and `--measure-form` 72ch, so either one
+ * would have made it narrower, which is how the first attempt at this got it
+ * backwards. A flash spans the column it sits in, like the section rules
+ * above and below it, and takes one line of padding instead of a panel's. */
+.note.flash {
+  max-width: none;
+  padding: 10px 16px;
+  margin: 0 0 14px;
+}
+
+.card.pad .prose,
+.card.pad .lede,
+.note .prose,
+.note .lede {
+  max-width: none;
+}
+
 .note h4 {
   font-family: var(--face-ui);
   font-weight: 700;
@@ -573,29 +867,57 @@
 }
 
 /* ── TABLE ─────────────────────────────────────────────────── */
+/* ── TABLES ────────────────────────────────────────────────────
+ 
+   A table of twenty-nine deadlines, every row the same weight on the same
+   white, separated by the same hairline, is the flattest surface in the
+   product and the one a student spends the most time reading. Three things
+   give it rhythm without decorating it.
+ 
+   The head sits on its own tint, so it stays legible as a heading when the
+   table is long. Rows alternate, which is what lets an eye track across four
+   columns without losing the line — the whole reason ledgers have ruled
+   paper. And the row under the cursor lifts, so the thing you are about to
+   act on is the thing that looks active. */
 .tbl {
   width: 100%;
   border-collapse: collapse;
   background: var(--card);
+  border: 1px solid var(--rule);
+  box-shadow: var(--lift);
   font-family: var(--face-ui);
   font-size: 0.92rem;
 }
 
 .tbl th {
   text-align: left;
+  font-family: var(--face-num);
   font-weight: 700;
-  font-size: 0.78rem;
-  letter-spacing: 0.07em;
+  font-size: 0.8rem;
+  letter-spacing: 0.09em;
   text-transform: uppercase;
   color: var(--ink-2);
+  background: var(--sunk);
   padding: 11px 12px;
-  border-bottom: 2px solid var(--ink);
+  border-bottom: 2px solid var(--brand);
 }
 
 .tbl td {
   padding: 12px;
   border-bottom: 1px solid var(--rule-fine);
   vertical-align: top;
+}
+
+.tbl tbody tr:nth-child(even) td {
+  background: var(--sunk);
+}
+
+.tbl tbody tr:hover td {
+  background: var(--ready-bg);
+}
+
+.tbl tbody tr:last-child td {
+  border-bottom: 0;
 }
 
 .tbl .n {
@@ -656,10 +978,16 @@ mark {
 }
 
 /* ── EMPTY STATE ───────────────────────────────────────────── */
+/* An empty screen is an invitation to act, so it is a surface with something
+   on it rather than an outline of a missing thing. The dashed border said
+   "content should be here and is not"; the sheet with a mark coloured top
+   edge says "this is where it will be". */
 .void {
-  border: 2px dashed var(--rule);
+  border: 1px solid var(--rule);
+  border-top: var(--edge) solid var(--brand-mark);
   background: var(--card);
-  padding: 40px 24px;
+  box-shadow: var(--lift);
+  padding: 44px 24px;
   text-align: center;
 }
 
@@ -800,4 +1128,213 @@ mark {
   color: var(--masthead-ink);
   line-height: 1.7;
   max-width: 74ch;
+}
+
+
+/* ===========================================================================
+ * FORMS
+ *
+ * These lived inside one page's <style> block and were reached for by class
+ * name from two others, which meant a form on the editorial page rendered
+ * its labels as plain body text while the same markup on the manuscript page
+ * did not. A class whose styles live somewhere else is a class that works by
+ * accident.
+ *
+ * One measure, one label treatment, one button placement, and every page that
+ * writes class="mform" gets all three.
+ * ======================================================================== */
+
+.mform {
+  display: grid;
+  gap: 18px;
+  max-width: var(--measure-form);
+}
+
+.mform label {
+  display: grid;
+  gap: 6px;
+  /* Without this, a cell whose help text runs to two lines stretches its row
+     and the input beside it floats down to meet nothing. */
+  align-content: start;
+}
+
+.mform label > span {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 14px;
+  font-family: var(--face-ui);
+  font-size: 0.78rem;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+}
+
+.mform small {
+  color: var(--ink-3);
+  font-size: 0.86rem;
+  line-height: 1.5;
+}
+
+/* A button in a grid stretches to fill its column unless told not to, which
+   is how one save turns into a banner across the page. */
+.mform button,
+.mform .btn {
+  justify-self: start;
+  width: auto;
+}
+
+/* Two and three across, collapsing together rather than one at a time. */
+.mform .row-2 {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+}
+
+.mform .row-3 {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 18px;
+}
+
+.mform .row-2 > label,
+.mform .row-3 > label {
+  align-content: start;
+}
+
+@media (max-width: 760px) {
+  .mform .row-2,
+  .mform .row-3 {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ═══ THE ACTION SCREENS ═══════════════════════════════════════════════════
+ *
+ * Assign, Editorial and Publish are the same kind of screen: a queue, where
+ * something arrives, somebody holding a role acts on it, and it moves on.
+ * The overview is the other kind, a register — everything, with its state.
+ *
+ * They had grown three vocabularies for one shape. Three grammars in the
+ * headings alone, an eyebrow that repeated the nav label above it on two of
+ * the three, and three different row primitives: four tables, a bare list,
+ * and a set of hand-styled blocks. Somebody moving between them was learning
+ * the same page three times.
+ *
+ * These are the shared parts, here rather than repeated per page, so a
+ * fourth action screen inherits the vocabulary instead of inventing one.
+ * Added to the component inventory in 15.7.
+ */
+
+/* One line of figures under the heading. A stacked label under each number
+   made a five item row three lines tall at the top of the page a teacher
+   opens first. */
+.counts {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 26px;
+  margin: 16px 0 0;
+  padding: 10px 0;
+  border-top: 1px solid var(--rule);
+  border-bottom: 1px solid var(--rule);
+  font-family: var(--face-ui);
+  font-size: 0.88rem;
+  color: var(--ink-3);
+}
+
+.counts li {
+  white-space: nowrap;
+}
+
+.counts b {
+  font-family: var(--face-num);
+  font-size: 1rem;
+  color: var(--ink);
+  margin-right: 5px;
+}
+
+/* Nothing wrong reads as nothing wrong: the alert tone only appears when
+   there is something in the count. */
+.counts li.bad b {
+  color: var(--alert);
+}
+
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 18px;
+  margin: 18px 0 6px;
+  font-family: var(--face-ui);
+  font-size: 0.88rem;
+}
+
+.filters a {
+  color: var(--ink-3);
+  text-decoration: none;
+}
+
+.filters a.on {
+  color: var(--ink);
+  font-weight: 600;
+  text-decoration: underline;
+}
+
+/* A queue: one thing, its state, and the single action available on it.
+ *
+ * The rule that decides between this and `.tbl` is not cosmetic. **A table
+ * is for comparing across rows; a list is for acting on one.** An advisor
+ * scanning who has a sponsor is comparing, and wants columns. An editor
+ * taking the next submission is acting, and columns make them read six
+ * cells to find the one button. */
+.queue {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border-top: 1px solid var(--rule-fine);
+}
+
+.queue > li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 4px 20px;
+  align-items: center;
+  padding: 14px 0;
+  border-bottom: 1px solid var(--rule-fine);
+}
+
+.q-title {
+  grid-column: 1;
+  font-size: 1.05rem;
+}
+
+/* Whatever the row needs said about itself: who is on it, when it arrived,
+   what it is waiting for. */
+.q-sub {
+  grid-column: 1;
+  font-family: var(--face-ui);
+  font-size: 0.86rem;
+  color: var(--ink-3);
+}
+
+/* The action, right and vertically centred against the whole row, so a
+   column of them is a column whatever each row says. */
+.q-do {
+  grid-column: 2;
+  grid-row: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+@media (max-width: 640px) {
+  .queue > li {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .q-do {
+    grid-column: 1;
+    grid-row: auto;
+    margin-top: 8px;
+  }
 }

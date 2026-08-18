@@ -1,0 +1,14 @@
+# A quad chart. Required by Genius Olympiad among others: one page, four
+# boxes, read in about thirty seconds.
+
+id: quad_chart
+name: Quad chart
+layout: grid_2x2
+guidance: >-
+  One page, read in half a minute. Everything on it competes for the same
+  small space, so a sentence that is not load-bearing should not be there.
+parts:
+  - { id: problem,  name: The problem,  guidance: Why it matters, in one or two sentences. }
+  - { id: approach, name: Approach,     guidance: What you did. A figure usually says it better than prose. }
+  - { id: results,  name: Results,      guidance: The finding, with the number that supports it. }
+  - { id: impact,   name: Impact,       guidance: What changes because of this. }

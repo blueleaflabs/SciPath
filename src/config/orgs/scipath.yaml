@@ -1,0 +1,49 @@
+# The base tenant, on the bare domain: www.scipath.org, or localhost:4321 while
+# developing.
+#
+# **Two things that used to be separate.** The platform record rendered
+# scipath.org and held no students; `blueleaflabs` was a fourth tenant on
+# open.scipath.org running the Open Program for students with no school behind
+# them. There is no reason for both: the front door and the open program are
+# the same place, and a student arriving at scipath.org with no school should
+# be able to start work there rather than being sent to a subdomain to do it.
+#
+# So this is provisioned as a row, accepts open signup, and is what any
+# hostname that names no tenant falls back to — the apex, `www`, and a bare
+# `localhost`.
+
+id: scipath
+
+name: SciPath
+mark: SP
+theme: entry
+record_prefix: SP
+timezone: America/Los_Angeles
+
+# Suppresses the "on SciPath" line in the lockup: naming the platform under
+# the platform reads as a mistake.
+is_platform: true
+
+# Open: no domain, no district, no adult required to vouch. Many high
+# schoolers are already adults, which is why the age gate carries three bands
+# rather than one checkbox.
+signup_mode: open
+requires_mentor: false
+verified_domains: []
+domains: []
+
+contact_email: hello@blueleaflabs.org
+editorial_review: true
+showcase_note: >-
+  Published records from every organization running this software, and from
+  students working on their own. Reading anything here never requires an
+  account.
+
+# Nothing yet, and that is the honest state.
+#
+# What belongs here is a staffed cohort with Blue Leaf Labs mentors, for the
+# student 2.5 is about. The old `independent-research` program existed so a
+# solo student had something to join; the process attaches to the project now,
+# so they get the same steps by starting one (22.10). Until somebody staffs a
+# cohort, an empty list says so rather than a placeholder implying otherwise.
+programs: []

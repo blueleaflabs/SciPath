@@ -1,0 +1,15 @@
+-- ============================================================================
+-- LOCAL SEED
+--
+-- Runs automatically at the end of `supabase db reset`, and never reaches
+-- production. Demo content only: anything that must exist in production is a
+-- migration instead, which is why the three organizations are in 0001 and not
+-- here. See brief 11.7.
+--
+-- Fixture ACCOUNTS are not here and cannot be: SQL cannot create an auth
+-- account. Those come from `npm run seed:demo`, which uses the admin API.
+--
+-- Empty for now. It exists so `db reset` stops warning about a missing file,
+-- and it is where demo projects, entries, and milestones will go once those
+-- tables exist.
+-- ============================================================================

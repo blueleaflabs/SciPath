@@ -1,0 +1,228 @@
+---
+export const prerender = false;
+
+import Base from '../../layouts/Base.astro';
+import { serverClient } from '../../lib/supabase';
+import { activeOrg } from '../../lib/tenant';
+import { afterPost, outcomeFrom, leaveTo } from '../../lib/post-redirect';
+import { signInWith } from '../../lib/next-path';
+
+const { session, account, orgSlug } = Astro.locals;
+const org = activeOrg(Astro) as any;
+
+/* Remembering where they were headed, so a link from a notification
+   survives the sign in it triggers (20.10). */
+if (!session) return Astro.redirect(signInWith(Astro.url));
+if (account) return Astro.redirect('/app/');
+
+const openProgram = org?.signupMode === 'open';
+
+/* The database is the enforcement; this is so a person finds out before
+   filling in a form rather than after. A tenant that lists domains accepts
+   only those domains, whatever Google was willing to authenticate. */
+const emailDomain = (session.email ?? '').split('@')[1]?.toLowerCase() ?? '';
+const allowedDomains = (org?.verifiedDomains ?? []) as string[];
+const domainRefused =
+  org?.signupMode === 'domain' && !allowedDomains.includes(emailDomain);
+
+/* Sign out on the spot. Leaving someone signed in to an account that cannot
+   be used here, and asking them to sign themselves out, is two steps of
+   nothing. The message survives because the address was already read. */
+if (domainRefused) {
+  const supabase = serverClient(
+    Astro.request,
+    Astro.cookies,
+    (Astro.locals as any).runtime?.env
+  );
+  await supabase.auth.signOut();
+}
+
+const year = new Date().getFullYear();
+const gradYears = [year, year + 1, year + 2, year + 3, year + 4];
+
+/* Seeded from the redirect a POST answers with. See
+   src/lib/post-redirect.ts. */
+let { error: error } = outcomeFrom(Astro.url);
+let sent: Record<string, string> = {};
+
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData();
+  for (const [k, v] of form.entries()) sent[k] = String(v);
+  const ageBand = String(form.get('age_band') ?? '');
+  const guardianEmail = String(form.get('guardian_email') ?? '').trim();
+  const gradYear = String(form.get('grad_year') ?? '');
+
+  if (ageBand === 'under_13') {
+    error = 'This platform is for students aged 13 and over.';
+  } else if (ageBand === '13_17' && !guardianEmail) {
+    error = 'A parent or guardian email is required.';
+  } else {
+    const supabase = serverClient(
+      Astro.request,
+      Astro.cookies,
+      (Astro.locals as any).runtime?.env
+    );
+
+    const { error: rpcError } = await supabase.rpc('complete_signup', {
+      p_org_slug: orgSlug,
+      p_display_name: String(form.get('display_name') ?? '').trim(),
+      p_age_band: ageBand,
+      p_grad_year: gradYear ? Number(gradYear) : null,
+      p_guardian_name: String(form.get('guardian_name') ?? '').trim() || null,
+      p_guardian_email: guardianEmail || null,
+    });
+
+    if (rpcError) error = rpcError.message;
+    else return leaveTo('/app/');
+  }
+
+  /* A refresh should re-read this page, not send the form again. */
+  return afterPost(Astro.url, { error: error });
+}
+
+const suggestedName = sent.display_name ?? session.email?.split('@')[0] ?? '';
+const band = sent.age_band ?? '';
+---
+
+<Base title="Finish signing up" noindex={true}>
+  <div class="wrap">
+  <section class="stack">
+    <p class="eyebrow">{org?.name}</p>
+    <h1>Finish signing up</h1>
+    <p>
+      Three things, and nothing your sign-in already proves.
+    </p>
+
+    {/* Anchored, and every form on this page posts to it. These pages
+        run to several screens, and an outcome rendered at the top after
+        a click three screens down reads as nothing having happened. */}
+    <div id="outcome" tabindex="-1">
+    {error && <p class="note" role="alert">{error}</p>}
+    </div>
+
+    {domainRefused ? (
+      <div class="note" role="alert">
+        <h4>That account cannot be used here</h4>
+        <p>
+          You signed in as <b>{session.email}</b>. {org?.name} accepts accounts
+          on {allowedDomains.map((d, i) => (
+            <>{i > 0 && <span> or </span>}<b>{d}</b></>
+          ))} only.
+        </p>
+        <p style="margin-top:12px">
+          You have been signed out. Sign in again with your school account.
+        </p>
+        <p style="margin-top:14px">
+          <a class="btn" href="/auth/signin/">Sign in with Google</a>
+        </p>
+      </div>
+    ) : (
+    <form method="POST" action="#outcome" class="stack">
+      {/* "Your name, as it should appear on a byline" explained a consequence
+          to somebody who has not published anything and may not know what a
+          byline is. It is asking for a name. The consequence is true and
+          belongs where it applies: on the profile, where somebody editing a
+          name they already have is deciding whether to change it. */}
+      <label>
+        <span>Your full name</span>
+        <input name="display_name" required value={suggestedName} autocomplete="name" />
+      </label>
+
+      <fieldset>
+        <legend>Current age <i class="req">*</i></legend>
+        <label><input type="radio" name="age_band" value="under_13" required checked={band === 'under_13'} /> Under 13</label>
+        <label><input type="radio" name="age_band" value="13_17" checked={band === '13_17'} /> 13 to 17</label>
+        <label><input type="radio" name="age_band" value="18_plus" checked={band === '18_plus'} /> 18 or older</label>
+      </fieldset>
+
+      <label>
+        <span>Graduation year</span>
+        <select name="grad_year">
+          <option value="">Not a student</option>
+          {gradYears.map((y) => (
+            <option value={y} selected={sent.grad_year === String(y)}>{y}</option>
+          ))}
+        </select>
+      </label>
+
+      <fieldset id="guardian" data-needed={band === '13_17' ? 'yes' : undefined}>
+        <legend>Parent or guardian</legend>
+        <p class="skipnote"><b>Not needed if you are 18 or older.</b></p>
+        <p class="fine">
+          If you are under 18, parent or guardian consent is required for
+          publishing.
+        </p>
+        <label>
+          <span>Their name <i class="req">*</i></span>
+          <input name="guardian_name" value={sent.guardian_name ?? ''} autocomplete="off" />
+        </label>
+        <label>
+          <span>Their email <i class="req">*</i></span>
+          <input name="guardian_email" type="email" value={sent.guardian_email ?? ''} autocomplete="off" />
+        </label>
+      </fieldset>
+
+      {openProgram && (
+        <p class="fine">
+          This is an open program. No school and no district behind it.
+        </p>
+      )}
+
+      <div class="finish">
+        <button class="btn" type="submit">Create my account</button>
+        <ul class="terms">
+          <li><i class="req">*</i> required</li>
+          <li>Publishing requires approval of a parent or guardian.</li>
+        </ul>
+      </div>
+    </form>
+    )}
+  </section>
+  </div>
+</Base>
+
+<script>
+  /* Required only when it applies. The server refuses a minor with no
+     guardian address, and being told that after submitting is a worse way to
+     learn it than the field being required at the moment it becomes so. */
+  const guardian = document.getElementById('guardian');
+  const bands = document.querySelectorAll('input[name="age_band"]');
+  const guardianFields = guardian ? guardian.querySelectorAll('input') : [];
+
+  function syncGuardian() {
+    const chosen = document.querySelector('input[name="age_band"]:checked');
+    const minor = chosen && chosen.value === '13_17';
+
+    if (guardian) guardian.dataset.needed = minor ? 'yes' : '';
+    guardianFields.forEach((field) => {
+      field.required = Boolean(minor);
+    });
+  }
+
+  bands.forEach((band) => band.addEventListener('change', syncGuardian));
+  syncGuardian();
+</script>
+
+<style>
+  form.stack { max-width: 52ch; }
+  form label { display: block; margin-bottom: 16px; }
+  form label > span { display: block; margin-bottom: 6px; font-family: var(--face-ui); font-size: 0.92rem; }
+  form fieldset { border: 1px solid var(--rule-fine); padding: 16px 18px; margin-bottom: 20px; }
+  form legend { font-family: var(--face-ui); font-size: 0.92rem; padding: 0 6px; }
+  form input, form select { width: 100%; padding: 9px 11px; border: 1px solid var(--rule); background: var(--card); color: var(--ink); font: inherit; }
+  form fieldset label input[type='radio'] { width: auto; margin-right: 8px; }
+  form fieldset > label { display: flex; align-items: center; gap: 4px; margin-bottom: 8px; }
+  .fine { color: var(--ink-3); font-size: 0.9rem; margin-top: 10px; }
+  .finish { display: flex; flex-wrap: wrap; gap: 20px; align-items: center; margin-top: 6px; }
+  .terms { margin: 0; padding-left: 1.1rem; color: var(--ink-3); font-size: 0.92rem; }
+  .req { color: var(--alert); font-style: normal; }
+
+  /* The guardian fields matter only for someone under 18, so the asterisks
+     are hidden until the age band says otherwise rather than marking a
+     field required that half the people filling this in should skip. */
+  #guardian .req { display: none; }
+  #guardian[data-needed='yes'] .req { display: inline; }
+  .terms li { margin-bottom: 3px; }
+  .skipnote { margin: 0 0 8px; font-family: var(--face-ui); font-size: 0.94rem; }
+  form button { padding: 10px 18px; border: 1px solid var(--ink); background: var(--ink); color: var(--paper); font-family: var(--face-ui); font-size: 1rem; font-weight: 600; cursor: pointer; }
+</style>

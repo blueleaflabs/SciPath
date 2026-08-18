@@ -1,0 +1,18 @@
+---
+export const prerender = false;
+
+/**
+ * GONE, AND STILL ANSWERING.
+ *
+ * This page listed a student's entries and the programs open to them, and
+ * the overview listed the same entries with a different row. Two pages
+ * holding one list is what a reader has to reconcile, and the reconciling
+ * is work nobody asked them to do.
+ *
+ * Both halves live on the overview now. The route survives as a redirect
+ * rather than as a 404, because the welcome page, an empty state and two
+ * years of anybody's bookmarks point at it, and a dead link is a worse
+ * answer than a moved one.
+ */
+return Astro.redirect('/app/#join', 301);
+---

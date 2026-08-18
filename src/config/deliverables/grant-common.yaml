@@ -1,0 +1,82 @@
+# What a grant application consists of.
+#
+# The same five or six documents at nearly every funder, at different page
+# limits. That is the whole argument for these being deliverables with
+# constraints rather than a form per grant: a student writes the narrative
+# once and four funders want it at four lengths.
+
+id: deliverables-grant
+
+deliverables:
+  - id: grant_narrative
+    name: The proposal
+    kind: link
+    owner: student
+    requirement: required
+    shape: grant_narrative
+    constraints:
+      pages: { max: 2, counting: body_only }
+    guidance: >-
+      What you want to do, why it needs money, and what the money buys. A
+      reader who funds ten of these will spend four minutes on yours, and the
+      one thing they are looking for is whether the money changes the outcome
+      or merely pays for something you would have done anyway.
+
+  - id: grant_budget
+    name: What the money is for
+    kind: link
+    owner: student
+    requirement: required
+    guidance: >-
+      Line items with prices and where you found them. Not a spreadsheet
+      exercise: a reviewer is checking that the number is real, so a link to
+      the supplier page beats a round figure. Say what happens if you get
+      part of it, because partial awards are the ordinary outcome.
+
+  - id: grant_letter
+    name: Letter from your sponsor
+    kind: link
+    owner: sponsor
+    requirement: required
+    guidance: >-
+      Your teacher writes it, so ask early: they are asked by many students
+      at once and a letter written in a hurry reads like one.
+
+  - id: grant_transcript
+    name: Transcript or enrollment proof
+    kind: file
+    owner: student
+    requirement: conditional
+    applies_when: needs_transcript
+    guidance: Some funders ask, most do not. The office issues it, not you.
+
+  # ── After the money arrives ────────────────────────────────────────────
+  #
+  # The part every fair template has no equivalent of. A competition ends at
+  # judging; a grant does not, and a school that misses the final report is a
+  # school that does not get the next one.
+
+  - id: grant_report
+    name: Final report
+    kind: link
+    owner: student
+    requirement: required
+    applies_when: awarded
+    guidance: >-
+      What you did with the money and what came of it, including the parts
+      that did not work. A funder reads this to decide whether to fund the
+      next student, so it is not really about you.
+
+  - id: grant_receipts
+    name: Receipts
+    kind: link
+    owner: student
+    requirement: conditional
+    applies_when: awarded and needs_receipts
+    guidance: Keep them as you spend. Reconstructing them in June is miserable.
+
+facts:
+  - { id: awarded, question: "Was the grant awarded?" }
+  - { id: needs_transcript, question: "Does this funder ask for a transcript?" }
+  - { id: needs_receipts, question: "Does this funder ask for receipts?" }
+  - { id: equipment, question: "Is the money mostly for equipment or materials?" }

@@ -1,0 +1,810 @@
+---
+export const prerender = false;
+
+import Base from '../../../layouts/Base.astro';
+import { formatDate } from '../../../lib/dates';
+import AppShell from '../../../components/AppShell.astro';
+import { activeOrg } from '../../../lib/tenant';
+import { programTitle, staffWord } from '../../../lib/program-names';
+import { serverClient } from '../../../lib/supabase';
+import { standing, isAuthorOf, attachmentLabel } from '../../../lib/roles';
+import { renderNote } from '../../../lib/notes';
+import { blobStore, notePath, MAX_UPLOAD_BYTES } from '../../../lib/blob';
+import { afterPost, outcomeFrom } from '../../../lib/post-redirect';
+import { signInWith } from '../../../lib/next-path';
+
+const { session, account, roles } = Astro.locals;
+const org = activeOrg(Astro);
+const { id } = Astro.params;
+
+/* Remembering where they were headed, so a link from a notification
+   survives the sign in it triggers (20.10). */
+if (!session) return Astro.redirect(signInWith(Astro.url));
+if (!account) return Astro.redirect('/app/welcome/');
+
+const me = standing(roles, account?.population);
+const supabase = serverClient(
+  Astro.request,
+  Astro.cookies,
+  (Astro.locals as any).runtime?.env
+);
+
+/* Seeded from the redirect a POST answers with. See
+   src/lib/post-redirect.ts. */
+let { error: error } = outcomeFrom(Astro.url);
+let noted = false;
+let sent: Record<string, string> = {};
+
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData();
+  const action = String(form.get('action') ?? 'note');
+
+  for (const [k, v] of form.entries()) {
+    if (typeof v === 'string') sent[k] = v;
+  }
+
+  /* Putting this project in a cohort, or taking it out. The relationship is
+     the project's rather than the author's, so it is set here rather than
+     inferred from who wrote it (22.5). */
+  if (action === 'cohort') {
+    const { error: e } = await supabase.rpc('set_project_cohort', {
+      p_project_id: id,
+      p_cohort_id: String(form.get('cohort_id') ?? ''),
+      p_in: form.get('leave') !== 'yes',
+    });
+
+    if (e) error = e.message;
+  }
+
+  if (action === 'note') {
+    const { data: noteId, error: e } = await supabase.rpc('add_field_note', {
+      p_project_id: id,
+      p_body_md: String(form.get('body_md') ?? ''),
+      p_occurred_on: String(form.get('occurred_on') ?? '') || null,
+      p_corrects_id: String(form.get('corrects_id') ?? '') || null,
+    });
+
+    if (e) error = e.message;
+    else {
+      noted = true;
+      sent = {};
+
+      const file = form.get('image');
+      if (file instanceof File && file.size > 0) {
+        const blob = blobStore(Astro.locals);
+
+        if (file.size > MAX_UPLOAD_BYTES) {
+          error = 'The note was saved, but that image is over 5 MB. Try again with a smaller one.';
+        } else if (!blob.available()) {
+          error = 'The note was saved. File storage is not configured on this deployment.';
+        } else {
+          const path = notePath(id!, noteId, file.name);
+          try {
+            await blob.put(path, await file.arrayBuffer(), file.type || 'image/jpeg');
+            const { error: mErr } = await supabase.rpc('attach_note_media', {
+              p_note_id: noteId,
+              p_storage_path: path,
+              p_caption: String(form.get('caption') ?? '') || null,
+            });
+            if (mErr) error = `Note saved, but the image did not attach: ${mErr.message}`;
+          } catch (e: any) {
+            error = `Note saved, but the image did not upload: ${e.message}`;
+          }
+        }
+      }
+    }
+  }
+
+
+
+
+
+  /* A refresh should re-read this page, not send the form again. */
+  return afterPost(Astro.url, { error: error });
+}
+
+
+const { data: project } = await supabase
+  .from('projects')
+  .select('id, title, question, started_on, video_url, project_authors(role, users(id, display_name))')
+  .eq('id', id)
+  .maybeSingle();
+
+if (!project) return Astro.redirect('/app/');
+
+const { data: notes } = await supabase
+  .from('field_notes')
+  .select('id, body_md, occurred_on, created_at, corrects_id, seq, author_id, users:author_id(display_name)')
+  .eq('project_id', id)
+  .order('occurred_on', { ascending: false })
+  .order('seq', { ascending: false });
+
+const noteIds = (notes ?? []).map((n: any) => n.id);
+
+const { data: media } = noteIds.length
+  ? await supabase.from('note_media').select('note_id, storage_path, caption').in('note_id', noteIds)
+  : { data: [] as any[] };
+
+/* Every image is served through a route that re-checks membership, so there
+   is no URL to leak and nothing to expire. */
+const mediaUrl = (path: string) => `/app/media/${path}`;
+
+
+/**
+ * The two things a project belongs to, read separately because they are two
+ * different relationships (22.5).
+ *
+ * A **cohort** is a group of people with a supervisor, and this is where a
+ * project's role word comes from: one project says Elder, another Officer,
+ * another Mentor, for the same person in three cohorts. It is read from the
+ * project rather than inferred from its authors, because a partner may be in
+ * no cohort at all.
+ *
+ * An **entry** is somewhere the work went. A project may have several, and
+ * each carries its own deadlines, its own deliverables and its own outcome.
+ */
+const { data: cohorts } = await supabase
+  .from('cohort_participations')
+  .select('program_id, programs:program_id(id, name, season_year, kind, roles, prepares_for)')
+  .eq('project_id', id);
+
+const { data: entries } = await supabase
+  .from('opportunity_participations')
+  .select('id, status, program_id, result_recorded_at, programs:program_id(id, name, season_year, kind, roles)')
+  .eq('project_id', id);
+
+const entryIds = (entries ?? []).map((e: any) => e.id);
+
+/**
+ * What this project calls the person looking after it.
+ *
+ * **From the cohorts, not the entries.** A word was being read off the fairs
+ * a project had been entered in, which is a venue's vocabulary rather than a
+ * school's: a supervisor belongs to a class or a club, and a regional fair
+ * has no opinion about what a school calls its officers (22.9).
+ *
+ * Where a project is in more than one cohort with different words, there is
+ * no single right answer and the schema's own word is the one nobody is
+ * wrong to read. The blocks below say each cohort's own.
+ */
+/* Cohorts this person is in that the project is not already in. A project
+   belongs to a cohort you are in, so there is nothing to offer somebody who
+   has joined nothing. */
+const { data: myCohorts } = await supabase
+  .from('memberships')
+  .select('cohort_id, programs:cohort_id(id, name, season_year)')
+  .eq('user_id', account.id)
+  .eq('state', 'member');
+
+const alreadyIn = new Set((cohorts ?? []).map((c: any) => c.program_id));
+const couldJoin = (myCohorts ?? []).filter((m: any) => !alreadyIn.has(m.cohort_id));
+
+/**
+ * Places asked for and not yet granted.
+ *
+ * **The merge does not fix this one.** A pending request is a membership in
+ * `requested`, and `set_project_cohort` refuses to attach a project until it
+ * is accepted -- so a pending cohort has no participation row *by
+ * construction*, and every block on this page reads participations.
+ *
+ * The student therefore asked to join IRPD, saw nothing here, and had no way
+ * to tell whether the request had gone anywhere. Which is the thing this
+ * software is supposed to be better at than a paper form.
+ */
+const { data: pendingCohorts } = await supabase
+  .from('memberships')
+  .select('cohort_id, programs:cohort_id(id, name, season_year)')
+  .eq('user_id', account.id)
+  .eq('state', 'requested');
+
+const cohortPrograms = (cohorts ?? []).map((c: any) => c.programs);
+const projectStaffWord =
+  cohortPrograms.length === 1 ? staffWord(cohortPrograms[0]) : 'Officer';
+
+
+/* The manuscript is one row per project and the project page only needs to
+   know whether it exists and how far along it is. Counting the check here
+   would mean assembling the whole snapshot for a line of text. */
+const { data: manuscript } = await supabase
+  .from('manuscripts')
+  .select('id, record_kind, title, abstract, updated_at')
+  .eq('project_id', id)
+  .maybeSingle();
+
+const { count: sectionsWritten } = manuscript
+  ? await supabase
+      .from('manuscript_sections')
+      .select('id', { count: 'exact', head: true })
+      .eq('manuscript_id', manuscript.id)
+      .neq('body', '')
+  : { count: 0 };
+
+const attachments = project.project_authors ?? [];
+const authors = attachments.filter((a: any) => a.role === 'author');
+const officers = attachments.filter((a: any) => a.role === 'officer');
+
+const { data: sponsor } = await supabase
+  .from('project_sponsors')
+  .select('teacher_name, confirmed_at, participations!inner(project_id)')
+  .eq('participations.project_id', id)
+  .is('superseded_at', null)
+  .limit(1)
+  .maybeSingle();
+
+/* Does the work, or watches it. Everything on this page follows from that. */
+/* Parsed here so the page can show what was saved rather than the raw
+   string, and so an address we cannot frame is reported as such. */
+
+const iAuthor = isAuthorOf(attachments, account.id);
+
+/* Who wrote which note, and in what capacity. A mentor's observation reads
+   differently from a student's own account, and it should look different. */
+const roleOf = new Map<string, string>(
+  attachments.map((a: any) => [a.users?.id, a.role])
+);
+
+const noteById = new Map((notes ?? []).map((n: any) => [n.id, n]));
+const today = new Date().toISOString().slice(0, 10);
+
+const fmt = (d: string | null) =>
+  formatDate(d, 'short');
+---
+
+<Base title={project.title} noindex={true}>
+  <div class="wrap">
+    <AppShell org={org} account={account} roles={roles} here="/app/" />
+
+    <section class="hero">
+      <div class="who">
+        {/* Which fair or class this belongs to, above the title.
+         
+            "Notebook" said what the page is, which the tabs already say. What
+            a student needs to know first is whose deadlines govern this
+            work, and a project may be in more than one: the course sets the
+            phases, the fair sets the refusals. */}
+        <p class="t-lbl">
+          {entries && entries.length > 0
+            ? entries.map((e: any) => programTitle(e.programs)).join(' · ')
+            : (cohorts ?? []).length > 0
+              ? (cohorts ?? []).map((c: any) => programTitle(c.programs)).join(' · ')
+              : 'Not in a class, and not entered anywhere'}
+        </p>
+        <h1 class="t-big">{project.title}</h1>
+        <p class="lede">
+          {authors.map((a: any) => a.users?.display_name).join(', ') || 'No authors'}
+          {officers.length > 0 &&
+            ` · ${projectStaffWord.toLowerCase()} ${officers
+              .map((m: any) => m.users?.display_name)
+              .join(', ')}`}
+          {sponsor && ` · sponsored by ${sponsor.teacher_name}`}
+        </p>
+      </div>
+      {/* One way out, and it is back.
+      
+          This page is the notebook and nothing else now. The manuscript, the
+          authors, the showcase, the documents and the export all live on the
+          entry page, which is where a project is actually run from, and four
+          buttons here were four routes back into the same page by different
+          names. */}
+      {/* A fixed label, not the program's name.
+      
+          The name went in the button and a program called "Independent
+          Research and Project Design 2027" took the whole second column of
+          the hero grid, squeezing the title's column to one word per line
+          and pushing the page down half a screen. A control in a header
+          slot has to have a length the layout can count on.
+      
+          Where a project is in more than one program there is more than one
+          hub, so the kind names which — one word each, and short by
+          construction. */}
+    </section>
+
+    {/* ── Where this work belongs, and where it went ──────────────────────
+    
+        The payoff of the model. A project in three cohorts is three blocks
+        on one page, each naming its own supervisor with its own word, and a
+        project entered in three competitions is three entries with their own
+        deadlines and outcomes (22.9).
+    
+        Before this, a project in two programs had two hubs showing the same
+        authors and the same export twice, because the hub was keyed on a
+        participation rather than on the work. */}
+    <section class="sec" id="belongs">
+      <div class="sec-h">
+        <b>Where this belongs</b>
+        <span>
+          {(cohorts ?? []).length === 0 && (entries ?? []).length === 0
+            ? 'nowhere yet'
+            : `${(cohorts ?? []).length} ${(cohorts ?? []).length === 1 ? 'cohort' : 'cohorts'} · ${(entries ?? []).length} ${(entries ?? []).length === 1 ? 'entry' : 'entries'}`}
+        </span>
+      </div>
+
+      {(cohorts ?? []).length > 0 && (
+        <ul class="belongs">
+          {(cohorts ?? []).map((c: any) => (
+            <li>
+              <span class="b-what">{programTitle(c.programs)}</span>
+              <span class="b-who">
+                {/* The cohort's own word. Elder in a class, Officer in a
+                    club, Mentor elsewhere, all for one person (22.9). */}
+                {staffWord(c.programs)}
+              </span>
+              <span class="b-do">
+                {/* "Deadlines" named one section of what is behind it. That
+                    page carries the calendar, the sponsor, the documents, the
+                    showcase and the entry's own details, so a student who
+                    wanted any of the other four had no reason to click. The
+                    row already names the program, so the verb does not have
+                    to repeat it. */}
+                <a class="btn btn-sm" href={`/app/project/${id}/in/${c.program_id}/`}>
+                  Open
+                </a>
+                {iAuthor && (
+                  <form method="POST" action="#outcome" class="inline">
+                    <input type="hidden" name="action" value="cohort" />
+                    <input type="hidden" name="cohort_id" value={c.program_id} />
+                    <input type="hidden" name="leave" value="yes" />
+                    <button class="btn btn-sm" type="submit">Remove</button>
+                  </form>
+                )}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {(entries ?? []).length > 0 && (
+        <ul class="belongs">
+          {(entries ?? []).map((e: any) => (
+            <li>
+              <span class="b-what">{programTitle(e.programs)}</span>
+              <span class="b-who">
+                {e.result_recorded_at
+                  ? 'result recorded'
+                  : e.status === 'requested'
+                    ? 'waiting on a decision'
+                    : e.status === 'declined'
+                      ? 'not selected'
+                      : 'entered'}
+              </span>
+              <span class="b-do">
+                <a class="btn btn-sm" href={`/app/project/${id}/in/${e.program_id}/`}>Open</a>
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {/* Only an author moves a project between cohorts. Somebody watching
+          reads where it belongs and changes nothing. */}
+      {iAuthor && couldJoin.length > 0 && (
+        <form method="POST" action="#outcome" class="inline" style="margin-top:14px">
+          <input type="hidden" name="action" value="cohort" />
+          {/* Labelled by the button beside it, which says what happens.
+              A visible label would repeat the verb twice in four words. */}
+          <select name="cohort_id" aria-label="Add this project to">
+            {couldJoin.map((m: any) => (
+              <option value={m.cohort_id}>{programTitle(m.programs)}</option>
+            ))}
+          </select>
+          <button class="btn btn-sm" type="submit">Add Project Here</button>
+        </form>
+      )}
+
+      {/* Asked for, not yet granted. See the query above: a pending place
+          has no participation row, so without this block the request is
+          invisible on the one page the student is looking at. */}
+      {iAuthor && (pendingCohorts ?? []).length > 0 && (
+        <p class="t-sm" style="max-width:var(--measure-text); margin-top:14px">
+          You asked to join{' '}
+          {(pendingCohorts ?? []).map((m: any, i: number) => (
+            <>
+              {i > 0 ? ', ' : ''}
+              <b>{programTitle(m.programs)}</b>
+            </>
+          ))}
+          . When they accept, you can add this project there.
+        </p>
+      )}
+
+      {/* A project with no cohort once said so here, in a paragraph
+          explaining that nobody at the school was looking after it and that
+          this was allowed. It went because the page already says it twice
+          over: the section header reads "nowhere yet", the eyebrow above the
+          title reads "not in a class, and not entered anywhere", and the
+          picker offering a class to add it to is itself the statement that
+          it is in none. A third telling, phrased as an absence and a
+          reassurance, reads as a warning about a state the student chose.
+
+          22.10 is the reason it was written, and it is not lost: the case
+          for a staffed Open Program is made by what the school can see on
+          the assignment queue, not by a sentence on the student's own page.
+          `independent-research` hid the state; this shows it, in fewer
+          words. */}
+
+      {(entries ?? []).length === 0 && (
+        <p class="t-sm" style="margin-top:10px">
+          <a href="/app/#join">Enter it somewhere</a> when it is ready. A fair,
+          a grant, or the journal.
+        </p>
+      )}
+    </section>
+
+    {/* Anchored, and every form on this page posts to it. These pages
+        run to several screens, and an outcome rendered at the top after
+        a click three screens down reads as nothing having happened. */}
+    <div id="outcome" tabindex="-1">
+    {error && <p class="note" role="alert">{error}</p>}
+    {noted && !error && <p class="note" role="status">Recorded.</p>}
+    </div>
+
+    {!iAuthor && (
+      <p class="note">
+        You are watching this project rather than working on it. You can read
+        everything and add an observation. Recording forms, marking obligations,
+        and setting the start date belong to the authors, because independent
+        work is what the judges ask about.
+      </p>
+    )}
+
+    <section class="sec">
+      <div class="sec-h">
+        <b>{iAuthor ? 'Add to the notebook' : 'Add an observation'}</b>
+        <span>Nothing is ever edited</span>
+      </div>
+      <form method="POST" action="#outcome" enctype="multipart/form-data" class="notef">
+        <input type="hidden" name="action" value="note" />
+
+        <label>
+          <span>What happened</span>
+          <textarea
+            name="body_md"
+            rows="7"
+            required
+          >{sent.body_md ?? ''}</textarea>
+          <small>
+            Markdown: <code>**bold**</code>, <code>*italic*</code>, <code>- list</code>,
+            <code># heading</code>, <code>[text](url)</code>, <code>```code```</code>.
+            No fonts, no colors, no embeds.
+          </small>
+        </label>
+
+        <div class="grid2">
+          <label>
+            <span>{iAuthor ? 'The day the work happened' : 'The day you observed it'}</span>
+            <input type="date" name="occurred_on" value={sent.occurred_on ?? today} />
+            <small>Not always the day you write it up.</small>
+          </label>
+          <label>
+            <span>Correcting an earlier entry?</span>
+            <select name="corrects_id">
+              <option value="">No</option>
+              {(notes ?? []).slice(0, 25).map((n: any) => (
+                <option value={n.id}>{fmt(n.occurred_on)} · {n.body_md.slice(0, 48)}</option>
+              ))}
+            </select>
+            <small>Corrections are new entries. The original stays.</small>
+          </label>
+        </div>
+
+        <div class="grid2">
+          <label>
+            <span>Photograph or scan</span>
+            <input type="file" name="image" accept="image/*" />
+            <small>A page, a reading, a gel. Up to 5 MB.</small>
+          </label>
+          <label>
+            <span>Caption</span>
+            <input name="caption" value={sent.caption ?? ''} />
+          </label>
+        </div>
+
+        <button class="btn" type="submit">{iAuthor ? 'Record this' : 'Add the observation'}</button>
+        {!iAuthor && (
+          <p class="fine">
+            Your name and role appear on it. It sits in the notebook alongside
+            the authors' entries and is exported with them.
+          </p>
+        )}
+      </form>
+    </section>
+
+    <section class="sec">
+      <div class="sec-h"><b>The notebook</b><span>{notes?.length ?? 0} entries</span></div>
+
+      {notes && notes.length > 0 ? (
+        <ol class="notes">
+          {notes.map((n: any) => {
+            const mine = (media ?? []).filter((m: any) => m.note_id === n.id);
+            const corrected = n.corrects_id ? noteById.get(n.corrects_id) : null;
+            return (
+              <li class="entry" id={`n${n.seq}`}>
+                <div class="meta">
+                  <b>{fmt(n.occurred_on)}</b>
+                  <span>{n.users?.display_name}</span>
+                  {roleOf.get(n.author_id) && roleOf.get(n.author_id) !== 'author' && (
+                    <span class="cap">{attachmentLabel[roleOf.get(n.author_id)!]}</span>
+                  )}
+                  <span class="seqno">#{n.seq}</span>
+                </div>
+                {corrected && (
+                  <p class="corrects">
+                    Corrects the entry of {fmt(corrected.occurred_on)}.
+                  </p>
+                )}
+                <div class="body" set:html={renderNote(n.body_md)} />
+                {mine.map((m: any) => (
+                  <figure>
+                    <img src={mediaUrl(m.storage_path)} alt={m.caption ?? 'Notebook image'} loading="lazy" />
+                    {m.caption && <figcaption>{m.caption}</figcaption>}
+                  </figure>
+                ))}
+              </li>
+            );
+          })}
+        </ol>
+      ) : (
+        <div class="note">
+          <h4>Nothing recorded yet</h4>
+          <p>
+            Entries are append only and attributed. Write them as you go rather
+            than reconstructing them in March, which is the difference between a
+            notebook and an alibi.
+          </p>
+        </div>
+      )}
+    </section>
+
+
+  </div>
+
+<script>
+  /* Shrink before sending. Halves what is stored and what is read back,
+     and a 4000px photograph of a notebook page is no more legible than a
+     1600px one. Falls through untouched if anything goes wrong. */
+  const MAX_EDGE = 1600;
+  const form = document.querySelector('form.notef');
+  const input = form?.querySelector('input[name="image"]');
+
+  form?.addEventListener('submit', async (event) => {
+    const file = input?.files?.[0];
+    if (!file || !file.type.startsWith('image/') || file.size < 400_000) return;
+
+    event.preventDefault();
+    try {
+      const bitmap = await createImageBitmap(file);
+      const scale = Math.min(1, MAX_EDGE / Math.max(bitmap.width, bitmap.height));
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.round(bitmap.width * scale);
+      canvas.height = Math.round(bitmap.height * scale);
+      canvas.getContext('2d').drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+
+      const blob = await new Promise((res) => canvas.toBlob(res, 'image/jpeg', 0.82));
+      if (blob) {
+        const transfer = new DataTransfer();
+        transfer.items.add(new File([blob], file.name.replace(/\.\w+$/, '.jpg'), { type: 'image/jpeg' }));
+        input.files = transfer.files;
+      }
+    } catch {
+      /* Send the original. */
+    }
+    form.submit();
+  });
+</script>
+</Base>
+
+<style>
+  /* Wraps as a grid rather than a line, so a fourth button drops onto a
+     second row aligned with the first rather than hanging off the end. */
+  /* The title and the ways out of this page, side by side.
+   
+     Four full-width buttons stacked under a heading pushed the notebook —
+     the thing the page is for — below the fold on a laptop. They are
+     navigation rather than the content, so they sit beside the title where
+     they cost nothing. */
+  .hero {
+    display: grid;
+    /* `auto` on the second column let a long button take the width it
+       wanted and leave the title whatever was left. `max-content` capped at
+       a share of the row means the control can never starve the thing it
+       sits beside. */
+    grid-template-columns: minmax(0, 1fr) minmax(0, max-content);
+    align-items: end;
+    gap: 12px 40px;
+    padding: 0 0 22px;
+    max-width: none;
+  }
+
+  .who { max-width: 74ch; }
+  .hero .t-lbl { margin-bottom: 8px; }
+  .hero .lede { margin-top: 10px; }
+
+  .actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin: 0;
+  }
+
+  .actions .btn { margin: 0; white-space: nowrap; }
+
+  @media (max-width: 860px) {
+    /* Under the title rather than beside it, and still two across. */
+    .hero { grid-template-columns: minmax(0, 1fr); align-items: start; }
+    .actions { margin-top: 16px; }
+  }
+
+  /* Wider than 64ch. Two columns inside it left each field about thirty
+     characters across, which turned every line of help into three, while
+     half the page sat empty to the right. */
+  .notef { max-width: var(--measure-form); }
+  .notef label { display: block; margin-bottom: 16px; }
+  .notef label > span { display: block; margin-bottom: 6px; font-family: var(--face-ui); font-size: 0.92rem; }
+  .notef textarea,
+  .notef input,
+  .notef select {
+    width: 100%;
+    padding: 9px 11px;
+    border: 1px solid var(--rule);
+    background: var(--card);
+    color: var(--ink);
+    font: inherit;
+  }
+  .notef textarea { font-family: var(--face-mono); font-size: 0.95rem; line-height: 1.55; }
+
+  .notef small { display: block; margin-top: 5px; color: var(--ink-3); font-size: 0.86rem; }
+  .notef button,
+  .linkf button {
+    padding: 10px 18px;
+    border: 1px solid var(--ink);
+    background: var(--ink);
+    color: var(--paper);
+    font-family: var(--face-ui); font-size: 1rem; font-weight: 600;
+    cursor: pointer;
+  }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 640px) { .grid2 { grid-template-columns: 1fr; } }
+
+  .linkf { display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap; }
+  .linkf label { display: block; }
+  .linkf label > span { display: block; margin-bottom: 5px; font-family: var(--face-ui); font-size: 0.9rem; }
+  .linkf input { padding: 8px 10px; border: 1px solid var(--rule); background: var(--card); color: var(--ink); font: inherit; min-width: 24ch; }
+
+  .notes { list-style: none; margin: 0; padding: 0; }
+  .entry {
+    border-left: 2px solid var(--rule);
+    padding: 0 0 26px 20px;
+    margin-left: 4px;
+  }
+  .entry .meta {
+    display: flex;
+    gap: 12px;
+    align-items: baseline;
+    font-family: var(--face-ui);
+    font-size: 0.88rem;
+    color: var(--ink-3);
+    margin-bottom: 8px;
+  }
+  .entry .meta b { color: var(--ink); }
+  .cap {
+    font-family: var(--face-ui);
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    padding: 1px 6px;
+    border: 1px solid var(--rule);
+    color: var(--ink-3);
+  }
+  .entry .seqno { margin-left: auto; font-family: var(--face-mono); }
+  .entry .corrects {
+    font-family: var(--face-ui);
+    font-size: 0.86rem;
+    color: var(--ink-3);
+    margin: 0 0 8px;
+  }
+  .entry .body :global(p) { margin: 0 0 10px; }
+  .entry .body :global(h1),
+  .entry .body :global(h2),
+  .entry .body :global(h3) { font-size: 1.05rem; margin: 14px 0 8px; }
+  .entry .body :global(pre) {
+    background: var(--paper);
+    border: 1px solid var(--rule-fine);
+    padding: 10px 12px;
+    overflow-x: auto;
+    font-size: 0.85rem;
+  }
+  .entry figure { margin: 12px 0 0; }
+  .entry figure img { max-width: 100%; border: 1px solid var(--rule-fine); }
+  .entry figcaption { margin-top: 5px; font-family: var(--face-ui); font-size: 0.86rem; color: var(--ink-3); }
+  .shots {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 20px;
+  }
+  .shots img {
+    width: 100%;
+    aspect-ratio: 4 / 3;
+    object-fit: cover;
+    border: 1px solid var(--rule-fine);
+  }
+  .shots p { margin: 8px 0 6px; font-size: 0.92rem; line-height: 1.45; }
+  .vsaved {
+    display: grid;
+    grid-template-columns: 200px minmax(0, 1fr);
+    align-items: start;
+    gap: 16px;
+    margin: 16px 0 20px;
+    max-width: var(--measure-form);
+  }
+  .vsaved img,
+  .vsaved .vblank {
+    width: 100%;
+    aspect-ratio: 16 / 9;
+    object-fit: cover;
+    border: 1px solid var(--rule-fine);
+    background: var(--wash);
+  }
+  .vhost {
+    margin: 0 0 4px;
+    font-family: var(--face-ui);
+    font-size: 0.8rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+  }
+  @media (max-width: 640px) {
+    .vsaved { grid-template-columns: 1fr; }
+  }
+
+  .sub-h {
+    margin: 34px 0 10px;
+    font-family: var(--face-ui);
+    font-size: 0.82rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--ink-2);
+  }
+</style>
+
+<style>
+  /* Where this work belongs, and where it went. One row per cohort and per
+     entry, because a project in three clubs is three blocks rather than a
+     sentence trying to hold all three (22.9). */
+  .belongs { list-style: none; margin: 0 0 4px; padding: 0; }
+
+  /* Three columns rather than a flex row that wraps where it likes: the
+     name, what it calls the supervisor, and what you can do. Aligned down
+     the page so three rows read as three of the same thing. */
+  .belongs li {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 7rem max-content;
+    gap: 10px 18px;
+    align-items: center;
+    padding: 12px 0;
+    border-bottom: 1px solid var(--rule-fine);
+  }
+
+  .b-what { min-width: 0; }
+
+  .b-who {
+    font-family: var(--face-ui);
+    font-size: 0.84rem;
+    color: var(--ink-3);
+  }
+
+  /* Every action the same weight and on one line. A quiet Remove beside two
+     solid buttons reads as disabled rather than as different. */
+  .b-do { display: flex; gap: 8px; align-items: center; }
+  .b-do .btn { white-space: nowrap; }
+
+  @media (max-width: 720px) {
+    .belongs li { grid-template-columns: minmax(0, 1fr); }
+  }
+
+  @media (max-width: 640px) {
+    .b-what { flex: 1 1 100%; }
+  }
+</style>

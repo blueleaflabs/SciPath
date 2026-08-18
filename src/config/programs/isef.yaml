@@ -1,0 +1,152 @@
+# ISEF. The parent every affiliated fair inherits from.
+#
+# Verified against societyforscience.org on 2026-08-06 for the 2027 rules.
+#
+# This file holds no dates. ISEF's own change annually and a regional fair's
+# have nothing to do with them, so a template that guessed would be wrong
+# every year in a way nobody notices until March.
+#
+# What it does hold: the categories, the forms, and the conditions that decide
+# which forms a project needs. That last part is the substance. ISEF publishes
+# a Rules Wizard precisely because working out your own forms is hard, and a
+# student who gets it wrong finds out at check-in.
+
+id: isef
+kind: competition
+
+# The international fair, and the source of the forms the
+# regional one inherits.
+role: opportunity
+name: Regeneron International Science and Engineering Fair
+authority: Society for Science
+level: international
+
+# ISEF's own steps override `collect`, which belongs to the standard research
+# process, so this file depends on it and has to say so. A child inherits the
+# choice; a program that brings its own process says `own` instead.
+
+version: 1
+# Bump when anything a student works against changes. A participation records
+# the version it started under, so a mid-season edit never puts somebody
+# retroactively in breach of a rule that did not exist when they began.
+
+# Deliverables and the facts they key off live in their own files, because
+# several programs need the same ones and four slightly different copies of
+# Form 1B is how a rulebook rots.
+uses:
+  deliverables: [deliverables-isef, deliverables-common]
+  shapes: [imrad, abstract]
+
+rules_year: 2027
+rules_url: https://www.societyforscience.org/isef/international-rules/
+rules_pdf: https://sspcdn.blob.core.windows.net/files/Documents/SEP/ISEF/2027/Rules/Book.pdf
+forms_pdf: https://sspcdn.blob.core.windows.net/files/Documents/SEP/ISEF/2027/Forms/All.pdf
+
+guidance:
+  - name: Rules Wizard, which works out the forms a project needs
+    url: https://ruleswizard.societyforscience.org/
+  - name: Companion Guide to the International Rules
+    url: https://sspcdn.blob.core.windows.net/files/Documents/SEP/ISEF/2027/Rules/Rules-Companion-Guide.pdf
+  - name: Generative AI use table
+    url: https://sspcdn.blob.core.windows.net/files/Documents/SEP/ISEF/2026/Rules/Generative-AI-Use-Table.pdf
+    note: >-
+      When AI may be used and how to cite it. New enough that most students
+      and many sponsors do not know it exists, and getting it wrong is a
+      disciplinary matter rather than a lost point.
+
+# ---------------------------------------------------------------------------
+# The facts a project declares about itself.
+#
+# Everything conditional keys off these. A student answers eight questions and
+# the forms follow, which is what the Rules Wizard does and what nobody should
+# have to do by reading a rulebook.
+# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Forms, expressed as deliverables so they sit inside steps like anything else.
+# A form is a deliverable that happens to be a PDF somebody signs.
+# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Steps ISEF contributes to the process. Two, and both sit in `approval`.
+#
+# A fair supervises the paperwork and assumes the research happens. That is
+# not a criticism: it is what a fair is, and it is why a club exists.
+# ---------------------------------------------------------------------------
+steps:
+  add:
+    - id: work_out_forms
+      name: Work out which forms this project needs
+      phase: forms
+      order: 45
+      owner: student
+      requires: [design]
+      deliverables: []
+      risk: >-
+        Assuming none are needed. A survey is human participants research and
+        a great many students do not realize it.
+
+    - id: approvals_before_work
+      name: Get every approval signed and dated before starting
+      phase: forms
+      order: 55
+      owner: student
+      requires: [work_out_forms, sponsor]
+      consequence: blocks_experimentation
+      deliverables:
+        - { ref: sponsor_1 }
+        - { ref: checklist_1a }
+        - { ref: research_plan }
+        - { ref: approval_1b }
+        - { ref: rri_1c }
+        - { ref: qualified_scientist_2 }
+        - { ref: risk_3 }
+        - { ref: humans_4 }
+        - { ref: vertebrate_5a }
+        - { ref: pha_6a }
+        - { ref: continuation_7 }
+        - { ref: field_safety }
+      note: >-
+        Signed and dated **before** experimentation, not before the fair. Work
+        done first is disqualified and cannot be redone in the time that
+        remains, which is the difference between this step and every other one
+        in the file.
+
+  override:
+    - id: collect
+      requires: [approvals_before_work]
+      note: Blocked on approval, not merely scheduled after it.
+
+# ---------------------------------------------------------------------------
+# The 22 categories. An affiliated fair may use its own instead: SCVSEFA does.
+#
+# Subcategories exist under all 22 and judges are assigned by them. They are
+# not here: most regional fairs do not use them, and 22 lists is a lot of data
+# to carry unverified. **[TODO]** when a program needs them.
+# ---------------------------------------------------------------------------
+categories:
+  - { id: ANIM, name: Animal Sciences }
+  - { id: BEHA, name: Behavioral and Social Sciences }
+  - { id: BCHM, name: Biochemistry }
+  - { id: BMED, name: Biomedical and Health Sciences }
+  - { id: ENBM, name: Biomedical Engineering }
+  - { id: CELL, name: Cellular and Molecular Biology }
+  - { id: CHEM, name: Chemistry }
+  - { id: CBIO, name: Computational Biology and Bioinformatics }
+  - { id: EAEV, name: Earth and Environmental Sciences }
+  - { id: EBED, name: Embedded Systems }
+  - { id: EGSD, name: "Energy: Sustainable Materials and Design" }
+  - { id: ETSD, name: "Engineering Technology: Statics and Dynamics" }
+  - { id: ENEV, name: Environmental Engineering }
+  - { id: MATS, name: Materials Science }
+  - { id: MATH, name: Mathematics }
+  - { id: MCRO, name: Microbiology }
+  - { id: PHYS, name: Physics and Astronomy }
+  - { id: PLNT, name: Plant Sciences }
+  - { id: ROBO, name: Robotics and Intelligent Machines }
+  - { id: SFTD, name: Software Design }
+  - { id: TECA, name: Technology Enhances the Arts }
+  - { id: TMED, name: Translational Medical Science }
+
+limits:
+  abstract_words: 250
+  team_max: 3
+  board: { width_cm: 122, depth_cm: 76, height_cm: 274 }

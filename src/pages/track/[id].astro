@@ -1,0 +1,177 @@
+---
+export const prerender = false;
+
+import Base from '../../layouts/Base.astro';
+import { activeOrg } from '../../lib/tenant';
+import { serverClient } from '../../lib/supabase';
+import { formatDate } from '../../lib/dates';
+
+/**
+ * THE PUBLIC TRACKER.
+ *
+ * No login. The id in the URL is a bearer token, so this shows the least that
+ * is useful: the title, the bylines, and a dated timeline in plain language.
+ * Never a reviewer's name, never a comment, never an editor's note, never an
+ * address. The authenticated view shows the rest to the people entitled to
+ * see it.
+ *
+ * The query runs through a SECURITY DEFINER function that returns exactly
+ * those fields, so there is no policy to get subtly wrong and no column that
+ * could leak by being added to a select later.
+ */
+const org = activeOrg(Astro);
+const { id } = Astro.params;
+
+const supabase = serverClient(
+  Astro.request,
+  Astro.cookies,
+  (Astro.locals as any).runtime?.env
+);
+
+let record: any = null;
+
+if (id && /^[0-9a-f-]{36}$/i.test(id)) {
+  const { data } = await supabase.rpc('track_submission', { p_id: id });
+  record = Array.isArray(data) ? data[0] : data;
+}
+
+/* Never in search results. A tracking page is for the person holding the
+   link and for nobody who went looking. */
+Astro.response.headers.set('X-Robots-Tag', 'noindex, nofollow');
+
+/* Six steps on one day is what a real submission looks like on a busy
+   afternoon, and a column of identical dates says nothing about the order or
+   the pace. The time is the information. */
+const fmt = (value: string | null) => formatDate(value, 'long', '');
+const fmtAt = (value: string | null) => formatDate(value, 'withTime', '');
+
+const events = record?.events ?? [];
+
+/* Where it is now, said once at the top. The timeline underneath is the
+   history, and reading a history to work out the present is the wrong way
+   round for the one question this page exists to answer. */
+const latest = events[events.length - 1];
+---
+
+<Base title={record ? `Status · ${record.title}` : 'Status'} noindex={true}>
+  <div class="wrap">
+    {!record && (
+      <section class="hero">
+        <p class="t-lbl">Status</p>
+        <h1 class="t-big">This link does not work</h1>
+        <p class="lede">
+          It may have been withdrawn by the authors, or the address may be
+          incomplete. Ask whoever sent it to you for a current one.
+        </p>
+      </section>
+    )}
+
+    {record && (
+      <>
+        <section class="hero">
+          <p class="t-lbl">
+            {record.record_kind === 'project' ? 'Project entry' : 'Article'} · {org.name}
+          </p>
+          <h1 class="t-big">{record.title}</h1>
+          <p class="lede">{record.authors}</p>
+        </section>
+
+        <section class="sec now">
+          <p class="t-lbl">Where it is</p>
+          <p class="state">{latest?.label ?? 'Not submitted'}</p>
+          <p class="since">
+            {latest?.on
+              ? `Since ${fmtAt(latest.on)}`
+              : ''}
+          </p>
+        </section>
+
+        <section class="sec">
+          <div class="sec-h">
+            <b>Every step</b>
+            <span>{record.submitted_at ? `Submitted ${fmtAt(record.submitted_at)}` : ''}</span>
+          </div>
+
+          <ol class="steps">
+            {events.map((e: any, index: number) => (
+              <li class:list={[index === events.length - 1 ? 'now' : 'past']}>
+                <span class="when">{fmtAt(e.on)}</span>
+                <span class="what">{e.label}</span>
+              </li>
+            ))}
+          </ol>
+
+          <p class="fine">
+            This page shows the stages and their dates. Login as the author for
+            the detailed view.
+          </p>
+        </section>
+      </>
+    )}
+  </div>
+</Base>
+
+<style>
+  .hero {
+    padding: 40px 0 26px;
+  }
+  .now {
+    padding-top: 0;
+  }
+  .state {
+    margin: 6px 0 0;
+    font-size: 1.9rem;
+    line-height: 1.15;
+  }
+  .since {
+    margin: 6px 0 0;
+    font-family: var(--face-num);
+    font-size: 0.9rem;
+    color: var(--ink-3);
+  }
+
+  .steps {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    border-top: 1px solid var(--rule-fine);
+  }
+  .steps li {
+    display: grid;
+    grid-template-columns: 17rem 1fr;
+    gap: 18px;
+    padding: 15px 0;
+    border-bottom: 1px solid var(--rule-fine);
+    align-items: baseline;
+  }
+  @media (max-width: 640px) {
+    .steps li {
+      grid-template-columns: 1fr;
+      gap: 3px;
+    }
+  }
+  .steps .when {
+    font-family: var(--face-num);
+    font-size: 0.86rem;
+    color: var(--ink-3);
+  }
+  .steps .what {
+    font-size: 1.05rem;
+  }
+  /* The most recent event is where it is now, which is the one fact somebody
+     opened this page for. */
+  .steps .now {
+    box-shadow: inset 3px 0 0 var(--brand-mark);
+    padding-left: 14px;
+  }
+  .steps .past .what {
+    color: var(--ink-2);
+  }
+  .fine {
+    margin-top: 22px;
+    max-width: var(--measure-text);
+    color: var(--ink-3);
+    font-size: 0.9rem;
+    line-height: 1.55;
+  }
+</style>

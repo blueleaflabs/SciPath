@@ -1,0 +1,513 @@
+---
+import { marked } from 'marked';
+import { disciplineLabel, siteUrl } from '../config/site';
+import type { RecordEntry } from '../lib/records-store';
+import type { Org } from '../config/orgs';
+import { parseVideo } from '../lib/video';
+
+interface Props {
+  record: RecordEntry;
+  body: string;
+  org: Org;
+  /** The other record for the same project, where there is one. */
+  companion?: RecordEntry | null;
+}
+
+/**
+ * ONE TEMPLATE FOR BOTH KINDS.
+ *
+ * An article and a project entry differ in what data exists, not in what
+ * layout is right. Every block renders only when it has something, so a
+ * project with an abstract and a result reads as finished rather than as an
+ * article with holes in it.
+ */
+const { record: d, body, org, companion } = Astro.props;
+
+const space = d.recordKind === 'project' ? 'projects' : 'articles';
+const url = new URL(`/${space}/${d.year}/${d.slug}/`, siteUrl).href;
+
+const video = parseVideo(d.video);
+
+/* The still stored with the record, which is our own file. Preferred over
+   the one on the host's CDN even for YouTube: a published page should ask
+   nobody anything until a reader presses play, and `i.ytimg.com` is
+   somebody else. */
+const poster = d.videoPoster ?? video?.poster ?? null;
+
+const doi = d.doi ? `https://doi.org/${d.doi.replace(/^https?:\/\/doi\.org\//, '')}` : null;
+
+const citationNames = d.authors
+  .map((a) => {
+    const parts = a.displayName.trim().split(/\s+/);
+    const last = parts.pop() ?? a.displayName;
+    const initials = parts.map((p) => `${p[0]}.`).join(' ');
+    return initials ? `${last}, ${initials}` : last;
+  })
+  .join(', ');
+
+const citation = `${citationNames} (${d.year}). ${d.title}. ${org.name}, ${d.recordId}. ${doi ?? url}`;
+
+const bibtex = `@article{${d.recordId.toLowerCase()},
+  title   = {${d.title}},
+  author  = {${d.authors.map((a) => a.displayName).join(' and ')}},
+  year    = {${d.year}},
+  journal = {${org.name}},
+  note    = {${d.recordId}},
+${d.doi ? `  doi     = {${d.doi}},\n` : ''}  url     = {${url}}
+}`;
+
+const published =
+  d.datePrecision === 'day'
+    ? new Date(`${d.publishedOn}T00:00:00`).toLocaleDateString('en-US', {
+        month: 'long', day: 'numeric', year: 'numeric',
+      })
+    : new Date(`${d.publishedOn}T00:00:00`).toLocaleDateString('en-US', {
+        month: 'long', year: 'numeric',
+      });
+
+const html = body ? marked.parse(body) : '';
+---
+
+<article class="wrap">
+  <header class="hero" data-pagefind-body data-pagefind-filter={`discipline:${disciplineLabel(d.discipline)}, year:${d.year}`}>
+    <p class="t-lbl">
+      {d.recordKind === 'project' ? 'Project entry' : 'Article'} · {org.name}
+    </p>
+    <h1 class="t-h1" data-pagefind-meta="title">{d.title}</h1>
+    <p class="by">
+      {d.authors.map((a, i) => (
+        <>
+          {i > 0 && ', '}
+          {a.authorSlug ? <a href={`/authors/${a.authorSlug}/`}>{a.displayName}</a> : a.displayName}
+        </>
+      ))}
+    </p>
+    {/* The question, directly under the byline. Somebody scanning decides
+        from this line whether to keep reading, and the abstract is too long
+        to be that line. */}
+    {d.question && <p class="question">{d.question}</p>}
+
+    <p class="meta">
+      {published} · <a href={`/topics/${d.discipline}/`}>{disciplineLabel(d.discipline)}</a> · {d.recordId}
+    </p>
+
+    {/* What the fair said, before the prose. A reader deciding whether this
+        is worth their time weighs an award more heavily than an abstract, and
+        the honest presentation of that is to put it where they look. */}
+    {d.entries.some((e) => e.placement || e.awards.length || e.advancedTo) && (
+      <ul class="honors">
+        {d.entries.map((e) => (
+          <>
+            {e.placement && (
+              <li>
+                <b>{e.placement}</b>
+                <span>{e.program}{e.season ? ` · ${e.season}` : ''}</span>
+              </li>
+            )}
+            {e.awards.map((award) => (
+              <li>
+                <b>{award}</b>
+                <span>{e.program}{e.season ? ` · ${e.season}` : ''}</span>
+              </li>
+            ))}
+            {e.advancedTo && (
+              <li>
+                <b>Advanced to {e.advancedTo}</b>
+                <span>{e.program}{e.season ? ` · ${e.season}` : ''}</span>
+              </li>
+            )}
+          </>
+        ))}
+      </ul>
+    )}
+
+    {/* What the work looked like, before a word of prose. */}
+    {d.shots.length > 0 && (
+      <ul class:list={['shots', d.shots.length === 1 && 'one']}>
+        {d.shots.map((shot) => (
+          <li>
+            <img src={shot.src} alt={shot.alt} loading="lazy" />
+            <p>{shot.caption}</p>
+          </li>
+        ))}
+      </ul>
+    )}
+
+    {video && (
+      <div class="video" data-embed={video.embed}>
+        {poster ? (
+          <img class="poster" src={poster} alt="" loading="lazy" />
+        ) : (
+          /* Drawn here rather than fetched.
+           
+             YouTube publishes a still at a predictable address; Vimeo's needs
+             an API call, which is a request made on a reader's behalf for
+             something they have not asked for. So this is a placeholder, and
+             an empty box read as a broken page rather than as a video
+             waiting to be played. It says which host it is, so somebody can
+             decide before pressing anything. */
+          <div class="poster drawn">
+            <span class="host">{video.host === 'vimeo' ? 'Vimeo' : 'YouTube'}</span>
+            <span class="quiet">Nothing loaded yet</span>
+          </div>
+        )}
+        <button type="button" class="play" aria-label="Play the video">
+          <span></span>
+        </button>
+        <p class="vnote">
+          Nothing is requested from {video.host === 'vimeo' ? 'Vimeo' : 'YouTube'} until
+          you press play. <a href={video.watch} target="_blank" rel="noopener noreferrer">Watch it there instead</a>.
+        </p>
+      </div>
+    )}
+
+    {d.abstract && (
+      <section class="sec">
+        <div class="sec-h"><b>Abstract</b></div>
+        <p class="prose lede-abs">{d.abstract}</p>
+      </section>
+    )}
+
+    {d.pdf && (
+      <p class="row"><a class="btn" href={d.pdf}>Read the paper as a PDF</a></p>
+    )}
+
+    {d.externalUrl && (
+      <p class="prose">
+        The version of record is held elsewhere:
+        {' '}<a href={d.externalUrl} target="_blank" rel="noopener noreferrer">{d.externalUrl}</a>
+      </p>
+    )}
+
+    {d.entries.length > 0 && (
+      <section class="sec">
+        <div class="sec-h"><b>Presented at</b></div>
+        <ul class="facts">
+          {d.entries.map((e) => (
+            <li>
+              <b>{e.program}{e.season ? ` ${e.season}` : ''}</b>
+              {/* Placement, awards, and advancement are already at the top,
+                  where somebody looks first. This is the detail underneath:
+                  the category and the fair's own code, which matter to
+                  anybody checking a result and to nobody else. */}
+              <span>{[e.category, e.entryCode].filter(Boolean).join(' · ')}</span>
+            </li>
+          ))}
+        </ul>
+      </section>
+    )}
+
+    {html && (
+      <section class="sec">
+        <div class="body prose" set:html={html} />
+      </section>
+    )}
+
+    {d.figures.length > 0 && (
+      <section class="sec">
+        <div class="sec-h"><b>Figures</b><span>{d.figures.length}</span></div>
+        <ul class="figs">
+          {d.figures.map((f, i) => (
+            <li>
+              <img src={f.src} alt={f.alt} loading="lazy" />
+              <p>Figure {i + 1}. {f.caption}</p>
+            </li>
+          ))}
+        </ul>
+      </section>
+    )}
+
+    {companion && (
+      <section class="sec">
+        <div class="sec-h">
+          <b>{companion.recordKind === 'project' ? 'The fair entry' : 'The paper'}</b>
+        </div>
+        <p class="prose">
+          {d.recordKind === 'project'
+            ? 'This project was also written up as a paper, which carries the methods, the results, and the references.'
+            : 'This work was entered at a fair. The entry records the category, the result, and any awards.'}
+        </p>
+        <p class="row">
+          <a
+            class="btn"
+            href={`/${companion.recordKind === 'project' ? 'projects' : 'articles'}/${companion.year}/${companion.slug}/`}
+          >
+            {companion.title}
+          </a>
+        </p>
+      </section>
+    )}
+
+    {(d.methods.length > 0 || d.dataSources.length > 0 || d.outputs.length > 0 || d.dataLinks.length > 0) && (
+      <section class="sec">
+        <div class="sec-h"><b>Research at a glance</b></div>
+        <div class="glance">
+          {d.methods.length > 0 && (
+            <div>
+              <p class="g-lbl">Methods</p>
+              <ul>{d.methods.map((m) => <li>{m}</li>)}</ul>
+            </div>
+          )}
+          {d.dataSources.length > 0 && (
+            <div>
+              <p class="g-lbl">Data sources</p>
+              <ul>{d.dataSources.map((m) => <li>{m}</li>)}</ul>
+            </div>
+          )}
+          {d.outputs.length > 0 && (
+            <div>
+              <p class="g-lbl">Outputs</p>
+              <ul>{d.outputs.map((m) => <li>{m}</li>)}</ul>
+            </div>
+          )}
+          {d.dataLinks.length > 0 && (
+            <div>
+              <p class="g-lbl">Data and code</p>
+              <ul>
+                {d.dataLinks.map((l) => (
+                  <li><a href={l.url} target="_blank" rel="noopener noreferrer">{l.label}</a></li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
+      </section>
+    )}
+
+    {d.contributions && (
+      <section class="sec">
+        <div class="sec-h"><b>Contributions</b></div>
+        <p class="prose">{d.contributions}</p>
+      </section>
+    )}
+
+    {d.references.length > 0 && (
+      <section class="sec">
+        <div class="sec-h"><b>References</b><span>{d.references.length}</span></div>
+        <ol class="refs">{d.references.map((r) => <li>{r}</li>)}</ol>
+      </section>
+    )}
+  </header>
+
+  <section class="sec" data-pagefind-ignore>
+    <div class="sec-h"><b>Cite this record</b><span>{d.recordId}</span></div>
+    <div class="card pad">
+      <p class="cite-text" id="citation-text">{citation}</p>
+      {doi && <p class="doi"><a href={doi} target="_blank" rel="noopener noreferrer">{doi}</a></p>}
+      <div class="row" style="margin-top:14px">
+        <button class="btn" type="button" data-copy="citation-text">Copy citation</button>
+        <button class="btn btn-q" type="button" data-copy="bibtex-text">Copy BibTeX</button>
+      </div>
+      <pre id="bibtex-text" hidden>{bibtex}</pre>
+    </div>
+    <p class="fine">
+      {d.reviewed
+        ? org.editorialReview
+        : d.source === 'migrated'
+          ? 'Migrated from an earlier archive. It did not pass through the review process described here.'
+          : 'Brought in from work published elsewhere.'}
+      {' '}Licensed {d.license}.
+    </p>
+  </section>
+</article>
+
+<script>
+  /* The embed is created on click and not before. An ordinary iframe would
+     contact the video host on load, from a page about a minor's work, on
+     behalf of a reader who never asked to watch anything. */
+  document.querySelectorAll('.video').forEach((box) => {
+    const button = box.querySelector('.play');
+    button?.addEventListener('click', () => {
+      const frame = document.createElement('iframe');
+      frame.src = box.getAttribute('data-embed') ?? '';
+      frame.title = 'Video';
+      frame.loading = 'lazy';
+      frame.allow = 'accelerometer; autoplay; encrypted-media; picture-in-picture';
+      frame.allowFullscreen = true;
+      frame.referrerPolicy = 'strict-origin-when-cross-origin';
+      box.querySelector('.poster')?.replaceWith(frame);
+      button.remove();
+    });
+  });
+
+  document.querySelectorAll('[data-copy]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      const target = document.getElementById(button.getAttribute('data-copy') ?? '');
+      if (!target) return;
+      await navigator.clipboard.writeText(target.textContent?.trim() ?? '');
+      const original = button.textContent;
+      button.textContent = 'Copied';
+      setTimeout(() => (button.textContent = original), 2000);
+    });
+  });
+</script>
+
+<style>
+  .hero { padding: 40px 0 0; }
+  .by { margin: 10px 0 0; font-size: 1.05rem; color: var(--ink-2); }
+  .meta { margin: 6px 0 0; font-size: 0.9rem; color: var(--ink-3); }
+
+  .question {
+    margin: 18px 0 0;
+    max-width: var(--measure-lede);
+    font-size: 1.28rem;
+    line-height: 1.45;
+    color: var(--ink-2);
+  }
+
+  /* Evidence before prose. Set as a list of facts rather than as prose,
+     because that is what it is. */
+  .honors {
+    list-style: none;
+    margin: 24px 0 0;
+    padding: 0;
+    display: grid;
+    gap: 1px;
+    background: var(--rule-fine);
+    border-block: 1px solid var(--rule-fine);
+    max-width: var(--measure-lede);
+  }
+  .honors li {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 6px 18px;
+    padding: 11px 0;
+    background: var(--paper);
+  }
+  .honors b { font-size: 1rem; }
+  .honors span {
+    font-family: var(--face-num);
+    font-size: 0.85rem;
+    color: var(--ink-3);
+  }
+
+  .glance {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 26px 34px;
+    max-width: var(--measure-form);
+  }
+  .g-lbl {
+    margin: 0 0 8px;
+    font-family: var(--face-ui);
+    font-size: 0.76rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+  }
+  .glance ul { list-style: none; margin: 0; padding: 0; }
+  .glance li {
+    padding: 4px 0;
+    line-height: 1.45;
+    font-size: 0.95rem;
+  }
+  @media (max-width: 640px) {
+    .glance { grid-template-columns: 1fr; }
+  }
+  .lede-abs { max-width: var(--measure-text); font-size: 1.05rem; }
+  .body { max-width: var(--measure-text); }
+  .body :global(h2) { margin: 30px 0 10px; font-size: 1.2rem; }
+  .facts { list-style: none; margin: 0; padding: 0; max-width: var(--measure-text); }
+  .facts li {
+    display: grid;
+    gap: 3px;
+    padding: 11px 0;
+    border-bottom: 1px solid var(--rule-fine);
+  }
+  .facts span { color: var(--ink-3); font-size: 0.9rem; }
+  .shots {
+    list-style: none;
+    margin: 28px 0 0;
+    padding: 0;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: 18px;
+  }
+  .shots.one { grid-template-columns: minmax(0, var(--measure-lede)); }
+  .shots img {
+    width: 100%;
+    aspect-ratio: 4 / 3;
+    object-fit: cover;
+    border: 1px solid var(--rule-fine);
+  }
+  .shots.one img { aspect-ratio: 16 / 9; }
+  .shots p { margin: 8px 0 0; font-size: 0.9rem; color: var(--ink-3); line-height: 1.45; }
+
+  .video {
+    position: relative;
+    margin: 28px 0 0;
+    max-width: var(--measure-lede);
+  }
+  .video .poster,
+  .video :global(iframe) {
+    display: block;
+    width: 100%;
+    aspect-ratio: 16 / 9;
+    border: 1px solid var(--rule-fine);
+    object-fit: cover;
+  }
+  .video .blank { background: var(--wash); }
+
+  /* Drawn rather than fetched, so it has to look deliberate. An empty box
+     reads as a page that failed; this reads as a video that has not been
+     asked for yet. */
+  .video .drawn {
+    display: grid;
+    place-content: center;
+    justify-items: center;
+    gap: 6px;
+    background: var(--sunk);
+  }
+  .video .drawn .host {
+    font-family: var(--face-ui);
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: var(--ink-2);
+  }
+  .video .drawn .quiet {
+    font-family: var(--face-mono);
+    font-size: 0.76rem;
+    color: var(--ink-3);
+  }
+  .play {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    width: 100%;
+    background: none;
+    border: 0;
+    cursor: pointer;
+  }
+  .play span {
+    width: 64px;
+    height: 64px;
+    border-radius: 50%;
+    background: var(--ink);
+    opacity: 0.86;
+    clip-path: circle(50%);
+    position: relative;
+  }
+  .play span::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 54%;
+    transform: translate(-50%, -50%);
+    border-left: 18px solid var(--paper);
+    border-block: 11px solid transparent;
+  }
+  .play:hover span { opacity: 1; }
+  .vnote { margin: 8px 0 0; font-size: 0.88rem; color: var(--ink-3); }
+
+  .figs { list-style: none; margin: 0; padding: 0; display: grid; gap: 24px; }
+  .figs img { max-width: 100%; border: 1px solid var(--rule-fine); }
+  .figs p { margin: 8px 0 0; color: var(--ink-2); font-size: 0.94rem; }
+  .refs { margin: 0; padding-left: 1.4rem; max-width: var(--measure-text); }
+  .refs li { margin-bottom: 8px; line-height: 1.5; }
+  .cite-text { margin: 0; line-height: 1.6; }
+  .doi { margin: 10px 0 0; font-family: var(--face-num); font-size: 0.9rem; }
+  .fine { margin-top: 16px; color: var(--ink-3); font-size: 0.88rem; max-width: var(--measure-text); }
+</style>

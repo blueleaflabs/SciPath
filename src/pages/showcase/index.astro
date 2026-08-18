@@ -1,0 +1,166 @@
+---
+export const prerender = false;
+
+/**
+ * EVERYTHING PUBLISHED, IN ONE LIST.
+ *
+ * A paper and a fair entry are siblings rather than a thing and its lesser
+ * version (8.1), and every other reading surface already treats them that
+ * way: the author page, the topic listing, and the search index all show
+ * both, marked. The index and the nav were the last two places still
+ * separating them, which made the separation an inconsistency rather than a
+ * decision.
+ *
+ * It also mattered more than tidiness. Most work at a high school fair never
+ * becomes a paper, so two nav items rank the kinds and put the student who
+ * did real work and did not write it up in the second menu — which is the
+ * student 2.5 is about, and the reason 8.1 has two record kinds at all.
+ *
+ * `/articles/` and `/projects/` are unchanged and still in the sitemap. They
+ * are the filtered views of this page, reached from the chips below, and
+ * they remain the separate crawl paths 10.2 depends on.
+ */
+
+import Base from '../../layouts/Base.astro';
+import { cachePublicPage } from '../../lib/caching';
+import PageHead from '../../components/PageHead.astro';
+import RecordCard from '../../components/RecordCard.astro';
+import Empty from '../../components/Empty.astro';
+import { openArchive } from '../../lib/archive';
+import { companionOf } from '../../lib/records-store';
+
+const archive = await openArchive(Astro);
+
+/* The filter lives in the URL, using the vocabulary `/search/` already uses,
+   so a reader learns one mechanism rather than two (8.4). */
+const wanted = Astro.url.searchParams.get('kind');
+const kind = wanted === 'article' || wanted === 'project' ? wanted : null;
+
+const records = kind ? archive.all.filter((r) => r.recordKind === kind) : archive.all;
+
+const counts = {
+  all: archive.all.length,
+  article: archive.articles.length,
+  project: archive.projects.length,
+};
+
+/* A project with both a paper and an entry appears twice, deliberately.
+   Grouping them into one row would have to choose between two abstracts
+   that 5.2 permits to differ, and hide the other. So both appear, each
+   marked with its kind and each naming its sibling. */
+const companions = new Map(
+  records
+    .map((r) => [r.recordId, companionOf(archive.all, r)] as const)
+    .filter(([, c]) => c)
+);
+
+const chips = [
+  { kind: null, label: 'Everything', count: counts.all },
+  { kind: 'article', label: 'Papers', count: counts.article },
+  { kind: 'project', label: 'Fair entries', count: counts.project },
+];
+
+cachePublicPage(Astro);
+---
+
+<Base
+  title="Showcase"
+  description="Every published record, newest first, each with its full abstract."
+>
+  <PageHead eyebrow="Published records" title="Showcase" lede={archive.org.showcaseNote} />
+
+  <div class="wrap">
+    {archive.all.length === 0 ? (
+      <Empty
+        title="Nothing published yet"
+        body="A record appears here when an editor accepts a paper, or when an officer publishes a fair result."
+      />
+    ) : (
+      <>
+        {/* Only where there is something to filter. One chip reading
+            "Everything 6" beside an empty one is a control that does
+            nothing, which is worse than no control. */}
+        {counts.article > 0 && counts.project > 0 && (
+          <nav class="chips" aria-label="Filter by kind">
+            {chips.map((c) => (
+              <a
+                href={c.kind ? `/showcase/?kind=${c.kind}` : '/showcase/'}
+                aria-current={kind === c.kind ? 'page' : undefined}
+              >
+                {c.label}
+                <span class="n">{c.count}</span>
+              </a>
+            ))}
+          </nav>
+        )}
+
+        {records.length === 0 ? (
+          <Empty
+            title="Nothing of that kind yet"
+            body="Everything published here is of the other kind. The filter above shows what there is."
+          />
+        ) : (
+          <section class="sec" style="padding-top:0">
+            <div class="sec-h">
+              <b>{kind === 'article' ? 'Papers' : kind === 'project' ? 'Fair entries' : 'All records'}</b>
+              <span>{records.length}</span>
+            </div>
+            {records.map((r) => {
+              const companion = companions.get(r.recordId);
+              return (
+                <div class="row">
+                  <RecordCard record={r} />
+                  {companion && (
+                    <p class="companion">
+                      <a
+                        href={`/${companion.recordKind === 'project' ? 'projects' : 'articles'}/${companion.year}/${companion.slug}/`}
+                      >
+                        {companion.recordKind === 'project'
+                          ? 'The fair entry for this project'
+                          : 'The paper written from this project'}
+                      </a>
+                    </p>
+                  )}
+                </div>
+              );
+            })}
+          </section>
+        )}
+      </>
+    )}
+  </div>
+</Base>
+
+<style>
+  .chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin: 0 0 26px;
+  }
+  .chips a {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 7px;
+    padding: 6px 13px;
+    border: 1px solid var(--rule);
+    font-family: var(--face-num);
+    font-size: 0.84rem;
+    text-decoration: none;
+    color: var(--ink-2);
+  }
+  .chips a[aria-current='page'] {
+    border-color: var(--ink);
+    color: var(--ink);
+  }
+  .chips .n { color: var(--ink-3); }
+
+  .row { position: relative; }
+  /* Aligned with the abstract rather than with the record number, because it
+     belongs to the record's text and not to its identifier. */
+  .companion {
+    margin: -14px 0 0 5.9rem;
+    padding: 0 0 18px;
+    font-size: 0.88rem;
+  }
+</style>

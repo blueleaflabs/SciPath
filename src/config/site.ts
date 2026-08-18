@@ -25,17 +25,13 @@ export const platform = {
 /** Canonical origin. Set to the custom domain once DNS is cut over. */
 export const siteUrl = 'https://scipath.pages.dev';
 
-/**
- * The five lifecycle stages. These are the product, and they are the only
- * place saturated color appears in the default theme.
+/*
+ * There were five lifecycle stages here, and they were a competition's
+ * lifecycle imposed on everything. A design research course has different
+ * ones and generic research has almost none, so phases come from whichever
+ * program a project belongs to. `process-standard.yaml` is what somebody with
+ * no program yet sees. 7.1.
  */
-export const stages = [
-  { key: 'registered', label: 'Registered', token: 'draft' },
-  { key: 'in_progress', label: 'In progress', token: 'work' },
-  { key: 'fair_ready', label: 'Fair ready', token: 'ready' },
-  { key: 'competed', label: 'Competed', token: 'comp' },
-  { key: 'published', label: 'Published', token: 'pub' },
-] as const;
 
 /**
  * Discipline taxonomy. Classified by the domain of the question, never by

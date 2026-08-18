@@ -1,93 +1,36 @@
 ---
+export const prerender = false;
+
 import Base from '../../layouts/Base.astro';
-import { getAuthorPages, monogram } from '../../lib/authors';
-import { org } from '../../config/orgs';
-import { siteUrl } from '../../config/site';
-import type { GetStaticPaths } from 'astro';
+import { cachePublicPage } from '../../lib/caching';
+import PageHead from '../../components/PageHead.astro';
+import RecordCard from '../../components/RecordCard.astro';
+import { openArchive, authorsOf } from '../../lib/archive';
 
-export const getStaticPaths: GetStaticPaths = async () => {
-  const authors = await getAuthorPages();
-  return authors.map((author) => ({ params: { slug: author.slug }, props: { author } }));
-};
+const archive = await openArchive(Astro);
+const slug = String(Astro.params.slug ?? '');
+const person = authorsOf(archive.all).find((p) => p.slug === slug);
 
-const { author } = Astro.props;
+if (!person) return new Response('Not found', { status: 404 });
 
-const jsonLd = {
-  '@context': 'https://schema.org',
-  '@type': 'Person',
-  name: author.displayName,
-  url: new URL(`/authors/${author.slug}/`, siteUrl).href,
-  ...(author.school ? { affiliation: { '@type': 'Organization', name: author.school } } : {}),
-};
+/* A publication list and nothing else. A profile with a bio and a photograph
+   is a profile that is wrong three years after somebody graduates, and these
+   pages are permanent. */
+const schools = [...new Set(person.records.flatMap((r) =>
+  r.authors.filter((a) => a.authorSlug === slug).map((a) => a.school).filter(Boolean)))];
 
-const years = author.articles.map((a) => a.data.publishedOn.getUTCFullYear());
-const span = years.length
-  ? years[0] === years[years.length - 1]
-    ? `${years[0]}`
-    : `${Math.min(...years)} to ${Math.max(...years)}`
-  : '';
+cachePublicPage(Astro);
 ---
 
-<Base title={author.displayName} description={`Published work by ${author.displayName}.`}>
-  <Fragment slot="head">
-    <script type="application/ld+json" set:html={JSON.stringify(jsonLd)} />
-  </Fragment>
-
-  <div class="wrap" style="padding-top:40px">
-    <div class="card pad">
-      <div class="prof">
-        <div class="mono-av" aria-hidden="true">{monogram(author.displayName)}</div>
-        <div>
-          <h1 class="t-h1">{author.displayName}</h1>
-          <p class="t-sm" style="margin-top:6px">
-            <span class={author.affiliationVerified ? 'verified' : 'unverified'}>
-              {author.school ?? 'Affiliation not recorded'}
-              {author.gradYear ? ` · Class of ${author.gradYear}` : ''}
-            </span>
-          </p>
-          <div class="row" style="margin-top:13px">
-            <span class="chip solid">
-              {author.articles.length} {author.articles.length === 1 ? 'record' : 'records'}
-            </span>
-            {span && <span class="chip">{span}</span>}
-          </div>
-          <div class="row" style="margin-top:11px">
-            <a class="btn btn-2" href="/contact/">Contact through {org.name}</a>
-          </div>
-        </div>
-      </div>
-
-      <p class="t-lbl" style="margin:28px 0 0">Published work</p>
-      <ul class="bib">
-        {
-          author.articles.map((a) => {
-            const year = a.data.publishedOn.getUTCFullYear();
-            const others = a.data.authors
-              .filter((x) => x.displayName !== author.displayName)
-              .map((x) => x.displayName);
-            return (
-              <li>
-                <span class="y">
-                  {year} · {a.data.recordId}
-                </span>
-                <div>
-                  <a href={`/articles/${year}/${a.data.slug}/`}>{a.data.title}</a>
-                  {others.length > 0 && (
-                    <p class="t-sm" style="margin-top:4px">
-                      with {others.join(', ')}
-                    </p>
-                  )}
-                </div>
-              </li>
-            );
-          })
-        }
-      </ul>
-    </div>
-
-    <p class="t-sm" style="margin-top:18px; max-width:74ch">
-      No email address appears on this page. Writing to {org.name} reaches the author, and
-      whether to reply is theirs to decide.
-    </p>
+<Base title={person.name} description={`Published work by ${person.name}.`}>
+  <PageHead
+    eyebrow="Author"
+    title={person.name}
+    lede={`${person.records.length} published ${person.records.length === 1 ? 'record' : 'records'}${schools.length ? ` · ${schools.join(', ')}` : ''}`}
+  />
+  <div class="wrap">
+    <section class="sec" style="padding-top:0">
+      {person.records.map((r) => <RecordCard record={r} />)}
+    </section>
   </div>
 </Base>

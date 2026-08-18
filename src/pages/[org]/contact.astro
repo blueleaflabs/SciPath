@@ -1,0 +1,71 @@
+---
+import { orgPaths } from '../../lib/tenant-paths';
+export const getStaticPaths = orgPaths;
+
+import Base from '../../layouts/Base.astro';
+import PageHead from '../../components/PageHead.astro';
+import { activeOrg } from '../../lib/tenant';
+
+const org = activeOrg(Astro);
+
+/* Rendered in parts so the page carries no harvestable address, and never
+   an individual student's address under any circumstances. */
+const [local, domain] = org.contactEmail.split('@');
+const display = `${local} [at] ${domain.replace(/\./g, ' [dot] ')}`;
+---
+
+<Base title="Contact" description={`How to reach ${org.name}.`}>
+  <PageHead
+    eyebrow="Contact"
+    title="Contact"
+    lede={`One address reaches ${org.name}. No individual student address appears anywhere on this site.`}
+  />
+
+  <div class="wrap">
+    <div class="card pad" style="max-width:74ch">
+      <p class="t-lbl">Write to</p>
+      <p class="addr">{display}</p>
+      <p class="t-sm" style="margin-top:14px">
+        Written out rather than linked, so it stays out of the hands of anything that
+        harvests addresses from pages.
+      </p>
+    </div>
+
+    <section class="sec">
+      <div class="sec-h"><b>Reaching an author</b><span>Through us</span></div>
+      <p class="prose">
+        Author pages carry no email address. Write to the address above naming the record
+        and we pass the message on. Whether to reply is theirs.
+      </p>
+    </section>
+
+    <section class="sec">
+      <div class="sec-h"><b>Asking for something to be removed</b><span>No account needed</span></div>
+      <p class="prose">
+        A current or former author can ask for their work or their author page to be taken
+        down, without logging in and without giving a reason.
+        <a href="/policies/takedown/">The takedown page</a> says exactly how, and that route
+        stays open permanently.
+      </p>
+    </section>
+
+    <section class="sec">
+      <div class="sec-h"><b>Reporting a problem with the site</b><span>Including access</span></div>
+      <p class="prose">
+        If something here is unusable with a screen reader, a keyboard, or at a text size you
+        need, that is a defect and we want to hear about it. Same address.
+        <a href="/policies/accessibility/">The accessibility statement</a> says what we
+        commit to.
+      </p>
+    </section>
+  </div>
+</Base>
+
+<style>
+  .addr {
+    font-family: var(--face-num);
+    font-size: 1.05rem;
+    margin: 8px 0 0;
+    word-break: break-word;
+  }
+</style>

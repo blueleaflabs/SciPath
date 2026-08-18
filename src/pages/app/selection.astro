@@ -1,0 +1,20 @@
+---
+export const prerender = false;
+
+/**
+ * ABSORBED.
+ *
+ * This screen and the overview held the same list of the same projects, with
+ * six of seven columns in common. The seventh was the selection state, and a
+ * state is a column rather than a page: an advisor deciding which projects
+ * go forward is looking at the same table they were already looking at.
+ *
+ * The overview groups by program now, which selection needed anyway — a cap
+ * belongs to a program and the club and the class are not one decision — and
+ * carries the control where the program has somewhere to advance to.
+ *
+ * The route redirects rather than 404s, because the nav pointed here for
+ * months and an advisor's bookmark is the most likely one to exist.
+ */
+return Astro.redirect('/app/#projects', 301);
+---

@@ -1,0 +1,189 @@
+# The Synopsys Silicon Valley Science and Technology Championship, 2027.
+#
+# Read off science-fair.org on 2026-08-06. Check again before a season runs on
+# this: the fair publishes changes annually and several 2027 dates were still
+# TBD when it was written.
+#
+# Fourteen steps once merged with the process, of which five come from the
+# fair and every one of those is compliance. The fair asks for nothing during
+# `work`, which is where the research happens. That gap is what a club fills.
+
+id: scvsefa-2027
+family: scvsefa
+extends: isef
+kind: competition
+
+# A regional fair. Not owned by any school, which is why its
+# `org_id` is null. A project enters it and comes away with a category, a
+# placement, and possibly somewhere to advance to.
+role: opportunity
+
+name: Synopsys Silicon Valley Science and Technology Championship
+short_name: Synopsys Championship
+authority: Santa Clara Valley Science and Engineering Fair Association
+level: regional
+season: 2027
+version: 1
+
+uses:
+  deliverables: [deliverables-scvsefa, deliverables-isef, deliverables-common]
+url: https://science-fair.org/
+publishes_to: mvrj
+
+
+# ── When a step starts being mentioned ────────────────────────────────────
+#
+# Overrides the platform floor in src/lib/template-resolve.ts for the things
+# this fair refuses work over. A form needing a teacher's signature, a scan
+# and a post has to be raised while there is still time to chase somebody,
+# and three weeks is the shortest that reliably is.
+#
+# `none` is left to the floor deliberately: a step this fair does not refuse
+# over should not shout for a month.
+notify_default:
+  blocks_experimentation: { from: 28, urgent: 5 }
+  blocks_registration:    { from: 21, urgent: 3 }
+
+anchors:
+  applications_open: 2026-09-28
+  src_early: 2026-11-02
+  src_final: 2026-11-13
+  applications_close: 2027-01-08
+  changes_close: 2027-02-18
+  abstracts_close: 2027-02-20
+  check_in: 2027-03-03
+  fair: 2027-03-04
+
+unscheduled: [teacher_workshop, student_clinic, awards_ceremony]
+
+deliverables:
+  add:
+    - { id: permission_hold_harmless, name: Student Permission and Hold Harmless, kind: form, owner: student, per: member, signed_by: [student, parent] }
+    - { id: media_release, name: Photo, Video, Website and Media Release, kind: form, owner: student, per: member, signed_by: [student, parent] }
+    - { id: ethics_statement, name: Ethics Statement, kind: form, owner: student, per: member }
+    - { id: application_form, name: Bar-coded Project Application Form, kind: form, owner: student }
+
+steps:
+  add:
+    - id: applications_open
+      name: Applications open
+      phase: forms
+      order: 35
+      owner: program
+      consequence: none
+      due: { anchor: applications_open, days: 0 }
+      deliverables: []
+
+    - id: src_submit
+      name: Submit for SRC and IRB approval
+      phase: forms
+      order: 56
+      owner: student
+      requires: [approvals_before_work]
+      consequence: blocks_experimentation
+      applies_when: humans or vertebrates or pha or hazardous or continuation
+      due: { anchor: src_final, days: 0 }
+      recommended: { anchor: src_early, days: 0 }
+      deliverables:
+        - { ref: research_plan }
+        - { ref: approval_1b }
+        - { ref: permission_hold_harmless }
+      risk: >-
+        Applications are read in the order received, so the final date means
+        being reviewed last. **A human participants project after the final
+        date is refused outright** — not late, not penalized, refused. This is
+        the one date in the calendar that ends seasons.
+
+    - id: register
+      name: Register the entry
+      phase: forms
+      order: 58
+      owner: student
+      consequence: blocks_registration
+      due: { anchor: applications_close, days: 0 }
+      deliverables:
+        - { ref: application_form }
+        - { ref: media_release }
+        - { ref: ethics_statement }
+      note: >-
+        The later of two deadlines and the one most students assume applies to
+        them. Anything needing SRC or IRB approval, and every returning
+        participant, is on the November date instead.
+
+    - id: lock_details
+      name: Last day to change the title, category, or field of study
+      phase: forms
+      order: 59
+      owner: student
+      consequence: none
+      due: { anchor: changes_close, days: 0 }
+      deliverables: []
+      note: Also the last day to withdraw. After it, a withdrawal is a no-show.
+
+    - id: upload_abstract
+      name: Upload the abstract to the judging folder
+      phase: conclusions
+      order: 82
+      owner: student
+      requires: [analyse]
+      consequence: blocks_competition
+      due: { anchor: abstracts_close, days: 0 }
+      deliverables:
+        - { ref: abstract }
+      note: A project without an abstract by this date is withdrawn.
+
+    - id: check_in
+      name: Deliver the board
+      phase: conclusions
+      order: 88
+      owner: student
+      consequence: blocks_competition
+      due: { anchor: check_in, days: 0 }
+      deliverables:
+        - { ref: board }
+      note: Noon to 6pm.
+
+    - id: judging
+      name: Judging day
+      phase: conclusions
+      order: 92
+      owner: program
+      consequence: none
+      due: { anchor: fair, days: 0 }
+      deliverables: []
+      note: >-
+        No deliverable: you turn up and talk about your work. High school
+        1:25 to 6pm, middle school 1:55 to 6pm.
+
+# Its own taxonomy, replacing ISEF's. The distinction the four draw is where
+# the work was done rather than what it was about, which ISEF does not draw at
+# all — so trimming the inherited twenty-two would leave a list that is wrong
+# rather than short.
+categories:
+  replace:
+    - { id: "1", name: "Biological Science and Engineering, non-RRI" }
+    - { id: "2", name: "Physical Science and Engineering, non-RRI" }
+    - { id: "3", name: "Biological Science and Engineering, RRI", grades: [9,10,11,12] }
+    - { id: "4", name: "Physical Science and Engineering, RRI", grades: [9,10,11,12] }
+
+fields_of_study:
+  - { id: "2", name: Plant Sciences }
+  - { id: "3", name: Animal Sciences }
+  - { id: "4", name: Biochemistry and Microbiology }
+  - { id: "5", name: Computational Biology and Bioinformatics }
+  - { id: "6", name: Biomedical and Health Sciences }
+  - { id: "7", name: Biomedical Engineering }
+  - { id: A, name: Chemistry }
+  - { id: B, name: Chemical and Environmental Engineering }
+  - { id: C, name: Earth and Environmental Sciences }
+  - { id: D, name: Physics and Astronomy }
+  - { id: E, name: Electrical Engineering }
+  - { id: F, name: Mechanical Engineering }
+  - { id: G, name: Mathematics }
+  - { id: H, name: Software Engineering }
+
+entry_code_format: GGC-FNN-KT
+
+advances_to:
+  - { program: csef, label: California Science and Engineering Fair }
+  - { program: isef, label: International Science and Engineering Fair }

@@ -1,38 +1,24 @@
 ---
+export const prerender = false;
+
 import Base from '../../../layouts/Base.astro';
+import { cachePublicPage } from '../../../lib/caching';
 import PageHead from '../../../components/PageHead.astro';
 import RecordCard from '../../../components/RecordCard.astro';
-import { getCollection } from 'astro:content';
-import type { GetStaticPaths } from 'astro';
+import { openArchive } from '../../../lib/archive';
 
-export const getStaticPaths: GetStaticPaths = async () => {
-  const articles = (await getCollection('articles')).filter((a) => a.data.status !== 'archived');
-  const years = [...new Set(articles.map((a) => a.data.publishedOn.getUTCFullYear()))];
+const archive = await openArchive(Astro);
+const year = Number(Astro.params.year);
+const records = archive.articles.filter((r) => r.year === year);
 
-  return years.map((year) => ({
-    params: { year: String(year) },
-    props: {
-      articles: articles
-        .filter((a) => a.data.publishedOn.getUTCFullYear() === year)
-        .sort((a, b) => b.data.publishedOn.valueOf() - a.data.publishedOn.valueOf()),
-    },
-  }));
-};
-
-const { year } = Astro.params;
-const { articles } = Astro.props;
+cachePublicPage(Astro);
 ---
 
-<Base title={`Published in ${year}`} description={`Records published in ${year}.`}>
-  <PageHead
-    eyebrow="Year archive"
-    title={String(year)}
-    lede={`${articles.length} ${articles.length === 1 ? 'record' : 'records'} published in ${year}.`}
-  />
+<Base title={`Showcase ${year}`} description={`Every published record, newest first, each with its full abstract. ${year}.`}>
+  <PageHead eyebrow="Year archive" title={String(year)} lede={`${records.length} ${records.length === 1 ? 'record' : 'records'}`} />
   <div class="wrap">
-    <div class="stack">
-      {articles.map((a) => <RecordCard article={a} />)}
-      <p><a href="/articles/">All years</a></p>
-    </div>
+    <section class="sec" style="padding-top:0">
+      {records.map((r) => <RecordCard record={r} />)}
+    </section>
   </div>
 </Base>

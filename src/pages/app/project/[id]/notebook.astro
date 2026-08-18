@@ -1,0 +1,800 @@
+---
+export const prerender = false;
+
+import { activeOrg } from '../../../../lib/tenant';
+import { toDate } from '../../../../lib/dates';
+import { parseVideo } from '../../../../lib/video';
+import { programTitle } from '../../../../lib/program-names';
+import { serverClient } from '../../../../lib/supabase';
+import { renderNote, linkDomain } from '../../../../lib/notes';
+import { signInWith } from '../../../../lib/next-path';
+
+const { session, account } = Astro.locals;
+const org = activeOrg(Astro);
+const { id } = Astro.params;
+
+/* Remembering where they were headed, so a link from a notification
+   survives the sign in it triggers (20.10). */
+if (!session) return Astro.redirect(signInWith(Astro.url));
+if (!account) return Astro.redirect('/app/welcome/');
+
+const supabase = serverClient(
+  Astro.request,
+  Astro.cookies,
+  (Astro.locals as any).runtime?.env
+);
+
+const { data: project } = await supabase
+  .from('projects')
+  .select('id, title, question, started_on, created_at, video_url, project_authors(role, users(id, display_name))')
+  .eq('id', id)
+  .maybeSingle();
+
+if (!project) return Astro.redirect('/app/');
+
+/* Chronological here, unlike the working view. A notebook reads forwards. */
+const { data: notes } = await supabase
+  .from('field_notes')
+  .select('id, body_md, occurred_on, created_at, corrects_id, seq, author_id, users:author_id(display_name)')
+  .eq('project_id', id)
+  .order('occurred_on', { ascending: true })
+  .order('seq', { ascending: true });
+
+const noteIds = (notes ?? []).map((n: any) => n.id);
+
+const { data: media } = noteIds.length
+  ? await supabase.from('note_media').select('note_id, storage_path, caption').in('note_id', noteIds)
+  : { data: [] as any[] };
+
+const mediaUrl = (path: string) => `/app/media/${path}`;
+
+const { data: links } = await supabase
+  .from('project_links')
+  .select('label, url')
+  .eq('project_id', id);
+
+/**
+ * Every place this project takes part, both kinds.
+ *
+ * **This read `opportunity_participations`**, which is the view that excludes
+ * classes — so a project in IRPD and nothing else exported no deadlines and
+ * no deliverables at all, and because both sections are wrapped in a length
+ * check they did not render empty, they vanished. A class has twenty-two
+ * deliverables and twenty-nine dated steps and none of them reached the
+ * paper. The merge's cost in one more place (22.19, 22.5): the export was
+ * written when only entries existed and nobody came back to it.
+ *
+ * The table rather than either view, because the question here is "everywhere
+ * this work is answerable", which is what a judge is reading. `programs(...)`
+ * resolves without naming the key because this is a table and carries its own
+ * constraints; on a view it would have to be spelled `programs:program_id`
+ * (19.9).
+ */
+const { data: places } = await supabase
+  .from('participations')
+  .select('id, program_id, programs(id, name, season_year, kind, phases, fair_date, program_role)')
+  .eq('project_id', id);
+
+/* Sorted so the paper reads the same way twice: the class before the fair it
+   feeds, and within a kind by season. `program_role` is the discriminator
+   rather than `kind`, because a club template extends the fair it prepares
+   for and inherits its word (1.62). */
+const participations = [...(places ?? [])].sort((a: any, b: any) => {
+  const rank = (p: any) => (p.programs?.program_role === 'cohort' ? 0 : 1);
+  return rank(a) - rank(b) ||
+    (a.programs?.season_year ?? 0) - (b.programs?.season_year ?? 0) ||
+    String(a.programs?.name ?? '').localeCompare(String(b.programs?.name ?? ''));
+});
+
+const entryIds = participations.map((e: any) => e.id);
+
+/* Where a row came from, so a table spanning two programs can say which one
+   each line belongs to. A judge handed one sheet of thirty obligations with
+   no column for the body that set them cannot act on it. */
+const placeById = new Map(participations.map((e: any) => [e.id, e]));
+
+/**
+ * The paperwork, including what it replaced.
+ *
+ * **Superseded rows are kept**, which is a departure from every other reader.
+ * The participation page, the notebook's own working view and the digest all
+ * filter them out, and they are right to: those answer *what is outstanding*,
+ * and a replaced row is not outstanding.
+ *
+ * This answers a different question. The notebook's stated discipline is that
+ * a correction is visible — a field note that corrects another appears as a
+ * later entry naming it, rather than the earlier one disappearing — and a
+ * deliverable superseded under 22.20 has exactly that shape, the old row
+ * keeping its own date and pointing forward. Showing only the survivor would
+ * hide the thing this document elsewhere insists on showing.
+ *
+ * It is also the history a disqualification argument turns on. 22.20 records
+ * that the earlier row keeps its date *because `checkDateOrder` reads dates
+ * against signatures*: a research plan recorded in October and replaced in
+ * November after a committee refused it is a different account from one
+ * recorded in November, and the second is what the old query printed.
+ *
+ * Ordered by when each was recorded, so a replacement follows what it
+ * replaced.
+ */
+const { data: deliverables } = entryIds.length
+  ? await supabase
+      .from('deliverables')
+      .select('participation_id, label, type, signed_on, external_url, verified_at, superseded_at, created_at')
+      .in('participation_id', entryIds)
+      .order('signed_on', { ascending: true, nullsFirst: true })
+      .order('created_at', { ascending: true })
+  : { data: [] as any[] };
+
+/**
+ * The deadlines, the pictures, and the video.
+ *
+ * The export is what a judge is handed, and it carried the entries and the
+ * paperwork and nothing else — so a project's calendar, its showcase, and
+ * its film existed only on a screen the judge will never see.
+ */
+const { data: milestones } = entryIds.length
+  ? await supabase
+      .from('entry_milestones')
+      .select('participation_id, name, kind, due_on, completed_on, blocks_experimentation, source, phase, program_milestones(deliverable_ref)')
+      .in('participation_id', entryIds)
+      .order('due_on', { ascending: true, nullsFirst: false })
+  : { data: [] as any[] };
+
+const { data: images } = await supabase
+  .from('project_images')
+  .select('position, storage_path, alt, caption')
+  .eq('project_id', id)
+  .is('withdrawn_at', null)
+  .order('position');
+
+const savedVideo = parseVideo(project.video_url);
+
+/**
+ * Who set a deadline, read per row rather than per project.
+ *
+ * `isCourse` used to be computed once for the whole export — and off the
+ * opportunity view, where `kind: course` cannot appear, so it was permanently
+ * false and every row read *The fair* or *The club*. Now that a class's
+ * deadlines are exported the label has to follow the row: a project in IRPD
+ * and at the fair has both, and one word cannot be right for both.
+ */
+const whoseFor = (place: any): Record<string, string> => {
+  const course = place?.programs?.kind === 'course';
+  return {
+    process: 'Research',
+    program: course ? 'The class' : 'The fair',
+    school: course ? 'The class' : 'The club',
+  };
+};
+
+/**
+ * One block per place, rather than one table for the project.
+ *
+ * A project in the class and at the fair has two calendars set by two bodies,
+ * and merging them produces a list of fifty obligations in which the reader
+ * cannot tell which deadline belongs to whom or which of two people to ask
+ * about it. The same argument as 22.18 and 22.18a, applied to paper.
+ *
+ * The phase grouping stays inside each place, because phase ids merge in
+ * chain order and the class prefixes its own (22.24) — two programs' phases
+ * flattened into one ordering is a heading sequence that belongs to neither.
+ */
+const groupPhases = (place: any, rows: any[]) => {
+  const phaseList: any[] = place?.programs?.phases ?? [];
+  const order = new Map(phaseList.map((p: any, i: number) => [p.id, i]));
+  const buckets = new Map<string, any[]>();
+
+  for (const m of rows) {
+    const key = m.phase && order.has(m.phase) ? m.phase : '';
+    buckets.set(key, [...(buckets.get(key) ?? []), m]);
+  }
+
+  return [...buckets.entries()]
+    .map(([pid, group]) => {
+      const phase = phaseList.find((p: any) => p.id === pid);
+      return {
+        id: pid,
+        name: phase?.name ?? 'Everything else',
+        window: phase?.window ?? null,
+        rows: group,
+      };
+    })
+    .sort((a, b) => (order.get(a.id) ?? 999) - (order.get(b.id) ?? 999));
+};
+
+/**
+ * The appendix, assembled per place.
+ *
+ * A place with neither a deadline nor a deliverable is dropped rather than
+ * printed as an empty heading — a school's fair layer that a project has only
+ * just entered is a real row with nothing under it yet, and a heading over
+ * nothing reads as something lost.
+ */
+const placeBlocks = participations
+  .map((place: any) => {
+    const own = (milestones ?? []).filter((m: any) => m.participation_id === place.id);
+    const papers = (deliverables ?? []).filter((d: any) => d.participation_id === place.id);
+
+    /**
+     * The artifact that satisfied each deadline, on the deadline.
+     *
+     * **The two tables cannot be joined by eye.** A deadline reads *Settle
+     * the question with an officer* and the artifact it wanted is labeled
+     * *The research question*, so a reader holding this on paper and asking
+     * the ordinary question — this was due the nineteenth, what date is
+     * actually on it — has no key to follow. 22.21 moved the recording onto
+     * the row for the same reason it is read there; a printed page cannot
+     * click, so the round trip it removed is worse here, not better.
+     *
+     * Paired on `deliverable_ref`, which 22.22 put on the step precisely so
+     * that nothing downstream has to guess which artifact a deadline wants.
+     * `milestone_id` on the deliverable would be the direct key and is null
+     * for everything the scenario seed writes, so pairing on it would look
+     * correct against fixtures thinner than reality (19.9).
+     *
+     * Only the current row. What it replaced is in the table below, which is
+     * where the history belongs: a deadline row carrying three versions is a
+     * calendar nobody can scan, and *when was this handed in* has one answer.
+     */
+    const current = new Map<string, any>();
+    for (const d of papers) if (!d.superseded_at) current.set(d.type, d);
+
+    const withArtifact = own.map((m: any) => ({
+      ...m,
+      artifact: current.get((m.program_milestones as any)?.deliverable_ref) ?? null,
+    }));
+
+    return {
+      id: place.id,
+      title: programTitle(place.programs),
+      isCohort: place.programs?.program_role === 'cohort',
+      whose: whoseFor(place),
+      groups: groupPhases(place, withArtifact),
+      milestones: withArtifact,
+      deliverables: papers,
+    };
+  })
+  .filter((b) => b.milestones.length > 0 || b.deliverables.length > 0);
+
+/* Whether the appendix needs to say which place each block is, which it only
+   does when there is more than one. A single heading naming the only program
+   there is above the only calendar there is is noise. */
+const severalPlaces = placeBlocks.length > 1;
+
+const attachments = project.project_authors ?? [];
+const authors = attachments.filter((a: any) => a.role === 'author');
+const officers = attachments.filter((a: any) => a.role === 'officer');
+
+const { data: sponsor } = await supabase
+  .from('project_sponsors')
+  /* Any current sponsor on any of this project's participations. The
+     question here is "does a teacher stand behind this work", which is
+     about the project; which fair they signed for belongs on that fair's
+     page. */
+  .select('teacher_name, participations!inner(project_id)')
+  .eq('participations.project_id', id)
+  .is('superseded_at', null)
+  .limit(1)
+  .maybeSingle();
+const roleOf = new Map<string, string>(attachments.map((a: any) => [a.users?.id, a.role]));
+const noteById = new Map((notes ?? []).map((n: any) => [n.id, n]));
+
+const first = notes?.[0]?.occurred_on ?? null;
+const last = notes?.[notes.length - 1]?.occurred_on ?? null;
+
+const fmt = (d: string | null) =>
+  d ? toDate(d)!.toLocaleDateString('en-US', {
+    year: 'numeric', month: 'long', day: 'numeric',
+  }) : '—';
+
+const printedOn = new Date().toLocaleDateString('en-US', {
+  year: 'numeric', month: 'long', day: 'numeric',
+});
+---
+
+<html lang="en" data-surface="print">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex, nofollow" />
+    <title>{project.title} · Research notebook</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Serif:ital,wght@0,400;0,600;1,400&family=IBM+Plex+Sans:wght@400;600&family=IBM+Plex+Mono:wght@400&display=swap"
+      rel="stylesheet"
+    />
+  </head>
+
+  <body>
+    <div class="toolbar">
+      <a href={`/app/project/${id}/`}>Back to the project</a>
+      <button class="btn" onclick="window.print()">Print or save as PDF</button>
+    </div>
+
+    <article class="book">
+      <header class="title">
+        <p class="kicker">Research notebook</p>
+        <h1>{project.title}</h1>
+        {project.question && <p class="q">{project.question}</p>}
+
+        <dl>
+          <dt>Author{authors.length === 1 ? '' : 's'}</dt>
+          <dd>{authors.map((a: any) => a.users?.display_name).join(', ') || '—'}</dd>
+
+          {sponsor && (<><dt>Teacher sponsor</dt>
+          <dd>{sponsor.teacher_name}</dd></>)}
+
+          {officers.length > 0 && (<><dt>Club officer</dt>
+          <dd>{officers.map((m: any) => m.users?.display_name).join(', ')}</dd></>)}
+
+          <dt>School</dt>
+          <dd>{org.name}</dd>
+
+          {/* Every place, not only the fairs. A project's class is as much a
+              part of where the work sits as the competition it went to, and
+              this line read "Entered" over a list that silently excluded it. */}
+          {participations.length > 0 && (<><dt>Part of</dt>
+          <dd>{participations.map((e: any) => programTitle(e.programs)).join(', ')}</dd></>)}
+
+          <dt>Work began</dt>
+          <dd>{fmt(project.started_on)}</dd>
+
+          <dt>Entries</dt>
+          <dd>
+            {notes?.length ?? 0}
+            {first && last && `, ${fmt(first)} to ${fmt(last)}`}
+          </dd>
+
+          <dt>Printed</dt>
+          <dd>{printedOn}</dd>
+        </dl>
+
+        <p class="honest">
+          Entries are recorded append only: each one is attributed, carries the
+          day the work happened, and is never edited afterwards. A correction
+          appears as a later entry naming the one it corrects. This is a record
+          kept in order, which is a discipline device rather than proof against
+          a determined author, and it is offered as no more than that.
+        </p>
+      </header>
+
+      <section class="entries">
+        <h2>Entries</h2>
+
+        {(notes ?? []).map((n: any, i: number) => {
+          const mine = (media ?? []).filter((m: any) => m.note_id === n.id);
+          const corrected = n.corrects_id ? noteById.get(n.corrects_id) : null;
+          return (
+            <div class="entry">
+              <div class="meta">
+                <span class="no">{i + 1}</span>
+                <b>{fmt(n.occurred_on)}</b>
+                <span>{n.users?.display_name}</span>
+                {roleOf.get(n.author_id) && roleOf.get(n.author_id) !== 'author' && (
+                  <span class="cap">
+                    officer note
+                  </span>
+                )}
+              </div>
+              {corrected && (
+                <p class="corrects">Corrects the entry of {fmt(corrected.occurred_on)}.</p>
+              )}
+              <div class="body" set:html={renderNote(n.body_md)} />
+              {mine.map((m: any) => (
+                <figure>
+                  <img src={mediaUrl(m.storage_path)} alt={m.caption ?? 'Notebook image'} />
+                  {m.caption && <figcaption>{m.caption}</figcaption>}
+                </figure>
+              ))}
+            </div>
+          );
+        })}
+
+        {(!notes || notes.length === 0) && <p class="empty">No entries recorded.</p>}
+      </section>
+
+      {/* The showcase, before the paperwork. A judge holding this should see
+          what the work looked like near the front rather than after two
+          tables. */}
+      {images && images.length > 0 && (
+        <section class="appendix">
+          <h2>Showcase</h2>
+          <ul class="shots">
+            {images.map((img: any) => (
+              <li class="shot">
+                <img src={`/app/media/${img.storage_path}`} alt={img.alt} />
+                <p>{img.caption}</p>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
+      {savedVideo && (
+        <section class="appendix">
+          <h2>Video</h2>
+          {/* No player on paper. The address is the useful thing, and the
+              print rule prints it after the link anyway. */}
+          <p>
+            <a href={savedVideo.watch} target="_blank" rel="noopener noreferrer">
+              {savedVideo.host === 'vimeo' ? 'Vimeo' : 'YouTube'}
+            </a>
+          </p>
+        </section>
+      )}
+
+      {placeBlocks.map((block) => (
+        <>
+          {block.milestones.length > 0 && (
+            <section class="appendix">
+              <h2>
+                Deadlines
+                {severalPlaces && <span class="place"> · {block.title}</span>}
+              </h2>
+              <table>
+                <thead>
+                  <tr><th>Due</th><th>Obligation</th><th>Set by</th><th>Done</th></tr>
+                </thead>
+                <tbody>
+                  {block.groups.map((group) => (
+                    <>
+                      <tr class="phase-row">
+                        <th colspan="4" scope="colgroup">
+                          {group.name}
+                          {group.window && ` · ${group.window.from} to ${group.window.to}`}
+                        </th>
+                      </tr>
+                      {group.rows.map((m: any) => (
+                        <tr>
+                          <td>{fmt(m.due_on)}</td>
+                          <td>
+                            {m.name}
+                            {m.blocks_experimentation && ' — must precede work'}
+                            {/* What satisfied it, under the thing it
+                                satisfied. Not a fifth column: the label, the
+                                date and the address are one answer to one
+                                question, and three narrow columns of mostly
+                                empty cells is the flat table 15.9 was
+                                about. */}
+                            {m.artifact && (
+                              <span class="met">
+                                {m.artifact.label}
+                                {m.artifact.signed_on && ` · ${fmt(m.artifact.signed_on)}`}
+                                {m.artifact.external_url && (
+                                  <> · <a href={m.artifact.external_url} target="_blank" rel="noopener noreferrer">{m.artifact.external_url}</a></>
+                                )}
+                              </span>
+                            )}
+                          </td>
+                          <td>{block.whose[m.source] ?? 'The program'}</td>
+                          <td>{m.completed_on ? fmt(m.completed_on) : '—'}</td>
+                        </tr>
+                      ))}
+                    </>
+                  ))}
+                </tbody>
+              </table>
+            </section>
+          )}
+
+          {block.deliverables.length > 0 && (
+            <section class="appendix">
+              {/**
+                * The full record, kept even though the current artifact now
+                * sits on the deadline it satisfied.
+                *
+                * Not a duplicate, because the two answer different questions.
+                * The deadline row answers *this was due the nineteenth, what
+                * is actually on it* — one artifact, one date. This answers
+                * *what was handed in over the season*, which is a question
+                * about the collection: every version including the ones
+                * replaced, in order, plus anything handed in that no deadline
+                * on this calendar asked for.
+                *
+                * It is also the only place supersession can live. A deadline
+                * carrying three versions is a calendar nobody can scan, and
+                * dropping the earlier ones would lose the history 22.20 keeps
+                * the dates for.
+                */}
+              <h2>
+                Every version handed in
+                {severalPlaces && <span class="place"> · {block.title}</span>}
+              </h2>
+              <table>
+                <thead>
+                  <tr><th>Signed</th><th>Deliverable</th><th>Where it is</th><th>Verified</th></tr>
+                </thead>
+                <tbody>
+                  {block.deliverables.map((d: any) => (
+                    <tr class={d.superseded_at ? 'row-old' : ''}>
+                      <td>{fmt(d.signed_on)}</td>
+                      <td>
+                        {d.label}
+                        {/* Said on the row rather than by leaving the row out.
+                            A correction is visible in this document (the
+                            entries above name what they correct), and a
+                            deliverable replaced under 22.20 is the same act. */}
+                        {d.superseded_at && (
+                          <span class="replaced">Replaced {fmt(d.superseded_at.slice(0, 10))}</span>
+                        )}
+                      </td>
+                      {/* Printed in full, because a reader holding this on
+                          paper cannot follow a link and a student reading it
+                          on a screen should not have to go hunting for their
+                          own document. The address is the answer to "where is
+                          it", so an abbreviated one answers nothing. */}
+                      <td class="where">
+                        {d.external_url
+                          ? <a href={d.external_url} target="_blank" rel="noopener noreferrer">{d.external_url}</a>
+                          : 'Held here'}
+                      </td>
+                      <td>{d.verified_at ? 'Yes' : 'No'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </section>
+          )}
+        </>
+      ))}
+
+      {links && links.length > 0 && (
+        <section class="appendix">
+          <h2>External documents</h2>
+          <ul>
+            {links.map((l: any) => (
+              <li>{l.label} — {linkDomain(l.url)}</li>
+            ))}
+          </ul>
+          <p class="fine">
+            Addresses are recorded rather than reproduced. A document held on a
+            school account becomes unreachable when that account closes.
+          </p>
+        </section>
+      )}
+    </article>
+  </body>
+</html>
+
+<style is:global>
+  @import '../../../../styles/tokens.css';
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--desk);
+    color: var(--ink);
+    font-family: 'IBM Plex Serif', Georgia, serif;
+    font-size: 16px;
+    line-height: 1.6;
+  }
+  .toolbar {
+    display: flex;
+    gap: 14px;
+    align-items: center;
+    justify-content: space-between;
+    max-width: 46rem;
+    margin: 18px auto 0;
+    padding: 0 24px;
+    font-family: 'IBM Plex Sans', system-ui, sans-serif;
+    font-size: 0.92rem;
+  }
+  .toolbar button {
+    padding: 8px 14px;
+    border: 1px solid var(--ink);
+    background: var(--ink);
+    color: var(--paper);
+    font-family: inherit;
+    font-size: 0.92rem;
+    cursor: pointer;
+  }
+  .book {
+    max-width: 46rem;
+    margin: 18px auto 60px;
+    padding: 56px 64px;
+    background: var(--paper);
+    border: 1px solid var(--rule);
+  }
+  .kicker {
+    font-family: 'IBM Plex Mono', monospace;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    font-size: 0.8rem;
+    color: var(--ink-3);
+    margin: 0 0 10px;
+  }
+  .title h1 { font-size: 1.9rem; line-height: 1.2; margin: 0 0 10px; }
+  .title .q { font-style: italic; color: var(--ink-3); margin: 0 0 22px; }
+  .title dl {
+    display: grid;
+    grid-template-columns: 10rem 1fr;
+    gap: 4px 16px;
+    margin: 0 0 22px;
+    font-size: 0.92rem;
+  }
+  .title dt {
+    font-family: 'IBM Plex Sans', sans-serif;
+    font-size: 0.84rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--ink-3);
+    padding-top: 2px;
+  }
+  .title dd { margin: 0; }
+  .honest {
+    border-top: 1px solid var(--rule);
+    padding-top: 14px;
+    font-size: 0.92rem;
+    color: var(--ink-3);
+  }
+  h2 {
+    font-family: 'IBM Plex Sans', sans-serif;
+    font-size: 0.88rem;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    border-bottom: 2px solid var(--ink);
+    padding-bottom: 6px;
+    margin: 44px 0 22px;
+  }
+  .entry { margin-bottom: 30px; page-break-inside: avoid; }
+
+  .phase-row th {
+    padding: 16px 0 5px;
+    text-align: left;
+    font-family: var(--face-ui);
+    font-weight: 600;
+    font-size: 0.92rem;
+    border-bottom: 1px solid var(--ink);
+  }
+
+  /* Two across on paper, which fits four images on half a page rather than
+     four pages. */
+  .shots {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 18px 22px;
+  }
+  .shot img {
+    width: 100%;
+    aspect-ratio: 4 / 3;
+    object-fit: cover;
+    border: 1px solid var(--rule-fine);
+  }
+  .shot p {
+    margin: 6px 0 0;
+    font-size: 0.88rem;
+    line-height: 1.4;
+    color: var(--ink-2);
+  }
+  .entry .meta {
+    display: flex;
+    gap: 12px;
+    align-items: baseline;
+    font-family: 'IBM Plex Sans', sans-serif;
+    font-size: 0.86rem;
+    color: var(--ink-3);
+    border-bottom: 1px solid var(--rule);
+    padding-bottom: 5px;
+    margin-bottom: 10px;
+  }
+  .entry .meta .no { font-family: 'IBM Plex Mono', monospace; }
+  .entry .meta .cap {
+    font-family: 'IBM Plex Sans', sans-serif;
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    border: 1px solid var(--rule);
+    padding: 1px 6px;
+  }
+  .entry .meta b { color: var(--ink); font-size: 0.95rem; }
+  .entry .corrects { font-size: 0.9rem; font-style: italic; color: var(--ink-3); margin: 0 0 8px; }
+  .entry .body p { margin: 0 0 10px; }
+  .entry .body pre {
+    background: var(--wash);
+    border: 1px solid var(--rule);
+    padding: 10px 12px;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.88rem;
+    overflow-x: auto;
+  }
+  .entry .body table { border-collapse: collapse; font-size: 0.95rem; }
+  .entry .body th, .entry .body td { border: 1px solid var(--rule); padding: 5px 9px; text-align: left; }
+  .entry figure { margin: 12px 0 0; page-break-inside: avoid; }
+  .entry figure img { max-width: 100%; border: 1px solid var(--rule); }
+  .entry figcaption {
+    font-family: 'IBM Plex Sans', sans-serif;
+    font-size: 0.86rem;
+    color: var(--ink-3);
+    margin-top: 5px;
+  }
+  .appendix table { border-collapse: collapse; width: 100%; font-size: 0.95rem; }
+  .appendix th, .appendix td { border-bottom: 1px solid var(--rule); padding: 7px 4px; text-align: left; }
+  .appendix ul { margin: 0; padding-left: 1.2rem; }
+
+  /* Which class or fair this block belongs to, quieter than the heading it
+     qualifies: the reader is looking for "Deliverables" and then for which. */
+  .appendix h2 .place { font-weight: 400; color: var(--ink-3); }
+
+  /* What satisfied an obligation, under it. Quieter than the obligation and
+     indented off it, so the eye reads the calendar first and the evidence
+     second rather than a table of forty equal lines. */
+  .appendix .met {
+    display: block;
+    margin-top: 3px;
+    padding-left: 12px;
+    border-left: 2px solid var(--rule);
+    font-size: 0.85rem;
+    color: var(--ink-3);
+  }
+  .appendix .met a { word-break: break-all; }
+
+  /* A replaced row stays legible rather than being struck through. It is a
+     fact about what happened, not a deletion, and a judge reading a struck
+     line reads it as withdrawn. */
+  .appendix .row-old td { color: var(--ink-3); }
+  .appendix .replaced {
+    display: block;
+    font-size: 0.85rem;
+    font-style: italic;
+    color: var(--ink-3);
+  }
+
+  /* An address is long and must not push the dates around, so it wraps
+     anywhere rather than widening the column. */
+  .appendix .where {
+    font-family: var(--face-num);
+    font-size: 0.8rem;
+    word-break: break-all;
+    max-width: 26ch;
+  }
+  .fine { font-size: 0.9rem; color: var(--ink-3); }
+  .empty { color: var(--ink-3); }
+
+  /* The printed page.
+   
+     Without an @page rule the browser uses its own margin, which puts the
+     first line against the edge and gives a judge nowhere to write. Nobody
+     reads this on a screen: it is exported, printed, and handed over. */
+  @page {
+    margin: 20mm 18mm 18mm;
+  }
+
+  @media print {
+    body { background: var(--paper); }
+    .toolbar { display: none; }
+
+    /* The page's margin is the margin now; the frame around the block was
+       there to look like paper on a screen. */
+    .book {
+      max-width: none;
+      margin: 0;
+      padding: 0;
+      border: 0;
+      box-shadow: none;
+    }
+
+    h2 { page-break-after: avoid; }
+
+    /* A heading alone at the foot of a page, or one line of an entry
+       stranded at the top of the next, both read as damage. */
+    .entry, .shot, tr { page-break-inside: avoid; }
+    .title { page-break-after: avoid; }
+
+    /* Links are useless in print unless the address is on the paper. */
+    a[href^='http']::after {
+      content: ' (' attr(href) ')';
+      font-size: 0.82em;
+      color: var(--ink-3);
+      word-break: break-all;
+    }
+
+    /* Except in the deliverables column, where the address *is* the link
+       text. Without this every row prints it twice. */
+    .where a[href^='http']::after { content: none; }
+  }
+</style>

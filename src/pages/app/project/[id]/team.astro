@@ -1,0 +1,623 @@
+---
+export const prerender = false;
+
+import Base from '../../../../layouts/Base.astro';
+import AppShell from '../../../../components/AppShell.astro';
+import { activeOrg } from '../../../../lib/tenant';
+import { serverClient } from '../../../../lib/supabase';
+import { standing, isAuthorOf, attachmentLabel } from '../../../../lib/roles';
+import { sharedStaffWord } from '../../../../lib/program-names';
+import { afterPost, outcomeFrom } from '../../../../lib/post-redirect';
+import { signInWith } from '../../../../lib/next-path';
+import { participationsForProject } from '../../../../lib/participation';
+
+const { session, account, roles } = Astro.locals;
+const org = activeOrg(Astro);
+const { id } = Astro.params;
+
+/* Remembering where they were headed, so a link from a notification
+   survives the sign in it triggers (20.10). */
+if (!session) return Astro.redirect(signInWith(Astro.url));
+if (!account) return Astro.redirect('/app/welcome/');
+
+const me = standing(roles, account?.population);
+const supabase = serverClient(
+  Astro.request,
+  Astro.cookies,
+  (Astro.locals as any).runtime?.env
+);
+
+/* Seeded from the redirect a POST answers with. See
+   src/lib/post-redirect.ts. */
+let { error: error } = outcomeFrom(Astro.url);
+let cleared: number | null = null;
+let detached = false;
+
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData();
+
+  const action = String(form.get('action') ?? '');
+
+  if (action === 'detach') {
+    const { error: e } = await supabase.rpc('detach_from_project', {
+      p_participation_id: String(form.get('place_id') ?? ''),
+      p_user_id: String(form.get('user_id') ?? ''),
+    });
+    if (e) error = e.message;
+    else detached = true;
+  }
+
+  if (action === 'officer') {
+    const { error: e } = await supabase.rpc('assign_officer', {
+      p_participation_id: String(form.get('place_id') ?? ''),
+      p_user_id: String(form.get('user_id') ?? ''),
+    });
+    if (e) error = e.message;
+  }
+
+  if (action === 'sponsor') {
+    const { error: e } = await supabase.rpc('record_sponsor', {
+      p_participation_id: String(form.get('participation_id') ?? ''),
+      p_teacher_name: String(form.get('teacher_name') ?? ''),
+      p_teacher_email: String(form.get('teacher_email') ?? ''),
+      /* Still passed as it arrives. The field is required in the form and
+         the function takes it as given; what this must not do is quietly
+         substitute today for a date somebody left out, because the check
+         that reads it is the one this system is justified by. */
+      p_signed_on: String(form.get('signed_on') ?? '') || null,
+    });
+    if (e) error = e.message;
+    else cleared = 0;
+  }
+
+  if (action === 'confirm') {
+    const { error: e } = await supabase.rpc('confirm_sponsorship', {
+      p_sponsor_id: String(form.get('sponsor_id') ?? ''),
+    });
+    if (e) error = e.message;
+  }
+
+  /* A refresh should re-read this page, not send the form again. */
+  return afterPost(Astro.url, { error: error });
+}
+
+const { data: project } = await supabase
+  .from('projects')
+  .select('id, title, started_on, project_authors(id, role, participation_id, accepted_at, self_managed_at, users(id, display_name, grad_year))')
+  .eq('id', id)
+  .maybeSingle();
+
+if (!project) return Astro.redirect('/app/');
+
+const attachments = project.project_authors ?? [];
+const authors = attachments.filter((a: any) => a.role === 'author');
+const officers = attachments.filter((a: any) => a.role === 'officer');
+const selfManaged = attachments.filter(
+  (a: any) => a.role === 'officer' && a.self_managed_at
+);
+
+/**
+ * WHICH PARTICIPATION A SPONSOR IS FOR.
+ *
+ * A sponsor used to hang off the project, which meant one signature showed
+ * on every class and every fair the project was in, and clearing the
+ * approval on one cleared it everywhere. It hangs off a participation now,
+ * so this page has to say which.
+ *
+ * Carried in `?in=` from the participation page's own Update link, so
+ * arriving from the fair records the sponsor for the fair. A project in only
+ * one place needs no asking; a project in none has nothing to record
+ * against yet.
+ */
+const places = await participationsForProject(supabase, id);
+const askedFor = Astro.url.searchParams.get('in');
+
+const forProgram =
+  places.find((p) => p.programId === askedFor) ??
+  (places.length === 1 ? places[0] : null);
+
+/* Where the reader came from, which is the parameter and nothing else. See
+   the back link below for why this is not `forProgram`. */
+const cameFrom = askedFor ? places.find((p) => p.programId === askedFor) ?? null : null;
+
+const placeIds = places.map((p) => p.id);
+
+/**
+ * **A project has several sponsors, one per place, and they are different
+ * people.**
+ *
+ * The class's teacher runs the class. Another teacher approves entry to the
+ * club. A third agrees to sponsor the student's own work at the fair. Three
+ * roles, three names, and the earlier project-level sponsor could hold one
+ * of them.
+ *
+ * So they are read together and shown together. What went wrong before was
+ * not the model: it was a page that asked which place you meant, wrote the
+ * answer, and then showed you one of the three -- so a name recorded for the
+ * club made the class look unsponsored, and nothing said the other two
+ * existed.
+ */
+const { data: currentSponsors } = placeIds.length
+  ? await supabase
+      .from('project_sponsors')
+      .select('id, teacher_name, teacher_email, signed_on, confirmed_at, recorded_at, participation_id')
+      .in('participation_id', placeIds)
+      .is('superseded_at', null)
+      .order('recorded_at', { ascending: false })
+  : { data: [] as any[] };
+
+const sponsorOf = new Map<string, any>();
+for (const row of currentSponsors ?? []) {
+  if (!sponsorOf.has(row.participation_id)) sponsorOf.set(row.participation_id, row);
+}
+
+/* Every place, with whoever sponsors it, in the order a student thinks about
+   them: the ones still needing somebody first. */
+const sponsorRows = places
+  .map((place) => ({
+    place,
+    name: (place.row.programs as any)?.name ?? 'This program',
+    sponsor: sponsorOf.get(place.id) ?? null,
+  }))
+  .sort((a, b) => Number(Boolean(a.sponsor)) - Number(Boolean(b.sponsor)));
+
+/* The one this page is scoped to, where it is scoped at all. Kept for the
+   acknowledgement below, which is about a single named teacher. */
+const sponsor = forProgram ? sponsorOf.get(forProgram.id) ?? null : null;
+
+const { data: sponsorHistory } = placeIds.length
+  ? await supabase
+      .from('project_sponsors')
+      .select('teacher_name, teacher_email, recorded_at, superseded_at')
+      .in('participation_id', placeIds)
+      .not('superseded_at', 'is', null)
+      .order('recorded_at', { ascending: false })
+  : { data: [] as any[] };
+
+/* A sponsor who happens to be signed in can acknowledge it. Nothing waits. */
+const iSponsor = Boolean(
+  sponsor && session.email &&
+  sponsor.teacher_email.toLowerCase() === session.email.toLowerCase()
+);
+const iAuthor = isAuthorOf(attachments, account.id);
+const attachedIds = new Set(attachments.map((a: any) => a.users?.id));
+
+/**
+ * Who could look after this project.
+ *
+ * An officer's role is held in a program, not at the school (6.4), so the
+ * fair's officers and the class's elders are different lists that happen to
+ * overlap. Offering every officer at the school would let a fair officer be
+ * put in charge of a project in a class they have nothing to do with.
+ *
+ * The advisor is scoped to nobody and appears for everything, which is
+ * correct: they oversee the school rather than one program.
+ */
+let candidates: any[] = [];
+
+/* What this project's programs call the person looking after it. Read for
+   everybody rather than inside the branch below, because an author sees the
+   word too and it was reading "officer" to a class. */
+const { data: participations } = await supabase
+  .from('opportunity_participations')
+  .select('program_id, programs:program_id(name, season_year, kind, roles)')
+  .eq('project_id', id);
+
+const programIds = (participations ?? []).map((e: any) => e.program_id);
+/* The programs' own word, where they agree. A project in the club and the
+   class at once has two words for one attachment, so it falls back to the
+   schema's, which is the word nobody is wrong to read. */
+const heres = (participations ?? []).map((e: any) => e.programs);
+const staff = sharedStaffWord(heres) ?? 'Officer';
+
+/* The default on the date field. Local rather than UTC, because a student
+   recording a form at nine in the evening should not see tomorrow. */
+const today = new Date().toLocaleDateString('en-CA');
+const staffPlural = sharedStaffWord(heres, 'plural') ?? 'Officers';
+
+if (me.runsTheClub) {
+
+  const { data: rows } = await supabase
+    .from('user_roles')
+    .select('role, scope_id, users:user_id(id, display_name)')
+    .is('revoked_at', null)
+    /* Officers only. An advisor is a teacher, and a teacher oversees the
+       club rather than being assigned somebody's project. */
+    .eq('role', 'officer');
+
+  /* An author who holds a club role may take their own project on. Excluding
+     them left an officer's own project unassignable forever, which is worse
+     than self-management being visible. */
+  const alreadyLooking = new Set([
+    ...officers.map((a: any) => a.users?.id),
+    ...selfManaged.map((a: any) => a.users?.id),
+    /* And its authors. An author is not their own officer: that state
+       exists and is called self managed, which the author sets rather than
+       somebody appointing them to oversee themselves. */
+    ...attachments
+      .filter((a: any) => a.role === 'author')
+      .map((a: any) => a.users?.id),
+  ]);
+
+  const seen = new Set<string>();
+  candidates = (rows ?? []).filter((r: any) => {
+    const uid = r.users?.id;
+    if (!uid || seen.has(uid) || alreadyLooking.has(uid)) return false;
+
+    /* An officer of a program this project is not in has no business being
+       assigned to it. */
+    if (r.scope_id && !programIds.includes(r.scope_id)) return false;
+
+    seen.add(uid);
+    return true;
+  });
+}
+
+const fmt = (d: string | null) =>
+  d ? new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '—';
+---
+
+<Base title={`Who is on ${project.title}`} noindex={true}>
+  <div class="wrap">
+    <AppShell org={org} account={account} roles={roles} here="/app/" />
+
+    <section class="hero">
+      <p class="t-lbl">{project.title}</p>
+      <h1 class="t-big">Who is on this project</h1>
+      <p class="lede">
+        Authors do the work. A {staff.toLowerCase()} looks after it. A teacher
+        sponsors it, and the student is the one who asks.
+      </p>
+      <p style="margin-top:18px">
+        {/* Back to where they came from, named for what it is.
+        
+            It read "Back to the notebook" and went to the project page, which
+            is not the notebook -- that is a tab on it -- and the notebook is
+            not where anybody arrives here from. Two ways in: the project page,
+            and the participation page's own Update link, which carries `?in=`
+            so that the sponsor is recorded against the right place. Where that
+            is present the reader came from the program's page and goes back to
+            it; otherwise the project.
+
+            Keyed on `?in=` and deliberately **not** on `forProgram`, which
+            falls back to the only place a project has when the parameter is
+            absent. That fallback is right for the sponsor form -- a project in
+            one class needs no asking -- and wrong here, because it would send
+            somebody who arrived from the project page onward to a page they
+            had not come from. Which place to record against and which page to
+            return to are two questions with one convenient answer, and they
+            come apart in exactly this case. */}
+        {cameFrom ? (
+          <a class="btn" href={`/app/project/${id}/in/${cameFrom.programId}/`}>
+            Back to {(cameFrom.row.programs as any)?.name}
+          </a>
+        ) : (
+          <a class="btn" href={`/app/project/${id}/`}>Back to the project</a>
+        )}
+      </p>
+    </section>
+
+    {/* Anchored, and every form on this page posts to it. These pages
+        run to several screens, and an outcome rendered at the top after
+        a click three screens down reads as nothing having happened. */}
+    <div id="outcome" tabindex="-1">
+    {error && <p class="note" role="alert">{error}</p>}
+    {detached && !error && <p class="note" role="status">Removed.</p>}
+    {cleared !== null && !error && <p class="note" role="status">Recorded.</p>}
+    </div>
+
+    <section class="sec">
+      <div class="sec-h"><b>Teacher project sponsor</b><span>Recorded by the student</span></div>
+
+      {/* One row per place. A student in a class, a club and a fair has
+          three sponsors and they are three different teachers; a page
+          showing one of them makes the other two look unasked. */}
+      {sponsorRows.length > 0 && (
+        <ul class="linklist">
+          {sponsorRows.map((row) => (
+            <li>
+              <b>{row.name}</b>
+              {row.sponsor ? (
+                <span class="t-sm">
+                  {' · '}{row.sponsor.teacher_name}
+                  {row.sponsor.signed_on
+                    ? ` · signed ${fmt(row.sponsor.signed_on)}`
+                    : ' · no signature date'}
+                  {row.sponsor.confirmed_at ? ' · acknowledged' : ''}
+                </span>
+              ) : (
+                <span class="t-sm"> · nobody named yet</span>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {sponsorRows.length > 0 && sponsorRows.every((row) => !row.sponsor) && (
+        <div class="note">
+          <h4>No sponsor named</h4>
+          <p>
+            {/* Every fair requires this and a class may not, so the sentence
+                says why it matters rather than who demands it. */}
+            A teacher has to agree to sponsor the project before the work
+            starts. Fairs require it, and asking early is the difference
+            between a signature in October and a scramble in November.
+          </p>
+        </div>
+      )}
+
+      {iSponsor && sponsor && !sponsor.confirmed_at && (
+        <form method="POST" action="#outcome" style="margin-top:16px">
+          <input type="hidden" name="action" value="confirm" />
+          <input type="hidden" name="sponsor_id" value={sponsor.id} />
+          <button class="btn" type="submit">Yes, I am sponsoring this project</button>
+        </form>
+      )}
+
+      {(iAuthor || me.runsTheClub) && places.length === 0 && (
+        <p class="t-sm" style="max-width:var(--measure-text); margin-top:20px">
+          A sponsor is recorded for a class or a fair, and this project is in
+          neither yet. Add it to one first, and the form appears there.
+        </p>
+      )}
+
+      {(iAuthor || me.runsTheClub) && places.length > 0 && (
+        <form method="POST" action="#outcome" class="assign" style="margin-top:20px">
+          <input type="hidden" name="action" value="sponsor" />
+          {/* Which class or fair this signature is for. A project in one
+              place is not asked; a project in several has to say, because
+              the approval it clears belongs to that one calendar. */}
+          {forProgram ? (
+            <>
+              <input type="hidden" name="participation_id" value={forProgram.id} />
+              <p class="t-sm whole-row">
+                For <b>{(forProgram.row.programs as any)?.name}</b>.
+              </p>
+            </>
+          ) : (
+            <label>
+              <span>Which class or fair</span>
+              {/* Named, and saying who each already has, because the whole
+                  failure this replaces was a form that asked the question
+                  and then hid the answer. */}
+              <select name="participation_id" required>
+                {sponsorRows.map((row) => (
+                  <option value={row.place.id}>
+                    {row.name}
+                    {row.sponsor ? ` — currently ${row.sponsor.teacher_name}` : ' — nobody yet'}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+          <label>
+            <span>Teacher's name</span>
+            <input name="teacher_name" required value={sponsor?.teacher_name ?? ''} />
+            {/* Named elsewhere on this project, so the student can see who
+                they already asked without going looking. Not prefilled: a
+                teacher who agreed to the club has not thereby agreed to the
+                fair, and filling their name in would say they had. */}
+            {(currentSponsors ?? []).length > 0 && (
+              <small>
+                Already on this project:{' '}
+                {[...new Set((currentSponsors ?? []).map((c: any) => c.teacher_name))].join(', ')}
+              </small>
+            )}
+          </label>
+          <label>
+            <span>Their school email</span>
+            <input name="teacher_email" type="email" required value={sponsor?.teacher_email ?? ''} />
+            <small>They can sign in with their district email to see this notebook.</small>
+          </label>
+          {/* Required, and dated today by default.
+          
+              The date is what the whole date ordering check compares
+              against (11.9), and a sponsor recorded without one cleared the
+              approval row while leaving nothing for the check to read: an
+              obligation that looked met and proved nothing. Today is the
+              right default because a student records this having just been
+              handed the signed form, and a wrong date is visible where a
+              missing one is not. */}
+          <label>
+            <span>Date on the signature</span>
+            <input
+              type="date"
+              name="signed_on"
+              required
+              value={sponsor?.signed_on ?? today}
+            />
+            <small>Clears the approval obligation, dated to the signature.</small>
+          </label>
+          <button class="btn" type="submit">{sponsor ? 'Change the sponsor' : 'Record the sponsor'}</button>
+        </form>
+      )}
+
+      {sponsorHistory && sponsorHistory.length > 0 && (
+        <details style="margin-top:18px">
+          <summary class="t-sm">Previously named ({sponsorHistory.length})</summary>
+          <ul class="linklist" style="margin-top:10px">
+            {sponsorHistory.map((h: any) => (
+              <li class="t-sm">
+                {h.teacher_name} · {h.teacher_email} · replaced {fmt(h.superseded_at)}
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
+    </section>
+
+    <section class="sec">
+      <div class="sec-h"><b>People</b><span>{attachments.length}</span></div>
+      <table class="tbl">
+        <thead>
+          <tr>
+            <th scope="col">Name</th>
+            <th scope="col">On this project</th>
+            <th scope="col">Since</th>
+            <th scope="col"><span class="sr">Remove</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          {attachments.map((a: any) => (
+            <tr>
+              <td>
+                {a.users?.display_name}
+                {a.users?.grad_year && <span class="sub">class of {a.users.grad_year}</span>}
+              </td>
+              <td>
+                {attachmentLabel[a.role] ?? a.role}
+                {/* Which place, because a project in the class and the club
+                    has two officers and two rows here would otherwise read
+                    as the same person listed twice. An author has no place:
+                    authorship is project level (23.1). */}
+                {a.participation_id && (
+                  <span class="sub">
+                    {(places.find((x: any) => x.id === a.participation_id)?.row?.programs as any)
+                      ?.name ?? 'a place that has gone'}
+                  </span>
+                )}
+                {a.self_managed_at && <span class="sub">looking after their own work</span>}
+              </td>
+              <td>{fmt(a.accepted_at)}</td>
+              <td>
+                {me.runsTheClub && a.role !== 'author' && (
+                  <form method="POST" action="#outcome" class="inline">
+                    <input type="hidden" name="action" value="detach" />
+                    {/* The place this oversight is for, carried by the row
+                        that shows it. Removing somebody used to take them
+                        off every program the project was in. */}
+                    <input type="hidden" name="place_id" value={a.participation_id} />
+                    <input type="hidden" name="user_id" value={a.users?.id} />
+                    <button type="submit" class="linkish">Remove</button>
+                  </form>
+                )}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+
+      {officers.length === 0 && selfManaged.length === 0 && (
+        <div class="note" style="margin-top:20px">
+          <h4>No {staff.toLowerCase()} assigned</h4>
+          {/* An officer is assigned by another officer or by the advisor,
+              never by the author. Offering an author the link sent them to a
+              page they cannot act on, and implied the gap was theirs to
+              close. Saying who closes it is the useful answer. */}
+          {me.runsTheClub && (!iAuthor || me.isAdvisor) ? (
+            <p><a href="/app/assign/">Assign one</a></p>
+          ) : (
+            <p class="t-sm">Another {staff.toLowerCase()} or your advisor assigns one.</p>
+          )}
+        </div>
+      )}
+    </section>
+
+    {/* An officer who authored this project is not the person who assigns
+        its officer. Officers are assigned by other officers, and offering
+        somebody the form on their own work invites exactly the appointment
+        it should prevent.
+     
+        The advisor is the exception: they oversee the club rather than
+        compete in it, and somebody has to be able to act when a project is
+        stuck. */}
+    {me.runsTheClub && (!iAuthor || me.isAdvisor) && (
+      <section class="sec">
+        <div class="sec-h">
+          <b>Assign a {staff.toLowerCase()}</b>
+          <span>{staffPlural} and the advisor</span>
+        </div>
+        {places.length === 0 ? (
+          <p class="t-sm" style="max-width:var(--measure-text)">
+            A {staff.toLowerCase()} looks after a project in a class or a fair,
+            and this project is in neither yet. Add it to one first.
+          </p>
+        ) : candidates.length > 0 ? (
+          <form method="POST" action="#outcome" class="assign">
+            <input type="hidden" name="action" value="officer" />
+            {/* **Which place.** Oversight belongs to the participation: the
+                class has an Elder and the club has an officer and they are
+                two people, so an assignment that did not say where covered
+                both. Asked the same way the sponsor above is asked, and for
+                the same reason — a project in one place is not asked, a
+                project in several has to say. */}
+            {forProgram ? (
+              <>
+                <input type="hidden" name="place_id" value={forProgram.id} />
+                <p class="t-sm whole-row">
+                  For <b>{(forProgram.row.programs as any)?.name}</b>.
+                </p>
+              </>
+            ) : (
+              <label>
+                <span>Which class or fair</span>
+                <select name="place_id" required>
+                  {places.map((place: any) => (
+                    <option value={place.id}>
+                      {(place.row.programs as any)?.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
+            <label>
+              <span>{staff}</span>
+              <select name="user_id" required>
+                {candidates.map((c: any) => (
+                  <option value={c.users.id}>{c.users.display_name}</option>
+                ))}
+              </select>
+            </label>
+            <button class="btn" type="submit">Assign</button>
+          </form>
+        ) : (
+          <p class="t-sm">
+            Nobody at this school holds a club role who is not already on this
+            project.
+          </p>
+        )}
+      </section>
+    )}
+  </div>
+</Base>
+
+<style>
+  .hero { padding: 44px 0 28px; max-width: 74ch; }
+  .hero .t-lbl { margin-bottom: 14px; }
+  .sub { display: block; margin-top: 2px; font-family: var(--face-ui); font-size: 0.82rem; color: var(--ink-3); }
+  .inline { display: flex; gap: 8px; align-items: center; }
+  .assign { display: flex; flex-wrap: wrap; gap: 14px; align-items: stretch; max-width: 82ch; }
+  .assign label {
+    display: flex;
+    flex-direction: column;
+    /* The hint under each field is a different length, so aligning on the top
+       left the three boxes at three different heights. The label grows, the
+       hint is pushed to the bottom, and the inputs line up. */
+    flex: 1 1 20ch;
+  }
+  .assign label > span { display: block; margin-bottom: 5px; font-family: var(--face-ui); font-size: 0.9rem; }
+  .assign small { display: block; margin-top: auto; padding-top: 4px; color: var(--ink-3); font-size: 0.84rem; }
+  .assign select,
+  .assign input { padding: 8px 10px; border: 1px solid var(--rule); background: var(--card); color: var(--ink); font: inherit; min-width: 20ch; }
+  /* `align-self` because the container stretches.
+  
+     The row is `align-items: stretch` so that the three labels grow to the
+     same height and push their hints to the bottom, which is what lines the
+     inputs up. A button is not a field and has no hint, so stretching gave it
+     the full height of the tallest label -- a submit control three lines tall
+     next to inputs one line tall. It sits at the top of the row instead, with
+     the same offset the inputs get from their own label. */
+  /* A sentence is not a field.
+  
+     `.assign` is a wrapping flex row of labels, and this paragraph was one of
+     its children — so "For Interdisciplinary Research and Project Design." took a
+     field's slot on the first line and pushed the teacher's name to the right
+     of it, leaving the row half empty and the three inputs on two ragged
+     lines. It says which place the signature is for, which is context for the
+     whole form rather than a column in it, so it takes the whole row and the
+     fields start below. */
+  .assign .whole-row { flex: 1 0 100%; margin: 0 0 2px; }
+
+  .assign button { padding: 9px 16px; border: 1px solid var(--ink); background: var(--ink); color: var(--paper); font-family: var(--face-ui); font-size: 1rem; font-weight: 600; cursor: pointer; margin-top: 22px; align-self: flex-start; }
+  .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+</style>

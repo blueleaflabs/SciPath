@@ -1,15 +1,58 @@
 ---
-import { org } from '../config/orgs';
+import type { Org } from '../config/orgs';
+import { activeOrg } from '../lib/tenant';
 import { platform } from '../config/site';
+import { SESSION_HINT } from '../lib/session-hint';
 
+interface Props {
+  /** Passed down by the layout, which resolved it from the hostname. */
+  org?: Org;
+}
+
+const org = Astro.props.org ?? activeOrg(Astro);
+
+/**
+ * Five items, down from seven.
+ *
+ * **Showcase holds both kinds.** Papers and fair entries were two items, and
+ * two items rank them: most work at a high school fair never becomes a
+ * paper, so the second label is where the student who did real work and did
+ * not write it up ends up. Every other reading surface already mixes them —
+ * author pages, topic listings, search — so this is the index catching up
+ * rather than a new idea. `/articles/` and `/projects/` are unchanged and
+ * are the filtered views.
+ *
+ * **Mistakes is gone from here.** 7.11 decided that a wall of things that
+ * can go wrong, read by somebody who has not started, is paralyzing or
+ * forgettable, and 9.3 removed it from the page inventory. It shipped
+ * anyway and stayed in the nav for four versions. The page remains and
+ * Guides links to it; what it stops being is a destination.
+ *
+ * About, contact, policies and the schools page live in the footer, which
+ * is where a reader looks for them and where they stop competing with the
+ * archive for a glance.
+ */
 const nav = [
-  { href: '/articles/', label: 'Showcase' },
+  { href: '/showcase/', label: 'Showcase' },
   { href: '/guides/', label: 'Guides' },
-  { href: '/deadlines/', label: 'Deadlines' },
-  { href: '/mistakes/', label: 'Mistakes' },
   { href: '/submit/', label: 'Publish' },
-  { href: '/search/', label: 'Search' },
 ];
+
+/* The working surface, reachable from every page. On a prerendered page
+   there is no session to read, so the label is the invitation rather than the
+   state: /app/ shows a sign-in prompt or the overview, whichever is true. */
+const locals = (Astro.locals as any) ?? {};
+const signedIn = Boolean(locals.session);
+const account = locals.account ?? null;
+
+/* Consent shows as a fragment beside the name rather than a banner on every
+   page. It is a state, not an announcement. */
+const consentNote =
+  account?.consent_state === 'pending'
+    ? 'Consent pending'
+    : account?.consent_state === 'paused'
+      ? 'Consent needed'
+      : null;
 
 const here = Astro.url.pathname;
 const isCurrent = (href: string) => here === href || (href !== '/' && here.startsWith(href));
@@ -19,13 +62,13 @@ const isCurrent = (href: string) => here === href || (href !== '/' && here.start
   <div class="wrap">
     <div class="mast-in">
       <a class="lockup" href="/">
-        <span class="badge" aria-hidden="true">{org.mark}</span>
+        <span class="badge" data-len={String(org.mark.length)} aria-hidden="true">{org.mark}</span>
         <span class="names">
           <span class="org">{org.name}</span>
           {!org.isPlatform && <span class="plat">{platform.lockupSuffix}</span>}
         </span>
       </a>
-      <nav aria-label="Main">
+      <nav aria-label="Main" class="mnav-bar">
         <ul class="mnav">
           {
             nav.map((item) => (
@@ -37,7 +80,224 @@ const isCurrent = (href: string) => here === href || (href !== '/' && here.start
             ))
           }
         </ul>
+
+        {/* Searching is a control, not a section.
+        
+            It sat in the link row as the word "Search", which is a page you
+            navigate to in order to reach a box. One fewer step: the box is
+            here, and it submits to the same page, which then does what it
+            always did. The magnifying glass is the submit control rather
+            than a decoration, so a keyboard reaches it and a screen reader
+            is told what it does.
+        
+            A plain GET form, so this works with no script at all — the page
+            it lands on reads `?q=` and runs the query. Nothing here needs to
+            know how the search itself works. */}
+        <form class="mnav-find" role="search" method="GET" action="/search/">
+          <label class="skip" for="mnav-q">Search</label>
+          <input
+            id="mnav-q"
+            type="search"
+            name="q"
+            autocomplete="off"
+            placeholder="Search"
+          />
+          <button class="mnav-go" type="submit" aria-label="Search">
+            <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+              <circle cx="7" cy="7" r="4.5" fill="none" stroke="currentColor" stroke-width="1.6" />
+              <line x1="10.4" y1="10.4" x2="14" y2="14" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+            </svg>
+          </button>
+        </form>
+
+        {/* The account cluster is a separate group with a rule before it.
+            Sections and "who am I" are different kinds of thing and should
+            not read as one run of links. */}
+        <ul class="mnav mnav-acct">
+          {signedIn && account ? (
+            <>
+              <li class="mnav-who">
+                <a href="/app/profile/" aria-current={here === '/app/profile/' ? 'page' : undefined}>
+                  {account.display_name}
+                </a>
+                {consentNote && <span class="mnav-flag">{consentNote}</span>}
+              </li>
+              <li>
+                <form method="POST" action="/auth/signout/">
+                  <button type="submit" class="mnav-out">Sign out</button>
+                </form>
+              </li>
+            </>
+          ) : (
+            <>
+              {/* A prerendered page cannot ask who is here, so it renders
+                  both answers and the script below picks. The signed in one
+                  is hidden rather than built by script, because a sign out
+                  is a POST form and markup is the honest place for it. */}
+              <li class="mnav-cta" data-anon>
+                <a href="/app/" aria-current={here.startsWith('/app/') ? 'page' : undefined}>
+                  Workbench
+                </a>
+              </li>
+
+              <li class="mnav-who" data-known hidden>
+                <a href="/app/" data-name></a>
+              </li>
+              <li data-known hidden>
+                <form method="POST" action="/auth/signout/">
+                  <button type="submit" class="mnav-out">Sign out</button>
+                </form>
+              </li>
+            </>
+          )}
+        </ul>
       </nav>
     </div>
   </div>
 </header>
+
+{/* Which of the two answers above is right.
+ 
+    A prerendered page has no session, so it greeted somebody who had signed
+    in a minute earlier as though they had not. The hint cookie carries their
+    display name; this reads it and shows the cluster the rest of the site
+    shows, rather than a bare link that reads as *not you*.
+ 
+    Only where the server could not know. Where it rendered the account
+    cluster there is nothing to correct, and running this there would be a
+    second opinion about a fact the page already has. */}
+{!signedIn && (
+  <script is:inline define:vars={{ hint: SESSION_HINT }}>
+    (() => {
+      const raw = document.cookie
+        .split('; ')
+        .find((c) => c.startsWith(hint + '='));
+      if (!raw) return;
+
+      let name = '';
+      try {
+        name = decodeURIComponent(raw.slice(hint.length + 1));
+      } catch {
+        return;
+      }
+      if (!name) return;
+
+      const who = document.querySelector('[data-name]');
+      if (who) who.textContent = name;
+
+      document.querySelectorAll('[data-anon]').forEach((el) => el.setAttribute('hidden', ''));
+      document.querySelectorAll('[data-known]').forEach((el) => el.removeAttribute('hidden'));
+    })();
+  </script>
+)}
+
+<style>
+  .mnav-bar {
+    display: flex;
+    align-items: center;
+    gap: 22px;
+    flex-wrap: wrap;
+  }
+
+  .mnav-acct {
+    align-items: center;
+    padding-left: 22px;
+    border-left: 1px solid var(--masthead-ink-2);
+    /* Never the thing that wraps. Adding the search field pushed this group
+       — the workbench link, or somebody's name and sign out — onto a second
+       line, which turned a one line bar into two and moved the rule that
+       separates the sections into the middle of nowhere. The field gives up
+       width instead; it is the only element here that can lose some without
+       losing meaning. */
+    flex: 0 0 auto;
+    white-space: nowrap;
+  }
+
+  /* A control on a dark bar.
+  
+     Outlined rather than filled, so it reads as part of the masthead rather
+     than as a white box dropped on it, and the field and its button share one
+     border so they are one control rather than two. It shrinks before the
+     links do: a nav item that wraps loses a section, and a search field that
+     narrows loses nothing but characters. */
+  .mnav-find {
+    display: flex;
+    align-items: stretch;
+    flex: 1 1 8rem;
+    max-width: 14rem;
+    min-width: 4.5rem;
+    border: 1px solid var(--masthead-ink-2);
+  }
+  .mnav-find input {
+    flex: 1 1 auto;
+    min-width: 0;
+    padding: 5px 9px;
+    border: 0;
+    background: none;
+    color: var(--masthead-ink);
+    font-family: var(--face-ui);
+    font-size: 0.92rem;
+  }
+  .mnav-find input::placeholder { color: var(--masthead-ink-2); }
+  /* The field carries the outline, so the ring goes on the whole control
+     rather than inside it. */
+  .mnav-find input:focus { outline: none; }
+  .mnav-find:focus-within { border-color: var(--masthead-ink); }
+  .mnav-go {
+    display: flex;
+    align-items: center;
+    padding: 0 9px;
+    border: 0;
+    background: none;
+    color: var(--masthead-ink-2);
+    cursor: pointer;
+  }
+  .mnav-go:hover,
+  .mnav-go:focus-visible { color: var(--masthead-ink); }
+  .mnav-find svg { width: 15px; height: 15px; display: block; }
+
+  .mnav-who { display: flex; align-items: center; gap: 8px; }
+
+  .mnav-flag {
+    font-family: var(--face-num);
+    font-size: 0.72rem;
+    line-height: 1.5;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    padding: 1px 7px;
+    border: 1px solid currentColor;
+    color: var(--masthead-ink-2);
+    white-space: nowrap;
+  }
+
+  /* `font: inherit` took the body serif at full size, so this button was
+     half again as large as the links beside it. It has to match .mnav a. */
+  .mnav-out {
+    background: none;
+    border: 0;
+    padding: 0;
+    cursor: pointer;
+    font-family: var(--face-ui);
+    font-weight: 500;
+    font-size: 0.9rem;
+    line-height: inherit;
+    letter-spacing: inherit;
+    color: var(--masthead-ink);
+  }
+
+  .mnav-out:hover {
+    text-decoration: underline;
+    text-decoration-thickness: 2px;
+    text-underline-offset: 0.3em;
+  }
+
+  .mnav-cta a {
+    box-shadow: inset 0 0 0 1px currentColor;
+    padding: 5px 12px;
+    border-radius: var(--radius);
+  }
+
+  @media (max-width: 720px) {
+    .mnav-acct { padding-left: 0; border-left: 0; }
+  }
+</style>

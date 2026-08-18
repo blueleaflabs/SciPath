@@ -1,0 +1,14 @@
+# The abstract. Not sections, but the questions it has to answer, which is
+# what most students get wrong: they describe the topic and never say what
+# they found.
+
+id: abstract
+name: Abstract
+guidance: >-
+  One paragraph. Judges read it before they see your board, and at many fairs
+  it is the only thing read before judging assignments are made.
+answers:
+  - What question did you ask?
+  - What did you do?
+  - What did you find? Give the number.
+  - What does it mean?

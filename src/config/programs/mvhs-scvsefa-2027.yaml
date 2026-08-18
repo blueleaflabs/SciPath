@@ -1,0 +1,161 @@
+# Monta Vista Research Club, 2027 season.
+#
+# The club's job is the part the fair does not supervise. The fair wants a
+# plan in November and an abstract in February and asks for nothing in
+# between, so most of what follows sits in `work` and `start`.
+#
+# Nothing here is a rule of the fair, and every step says so. A student who
+# confuses the two starts treating real deadlines as advisory, and the fair's
+# November date is one where that ends a season.
+
+id: mvhs-scvsefa-2027
+
+# The research club. A teacher advisor and student officers, and
+# deadlines derived entirely from the fair it prepares for. No process of
+# its own: the club exists for SCVSEFA.
+role: cohort
+
+# What this cohort prepares its members for.
+#
+# The club's internal deadlines are offsets from the fair's anchors, and they
+# resolve **from the opportunity directly** rather than through a member's
+# entry. A student who works all year and is not selected still needs the
+# calendar they were working toward: resolving through an entry would leave
+# them with no dates at all until the moment they were told no (22.6).
+prepares_for: scvsefa-2027
+family: scvsefa
+extends: scvsefa-2027
+level: school
+season: 2027
+# The club has a signup. Not a selection: an officer is confirming that
+# somebody turned up and means it, which is a smaller thing than a class with
+# thirty places and still worth having a name against.
+joining: approval
+
+version: 1
+
+uses:
+  deliverables: [deliverables-common]
+name: Monta Vista Research Club, 2027
+
+roles:
+  staff: { singular: Officer, plural: Officers }
+  member: { singular: Student, plural: Students }
+
+steps:
+  add:
+    - id: club_topic
+      name: Settle the question with an officer
+      phase: topic
+      order: 12
+      internal: true
+      owner: student
+      due: { anchor: applications_open, days: 7 }
+      deliverables:
+        - { ref: question }
+
+    - id: club_lit_review
+      name: Literature review read by an officer
+      phase: literature
+      order: 22
+      internal: true
+      owner: staff
+      requires: [literature]
+      # After the topic is settled, which it was not: this was due a week
+      # before the conversation that chooses what to read about.
+      due: { anchor: src_early, days: -21 }
+      deliverables:
+        - { ref: literature_review }
+
+    - id: club_sponsor
+      name: Ask a teacher to sponsor
+      phase: forms
+      order: 42
+      internal: true
+      owner: student
+      due: { anchor: src_early, days: -21 }
+      risk: >-
+        A week of silence is normal and not a refusal. Two weeks means ask
+        somebody else. Start before the plan is finished: the sponsor has to
+        read it, and finding one in the last week is how a project misses
+        November.
+
+    - id: club_plan_review
+      name: Research plan read by an officer
+      phase: design
+      order: 32
+      internal: true
+      owner: staff
+      requires: [design]
+      due: { anchor: src_early, days: -14 }
+      deliverables:
+        - { ref: research_plan }
+
+    - id: club_packet_check
+      name: Paperwork checked by an officer before it goes in
+      phase: forms
+      # Before the fair's deadline, which is what the step is for. It was
+      # numbered after it: the name said one thing and the order said another,
+      # and a student reading the list in order would have seen the check
+      # after the thing it checks.
+      order: 55
+      internal: true
+      owner: staff
+      requires: [approvals_before_work]
+      due: { anchor: src_early, days: -7 }
+      note: >-
+        A week before the fair's early date. Applications are read in the
+        order received, so being early is worth something real.
+
+    # The two steps the fair leaves empty. This is the club's whole purpose.
+    - id: club_collect_checkin
+      name: Data collection check-in
+      phase: experiment
+      order: 62
+      internal: true
+      owner: staff
+      repeats: { every: 3_weeks, until: { anchor: abstracts_close, days: -28 } }
+      note: >-
+        The fair asks nothing between November and February. Somebody should,
+        and it is cheaper to find out in December that the apparatus never
+        worked than in February.
+
+    - id: club_analysis_review
+      name: Analysis reviewed with an officer
+      phase: analysis
+      order: 72
+      internal: true
+      owner: staff
+      requires: [analyse]
+      due: { anchor: abstracts_close, days: -28 }
+
+    - id: club_abstract_draft
+      name: Abstract drafted and read
+      phase: conclusions
+      order: 81
+      internal: true
+      owner: student
+      due: { anchor: abstracts_close, days: -14 }
+      deliverables:
+        - { ref: abstract }
+
+    - id: club_board_check
+      name: Board measured against the size limit
+      phase: conclusions
+      order: 87
+      internal: true
+      owner: student
+      due: { anchor: check_in, days: -5 }
+      note: 122 cm wide, 76 cm deep, 274 cm tall, standing on the table.
+
+    - id: club_practice
+      name: Practice judging
+      phase: conclusions
+      # Before the board goes in, not after: the point of practising is to
+      # find out what is missing from the board while there is still time to
+      # change it. It was ordered after check-in and dated before it, which
+      # the validator caught.
+      order: 86
+      internal: true
+      owner: staff
+      due: { anchor: fair, days: -10 }

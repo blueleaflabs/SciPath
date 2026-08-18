@@ -1,0 +1,519 @@
+# Interdisciplinary Research and Project Design, 2026-27.
+#
+# Rewritten from the two documents the class actually publishes: the IRPD
+# Roadmap, which is the same every year, and the semester calendar, which is
+# not.
+#
+# ── What was taken, and what was left ─────────────────────────────────────
+#
+# The calendar is a teaching plan. It carries the aluminum foil challenge,
+# the compass points activity, polaroid pictures for the family boards, brain
+# breaks, sweatshirts, the yearbook page and the Thanksgiving potluck, and it
+# is right that it does — that is what makes the class work.
+#
+# **None of it belongs here.** This file is the set of things a student is
+# held to: what they hand in, what has to be signed, and where they present.
+# A student who opens their deadlines and finds "walk and talk, five minutes"
+# in the list learns to skim the list, and the one they skim past is the
+# consent form. So the question asked of every line of the calendar was: does
+# a student owe somebody something on this date? Roughly one line in four
+# did.
+#
+# The roadmap is the durable half, so it supplies the **phases** — its six
+# milestones, in its order. The calendar is the season's instance, so it
+# supplies the **dates**.
+#
+# ── Dates are absolute here, and that is a change ─────────────────────────
+#
+# Most templates express a deadline as an offset from an anchor, so that
+# moving one date moves the rest. A class calendar does not work that way: it
+# bends around Labor Day, three PD days, finals week and two breaks, and no
+# offset from the first day of school reproduces it. The teachers publish
+# actual days, so actual days are what this carries.
+#
+# The three anchors that remain are the ones that move as a unit and are not
+# ours to predict: the first day, the feedback session, and the showcase.
+
+id: irpd-mvhs-2027
+family: irpd
+kind: course
+
+# A class. A teacher, student elders, a roster, its own process
+# and its own anchors. What it prepares for is its own showcase.
+role: cohort
+
+# No `prepares_for`. The Community Showcase was briefly lifted out as an
+# opportunity of its own, on the reasoning that a student can say "I presented
+# at the IRPD Community Showcase" two years later. It is going back where it
+# was: it is a milestone of this class, run by this class, on a day this class
+# sets, and a separate template duplicated the step rather than moving it.
+#
+# If a showcase ever needs a record of its own, milestone 6 is where it comes
+# from and the template does not have to exist first.
+
+name: Interdisciplinary Research and Project Design
+short_name: IRPD
+authority: Monta Vista High School
+level: school
+season: 2027
+version: 2
+
+uses:
+  deliverables: [deliverables-common]
+url: https://irpdelders.wixsite.com/irpd/
+location: Room A112
+publishes_to: mvrj
+
+teachers:
+  - { name: Kavita Gupta }
+  - { name: Sushma Bana }
+
+roles:
+  staff: { singular: Elder, plural: Elders }
+  member: { singular: Student, plural: Students }
+  staff_note: Returning student leaders selected by the instructors.
+
+has:
+  entries: false
+  categories: false
+  awards: false
+  advancement: false
+
+process: own
+
+facts:
+  - { id: humans, question: "Will you interview or survey anybody?" }
+  - { id: minors, question: "Are any of them under 18?" }
+
+# ── The roadmap's six milestones, in the roadmap's order ───────────────────
+#
+# The roadmap groups these under three phases — Research (01-03), Design
+# (04), Impact (05-06) — and the model has one level of grouping rather than
+# two. Six is the level that helps: a student asking "where am I" is asking
+# which of the six, and the three are visible in the names.
+#
+# The windows are the months the calendar spends on each, which is what a
+# step with no published day of its own resolves to.
+#
+# The ids are prefixed rather than named `topic` and `design`, which is not
+# cosmetic: `process-science` declares phases and steps by those names, and a
+# project in this class that is also entered at a fair resolves both. Two
+# phases with one id merge into one heading, and a student sees the class's
+# journey map filed under the fair's idea of design.
+phases:
+  - { id: irpd_topic,     name: "Research I · Research topic",             window: { from: august,    to: september } }
+  - { id: irpd_empathy,   name: "Research II · Interviews and literature", window: { from: august,    to: september } }
+  - { id: irpd_question,  name: "Research III · Research question",        window: { from: august,    to: september } }
+  - { id: irpd_design,    name: "Design · Project design",                 window: { from: september, to: october } }
+  - { id: irpd_impact,    name: "Impact I · Implementation",               window: { from: october,   to: november } }
+  - { id: irpd_scaling,   name: "Impact II · Scaling",                     window: { from: november,  to: april } }
+
+joining: approval
+places: 30
+
+# ── When a milestone starts being mentioned ────────────────────────────────
+#
+# A window, not a schedule: nothing is queued, so there is nothing to cancel
+# when a milestone is met. The step simply stops appearing in the digest.
+#
+# These override the platform floor in src/lib/template-resolve.ts, which is
+# five days for a step with no consequence. Five days is right for a fair
+# deadline that mostly confirms paperwork and wrong for a class milestone
+# with weeks of work behind it.
+#
+# Shorter than they were, now that the dates are real. Seventy five days was
+# set while every step resolved to the end of a month; against a published
+# day, a fortnight's notice on a worksheet is a reminder and a month is
+# noise. The one that blocks work keeps a month, because finding a guardian
+# to sign a consent form takes longer than finding a worksheet.
+notify_default:
+  none:                      { from: 14, urgent: 3 }
+  blocks_human_participants: { from: 30, urgent: 14 }
+
+anchors:
+  course_start: 2026-08-17
+  # Thursday, per the calendar. This read 2026-11-06, which is a Friday and
+  # not a day this class meets.
+  feedback_session: 2026-11-05
+  community_showcase: 2027-04-25
+
+anchor_specs:
+  - { id: course_start, label: First day of the course, required: true }
+  - { id: feedback_session, label: Feedback session }
+  - { id: community_showcase, label: Mountain View Library showcase }
+
+# ── What is handed in ──────────────────────────────────────────────────────
+#
+# Named as the class names them, because a student looking for "narrowing
+# down your research topic" in their folder should find the same words here.
+#
+# `question`, `literature_review`, `research_plan` and `project_site` are
+# declared in `deliverables-common` and are overridden rather than renamed,
+# so that the research club's steps, which reference the shared ids, still
+# point at the same artifact. One document satisfying two calendars is 6.8,
+# and it works only while the id is the same in both.
+deliverables:
+  - { id: green_sheet, name: Green sheet, kind: form, owner: student, requirement: required }
+  - { id: project_idea, name: Project idea form, kind: form, owner: student, requirement: required }
+  - { id: topic_narrowing, name: Narrowing down your research topic, kind: link, owner: student, requirement: required }
+  - { id: impact_feasibility, name: Impact and feasibility analysis, kind: link, owner: student, requirement: required }
+  - { id: user_list, name: List of potential users, kind: link, owner: student, requirement: required }
+  - { id: interview_protocol, name: User interview questions, kind: link, owner: student, requirement: required }
+  - { id: interview_consent, name: Consent to be interviewed, kind: form, owner: student, per: participant, requirement: conditional, applies_when: humans, before_work: true }
+  - { id: interview_synthesis, name: What the interviews said, kind: link, owner: student, requirement: required }
+
+  - id: question
+    name: The research question
+    kind: text
+    owner: student
+    requirement: required
+    guidance: >-
+      Narrow the scope until it is feasible and still worth doing. A topic is
+      what you are interested in; a question is what you are going to answer.
+
+  - id: literature_review
+    name: Literature review
+    kind: link
+    owner: student
+    requirement: required
+    guidance: >-
+      What already exists, and what it does not answer. Read before you
+      design, which is why this is milestone 2 rather than a section of the
+      write-up.
+
+  - { id: project_summary, name: Project summary, kind: link, owner: student, requirement: required }
+  - { id: journey_map_1, name: Journey map, kind: link, owner: student, requirement: required }
+  - { id: wbs, name: Work breakdown structure, kind: link, owner: student, requirement: required }
+  - { id: oral_pitch, name: Two minute oral pitch, kind: link, owner: student, requirement: required }
+
+  - id: research_plan
+    name: Project plan
+    kind: link
+    owner: student
+    requirement: required
+    guidance: >-
+      The deliverables and the timeline, built from the work breakdown
+      structure. The class calls this the project plan; a fair entering the
+      same work calls it the research plan, and it is one document.
+
+  - { id: grants_scan, name: Grants and competitions to apply for, kind: link, owner: student, requirement: optional }
+  - { id: prototype_plan, name: Prototype implementation and testing, kind: link, owner: student, requirement: required }
+  - { id: journey_map_2, name: Journey map 2.0, kind: link, owner: student, requirement: required }
+  - { id: project_presentation, name: Project presentation, kind: link, owner: student, requirement: required }
+  - { id: lessons_learned, name: Lessons learned, kind: link, owner: student, requirement: required }
+
+  - id: project_site
+    name: Researcher profile
+    kind: link
+    owner: student
+    requirement: required
+    guidance: >-
+      A site or a profile that outlives the class. Drafted in October and
+      finished in the spring, which is why it appears twice.
+
+  - { id: showcase_presentation, name: Showcase presentation, kind: link, owner: student, requirement: required }
+
+  - id: manuscript
+    name: The write-up
+    kind: link
+    owner: student
+    requirement: optional
+    shape: design-research
+
+steps:
+  # ── 01 Research topic ────────────────────────────────────────────────────
+  - id: green_sheet
+    name: Green sheet signed and returned
+    phase: irpd_topic
+    order: 10
+    owner: student
+    due: { on: 2026-08-18 }
+    deliverables:
+      - { ref: green_sheet }
+
+  - id: project_idea
+    name: Project idea form
+    phase: irpd_topic
+    order: 20
+    owner: student
+    due: { on: 2026-08-19 }
+    deliverables:
+      - { ref: project_idea }
+
+  - id: topic_narrowing
+    name: Narrow down the research topic
+    phase: irpd_topic
+    order: 30
+    owner: student
+    due: { on: 2026-08-27 }
+    requires: [project_idea]
+    deliverables:
+      - { ref: topic_narrowing }
+    note: >-
+      Post-it feedback from the family on this date, so it is brought to
+      class rather than turned in after it.
+
+  - id: impact_feasibility
+    name: Impact and feasibility analysis
+    phase: irpd_topic
+    order: 40
+    owner: student
+    due: { on: 2026-09-01 }
+    requires: [topic_narrowing]
+    deliverables:
+      - { ref: impact_feasibility }
+
+  - id: notebook
+    name: Keep the research journal current
+    phase: irpd_topic
+    order: 50
+    owner: student
+    repeats: { every: week }
+
+  # ── 02 Empathy interviews and literature review ──────────────────────────
+  - id: user_list
+    name: List the people you need to hear from
+    phase: irpd_empathy
+    order: 10
+    owner: student
+    due: { on: 2026-08-31 }
+    deliverables:
+      - { ref: user_list }
+
+  - id: interview_questions
+    name: Interview questions, read by an elder
+    phase: irpd_empathy
+    order: 20
+    owner: student
+    due: { on: 2026-09-09 }
+    requires: [user_list]
+    deliverables:
+      - { ref: interview_protocol }
+
+  - id: interviews
+    name: Empathy interviews
+    phase: irpd_empathy
+    order: 40
+    owner: student
+    requires: [interview_questions]
+    consequence: blocks_human_participants
+    applies_when: humans
+    deliverables:
+      - { ref: interview_consent }
+      - { ref: interview_synthesis }
+    risk: >-
+      Consent comes **before** the interview, not after it, and anybody under
+      18 needs a guardian's. This is the one step in the class that cannot be
+      put right afterwards: an interview conducted without consent cannot be
+      used, and repeating it is not the same evidence.
+
+  - id: literature_review
+    name: Literature review
+    phase: irpd_empathy
+    order: 30
+    owner: student
+    due: { on: 2026-09-14 }
+    deliverables:
+      - { ref: literature_review }
+    note: >-
+      Elder feedback in family on the day it is due.
+
+  # ── 03 Research question ─────────────────────────────────────────────────
+  - id: research_question
+    name: Settle the research question
+    phase: irpd_question
+    order: 10
+    owner: student
+    due: { on: 2026-08-31 }
+    requires: [topic_narrowing]
+    deliverables:
+      - { ref: question }
+
+  - id: project_summary
+    name: Project summary
+    phase: irpd_question
+    order: 20
+    owner: student
+    due: { on: 2026-09-08 }
+    requires: [research_question]
+    deliverables:
+      - { ref: project_summary }
+
+  # ── 04 Project design ────────────────────────────────────────────────────
+  - id: journey_map
+    name: Journey map
+    phase: irpd_design
+    order: 10
+    owner: student
+    due: { on: 2026-09-24 }
+    deliverables:
+      - { ref: journey_map_1 }
+
+  - id: oral_pitch
+    name: Two minute oral pitch
+    phase: irpd_design
+    order: 20
+    owner: student
+    due: { on: 2026-09-29 }
+    deliverables:
+      - { ref: oral_pitch }
+
+  - id: wbs
+    name: Work breakdown structure
+    phase: irpd_design
+    order: 30
+    owner: student
+    due: { on: 2026-09-30 }
+    requires: [journey_map]
+    deliverables:
+      - { ref: wbs }
+
+  - id: project_plan
+    name: Project plan
+    phase: irpd_design
+    order: 40
+    owner: student
+    due: { on: 2026-10-06 }
+    requires: [wbs]
+    deliverables:
+      - { ref: research_plan }
+
+  # ── 05 Implementation ────────────────────────────────────────────────────
+  - id: grants_scan
+    name: Find the grants and competitions worth entering
+    phase: irpd_impact
+    order: 10
+    owner: student
+    due: { on: 2026-10-06 }
+    deliverables:
+      - { ref: grants_scan }
+
+  - id: prototype_plan
+    name: Prototype implementation and testing plan
+    phase: irpd_impact
+    order: 20
+    owner: student
+    due: { on: 2026-10-08 }
+    requires: [project_plan]
+    deliverables:
+      - { ref: prototype_plan }
+
+  - id: researcher_profile_draft
+    name: First draft of the researcher profile
+    phase: irpd_impact
+    order: 30
+    owner: student
+    due: { on: 2026-10-15 }
+
+  - id: journey_map_2
+    name: Journey map 2.0
+    phase: irpd_impact
+    order: 40
+    owner: student
+    due: { on: 2026-10-20 }
+    requires: [journey_map]
+    deliverables:
+      - { ref: journey_map_2 }
+
+  - id: project_presentation
+    name: Project presentation to the class
+    phase: irpd_impact
+    order: 50
+    owner: student
+    due: { on: 2026-10-29 }
+    requires: [prototype_plan]
+    deliverables:
+      - { ref: project_presentation }
+
+  - id: feedback_session
+    name: Feedback session
+    phase: irpd_impact
+    order: 60
+    owner: student
+    due: { anchor: feedback_session, days: 0 }
+    review: formative
+    note: >-
+      A checkpoint, not a decision. Nothing is accepted or declined; the
+      outcome is feedback and a record that progress was shown.
+
+  # ── 06 Scaling ───────────────────────────────────────────────────────────
+  - id: nsta
+    name: Present at the NSTA conference
+    phase: irpd_scaling
+    order: 10
+    owner: student
+    due: { on: 2026-11-10 }
+    requirement: optional
+
+  - id: grants_applications
+    name: Apply for the grants and competitions
+    phase: irpd_scaling
+    order: 20
+    owner: student
+    due: { on: 2026-11-19 }
+    requires: [grants_scan]
+    requirement: optional
+
+  - id: exploravision
+    name: ExploraVision entry
+    phase: irpd_scaling
+    order: 30
+    owner: student
+    due: { on: 2026-11-24 }
+    requirement: optional
+    note: >-
+      Launched as a class in November and worked on again in January.
+
+  - id: lessons_learned
+    name: Lessons learned
+    phase: irpd_scaling
+    order: 40
+    owner: student
+    due: { on: 2026-12-17 }
+    deliverables:
+      - { ref: lessons_learned }
+
+  - id: researcher_profile
+    name: Researcher profile published
+    phase: irpd_scaling
+    order: 50
+    owner: student
+    due: { on: 2027-02-26 }
+    requires: [researcher_profile_draft]
+    deliverables:
+      - { ref: project_site }
+
+  - id: sigma_xi
+    name: Sigma Xi virtual research showcase
+    phase: irpd_scaling
+    order: 60
+    owner: student
+    due: { on: 2027-03-31 }
+    requirement: optional
+
+  - id: quest_fair
+    name: Quest Innovation Fair
+    phase: irpd_scaling
+    order: 70
+    owner: student
+    due: { on: 2027-04-18 }
+    requirement: optional
+
+  - id: community_showcase
+    name: Mountain View Library showcase
+    phase: irpd_scaling
+    order: 80
+    owner: student
+    due: { anchor: community_showcase, days: 0 }
+    review: formative
+    deliverables:
+      - { ref: showcase_presentation }
+    note: >-
+      Milestone 6, and the last thing the class asks for. A checkpoint
+      rather than a decision.
+
+presents_at:
+  - { name: Junior Science and Humanities Symposium }
+  - { name: National Science Teaching Association conference }
+  - { name: Sigma Xi Student Research Showcase }
+  - { name: Quest Innovation Fair }

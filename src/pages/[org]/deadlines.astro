@@ -1,0 +1,25 @@
+---
+export const prerender = false;
+
+/**
+ * WITHDRAWN, AND STILL ANSWERING.
+ *
+ * This listed every step of every program the school runs, grouped by phase,
+ * for somebody without an account. It was accurate and it was a reference
+ * document: a reader arriving at a school's site is asking what they could
+ * be part of, which is a list of names and dates, not four calendars of
+ * milestones they have no project to hang on.
+ *
+ * The short answer moved to the school's own home page, per tenant. The long
+ * answer is where it was always most useful: on the program's page, once
+ * there is a project, next to the work each date governs.
+ *
+ * **Recorded in the brief rather than deleted quietly.** If a public calendar
+ * turns out to be what a parent or a teacher actually wants, everything it
+ * needs still resolves from the templates and this file is a `git log` away.
+ *
+ * The route redirects rather than 404s, as `/app/fairs/` does: a dead link is
+ * a worse answer than a moved one, and this one has been in a footer.
+ */
+return Astro.redirect('/', 301);
+---

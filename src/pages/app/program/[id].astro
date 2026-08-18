@@ -1,0 +1,247 @@
+---
+export const prerender = false;
+
+/**
+ * A PROGRAM, ON OUR SITE.
+ *
+ * The card on the overview put the fair's own website behind its name, so
+ * the most prominent thing on a card sent somebody off the site before they
+ * had read the rest of the card. It also meant that the only page describing
+ * a program a student had not joined was somebody else's.
+ *
+ * So the name comes here, and the external site is a link among the facts
+ * rather than the heading. That ordering is the whole point: what a student
+ * needs first is what this program is, when it decides, and how to get in —
+ * all of which we hold. The fair's own page is where they go afterwards, for
+ * rules and forms we deliberately do not copy.
+ *
+ * It reads. It does not write: joining and entering stay on the overview,
+ * where the forms and their gates already are, and this page links back to
+ * them rather than growing a second copy that could disagree.
+ */
+
+import Base from '../../../layouts/Base.astro';
+import AppShell from '../../../components/AppShell.astro';
+import { activeOrg } from '../../../lib/tenant';
+import { serverClient } from '../../../lib/supabase';
+import { formatDate } from '../../../lib/dates';
+import { signInWith } from '../../../lib/next-path';
+import {
+  programTitle,
+  programKind,
+  staffWord,
+  memberWord,
+} from '../../../lib/program-names';
+
+const { session, account, roles } = Astro.locals;
+const org = activeOrg(Astro);
+
+if (!session) return Astro.redirect(signInWith(Astro.url));
+if (!account) return Astro.redirect('/app/welcome/');
+
+const supabase = serverClient(
+  Astro.request,
+  Astro.cookies,
+  (Astro.locals as any).runtime?.env
+);
+
+const id = Astro.params.id ?? '';
+
+const { data: programRow } = await supabase
+  .from('programs')
+  .select(
+    'id, name, season_year, kind, program_role, joining, status, level, ' +
+      'description, fair_date, website_url, advances_to_fairs, places, roles, org_id'
+  )
+  .eq('id', id)
+  .maybeSingle();
+
+/* Cast once, at the boundary. The generated client types a selected row as a
+   union with an error shape, and every property read below is otherwise an
+   error about `GenericStringError`. Every other page here does the same. */
+const program = programRow as any;
+
+/* A row that RLS will not return reads as absent, which is the right answer
+   for a student at another school: not "forbidden", which confirms it
+   exists. */
+if (!program) return Astro.redirect('/app/#join');
+
+/**
+ * The program's own dates, not anybody's copy of them.
+ *
+ * `entry_milestones` is what a student is held to and is frozen at the
+ * moment they join; this is the published calendar, which is what somebody
+ * deciding whether to join is asking about. A school's own layer is included
+ * where it applies, because "our club wants it a fortnight early" is a date
+ * that governs the reader.
+ */
+const { data: milestones } = await supabase
+  .from('program_milestones')
+  .select('id, name, kind, due_on, opens_on, required, source, form_number, source_url, notes')
+  .eq('program_id', id)
+  .order('due_on', { ascending: true, nullsFirst: false })
+  .order('sort_order', { ascending: true });
+
+const dated = (milestones ?? []).filter((m: any) => m.due_on || m.opens_on);
+
+/* Whether this person is already in it, so the way in points at the right
+   thing rather than inviting somebody to join twice. */
+const { data: membership } = await supabase
+  .from('memberships')
+  .select('state')
+  .eq('user_id', account.id)
+  .eq('cohort_id', id)
+  .maybeSingle();
+
+const isCohort = program.program_role === 'cohort';
+const state = (membership as any)?.state ?? null;
+
+const dateLabel =
+  program.kind === 'course' ? 'Ends' : program.kind === 'grant' ? 'Closes' : 'Judging';
+---
+
+<Base title={programTitle(program)} noindex={true}>
+  <div class="wrap">
+    {/* Self-closing, and the content is a sibling rather than a child.
+    
+        `AppShell` renders a nav bar and has no `<slot />`, so this page —
+        the only one of the eleven that wrapped its content in it — had
+        every one of those children silently discarded. The nav rendered,
+        the page did not, and nothing errored: an unrendered slot is not a
+        mistake Astro reports. `tests/ordering.mjs` refuses it now.
+    
+        The `.wrap` came with it. Without the container every sibling page
+        has, the content had no measure and no centering. */}
+    <AppShell org={org} account={account} roles={roles} here="/app/" />
+
+    <p class="crumb"><a href="/app/#join">Back to the overview</a></p>
+
+    <p class="season">{programKind(program)} · {program.season_year} season</p>
+    <h1>{programTitle(program)}</h1>
+
+    {program.description && <p class="blurb">{program.description}</p>}
+
+    <dl class="facts">
+      {program.kind !== 'independent' && (
+        <>
+          <dt>{dateLabel}</dt>
+          <dd>{formatDate(program.fair_date, 'long', 'to be announced')}</dd>
+        </>
+      )}
+
+      <dt>Joining</dt>
+      <dd>
+        {program.joining === 'approval'
+          ? `By approval, decided by the ${staffWord(program).toLowerCase()}s`
+          : 'Open to anybody at this school'}
+      </dd>
+
+      {program.advances_to_fairs?.length > 0 && (
+        <>
+          <dt>Advances to</dt>
+          <dd>{program.advances_to_fairs.join(' and ')}</dd>
+        </>
+      )}
+
+      {program.places && (
+        <>
+          <dt>Places</dt>
+          <dd>{program.places}</dd>
+        </>
+      )}
+
+      {/* Named, not hidden behind the heading. A student going to the fair's
+          own site is going for rules and forms we do not copy, and they
+          should be able to see they are leaving. */}
+      {program.website_url && (
+        <>
+          <dt>Official site</dt>
+          <dd>
+            <a href={program.website_url} target="_blank" rel="noopener noreferrer">
+              {new URL(program.website_url).hostname.replace(/^www\./, '')}
+            </a>
+          </dd>
+        </>
+      )}
+    </dl>
+
+    {dated.length > 0 && (
+      <section class="sec">
+        <div class="sec-h"><b>Published dates</b></div>
+        <p class="t-sm" style="max-width:var(--measure-text)">
+          {isCohort
+            ? `What the ${memberWord(program, 'plural').toLowerCase()} are held to. Your own copy is made when you join, so a date moved afterwards does not rewrite what you were told.`
+            : 'What this program publishes. Your own copy is made when you enter, so a date moved afterwards does not rewrite what you were told.'}
+        </p>
+
+        <ul class="dates">
+          {dated.map((m: any) => (
+            <li>
+              <span class="when">{formatDate(m.due_on ?? m.opens_on, 'short')}</span>
+              <span class="what">
+                {m.name}
+                {m.form_number && <span class="t-sm"> · form {m.form_number}</span>}
+                {m.source === 'school' && <span class="t-sm"> · your school's own</span>}
+              </span>
+            </li>
+          ))}
+        </ul>
+      </section>
+    )}
+
+    <section class="sec">
+      <div class="sec-h"><b>Your way in</b></div>
+      {isCohort && state === 'member' ? (
+        <p>You are in this one. <a href="/app/#join">Add a project to it</a>.</p>
+      ) : isCohort && state === 'requested' ? (
+        <p>You have asked to join, and it is waiting on a decision.</p>
+      ) : (
+        <p><a class="btn" href="/app/#join">See how to take part</a></p>
+      )}
+    </section>
+  </div>
+</Base>
+
+<style>
+  .crumb { margin: 0 0 18px; }
+  .season {
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    margin: 0 0 4px;
+  }
+  h1 { margin: 0 0 12px; }
+  .blurb { max-width: var(--measure-text); }
+
+  .facts {
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    gap: 6px 20px;
+    margin: 20px 0 0;
+  }
+  .facts dt {
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    align-self: baseline;
+  }
+  .facts dd { margin: 0; }
+
+  .dates { list-style: none; padding: 0; margin: 12px 0 0; }
+  .dates li {
+    display: grid;
+    grid-template-columns: 10rem 1fr;
+    gap: 12px;
+    padding: 7px 0;
+    border-top: 1px solid var(--rule);
+  }
+  .dates .when { font-family: var(--font-mono); font-size: 0.85rem; color: var(--ink-2); }
+
+  @media (max-width: 40rem) {
+    .facts, .dates li { grid-template-columns: 1fr; gap: 2px; }
+  }
+</style>

@@ -1,0 +1,54 @@
+---
+export const prerender = false;
+
+import Base from '../../layouts/Base.astro';
+import { cachePublicPage } from '../../lib/caching';
+import PageHead from '../../components/PageHead.astro';
+import RecordCard from '../../components/RecordCard.astro';
+import Empty from '../../components/Empty.astro';
+import { openArchive, byYear } from '../../lib/archive';
+
+const archive = await openArchive(Astro);
+const records = archive.projects;
+const years = byYear(records);
+
+cachePublicPage(Astro);
+---
+
+<Base title="Projects" description="Every project entered, with its abstract, category, and result.">
+  <PageHead eyebrow="Project entries" title="Projects" lede={'What each project was, what it found, and how it did. A paper is a separate thing and not every project has one.'} />
+  <div class="wrap">
+    {records.length === 0 ? (
+      <Empty title="No project entries yet" body="A project entry is published when a fair result is recorded and an officer verifies it." />
+    ) : (
+      <>
+        <section class="sec" style="padding-top:0">
+          <div class="sec-h"><b>All projects</b><span>{records.length}</span></div>
+          {records.map((r) => <RecordCard record={r} />)}
+        </section>
+
+        {years.length > 1 && (
+          <section class="sec">
+            <div class="sec-h"><b>By year</b><span>{years.length}</span></div>
+            <ul class="years">
+              {years.map(([year, list]) => (
+                <li><a href={`/projects/${year}/`}>{year}</a><span>{list.length}</span></li>
+              ))}
+            </ul>
+          </section>
+        )}
+      </>
+    )}
+  </div>
+</Base>
+
+<style>
+  .years { list-style: none; margin: 0; padding: 0; max-width: var(--measure-text); }
+  .years li {
+    display: flex;
+    justify-content: space-between;
+    padding: 11px 0;
+    border-bottom: 1px solid var(--rule-fine);
+  }
+  .years span { font-family: var(--face-num); color: var(--ink-3); }
+</style>

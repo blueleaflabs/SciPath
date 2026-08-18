@@ -1,0 +1,138 @@
+# A school-run research micro-grant, 2027.
+#
+# **This is a fixture, not a real program.** Every date, amount and rule below
+# is invented, and the file says so rather than reading like a transcription
+# of something that exists. A real funder's page limits and deadlines belong
+# in a template only once somebody has read them off the funder's own page,
+# which is the rule every other template here follows.
+#
+# It is modelled on the grant a student is most likely to actually get: a few
+# hundred dollars from a school, a PTSA, or a local company, decided by two
+# people in an afternoon. Not a foundation cycle. The large ones are worth
+# adding later and are worth transcribing rather than guessing.
+
+id: grant-mvhs-micro-2027
+family: mvhs-micro
+kind: grant
+
+# A grant. A project applies, and the outcome is money rather
+# than a placement.
+role: opportunity
+
+# ── This one names a process, and it is the exception ──────────────────────
+#
+# 22.4 says an opportunity may not prescribe a research process, because a
+# fair's science and engineering tracks are categories rather than ways of
+# working, and letting a venue choose would ask a student who enters two to
+# have done the work two ways.
+#
+# `process-grant` is not a way of doing research. It is how you apply for
+# money: write the proposal, cost it, be decided on, report on what you
+# spent. Those steps belong to *this* opportunity and to nothing else, and
+# they are in a process file only because that is where shared step lists
+# live.
+#
+# So the rule holds and this is genuinely outside it. It is named in
+# `tests/templates.mjs` rather than tolerated, and the honest fix is to move
+# these steps into this file, at which point the name goes.
+process: grant
+
+name: Research Micro-Grant
+authority: Monta Vista High School
+level: school
+season: 2027
+version: 1
+
+
+uses:
+  deliverables: [deliverables-grant, deliverables-common]
+  shapes: [grant_narrative]
+
+# **[FIXTURE]** Invented dates. Two rounds a year, which is the usual shape:
+# one early enough to buy equipment for the season, one for work already
+# under way that has run into something it cannot afford.
+# Applying is the request. The decision is the award, which is recorded as
+# money rather than as a place, so joining is open: anybody may apply.
+joining: open
+
+anchors:
+  round_one_opens: 2026-09-15
+  round_one_closes: 2026-10-16
+  round_one_decided: 2026-10-30
+  round_two_opens: 2027-01-12
+  round_two_closes: 2027-02-12
+  round_two_decided: 2027-02-26
+  report_due: 2027-05-29
+
+roles:
+  staff: { singular: Reviewer, plural: Reviewers }
+  member: { singular: Applicant, plural: Applicants }
+
+# What it will and will not pay for. The second list is the more useful one:
+# most refusals are for something a student could have known was excluded.
+limits:
+  amount_max: 400
+  currency: USD
+  pays_for:
+    - Materials and consumables
+    - Equipment under the limit, which stays with the school afterwards
+    - Access fees, sample analysis, and shipping
+  does_not_pay_for:
+    - Travel, including to a fair
+    - Registration or entry fees
+    - Anything already bought
+    - Payment for the student's own time
+
+facts:
+  - { id: needs_transcript, question: "Does this funder ask for a transcript?" }
+  - { id: needs_receipts, question: "Does this funder ask for receipts?" }
+
+eligibility:
+  grades: [9, 10, 11, 12]
+  note: >-
+    Any student at the school, in a program or not. A project does not have
+    to be entered anywhere: the point of the money is to make work possible
+    rather than to reward work already being noticed.
+
+steps:
+  override:
+    - id: submit
+      name: Submit the application
+      due: { anchor: round_one_closes, days: 0 }
+      note: >-
+        Round one. **[FIXTURE]** A second round closes in February for work
+        already under way.
+
+    - id: decision
+      name: Decisions announced
+      due: { anchor: round_one_decided, days: 0 }
+
+    - id: report
+      name: Final report
+      due: { anchor: report_due, days: 0 }
+      note: >-
+        Before the end of the year, whichever round the money came from. A
+        report that never arrives is what closes a small grant down: the
+        people running it are volunteers deciding each spring whether to do
+        it again.
+
+  add:
+    - id: read_the_rules
+      name: Read what it will and will not pay for
+      phase: find
+      order: 15
+      owner: student
+      due: { anchor: round_one_opens, days: 0 }
+      deliverables: []
+      note: >-
+        Travel and entry fees are the two that catch people, and both are
+        common enough that a student assumes they are covered.
+
+# A grant does not send you anywhere; it pays for the work that goes
+# somewhere else. Recorded so the interface stops offering advancement.
+advances_to: []
+
+# **[DECIDE]** whether a funded project's published record should say so.
+# "Supported by the Monta Vista Research Micro-Grant" is real for the student
+# and real for the people who paid, and nothing renders it yet.
+publishes_to: null

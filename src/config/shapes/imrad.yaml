@@ -1,0 +1,51 @@
+# The scientific paper. What the manuscript check has always enforced, now
+# stated where other things can point at it.
+
+id: imrad
+name: Scientific paper
+parts:
+  - id: background
+    name: Introduction and background
+    min_words: 150
+    guidance: >-
+      The problem, why it matters, and your hypothesis or design goal, stated
+      plainly enough that somebody outside your field follows it.
+
+  - id: prior_work
+    name: Prior work
+    min_words: 100
+    guidance: >-
+      What is already known and the specific gap you are working in. Not a
+      list of everything you read.
+
+  - id: methods
+    name: Methods
+    min_words: 200
+    guidance: >-
+      Enough that somebody else could repeat it. This is the section
+      reviewers most often send back, and the test is specific: could a
+      stranger run your experiment from this text alone.
+
+  - id: results
+    name: Results
+    min_words: 150
+    guidance: What happened, with the data that supports it. What it means belongs below.
+
+  - id: discussion
+    name: Discussion and limitations
+    min_words: 150
+    guidance: >-
+      What it means, and what it does not. Every study has limitations and
+      naming them is what makes the rest credible.
+
+  - id: conclusion
+    name: Conclusion
+    min_words: 75
+    guidance: What you now know that you did not before. Short is fine.
+
+  - id: future_work
+    name: Future work
+    min_words: 50
+    guidance: >-
+      What you would do next with more time. Judges ask this out loud, so
+      having written it down is rehearsal.

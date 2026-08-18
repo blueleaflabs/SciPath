@@ -1,0 +1,1843 @@
+---
+export const prerender = false;
+
+import Base from '../../layouts/Base.astro';
+import { formatDate } from '../../lib/dates';
+import AppShell from '../../components/AppShell.astro';
+import { activeOrg } from '../../lib/tenant';
+import { programTitle, programKind, participationVerb, staffWord } from '../../lib/program-names';
+import { serverClient } from '../../lib/supabase';
+import { standing, roleLabel } from '../../lib/roles';
+import { checkDateOrder, worstFinding } from '../../lib/dateOrder';
+import { assess, tally } from '../../lib/attention';
+import { afterPost, outcomeFrom, leaveTo } from '../../lib/post-redirect';
+import { safeNext, HOME } from '../../lib/next-path';
+
+const { configured, session, account, roles } = Astro.locals;
+const org = activeOrg(Astro);
+
+/* Where they were headed before being asked to sign in. Kept through the
+   form and through Google's round trip. */
+const next = safeNext(Astro.url.searchParams.get('next'));
+/* Ours, not the provider's. See the comment in middleware.ts: sharing the
+   `error` parameter with Supabase produced a redirect loop. */
+const signin = Astro.url.searchParams.get('signin');
+
+if (configured && session && !account) return Astro.redirect('/app/welcome/');
+
+const me = standing(roles, account?.population);
+const today = new Date().toISOString().slice(0, 10);
+
+const supabase = account
+  ? serverClient(Astro.request, Astro.cookies, (Astro.locals as any).runtime?.env)
+  : null;
+
+/* Seeded from the redirect a POST answers with. `cleared` was a count that
+   could not survive one, so it became the sentence it was rendered as. See
+   src/lib/post-redirect.ts. */
+let { error: error2, note: attached } = outcomeFrom(Astro.url);
+
+/**
+ * Two different people post to this page, and the guard is per action.
+ *
+ * Joining a program is a student's, attaching somebody to a project is the
+ * club's, and the whole handler used to sit behind `me.runsTheClub` — so a
+ * student's join would have been dropped without a word. The action is also
+ * explicit on every branch now: attaching was the `else`, and a form that
+ * forgot its action fell into it.
+ */
+if (Astro.request.method === 'POST' && supabase) {
+  const form = await Astro.request.formData();
+  const action = String(form.get('action') ?? '');
+
+  /* Joining a cohort. A person enrolls, and no project is invented in order
+     to have somewhere to put the enrolment (22.1). */
+  /* Starting a project.
+  
+     There was no way to do this at all: `start_entry` made one as a side
+     effect of entering something, and separating the two (22.1) left a
+     student who had joined a class with nothing to click. A project exists
+     because somebody started work, so this is its own act. */
+  /* Putting an existing project into a cohort somebody has been admitted
+     to. The same act as the picker on the project page, offered where a
+     student is when they are told they are in (22.5). */
+  if (action === 'attach_cohort') {
+    const { error: e } = await supabase.rpc('set_project_cohort', {
+      p_project_id: String(form.get('project_id') ?? ''),
+      p_cohort_id: String(form.get('cohort_id') ?? ''),
+      p_in: true,
+    });
+
+    if (e) error2 = e.message;
+    else return leaveTo(`/app/project/${String(form.get('project_id') ?? '')}/`);
+  } else if (action === 'start_project') {
+    const title = String(form.get('title') ?? '').trim();
+
+    if (!title) {
+      error2 = 'Give the project a working title. You can change it later.';
+    } else {
+      const { data: projectId, error: e } = await supabase.rpc('start_project', {
+        p_title: title,
+        p_started_on: String(form.get('started_on') ?? '') || null,
+        p_cohort_id: String(form.get('cohort_id') ?? '') || null,
+      });
+
+      if (e) error2 = e.message;
+      else return leaveTo(`/app/project/${projectId}/`);
+    }
+  } else if (action === 'join_cohort') {
+    const { error: e } = await supabase.rpc('join_cohort', {
+      p_cohort_id: String(form.get('program_id') ?? ''),
+    });
+
+    if (e) error2 = e.message;
+    else {
+      /* What happens next, in the order it happens. A request that says "you
+         are in" when a teacher has not decided is telling somebody something
+         untrue. */
+      /* Named, because a student asking to join three things in a row gets
+         three identical confirmations otherwise and cannot tell which one
+         this was. */
+      const { data: program } = await supabase
+        .from('programs')
+        .select('joining, name')
+        .eq('id', String(form.get('program_id') ?? ''))
+        .maybeSingle();
+
+      const what = program?.name ?? 'it';
+
+      attached =
+        program?.joining === 'approval'
+          ? `Request to join ${what} sent. You can start a project while you wait for approval.`
+          : `You are in ${what}. Start a project when you are ready.`;
+    }
+  } else if (action === 'join') {
+    const title = String(form.get('title') ?? '').trim();
+
+    if (!title) {
+      error2 = 'Give the project a working title. You can change it later.';
+    } else {
+      const { data: entryId, error: e } = await supabase.rpc('start_entry', {
+        p_program_id: String(form.get('program_id') ?? ''),
+        p_title: title,
+        p_started_on: String(form.get('started_on') ?? '') || null,
+      });
+
+      if (e) error2 = e.message;
+      /* The top of their new project, not wherever the last outcome was.
+         See leaveTo. */
+      else return leaveTo(`/app/entry/${entryId}/`);
+    }
+  } else if (action === 'enter_existing') {
+    /* **Research you are already doing, taken somewhere.**
+    
+       The card had one form and it called `start_entry`, which makes a
+       project — so a student entering the fair with the work they had been
+       doing since August got a second, empty project with the same title and
+       none of the notebook. Nothing prevented it and nothing said so.
+    
+       No new function was needed for this. `enter_program` is the one path
+       that attaches a project to an opportunity, and `start_entry` calls it
+       too, having made the project first. So the difference between the two
+       routes is exactly the thing that differs: whether there is already a
+       project.
+    
+       No title, because it has one. No start date, because it has one or has
+       deliberately been left without one, and a fair entry form is not where
+       that gets rewritten: `checkDateOrder` reads that date against the
+       sponsor's signature, and "work began before a sponsor agreed" ends
+       seasons. */
+    const projectId = String(form.get('project_id') ?? '');
+
+    if (!projectId) {
+      error2 = 'Choose which research you are entering.';
+    } else {
+      const { data: entryId, error: e } = await supabase.rpc('enter_program', {
+        p_project_id: projectId,
+        p_program_id: String(form.get('program_id') ?? ''),
+      });
+
+      if (e) error2 = e.message;
+      else return leaveTo(`/app/entry/${entryId}/`);
+    }
+  } else if (!me.runsTheClub) {
+    error2 = 'Only an officer or your advisor can do that.';
+    /* A `detach` branch stood here and no form on this page posted to it —
+       left behind when removing somebody moved to the team page, where the
+       row being removed is visible. It called `detach_from_project` with a
+       project, which no longer exists as a signature: oversight names a
+       place now. Dead code that would not compile against its own function
+       is worse than dead code, so it is gone rather than updated. */
+  } else if (action === 'select') {
+    /* Which projects a school puts forward. The advisor's, and the function
+       says so too; this only decides whether the control is offered. */
+    if (!me.isAdvisor) {
+      error2 = 'Only your advisor decides which projects go forward.';
+    } else {
+      const { error: e } = await supabase.rpc('set_selection', {
+        p_participation_id: String(form.get('participation_id') ?? ''),
+        p_state: String(form.get('state') ?? 'candidate'),
+        p_note: String(form.get('note') ?? '') || null,
+      });
+      if (e) error2 = e.message;
+    }
+  } else if (action === 'attach') {
+    const { data, error: e } = await supabase.rpc('attach_to_project', {
+      p_project_id: String(form.get('project_id') ?? ''),
+      p_user_id: String(form.get('user_id') ?? ''),
+      p_role: String(form.get('role') ?? 'mentor'),
+      p_dated: String(form.get('dated') ?? '') || null,
+    });
+    if (e) {
+      error2 = e.message;
+    } else {
+      const n = data ?? 0;
+      attached = `Attached. ${n} approval obligation${n === 1 ? '' : 's'} cleared.`;
+    }
+  }
+
+  /* A refresh should re-read this page, not send the form again. */
+  return afterPost(Astro.url, { error: error2, note: attached });
+}
+
+/* --- What a student sees: their own entries -------------------------- */
+let myEntries: any[] = [];
+let myReviews: any[] = [];
+let myManuscripts = new Set<string>();
+
+/* --- What everyone else sees: the projects they are responsible for --- */
+let watched: any[] = [];
+let staffPeople: any[] = [];
+
+if (supabase && account) {
+  if (me.isStudent || !me.runsTheClub) {
+    /* Scoped by authorship. The policy lets an officer read every entry at
+       the school, which is right for the club table below and wrong for a
+       section headed "this season". */
+    const { data: authored } = await supabase
+      .from('project_authors')
+      .select('project_id')
+      .eq('user_id', account.id)
+      .eq('role', 'author');
+
+    const myProjectIds = (authored ?? []).map((a: any) => a.project_id);
+
+    /**
+     * The projects, and where each of them went.
+     *
+     * **Read from projects, not from entries.** This listed entries, so a
+     * project that had not been submitted anywhere did not exist to it: a
+     * student who started work and joined a class saw *nothing yet this
+     * season* while looking at their own project's page in another tab.
+     *
+     * That was the conflation surviving in a query. Work exists because
+     * somebody started it, and entering it somewhere is a later and optional
+     * thing (22.1). A project with no entry is the ordinary state of every
+     * project for its first month.
+     */
+    const { data: mineProjects } = myProjectIds.length
+      ? await supabase
+          .from('projects')
+          .select('id, title, created_at')
+          .in('id', myProjectIds)
+          .is('archived_at', null)
+          .order('created_at', { ascending: false })
+      : { data: [] as any[] };
+
+    const { data: theirEntries } = myProjectIds.length
+      ? await supabase
+          .from('opportunity_participations')
+          .select('id, status, placement, program_id, project_id, programs:program_id(name, season_year, fair_date, kind, roles)')
+          .in('project_id', myProjectIds)
+          .order('entered_at', { ascending: false })
+      : { data: [] as any[] };
+
+    /* The classes and clubs these projects are in, which is a separate
+       question from what they have been entered in. Before the merge a
+       cohort had no participation row to read, so this line could not be
+       written and the list below said "not entered anywhere yet" to a
+       student whose project was sitting in IRPD. */
+    const { data: theirCohorts } = myProjectIds.length
+      ? await supabase
+          .from('cohort_participations')
+          .select('id, program_id, project_id, programs:program_id(name, season_year, kind, roles)')
+          .in('project_id', myProjectIds)
+      : { data: [] as any[] };
+
+    const entriesFor = new Map<string, any[]>();
+    for (const e of theirEntries ?? []) {
+      entriesFor.set(e.project_id, [...(entriesFor.get(e.project_id) ?? []), e]);
+    }
+
+    const cohortsFor = new Map<string, any[]>();
+    for (const c of theirCohorts ?? []) {
+      cohortsFor.set(c.project_id, [...(cohortsFor.get(c.project_id) ?? []), c]);
+    }
+
+    /* One row per project, carrying whatever it has been entered in. A
+       project entered nowhere still gets a row, which is the fix. */
+    myEntries = (mineProjects ?? []).map((project: any) => ({
+      project,
+      entries: entriesFor.get(project.id) ?? [],
+      cohorts: cohortsFor.get(project.id) ?? [],
+    }));
+
+    /* Which of these already have a manuscript, so the link can say "start"
+       or "open" rather than making somebody click to find out. */
+    const { data: started } = myProjectIds.length
+      ? await supabase.from('manuscripts').select('project_id').in('project_id', myProjectIds)
+      : { data: [] as any[] };
+
+    myManuscripts = new Set((started ?? []).map((m: any) => m.project_id));
+
+    /* Reviewing is an attachment rather than a standing role, so it appears
+       nowhere in the nav. If it did not appear here it would appear nowhere
+       at all, which is exactly how an assignment sits untouched until the
+       week of the fair. */
+    const { data: assigned } = await supabase
+      .from('reviews')
+      .select('id, due_at, submitted_at, submissions(manuscripts(title))')
+      .is('submitted_at', null)
+      .order('due_at', { ascending: true });
+
+    myReviews = assigned ?? [];
+  }
+}
+
+/* --- What is open to join ------------------------------------------------
+ *
+ * This was its own page, listing the same entries as the section above it
+ * with a different row. Two pages holding one list is the sprawl this pass
+ * exists to remove, so the joining half moved here and the page it came
+ * from redirects.
+ */
+let joinable: any[] = [];
+let enteredIn = new Set<string>();
+
+/**
+ * Why a program cannot be entered yet, if it cannot.
+ *
+ * The same function `enter_program` and `start_entry` call, so a form drawn
+ * here is a form that will be accepted. Drawing the door and refusing at it
+ * is worse than not drawing it: the student has already decided to go
+ * through by the time anybody tells them.
+ */
+let gateFor = new Map<string, string>();
+let entryFor = new Map<string, string>();
+
+/* Cohorts this person is in or waiting on, so a card can say which. Asking
+   twice does nothing and reads as though the first request vanished. */
+let cohortState = new Map<string, string>();
+
+/* And who decided it, when, and what they said. A refusal that names nobody
+   is a refusal nobody can respond to. */
+let cohortDecider = new Map<string, string>();
+let cohortDecidedOn = new Map<string, string>();
+let cohortJoinedOn = new Map<string, string>();
+let cohortNote = new Map<string, string>();
+
+/* Cohorts this person is actually in, for the picker when starting a
+   project. A pending request is not one of them. */
+let myMemberships: any[] = [];
+
+/* This person's projects, and which cohorts each is already in, so a card
+   can offer the ones that are not. */
+let myProjects: any[] = [];
+let projectCohorts = new Map<string, Set<string>>();
+
+/* And which opportunities each is already entered in, plus, per opportunity,
+   the title of the project already holding this student's place. */
+let projectEntries = new Map<string, Set<string>>();
+let holdsPlace = new Map<string, string>();
+
+const myProjectsForCohort = (cohortId: string) =>
+  myProjects.filter((p: any) => !(projectCohorts.get(p.id) ?? new Set()).has(cohortId));
+
+/**
+ * The projects this person could enter in an opportunity, right now.
+ *
+ * Empty for two different reasons, and the card distinguishes them: nothing
+ * to offer because everything is already in, and nothing offerable because
+ * one of their projects is already competing here. `holdsPlace` answers the
+ * second, and a card with an answer there says so instead of drawing a
+ * picker the server would refuse.
+ */
+const myProjectsForOpportunity = (programId: string) =>
+  holdsPlace.has(programId)
+    ? []
+    : myProjects.filter((p: any) => !(projectEntries.get(p.id) ?? new Set()).has(programId));
+
+if (supabase && account) {
+  const { data: open } = await supabase
+    .from('programs')
+    .select('id, name, season_year, fair_date, description, website_url, advances_to_fairs, status, kind, level, joining, places, program_role')
+    .eq('status', 'open')
+    .order('fair_date', { ascending: true });
+
+  joinable = open ?? [];
+
+
+  const { data: mine } = await supabase
+    .from('memberships')
+    .select('cohort_id, state, note, joined_at, decided_at, decided:decided_by(display_name)')
+    .eq('user_id', account.id);
+
+  for (const m of mine ?? []) {
+    cohortState.set(m.cohort_id, m.state);
+    /* Who decided, so a refusal names somebody a student can go and ask.
+       The column has been recorded since the table was written; nothing had
+       ever read it back. */
+    const who = (m as any).decided?.display_name;
+    if (who) cohortDecider.set(m.cohort_id, who);
+
+    /* When they got in. `decided_at` is the day somebody approved it and is
+       null for a cohort anybody may join, so `joined_at` is the fallback and
+       the sentence below says which of the two happened. */
+    const on = (m as any).decided_at ?? (m as any).joined_at;
+    if (on) cohortJoinedOn.set(m.cohort_id, formatDate(on, 'long'));
+    if ((m as any).decided_at) {
+      cohortDecidedOn.set(m.cohort_id, formatDate((m as any).decided_at, 'short'));
+    }
+    if ((m as any).note) cohortNote.set(m.cohort_id, (m as any).note);
+  }
+
+  /* Newest first, because the picker below defaults to the first of these.
+  
+     A student who has just been let into a class and has no project yet is,
+     almost always, about to start that class's project -- so the answer they
+     were about to give is the one that should already be selected. Where
+     somebody is in two, the one they were most recently admitted to is the
+     better guess than whichever the database happened to return first.
+  
+     `decided_at` is null for a cohort that admits without approval, so
+     `joined_at` is the fallback and the sort is stable either way. */
+  const { data: joined } = await supabase
+    .from('memberships')
+    .select('cohort_id, decided_at, joined_at, programs:cohort_id(name, season_year, kind, program_role)')
+    .eq('user_id', account.id)
+    .eq('state', 'member')
+    .order('decided_at', { ascending: false, nullsFirst: false })
+    .order('joined_at', { ascending: false });
+
+  myMemberships = joined ?? [];
+
+  const { data: authored } = await supabase
+    .from('project_authors')
+    .select('project_id, projects(id, title)')
+    .eq('user_id', account.id)
+    .eq('role', 'author');
+
+  myProjects = (authored ?? []).map((a: any) => a.projects).filter(Boolean);
+
+  if (myProjects.length > 0) {
+    const { data: attached } = await supabase
+      .from('cohort_participations')
+      .select('project_id, program_id')
+      .in('project_id', myProjects.map((p: any) => p.id));
+
+    for (const row of attached ?? []) {
+      const held = projectCohorts.get(row.project_id) ?? new Set<string>();
+      held.add(row.program_id);
+      projectCohorts.set(row.project_id, held);
+    }
+
+    /* **Where this person's work already is, so a card offers only what the
+       server would accept.**
+    
+       Two different refusals live in here and they need different sentences.
+       A project already entered in this fair is simply not offered again. A
+       project entered in this fair by *this student* means no other project
+       of theirs may be entered at all -- `app.entry_conflict` refuses a
+       second one, because two projects from one student compete against each
+       other for one place -- and the card has to say which project holds it
+       rather than presenting a picker that cannot succeed.
+    
+       `withdrawn` is excluded on purpose: withdrawing is how a place is given
+       back, and the trigger reads it the same way. */
+    const { data: entered } = await supabase
+      .from('opportunity_participations')
+      .select('project_id, program_id, status, projects:project_id(title)')
+      .in('project_id', myProjects.map((p: any) => p.id))
+      .neq('status', 'withdrawn');
+
+    for (const row of entered ?? []) {
+      const held = projectEntries.get(row.project_id) ?? new Set<string>();
+      held.add(row.program_id);
+      projectEntries.set(row.project_id, held);
+      holdsPlace.set(row.program_id, (row as any).projects?.title ?? 'another project');
+    }
+  }
+
+  const { data: gates } = await supabase.rpc('entry_gates');
+  for (const g of gates ?? []) gateFor.set(g.program_id, g.reason);
+
+  /* A program already entered shows the way in rather than the form.
+   *
+   * `myEntries` is one row per *project*, each carrying its entries -- so
+   * `e.program_id` was undefined on every pass and `enteredIn` only ever
+   * collected `undefined`. Every program therefore kept offering its entry
+   * form to somebody who had already entered it. This predates the merge;
+   * it is fixed here because the loop had to be read anyway.
+   */
+  for (const group of myEntries) {
+    for (const entry of group.entries) {
+      enteredIn.add(entry.program_id);
+      entryFor.set(entry.program_id, entry.id);
+    }
+  }
+}
+
+/* --- What everyone else sees: the projects they are responsible for --- */
+if (supabase && account) {
+  if (me.runsTheClub) {
+    /* Every project at the school. Row level security decides who may run
+       this at all; the heading says so, unlike the section above. */
+    const { data: projects } = await supabase
+      .from('projects')
+      .select('id, title, started_on, project_authors(role, participation_id, self_managed_at, users(id, display_name, grad_year))')
+      .is('archived_at', null)
+      .order('created_at', { ascending: false });
+
+    const ids = (projects ?? []).map((p: any) => p.id);
+
+    /* Per participation, not per project.
+    
+       This picked one entry per project with `.find`, which is arbitrary the
+       moment a project is in two programs — and it is the reason the table
+       could not be grouped by program or carry a selection state, both of
+       which belong to a participation rather than to the work. */
+    const { data: entries } = ids.length
+      ? await supabase
+          .from('opportunity_participations')
+          .select('id, project_id, status, selection_state, selection_decided_at, programs:program_id(id, name, season_year, fair_date, kind, roles, selection_cap)')
+          .in('project_id', ids)
+          .in('status', ['entered', 'competed'])
+      : { data: [] as any[] };
+
+    const { data: sponsorRows } = ids.length
+      ? await supabase
+          .from('project_sponsors')
+          .select('teacher_name, participations!inner(project_id)')
+          .in('participations.project_id', ids)
+          .is('superseded_at', null)
+      : { data: [] as any[] };
+
+    const entryIds = (entries ?? []).map((e: any) => e.id);
+
+    const { data: milestones } = entryIds.length
+      ? await supabase
+          .from('entry_milestones')
+          .select('id, participation_id, name, kind, due_on, required, blocks_experimentation, completed_on')
+          .in('participation_id', entryIds)
+      : { data: [] as any[] };
+
+    /* One row per participation, and a project in no program still gets a
+       row, because a project nobody has entered anywhere is exactly the one
+       an advisor should see. */
+    const pairs = (projects ?? []).flatMap((p: any) => {
+      const its = (entries ?? []).filter((e: any) => e.project_id === p.id);
+      return its.length ? its.map((entry: any) => ({ p, entry })) : [{ p, entry: null }];
+    });
+
+    watched = pairs.map(({ p, entry }: any) => {
+      const mine = (milestones ?? []).filter((m: any) => m.participation_id === entry?.id);
+
+      const findings = checkDateOrder({
+        startedOn: p.started_on,
+        today,
+        obligations: mine.map((m: any) => ({
+          id: m.id,
+          name: m.name,
+          dueOn: m.due_on,
+          completedOn: m.completed_on,
+          blocksExperimentation: m.blocks_experimentation,
+          required: m.required,
+        })),
+      });
+
+      const officers = (p.project_authors ?? []).filter((a: any) => a.role === 'officer');
+      const selfManaged = (p.project_authors ?? []).filter(
+        (a: any) => a.role === 'officer' && a.self_managed_at
+      );
+      const sponsor = (sponsorRows ?? []).find((s: any) => s.participations?.project_id === p.id) ?? null;
+      const worst = worstFinding(findings);
+
+      return {
+        ...p,
+        entry,
+        authors: (p.project_authors ?? []).filter((a: any) => a.role === 'author'),
+        officers,
+        selfManaged,
+        sponsor,
+        done: mine.filter((m: any) => m.completed_on).length,
+        total: mine.length,
+
+        /* Where the project is: the next thing not done, by date. Undated
+           steps sort last, because a step nobody has scheduled is not the
+           next thing to worry about.
+         
+           Events are skipped. "Applications open" is a day on the fair's
+           calendar rather than something anybody does, and a column of forty
+           projects all reading "Applications open" says nothing about any of
+           them. */
+        next:
+          mine
+            .filter((m: any) => !m.completed_on && m.kind !== 'event')
+            .sort((a: any, b: any) => (a.due_on ?? '9999').localeCompare(b.due_on ?? '9999'))[0] ??
+          mine
+            .filter((m: any) => !m.completed_on)
+            .sort((a: any, b: any) => (a.due_on ?? '9999').localeCompare(b.due_on ?? '9999'))[0] ??
+          null,
+        worst,
+        verdict: assess({
+          worst,
+          hasOfficer: officers.length > 0 || selfManaged.length > 0,
+          hasSponsor: Boolean(sponsor),
+          startedOn: p.started_on,
+          obligationsDone: mine.filter((m: any) => m.completed_on).length,
+          obligationsTotal: mine.length,
+        }),
+      };
+    });
+
+    const { data: rows } = await supabase
+      .from('user_roles')
+      .select('user_id, role, users:user_id(id, display_name)')
+      .is('revoked_at', null)
+      .in('role', ['mentor', 'officer']);
+
+    const seen = new Set<string>();
+    staffPeople = (rows ?? []).filter((r: any) => {
+      if (!r.users?.id || seen.has(r.users.id)) return false;
+      seen.add(r.users.id);
+      return true;
+    });
+  }
+}
+
+const fmt = (d: string | null) => formatDate(d, 'long', 'To be announced');
+
+/* There was a stageLabel map here, five literals describing a competition's
+   lifecycle. Where a project is comes from its steps now: the next one that
+   is not done, which is both more accurate and more useful than a bucket
+   name, because it says what to do rather than roughly where you are. */
+
+/* An officer sees every project by role and looks after the ones assigned to
+   them. Counting the first as "in your care" told Marchetti she was
+   responsible for a project nobody had given her. */
+const mine = watched.filter((w) =>
+  w.officers.some((o: any) => o.users?.id === account?.id) ||
+  w.selfManaged.some((o: any) => o.users?.id === account?.id)
+);
+
+const counts = tally(watched.map((w) => w.verdict));
+
+/**
+ * The oversight table, grouped by program.
+ *
+ * This and the selection screen were the same list of the same projects with
+ * six of seven columns in common, and the seventh — the selection state —
+ * is a column rather than a page. So selection moved here and that route
+ * redirects.
+ *
+ * Grouped because the club and the class are not one decision: an advisor
+ * putting projects forward to a fair is not choosing which class projects
+ * are good, and a cap belongs to a program. Grouping also lets the staff
+ * column say the program's own word, which one table could not.
+ */
+const filter = Astro.url.searchParams.get('show') ?? 'all';
+
+const shown = watched.filter((w) => {
+  if (filter === 'no_officer') return w.officers.length === 0 && w.selfManaged.length === 0;
+  if (filter === 'no_sponsor') return !w.sponsor;
+  if (filter === 'flagged') return w.worst?.severity === 'disqualifying';
+  if (filter === 'selected') return w.entry?.selection_state === 'selected';
+  return true;
+});
+
+const filters = [
+  ['all', 'Everything'],
+  ['selected', 'Selected'],
+  ['no_officer', 'No officer'],
+  ['no_sponsor', 'No sponsor'],
+  ['flagged', 'Disqualifying'],
+];
+
+const groups = (() => {
+  const by = new Map<string, { program: any; rows: any[] }>();
+
+  for (const row of shown) {
+    const program = row.entry?.programs ?? null;
+    /* A project in no program is still somebody's to look after, and it
+       groups under its own heading rather than vanishing. */
+    const key = program?.id ?? 'none';
+    const held = by.get(key) ?? { program, rows: [] };
+    held.rows.push(row);
+    by.set(key, held);
+  }
+
+  return [...by.values()].sort((a, b) => {
+    if (!a.program) return 1;
+    if (!b.program) return -1;
+    return (a.program.name ?? '').localeCompare(b.program.name ?? '');
+  });
+})();
+
+/* Selected against the cap, per program. Only a competition selects: a class
+   has nowhere to put projects forward to, so the column is absent rather
+   than empty. */
+const selects = (program: any) => program?.kind === 'competition';
+
+function standingOf(group: { program: any; rows: any[] }) {
+  const chosen = group.rows.filter((r) => r.entry?.selection_state === 'selected').length;
+  const cap = group.program?.selection_cap ?? null;
+  if (!selects(group.program)) return `${group.rows.length} in progress`;
+  return cap ? `${chosen} of ${cap} selected` : `${chosen} selected`;
+}
+
+/* --- Grouped, because a mixed list is read as a mixed list ---------------
+ *
+ * Six cards in one grid put a class between two fairs and a grant beside a
+ * journal, and a reader deciding what to do had to sort them by eye first.
+ * They are different acts -- you join a class, you enter a fair, you apply
+ * for a grant -- so the grouping is by act rather than by date.
+ *
+ * Classes and clubs first: joining one is the ordinary path and the one that
+ * decides a project's process, and 22.4 says the interface should offer it
+ * before the solo route. Fairs next, because that is what most of them are
+ * preparing for. Grants and the journal last, since both are things you do
+ * with work that already exists.
+ */
+const GROUPS: { id: string; title: string; blurb: string; holds: (p: any) => boolean }[] = [
+  {
+    id: 'cohorts',
+    title: 'Classes and clubs',
+    blurb: 'A group you belong to, with its own calendar and its own teacher.',
+    holds: (p) => p.program_role === 'cohort',
+  },
+  {
+    id: 'fairs',
+    title: 'Fairs',
+    blurb: 'Where a project is judged. You enter one with a project.',
+    holds: (p) => p.program_role !== 'cohort' && p.kind === 'competition',
+  },
+  {
+    id: 'grants',
+    title: 'Grants',
+    blurb: 'Money for research you are doing. You apply with a project.',
+    holds: (p) => p.program_role !== 'cohort' && p.kind === 'grant',
+  },
+  {
+    id: 'publishing',
+    title: 'Publishing',
+    blurb: 'Where finished work is read.',
+    holds: (p) => p.program_role !== 'cohort' && ['publication', 'showcase'].includes(p.kind),
+  },
+];
+
+/* Anything a group does not claim still appears, rather than vanishing
+   because somebody added a kind and not a group. */
+const grouped = () => {
+  const seen = new Set<string>();
+  const out = GROUPS.map((g) => {
+    const items = joinable.filter((p: any) => g.holds(p));
+    for (const p of items) seen.add(p.id);
+    return { ...g, items };
+  }).filter((g) => g.items.length > 0);
+
+  const rest = joinable.filter((p: any) => !seen.has(p.id));
+  if (rest.length > 0) {
+    out.push({
+      id: 'other',
+      title: 'Everything else',
+      blurb: '',
+      holds: () => true,
+      items: rest,
+    } as any);
+  }
+  return out;
+};
+
+---
+
+<Base title="Overview" noindex={true}>
+  <div class="wrap">
+    {!configured && (
+      <p class="note">
+        This deployment has no database configured. Everything published stays
+        available; only the working surface is unavailable.
+      </p>
+    )}
+
+    {signin === 'cancelled' && (
+      <p class="note" role="status">
+        Sign in was cancelled, or the sign-in link expired. Nothing happened.
+        Start again when you are ready.
+      </p>
+    )}
+    {signin === 'password' && (
+      <p class="note" role="alert">That email and password did not match.</p>
+    )}
+    {signin === 'oauth' && <p class="note" role="alert">Sign in could not start. Try again.</p>}
+    {signin === 'exchange' && <p class="note" role="alert">Sign in did not complete. Try again.</p>}
+    {signin === 'no_code' && <p class="note" role="alert">Sign in did not complete. Try again.</p>}
+    {/* Anchored, and the forms on this page post to it. Attaching or
+        detaching happens far down a long list of projects, and the failure
+        message renders here. */}
+    <div id="outcome" tabindex="-1">
+      {error2 && <p class="note flash" role="alert">{error2}</p>}
+    </div>
+    {attached && <p class="note flash" role="status">{attached}</p>}
+
+    {configured && !session && (
+      <section class="hero">
+        <p class="t-lbl">{org.name}</p>
+        <h1 class="t-big">Sign in to work on a project</h1>
+        <p class="lede">
+          Use your school Google account. Reading anything published here never
+          needs an account.
+        </p>
+        <div class="row" style="margin-top:24px">
+          <a
+            class="btn"
+            href={next === HOME ? '/auth/signin/' : `/auth/signin/?next=${encodeURIComponent(next)}`}
+          >Sign in with Google</a>
+        </div>
+
+        <div class="fixture">
+          <p class="t-lbl">Or with an email and password</p>
+          <form method="POST" action="/auth/password/" class="fixrow">
+            {/* Without this the round trip loses its destination on the last
+                step, which is the one place it would be hardest to notice. */}
+            {next !== HOME && <input type="hidden" name="next" value={next} />}
+            {/* Labelled rather than placeheld: grey text inside a box reads
+                as a filled value, and it disappears the moment somebody
+                types, which is when they most want to know what the box is
+                for. */}
+            <label class="skip" for="fixture-email">Email</label>
+            <input id="fixture-email" name="email" type="email" autocomplete="username" required />
+
+            <label class="skip" for="fixture-password">Password</label>
+            <input id="fixture-password" name="password" type="password" autocomplete="current-password" required />
+            <button class="btn" type="submit">Sign in</button>
+          </form>
+        </div>
+      </section>
+    )}
+
+    {account && (
+      <>
+        <AppShell org={org} account={account} roles={roles} here="/app/" />
+
+        <section class="hero">
+          <p class="t-lbl">
+            {me.names.length ? me.names.map((n) => roleLabel[n]).join(' · ') : org.name}
+          </p>
+          <h1 class="t-big">{account.display_name}</h1>
+          <p class="lede">
+            {me.runsTheClub
+              ? mine.length
+                ? `${mine.length} project${mine.length === 1 ? '' : 's'} in your care, ${watched.length} at the school.`
+                : watched.length
+                  ? `Nothing assigned to you yet. ${watched.length} project${watched.length === 1 ? '' : 's'} at the school.`
+                  : 'No projects have been registered at this school yet.'
+              : me.isStudent
+                ? ''
+                : 'You are signed in. A club role is granted by an officer or the club advisor.'}
+          </p>
+
+          {me.runsTheClub && watched.length > 0 && (
+            <ul class="counts">
+              {/* One line. Stacked labels under figures made a four item row
+                  three lines tall at the top of the page a teacher opens
+                  first. */}
+              <li><b>{mine.length}</b> in your care</li>
+              <li><b>{watched.length}</b> at the school</li>
+              <li><b>{watched.filter((w: any) => !w.sponsor).length}</b> no sponsor</li>
+              <li><b>{watched.filter((w: any) => w.officers.length === 0 && w.selfManaged.length === 0).length}</b> no officer</li>
+              <li class={counts.disqualifying > 0 ? 'bad' : ''}>
+                <b>{counts.disqualifying}</b> disqualifying
+              </li>
+              <li><b>{counts.attention}</b> need attention</li>
+            </ul>
+          )}
+        </section>
+
+        {/* ---------------- OVERSIGHT ---------------- */}
+        {me.runsTheClub && (
+          watched.length > 0 ? (
+            <>
+              <nav class="filters" aria-label="Filter projects">
+                {filters.map(([key, label]) => (
+                  <a href={`/app/?show=${key}#projects`} class={filter === key ? 'on' : ''}>
+                    {label}
+                  </a>
+                ))}
+              </nav>
+
+              <div id="projects" tabindex="-1"></div>
+
+              {groups.map((group) => (
+                <section class="sec">
+                  <div class="sec-h">
+                    <b>{group.program ? programTitle(group.program) : 'In no program'}</b>
+                    <span>{standingOf(group)}</span>
+                  </div>
+
+                  <table class="tbl">
+                    <thead>
+                      <tr>
+                        <th scope="col">Project</th>
+                        <th scope="col">Students</th>
+                        <th scope="col">{staffWord(group.program)}</th>
+                        <th scope="col">Sponsor</th>
+                        <th scope="col">Next</th>
+                        <th scope="col">Obligations</th>
+                        <th scope="col">Standing</th>
+                        {/* Only where there is somewhere to go forward to. A
+                            class does not select, so the column is absent
+                            rather than present and inapplicable. */}
+                        {me.isAdvisor && selects(group.program) && (
+                          <th scope="col">Selection</th>
+                        )}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {group.rows.map((w: any) => (
+                        <tr class={w.worst?.severity === 'disqualifying' ? 'row-bad' : w.worst?.severity === 'planned' ? 'row-warn' : ''}>
+                          <td>
+                            <a href={w.entry ? `/app/entry/${w.entry.id}/` : `/app/project/${w.id}/`}>
+                              {w.title}
+                            </a>
+                            {/* Export beside the notebook rather than on a
+                                row of its own: it is the notebook printed,
+                                and the reason it is offered here as well as
+                                on the participation page is that somebody
+                                assembling paperwork for several projects
+                                should not have to open each one to find it. */}
+                            <span class="sub">
+                              <a href={`/app/project/${w.id}/`}>notebook</a> ·{' '}
+                              <a href={`/app/project/${w.id}/notebook/`}>export</a> ·{' '}
+                              <a href={`/app/project/${w.id}/team/`}>who is on it</a>
+                            </span>
+                          </td>
+                          <td>{w.authors.map((a: any) => a.users?.display_name).join(', ') || '—'}</td>
+                          <td>
+                            {w.officers.length > 0
+                              ? w.officers.map((m: any) => m.users?.display_name).join(', ')
+                              : w.selfManaged.length > 0
+                                ? <>{w.selfManaged.map((m: any) => m.users?.display_name).join(', ')}<span class="sub">self-managed</span></>
+                                : <span class="miss">none</span>}
+                          </td>
+                          <td>
+                            {w.sponsor
+                              ? w.sponsor.teacher_name
+                              : <span class="miss">none named</span>}
+                          </td>
+                          <td>
+                            {w.next
+                              ? <span class="next">{w.next.name}</span>
+                              : <span class="none">Nothing outstanding</span>}
+                          </td>
+                          <td>{w.total ? `${w.done} of ${w.total}` : '—'}</td>
+                          <td>
+                            {w.verdict.reasons.length > 0
+                              ? w.verdict.reasons.map((r: string) => (
+                                  <span class={w.verdict.level === 'disqualifying' ? 'sev bad' : 'sev warn'}>{r}</span>
+                                ))
+                              : 'In order'}
+                          </td>
+                          {me.isAdvisor && selects(group.program) && (
+                            <td>
+                              <form method="POST" action="#outcome" class="inline">
+                                <input type="hidden" name="action" value="select" />
+                                <input type="hidden" name="participation_id" value={w.entry.id} />
+                                <select
+                                  name="state"
+                                  aria-label={`Selection state for ${w.title}`}
+                                >
+                                  <option value="candidate" selected={w.entry.selection_state === 'candidate'}>Under consideration</option>
+                                  <option value="selected" selected={w.entry.selection_state === 'selected'}>Selected</option>
+                                  <option value="not_selected" selected={w.entry.selection_state === 'not_selected'}>Not selected</option>
+                                  <option value="withdrawn" selected={w.entry.selection_state === 'withdrawn'}>Withdrawn</option>
+                                </select>
+                                <button class="btn btn-sm" type="submit">Set</button>
+                              </form>
+                            </td>
+                          )}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </section>
+              ))}
+
+              {shown.length === 0 && (
+                <p class="t-sm" style="margin-top:16px">Nothing matches that filter.</p>
+              )}
+            </>
+          ) : (
+            <section class="sec">
+              <div class="sec-h"><b>All projects</b><span>0</span></div>
+              <div class="note">
+                <h4>No projects yet</h4>
+                <p>Projects appear here as students register them.</p>
+              </div>
+            </section>
+          )
+        )}
+
+        {/* ---------------- STUDENT ---------------- */}
+        {(me.isStudent || !me.runsTheClub) && (
+          <>
+            {myReviews.length > 0 && (
+              <section class="sec">
+                <div class="sec-h">
+                  <b>To review</b>
+                  <span>{myReviews.length} waiting</span>
+                </div>
+                <ul class="plain">
+                  {myReviews.map((r) => {
+                    const late = new Date(r.due_at) < new Date();
+                    return (
+                      <li>
+                        <a href={`/app/review/${r.id}/`}>
+                          {r.submissions?.manuscripts?.title ?? 'A submission'}
+                        </a>
+                        <span class:list={['t-sm', late && 'late']}>
+                          {late ? 'overdue, was due ' : 'due '}{fmt(r.due_at)}
+                        </span>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </section>
+            )}
+
+            <section class="sec">
+              <div class="sec-h">
+                <b>This season</b>
+                <span>
+                  {myEntries.length
+                    ? `${myEntries.length} ${myEntries.length === 1 ? 'project' : 'projects'}`
+                    : 'nothing yet'}
+                </span>
+              </div>
+              {myEntries.length ? (
+                <ul class="linklist">
+                  {myEntries.map((e) => (
+                    <li>
+                      {/* The project, which is the hub (22.9). A project may
+                          have gone nowhere, or to three places, and either
+                          way the work is the thing to open. */}
+                      <a href={`/app/project/${e.project.id}/`}>{e.project.title}</a>
+
+                      {/* Classes and clubs first, then entries. A project in
+                          IRPD and nowhere else is not "not entered anywhere
+                          yet" — it is in a class, which is the more useful
+                          thing to say and the thing the old copy denied. */}
+                      {e.cohorts.length > 0 || e.entries.length > 0 ? (
+                        <span class="t-sm">
+                          {e.cohorts.map((c: any, i: number) => (
+                            <>
+                              {i > 0 ? ', ' : ' · '}
+                              <a href={`/app/project/${e.project.id}/in/${c.program_id}/`}>
+                                {programTitle(c.programs)}
+                              </a>
+                            </>
+                          ))}
+                          {e.entries.map((entry: any, i: number) => (
+                            <>
+                              {i > 0 || e.cohorts.length > 0 ? ', ' : ' · '}
+                              <a href={`/app/project/${e.project.id}/in/${entry.program_id}/`}>{programTitle(entry.programs)}</a>
+                            </>
+                          ))}
+                        </span>
+                      ) : (
+                        /* Neither, which is the case the noun has to be
+                           careful about: we do not know whether this school
+                           runs a fair, a class, or both. */
+                        <span class="t-sm"> · not in a class or entered anywhere yet</span>
+                      )}
+
+                      {/* The export, from the overview as well as from the
+                          participation page. A student assembling paperwork
+                          the night before a fair should not have to open a
+                          project and then a program to reach the one thing
+                          they came for. It carries every place the work sits,
+                          so it is a fact about the project rather than about
+                          whichever program they happened to open. */}
+                      <span class="t-sm"> · <a href={`/app/project/${e.project.id}/notebook/`}>export</a></span>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                /* No noun here on purpose. With nothing joined we do not know
+                   whether this student's school runs a fair, a class, or
+                   both, and "no fair entered" is wrong for somebody whose
+                   only option is IRPD. */
+                <div class="note startbox">
+                  <h4>Nothing yet this season</h4>
+                  <p class="t-sm" style="max-width:var(--measure-text)">
+                    Start a project whenever you are ready. It does not have to
+                    be entered anywhere, or belong to a class, to be worth
+                    keeping a notebook for.
+                  </p>
+
+                  <form method="POST" data-leaves-page class="startp">
+                    <input type="hidden" name="action" value="start_project" />
+
+                    <label>
+                      <span>Working title <i class="req">*</i></span>
+                      <input class="in" name="title" required />
+                    </label>
+
+                    {/* Where a person is in a cohort, the project can belong
+                        to it from the start, which also decides its research
+                        process (22.4). Absent, it belongs to nobody, which is
+                        the solo case and is allowed.
+
+                        **The class leads and the solo case sits at the
+                        bottom.** A student who has just been admitted and has
+                        no project yet is, almost always, about to start that
+                        class's project -- and "Nothing in particular" was
+                        first and therefore selected, so the ordinary path
+                        needed an act to choose and the exception was the
+                        default. 22.4 says joining a cohort is the ordinary
+                        route and the interface should offer it first; this is
+                        that, in the one control where it decides something.
+
+                        Marked `selected` rather than left to the browser's
+                        first-option rule, because the rule holds only while
+                        the first option is the intended one, and that is
+                        exactly the assumption that broke here. */}
+                    {myMemberships.length > 0 && (
+                      <label>
+                        <span>Part of</span>
+                        <select name="cohort_id">
+                          {myMemberships.map((m: any, i: number) => (
+                            <option value={m.cohort_id} selected={i === 0}>
+                              {programTitle(m.programs)}
+                            </option>
+                          ))}
+                          <option value="">Nothing in particular</option>
+                        </select>
+                      </label>
+                    )}
+
+                    <p><button class="btn" type="submit">Start a project</button></p>
+                  </form>
+
+                  <p style="margin-top:6px">
+                    <a href="#join">Or see what you can join</a>
+                  </p>
+                </div>
+              )}
+            </section>
+
+    <section class="sec" id="join">
+      {/* Not "Open fairs": a research class is not a fair, and "programs" is
+          our word rather than a student's. The heading says what the list is
+          for, and each card says what kind of thing it is. */}
+      <div class="sec-h"><b>Programs you can join</b></div>
+
+      {joinable && joinable.length > 0 ? (
+        grouped().map((group: any) => (
+        <div class="group">
+          <h3 class="group-h">{group.title}</h3>
+          {group.blurb && <p class="group-b t-sm">{group.blurb}</p>}
+        <div class="progs">
+          {/* A grid rather than a stack.
+          
+              Each program was a full width card carrying a two field form,
+              so five of them ran to several screens and the one somebody
+              wanted was below the fold. What a reader is doing here is
+              choosing, and choosing wants everything visible at once.
+          
+              The form is the reason they were tall, so it folds away: a
+              card is a name, a kind, a date and a way in, and the fields
+              appear when somebody has decided which one they want. */}
+          {group.items.map((p: any) => (
+            <div
+              class:list={[
+                'card',
+                'prog',
+                p.program_role === 'cohort' ? 'k-cohort' : `k-${p.kind}`,
+              ]}
+            >
+              <div class="about">
+                <p class="season">{programKind(p)} · {p.season_year} season</p>
+                {/* Into the site, not out of it. The fair's own page is
+                    named among the facts on the program page, where a reader
+                    can see they are about to leave. */}
+                <h3><a href={`/app/program/${p.id}/`}>{p.name}</a></h3>
+
+                {p.description && <p class="blurb">{p.description}</p>}
+
+                <dl class="facts">
+                  {/* A class has no judging day. Its calendar is its phases,
+                      which the deadlines page shows. */}
+                  {/* Independent research has no judging day and never will,
+                      so "to be announced" was promising something that is not
+                      coming. A program with no date and nothing to wait for
+                      says nothing rather than an empty label. */}
+                  {p.kind !== 'independent' && (
+                    <>
+                      <dt>
+                        {p.kind === 'course' ? 'Ends' : p.kind === 'grant' ? 'Closes' : 'Judging'}
+                      </dt>
+                      <dd>{fmt(p.fair_date) ?? 'to be announced'}</dd>
+                    </>
+                  )}
+                  {p.advances_to_fairs?.length > 0 && (
+                    <>
+                      <dt>Advances to</dt>
+                      <dd>{p.advances_to_fairs.join(' and ')}</dd>
+                    </>
+                  )}
+                </dl>
+              </div>
+
+              {enteredIn.has(p.id) ? (
+                <div class="already">
+                  {/* One line and a way through, rather than a paragraph
+                      explaining a rule nobody is trying to break. */}
+                  <a class="btn" href={`/app/entry/${entryFor.get(p.id)}/`}>
+                    View {participationVerb(p).noun}
+                  </a>
+                </div>
+              ) : gateFor.has(p.id) ? (
+                /* Locked, and the sentence says by what. A state fair takes
+                   the projects a regional put forward, and a club is how a
+                   school enters the fair it prepares for -- neither is a
+                   form to fill in. */
+                <div class="already">
+                  <p class="t-sm" style="max-width:var(--measure-text); margin:0">
+                    {gateFor.get(p.id)}
+                  </p>
+                </div>
+              ) : (
+              <>
+              {/* **A state is shown; only a form is folded away.**
+              
+                  These five branches sat inside one `<details>`, and three of
+                  them have no `<summary>` of their own: a request pending, a
+                  refusal, and being a member. A `<details>` with no summary is
+                  not empty -- the browser supplies its own -- so the card read
+                  **Details**, collapsed, over the one line that mattered.
+                  "Request sent, pending approval" is four words and was behind
+                  a click that named nothing.
+
+                  The disclosure earns its place on the other two, where it
+                  holds a form: the verb is the summary, so "Ask to join" and
+                  then a title field is the same two steps as a button that
+                  opens a form, without a second page or a line of script.
+
+                  So the wrapper goes around the two branches that ask for
+                  something. A state renders as itself. */}
+              {p.program_role === 'cohort'
+                && ['requested', 'declined', 'member'].includes(cohortState.get(p.id) ?? '') ? (
+                <div class="enter shown" style={!me.isStudent ? 'display:none' : undefined}>
+                {p.program_role === 'cohort' && cohortState.get(p.id) === 'requested' ? (
+                  /* Already asked. Offering the form again invites somebody
+                     to send a second request that does nothing, and reads as
+                     though the first one was lost. */
+                  <p class="waiting">Request sent, pending approval</p>
+                ) : p.program_role === 'cohort' && cohortState.get(p.id) === 'declined' ? (
+                  /* **A refusal is a state, and it was invisible.**
+                  
+                     The card fell through to "Ask to join" with nothing said,
+                     so a student who had been turned down saw the same offer
+                     they saw before asking -- and clicking it did nothing at
+                     all, because `join_cohort` left a declined row where it
+                     was. Three things were wrong and this fixes the reading
+                     half: the answer, who gave it, and what they said.
+                  
+                     Named, because a decision with no author is a decision
+                     nobody can go and talk to, and talking to them is the
+                     actual next step. */
+                  <div class="waiting">
+                    <p style="margin:0 0 4px"><b>Not this time.</b></p>
+                    <p class="t-sm" style="margin:0 0 8px; max-width:var(--measure-text)">
+                      {cohortDecider.get(p.id)
+                        ? `Decided by ${cohortDecider.get(p.id)}${cohortDecidedOn.get(p.id) ? ` on ${cohortDecidedOn.get(p.id)}` : ''}.`
+                        : 'Decided by the people who run it.'}
+                      {cohortNote.get(p.id) && ` "${cohortNote.get(p.id)}"`}
+                    </p>
+                    <form method="POST" data-leaves-page>
+                      <input type="hidden" name="action" value="join_cohort" />
+                      <input type="hidden" name="program_id" value={p.id} />
+                      <button class="btn btn-2 btn-sm" type="submit">Ask again</button>
+                    </form>
+                  </div>
+                ) : (
+                  /* Being in a cohort is not the end of the errand. The card
+                     said "You are in this one" as dead text, so somebody who
+                     had just been admitted had nothing to click and no way
+                     to put their work into the class they had joined.
+
+                     The final branch rather than a third test: the wrapper
+                     above has already established that this is a cohort and
+                     that the state is one of these three. */
+                  <div class="waiting">
+                    {/* **The status, and then only what there is to do.**
+                    
+                        This read "You are in this one." and, when there was
+                        nothing left to add, "Every project you have is
+                        already in it." Two sentences, both of them answers
+                        to questions nobody asked: the card is in the list of
+                        things you can join, so being in it is the one fact
+                        worth stating, and it was stated without the one
+                        detail that makes it a fact -- when.
+                    
+                        The second line was worse than redundant. It reported
+                        the absence of an action as though it were news, on a
+                        card whose whole purpose is the action. */}
+                    <p style="margin:0">
+                      {cohortDecidedOn.get(p.id) ? 'Approved and joined' : 'Joined'}
+                      {cohortJoinedOn.get(p.id) ? ` on ${cohortJoinedOn.get(p.id)}` : ''}
+                    </p>
+
+                    {myProjectsForCohort(p.id).length > 0 && (
+                      <form method="POST" action="#outcome" class="inline" style="margin-top:8px">
+                        <input type="hidden" name="action" value="attach_cohort" />
+                        <input type="hidden" name="cohort_id" value={p.id} />
+                        <select name="project_id" aria-label={`Add a project to ${p.name}`}>
+                          {myProjectsForCohort(p.id).map((project: any) => (
+                            <option value={project.id}>{project.title}</option>
+                          ))}
+                        </select>
+                        <button class="btn btn-sm" type="submit">Add project</button>
+                      </form>
+                    )}
+                  </div>
+                )}
+                </div>
+              ) : (
+                <details class="enter" style={!me.isStudent ? 'display:none' : undefined}>
+                  {/* A cohort is joined and asks for nothing; an opportunity
+                      is entered and asks for a project (22.2). Two different
+                      acts, and the form should not pretend otherwise: asking
+                      a student to name a project in order to enroll in a
+                      class is the conflation this model removed. */}
+                  {p.program_role === 'cohort' ? (
+                  <>
+                    <summary>
+                      {p.joining === 'approval' ? 'Ask to join' : 'Join'}
+                    </summary>
+                    <form method="POST" data-leaves-page>
+                      <input type="hidden" name="action" value="join_cohort" />
+                      <input type="hidden" name="program_id" value={p.id} />
+                      {/* No explanation above the button. Who decides is not
+                          the student's problem at the moment they ask, and
+                          the line pushed three cards out of alignment for a
+                          sentence nobody needed twice. */}
+                      <button class="btn" type="submit">
+                        {p.joining === 'approval' ? 'Request to join' : 'Join'}
+                      </button>
+                    </form>
+                  </>
+                ) : (
+                  <>
+                <summary>
+                  {p.joining === 'approval'
+                    ? 'Ask to enter'
+                    : p.kind === 'grant'
+                      ? 'Start an application'
+                      : 'Enter'}
+                </summary>
+
+              {/* **What you enter with is usually work you are already doing.**
+              
+                  This card had one form, and it made a project. A student in
+                  IRPD since August, entering the fair their club prepares
+                  for, got a second project with the same title, no notebook
+                  and none of the class's dates -- and no warning, because
+                  making a project is what the only available path did.
+              
+                  So existing research leads and a new project is the second
+                  offer. Which way round matters: a fair is somewhere you take
+                  work, and the exception is starting something at the moment
+                  you enter it, not the rule.
+              
+                  The list is what the server would accept and nothing more.
+                  A project already entered here is absent, because entering
+                  it twice is not a thing. And where one of this student's
+                  projects already holds their place, the whole picker is
+                  replaced by the sentence saying which -- `app.entry_conflict`
+                  refuses a second, since two projects from one student
+                  compete against each other for one place, and a picker that
+                  cannot succeed is the failure the gates exist to prevent. */}
+              {holdsPlace.has(p.id) ? (
+                <p class="legend fit" style="padding:16px 20px; margin:0">
+                  You have already entered <b>{holdsPlace.get(p.id)}</b> here.
+                  One student enters one fair with one project.
+                </p>
+              ) : myProjectsForOpportunity(p.id).length > 0 ? (
+                <>
+                  <form method="POST" data-leaves-page>
+                    <input type="hidden" name="action" value="enter_existing" />
+                    <input type="hidden" name="program_id" value={p.id} />
+                    <label>
+                      <span>Which research are you entering?</span>
+                      <select name="project_id" required>
+                        {myProjectsForOpportunity(p.id).map((project: any) => (
+                          <option value={project.id}>{project.title}</option>
+                        ))}
+                      </select>
+                    </label>
+                    <button class="btn" type="submit">
+                      {p.joining === 'approval'
+                        ? 'Send the request'
+                        : p.kind === 'grant'
+                          ? 'Apply with this'
+                          : 'Enter this'}
+                    </button>
+                    {p.joining === 'approval' && (
+                      <p class="legend fit">
+                        {p.places ? `${p.places} places. ` : ''}You can keep working
+                        while you wait for approval
+                      </p>
+                    )}
+                  </form>
+
+                  {/* Second, and folded, because starting a project from a
+                      fair card is the rarer act and the fields are the ones
+                      the student has already answered once. */}
+                  <details class="also">
+                    <summary>or start something new</summary>
+                    <form method="POST" data-leaves-page>
+                      <input type="hidden" name="action" value="join" />
+                      <input type="hidden" name="program_id" value={p.id} />
+                      <label>
+                        <span>Working title for your project <i class="req">*</i></span>
+                        <input name="title" required />
+                      </label>
+                      <label>
+                        <span>The day you started, or plan to start, experimenting</span>
+                        <input name="started_on" type="date" />
+                        <small>Leave it blank if you have not started.</small>
+                      </label>
+                      <button class="btn" type="submit">
+                        {p.joining === 'approval'
+                          ? 'Send the request'
+                          : p.kind === 'course'
+                            ? 'Join the class'
+                            : p.kind === 'grant'
+                              ? 'Start an application'
+                              : p.kind === 'independent'
+                                ? 'Start research'
+                                : 'Enter fair'}
+                      </button>
+                      <p class="legend"><i class="req">*</i> required</p>
+                    </form>
+                  </details>
+                </>
+              ) : (
+              <>
+              {/* No fragment on the action.
+              
+                  A browser keeps the fragment across a redirect when the
+                  destination has none of its own, so posting to `#outcome`
+                  and then being sent to the entry page landed somebody
+                  partway down it, at an anchor belonging to a different
+                  screen. Joining succeeds far more often than it fails, and
+                  the failure message is at the top of this page anyway. */}
+              <form method="POST" data-leaves-page>
+                <input type="hidden" name="action" value="join" />
+                <input type="hidden" name="program_id" value={p.id} />
+                <label>
+                  <span>Working title for your project <i class="req">*</i></span>
+                  <input name="title" required />
+                </label>
+                <label>
+                  <span>The day you started, or plan to start, experimenting</span>
+                  <input name="started_on" type="date" />
+                  <small>Leave it blank if you have not started.</small>
+                </label>
+                {/* You enter a fair and you join a class. The kind is on the
+                    card, so there is no reason to guess. */}
+                {/* Asking is not joining where a program grants places, and
+                    a button that says "join" and produces a request is a
+                    button that lied. */}
+                {/* Every kind names its own verb. "Enter fair" was the
+                    default and independent research is not a fair: nobody
+                    enters it, they just begin. */}
+                <button class="btn" type="submit">
+                  {p.joining === 'approval'
+                    ? 'Send the request'
+                    : p.kind === 'course'
+                      ? 'Join the class'
+                      : p.kind === 'grant'
+                        ? 'Start an application'
+                        : p.kind === 'independent'
+                          ? 'Start research'
+                          : 'Enter fair'}
+                </button>
+
+                {p.joining === 'approval' && (
+                  <p class="legend fit">
+                    {p.places ? `${p.places} places. ` : ''}You can start work
+                    while you wait for approval
+                  </p>
+                )}
+                <p class="legend"><i class="req">*</i> required</p>
+              </form>
+              </>
+              )}
+                  </>
+                  )}
+                </details>
+              )}
+              </>
+              )}
+            </div>
+          ))}
+        </div>
+        </div>
+        ))
+      ) : (
+        <div class="note">
+          <h4>Nothing is open yet</h4>
+          <p>An officer or your advisor sets up the season.</p>
+        </div>
+      )}
+    </section>
+
+            <section class="sec">
+              <div class="sec-h"><b>Earlier seasons</b><span>nothing yet</span></div>
+              <p class="t-sm">
+                What you have done before appears here, with any placement.
+              </p>
+            </section>
+          </>
+        )}
+      </>
+    )}
+  </div>
+</Base>
+
+<style>
+  /* Room in the one box a student with nothing yet actually reads.
+  
+     Title, a sentence, a labelled field, a button and a link, all at the
+     panel's default rhythm, put five things a uniform distance apart and the
+     field ended up touching the sentence above it. What differs here is
+     importance rather than kind, so the gaps differ: the sentence sits close
+     to the heading it explains, the form stands apart from both, and the
+     secondary route out has clear air above it rather than reading as part
+     of the form. */
+  .startbox { padding: 20px 22px 22px; }
+  .startbox h4 { margin: 0 0 6px; }
+  .startbox > .t-sm { margin: 0 0 18px; }
+  .startbox .startp { margin: 0; }
+  .startbox .startp label { display: block; margin: 0 0 14px; }
+  .startbox .startp label > span { display: block; margin: 0 0 5px; }
+  .startbox .startp p { margin: 18px 0 0; }
+
+  /* Grouped, and the groups are what a reader scans.
+  
+     A heading over a grid is enough on its own; a rule under it would make
+     four sections compete with the section rules already on the page. */
+  .group + .group { margin-top: 30px; }
+  .group-h {
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+    color: var(--ink-2);
+    margin: 0 0 3px;
+  }
+  .group-b { margin: 0 0 12px; max-width: var(--measure-text); }
+
+  .miss { color: var(--ink-3); font-style: italic; }
+  .inline { display: flex; gap: 6px; align-items: center; }
+  /* The button keeps its line; the select gives up the room.
+  
+     In a card a little over fifteen rems wide, a select sized to its longest
+     option left the button two words on two lines and half a card tall. The
+     order of preference is the fix: the label is short and fixed, so it never
+     wraps, and the select shrinks below its content width and truncates a
+     long project title instead — which the student can still read once the
+     menu is open. */
+  .inline > button { flex: 0 0 auto; white-space: nowrap; }
+  .inline select {
+    flex: 1 1 auto;
+    min-width: 0;
+    text-overflow: ellipsis;
+    padding: 6px 9px;
+    border: 1px solid var(--rule);
+    background: var(--card);
+    color: var(--ink);
+    font: inherit;
+    font-size: 0.86rem;
+  }
+
+  /* Three or more across wherever there is room for them.
+  
+     `auto-fill` with a 15.5rem floor gives three on a laptop, two on a
+     tablet and one on a phone, without a breakpoint per count. The floor is
+     what guarantees the three: a program name and a date fit in it, and
+     anything narrower would start hyphenating titles. */
+  .progs {
+    display: grid;
+    /* Wide enough for the widest row a card holds, which is the select and
+       the button beside it rather than anything in the heading. At 15.5rem
+       those two had nowhere to go; this is the smallest that leaves the
+       select a readable amount of a project title. */
+    grid-template-columns: repeat(auto-fill, minmax(17.5rem, 1fr));
+    gap: 16px;
+  }
+  .prog {
+    display: flex;
+    flex-direction: column;
+    padding: 0;
+    /* **The kind, as a colored edge.**
+    
+       Six cards in a row, identical but for their words, made a reader parse
+       every heading to find the one they wanted. The edge encodes what the
+       card already says in its eyebrow — class, club, fair, grant, journal —
+       so the grid can be scanned by shape before it is read. Stage colors,
+       because a program's kind is the same vocabulary the lifecycle uses and
+       a second palette would be a second thing to learn. */
+    border-left: var(--edge) solid var(--stage-draft);
+    transition: box-shadow 120ms ease, transform 120ms ease;
+  }
+  .prog.k-cohort { border-left-color: var(--stage-comp); }
+  .prog.k-competition { border-left-color: var(--stage-work); }
+  .prog.k-grant { border-left-color: var(--stage-ready); }
+  .prog.k-publication { border-left-color: var(--stage-pub); }
+
+  /* It lifts under the cursor, which is the whole of the motion budget on
+     this page. */
+  .prog:hover { box-shadow: var(--lift-2); }
+
+  @media (prefers-reduced-motion: reduce) {
+    .prog { transition: none; }
+  }
+  /* The action on the floor of every card, whatever the description above
+     it says. Three cards with three different amounts of text put their
+     buttons at three heights, which reads as three different kinds of
+     thing. */
+  .prog .enter,
+  .prog .already,
+  .prog .waiting { margin-top: auto; }
+
+  .prog .waiting {
+    margin-bottom: 0;
+    padding: 14px 20px;
+    border-top: 1px solid var(--rule-fine);
+    background: var(--paper);
+    font-family: var(--face-ui);
+    font-size: 0.9rem;
+    color: var(--ink-2);
+  }
+  /* The description grows and the action sits on the floor, so a row of
+     cards has its buttons on one line however long the blurbs are. */
+  .prog .about { padding: 18px 20px; flex: 1; }
+  .prog h3 { margin: 0 0 10px; }
+  .prog .season {
+    margin: 0 0 4px;
+    font-family: var(--face-num);
+    font-size: 0.82rem;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    color: var(--ink-3);
+  }
+  .prog h3 { font-size: 1.1rem; line-height: 1.25; }
+  .prog .blurb {
+    margin: 0 0 14px;
+    font-size: 0.92rem;
+    /* Four lines. A card grid wants a predictable height and a description
+       nobody wrote a limit for will otherwise set it. The full text is on
+       the program's own page. */
+    display: -webkit-box;
+    -webkit-line-clamp: 4;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+  .prog .facts {
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    gap: 4px 14px;
+    margin: 0;
+    padding-top: 12px;
+    border-top: 1px solid var(--rule-fine);
+    font-size: 0.95rem;
+  }
+  .prog .facts dt {
+    font-family: var(--face-ui);
+    font-size: 0.82rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--ink-3);
+    padding-top: 3px;
+  }
+  .prog .facts dd { margin: 0; }
+  .req { color: var(--alert); font-style: normal; }
+  .legend { margin: 10px 0 0; font-size: 0.86rem; color: var(--ink-3); }
+
+  /* One line, whatever the column width. The sentence is short enough that
+     shrinking it a little beats wrapping it: a two-line caption under a
+     button reads as a warning rather than a note. */
+  .fit {
+    white-space: nowrap;
+    font-size: clamp(0.72rem, 1.6cqi, 0.86rem);
+  }
+
+  .already {
+    padding: 14px 20px;
+    border-top: 1px solid var(--rule-fine);
+    background: var(--paper);
+  }
+  .already p { margin: 0 0 6px; }
+
+  .enter {
+    margin: 0;
+    border-top: 1px solid var(--rule-fine);
+    background: var(--paper);
+    container-type: inline-size;
+  }
+  /* The shown state carries the card's floor itself.
+  
+     `.waiting` has the rule above it, the padding and the background,
+     because it sat directly in the card before the disclosure existed. The
+     wrapper is here only to hold `margin-top: auto` so the block still lands
+     on the floor of a card whose blurb is shorter than its neighbor's, so it
+     must not draw a second rule over the top of the first. */
+  .enter.shown { border-top: 0; background: none; }
+  /* The summary is the button. Reset the marker rather than hiding the
+     control it belongs to: a disclosure with no affordance at all is a
+     button somebody has to guess at. */
+  .enter > summary {
+    padding: 12px 20px;
+    font-family: var(--face-ui);
+    font-size: 0.94rem;
+    cursor: pointer;
+    list-style: none;
+  }
+  .enter > summary::-webkit-details-marker { display: none; }
+  .enter > summary::after {
+    content: ' +';
+    font-family: var(--face-num);
+    color: var(--ink-3);
+  }
+  .enter[open] > summary::after { content: ' \2212'; }
+  .enter[open] > summary { border-bottom: 1px solid var(--rule-fine); }
+  .enter > form { padding: 16px 20px; }
+  .enter label { display: block; margin-bottom: 12px; }
+  .enter label > span { display: block; margin-bottom: 5px; font-family: var(--face-ui); font-size: 0.9rem; }
+  .enter input,
+  .enter select { width: 100%; padding: 8px 10px; border: 1px solid var(--rule); background: var(--card); color: var(--ink); font: inherit; }
+
+  /* The second offer, and it should read as one.
+  
+     Starting a project from a fair card is the rarer act now that existing
+     research leads, so it is folded — but folded quietly: a rule above it
+     rather than a second heading, and a summary in the running size rather
+     than the button size the primary form uses. Scoped to `.enter`, because
+     `.also` means something else further down the page. */
+  .enter .also { border-top: 1px solid var(--rule-fine); }
+  .enter .also > summary {
+    padding: 10px 20px;
+    font-family: var(--face-ui);
+    font-size: 0.88rem;
+    color: var(--ink-2);
+    cursor: pointer;
+    list-style: none;
+  }
+  .enter .also > summary::-webkit-details-marker { display: none; }
+  .enter .also > form { padding: 0 20px 16px; }
+
+  .plain { list-style: none; margin: 0; padding: 0; }
+  .plain li {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 10px;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--rule-fine);
+  }
+  .plain .late { color: var(--alert); }
+  /* The two or three places a student actually goes from a project, said
+     once rather than discovered by clicking. */
+  .going {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 16px;
+    margin-top: 6px;
+  }
+  .going a {
+    font-family: var(--face-ui);
+    font-size: 0.82rem;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+  }
+  .going a:hover {
+    color: var(--ink);
+  }
+  /* The measure belongs to the prose, not to the container. With it on the
+     hero, a one line row of six figures wrapped at 74 characters while two
+     thirds of the page sat empty beside it. */
+  .hero { padding: 44px 0 28px; }
+  .hero .t-lbl, .hero h1, .hero .lede { max-width: 74ch; }
+  .hero .t-lbl { margin-bottom: 14px; }
+  .fixture { margin-top: 34px; padding: 18px 20px; border: 1px dashed var(--rule); max-width: 52ch; }
+  .fixture .t-lbl { margin-bottom: 8px; }
+  .fixrow { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+  .fixrow input { flex: 1 1 14ch; padding: 8px 10px; border: 1px solid var(--rule); background: var(--card); color: var(--ink); font: inherit; font-size: 0.94rem; }
+  .fixrow button { padding: 8px 14px; border: 1px solid var(--ink); background: var(--ink); color: var(--paper); font-family: var(--face-ui); font-size: 0.9rem; cursor: pointer; }
+  /* A grid rather than a flex row. Sized to content, the fourth cell dropped
+     to a line of its own as soon as one label ran long, which left a gap
+     beside "disqualifying" and a stranded number underneath. Equal columns
+     put all four on one line and wrap them in pairs rather than one at a
+     time. */
+  .countdown {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    margin-top: 26px;
+    border-top: 1px solid var(--rule);
+    border-bottom: 1px solid var(--rule);
+  }
+  .countdown > div {
+    padding: 14px 22px 14px 0;
+    border-right: 1px solid var(--rule-fine);
+  }
+  .countdown > div:last-child { border-right: 0; }
+
+  @media (max-width: 720px) {
+    .countdown { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    /* The divider belongs between columns, so it comes off the right hand
+       one and the first row gains a rule underneath it. */
+    .countdown > div:nth-child(2n) { border-right: 0; }
+    .countdown > div:nth-child(-n + 2) { border-bottom: 1px solid var(--rule-fine); }
+  }
+  .countdown b { display: block; font-size: 1.05rem; line-height: 1.2; }
+  .countdown span { display: block; margin-top: 3px; font-family: var(--face-ui); font-size: 0.84rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--ink-3); }
+  .also { font-size: 0.95rem; }
+  .sub { display: block; margin-top: 3px; font-family: var(--face-ui); font-size: 0.82rem; color: var(--ink-3); }
+  /* One per line. Two reasons run together read as one long sentence, and
+     the second is the one somebody has not noticed yet. */
+  .sev { display: block; font-family: var(--face-ui); font-size: 0.86rem; }
+  .sev.bad { color: var(--alert); font-weight: 600; }
+  .row-bad td { background: var(--alert-bg); }
+  .row-warn td { background: var(--ready-bg); }
+  .assign { display: flex; flex-wrap: wrap; gap: 14px; align-items: flex-end; }
+  .assign label { display: block; }
+  .assign label > span { display: block; margin-bottom: 5px; font-family: var(--face-ui); font-size: 0.9rem; }
+  .assign select { padding: 8px 10px; border: 1px solid var(--rule); background: var(--card); color: var(--ink); font: inherit; min-width: 22ch; }
+  .assign button { padding: 9px 16px; border: 1px solid var(--ink); background: var(--ink); color: var(--paper); font-family: var(--face-ui); font-size: 1rem; font-weight: 600; cursor: pointer; }
+  /* Quiet, and not part of the link's name. */
+  .yet {
+    margin-left: 6px;
+    font-family: var(--face-mono);
+    font-size: 0.76rem;
+    letter-spacing: 0.02em;
+    text-transform: none;
+    color: var(--ink-3);
+  }
+
+  .next { font-size: 0.94rem; }
+  .none { color: var(--ink-3); font-size: 0.92rem; }
+</style>

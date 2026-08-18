@@ -1,0 +1,46 @@
+---
+import Base from '../../../layouts/Base.astro';
+import PageHead from '../../../components/PageHead.astro';
+import { getCollection, render } from 'astro:content';
+import type { GetStaticPaths } from 'astro';
+import { withTenants } from '../../../lib/tenant-paths';
+
+export const getStaticPaths: GetStaticPaths = withTenants(async () => {
+  const guides = await getCollection('guides');
+  return guides.map((guide) => ({ params: { slug: guide.id }, props: { guide } }));
+});
+
+/**
+ * The guide, from props where they arrived and from the slug where they did
+ * not.
+ *
+ * `getStaticPaths` supplies props, and a rewrite does not always carry them:
+ * the middleware sends `/guides/x/` to `/montavista/guides/x/`, and the
+ * route then rendered with `guide` undefined and threw a framework error at
+ * a reader.
+ *
+ * The slug is in the URL either way, so it is the more reliable of the two.
+ * Props stay as the fast path.
+ */
+const slug = Astro.params.slug;
+
+const guide =
+  Astro.props.guide ??
+  (await getCollection('guides')).find((g) => g.id === slug);
+
+if (!guide) {
+  return new Response(null, { status: 404 });
+}
+
+const { Content } = await render(guide);
+---
+
+<Base title={guide.data.title} description={guide.data.summary}>
+  <PageHead eyebrow="Guide" title={guide.data.title} lede={guide.data.summary} />
+  <div class="wrap">
+    <div class="prose" data-pagefind-body>
+      <Content />
+    </div>
+    <p style="margin-top:32px"><a href="/guides/">All guides</a></p>
+  </div>
+</Base>

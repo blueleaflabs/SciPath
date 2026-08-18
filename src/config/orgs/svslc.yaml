@@ -1,0 +1,37 @@
+# Tenant two: the Silicon Valley Student Leadership Council.
+#
+# `SVSLC` is the mark. `Student Leadership Council` is confirmed; the `SV`
+# is read as `Silicon Valley`, which is an inference from the mark rather
+# than something anybody at SVSLC has said. Worth one sentence of
+# confirmation before the demo, since a lockup is the first thing an
+# organization reads about itself.
+#
+# Replaced Lynbrook High School, which was tenant two while what was being
+# proved was that two schools in one district share the same email domains and
+# therefore that a domain cannot identify a tenant. That case is still worth
+# keeping in mind and is recorded in the brief; it is not worth a tenant.
+
+id: svslc
+
+name: Silicon Valley Student Leadership Council
+mark: SVSLC
+theme: proceedings
+record_prefix: SVSL
+timezone: America/Los_Angeles
+
+# By approval rather than by domain: a council draws from several schools,
+# so no one email domain says who belongs. `invite` means an account needs a
+# pending grant before it can be created.
+signup_mode: invite
+verified_domains: []
+domains: []
+
+contact_email: hello@blueleaflabs.org
+editorial_review: true
+showcase_note: >-
+  Work by students across the council, published as a permanent, citable
+  record.
+
+# The regional fair the council's students enter. Shared: one row serves
+# every organization that takes part, and listing it here says this one does.
+programs: [scvsefa-2027]

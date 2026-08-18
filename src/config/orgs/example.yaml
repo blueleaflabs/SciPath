@@ -1,0 +1,22 @@
+# A second record, so the alternate theme can be reviewed and its contrast
+# checked in CI. Replace or delete when a real organization is provisioned.
+# Holds no student data of any kind, and is not provisioned as a row.
+
+id: example
+provisioned: false
+
+name: Example Research Program
+mark: EX
+theme: proceedings
+record_prefix: EXP
+timezone: America/Los_Angeles
+
+signup_mode: domain
+verified_domains: [students.example.org, example.org]
+programs: []
+
+contact_email: research@example.org
+editorial_review: true
+showcase_note: >-
+  Work by students at this organization, published as a permanent, citable
+  record.

@@ -1,0 +1,24 @@
+---
+export const prerender = false;
+
+import Base from '../../../layouts/Base.astro';
+import { cachePublicPage } from '../../../lib/caching';
+import PageHead from '../../../components/PageHead.astro';
+import RecordCard from '../../../components/RecordCard.astro';
+import { openArchive } from '../../../lib/archive';
+
+const archive = await openArchive(Astro);
+const year = Number(Astro.params.year);
+const records = archive.projects.filter((r) => r.year === year);
+
+cachePublicPage(Astro);
+---
+
+<Base title={`Projects ${year}`} description={`Every project entered, with its abstract, category, and result. ${year}.`}>
+  <PageHead eyebrow="Year archive" title={String(year)} lede={`${records.length} ${records.length === 1 ? 'record' : 'records'}`} />
+  <div class="wrap">
+    <section class="sec" style="padding-top:0">
+      {records.map((r) => <RecordCard record={r} />)}
+    </section>
+  </div>
+</Base>

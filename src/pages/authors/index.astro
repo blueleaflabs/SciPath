@@ -1,77 +1,49 @@
 ---
+export const prerender = false;
+
 import Base from '../../layouts/Base.astro';
+import { cachePublicPage } from '../../lib/caching';
 import PageHead from '../../components/PageHead.astro';
 import Empty from '../../components/Empty.astro';
-import { getAuthorPages, monogram } from '../../lib/authors';
+import { openArchive, authorsOf } from '../../lib/archive';
 
-const authors = await getAuthorPages();
+const archive = await openArchive(Astro);
+const people = authorsOf(archive.all);
 
-const byClass = new Map<string, typeof authors>();
-for (const a of authors) {
-  const key = a.gradYear ? `Class of ${a.gradYear}` : 'Year not recorded';
-  byClass.set(key, [...(byClass.get(key) ?? []), a]);
-}
-const classes = [...byClass.entries()].sort((a, b) => b[0].localeCompare(a[0]));
+cachePublicPage(Astro);
 ---
 
-<Base title="Authors" description="Everyone with published work, with their full publication list.">
+<Base title="Authors" description="Everybody with published work here.">
   <PageHead
-    eyebrow="Author pages"
+    eyebrow="People"
     title="Authors"
-    lede="An author page is created at first publication and its URL never moves. No email address is rendered anywhere on this site."
+    lede="A page per person, listing their published work. Nothing else: a profile that goes stale is worse than none."
   />
-
   <div class="wrap">
-    {
-      authors.length ? (
-        <div class="stack">
-          {classes.map(([label, people]) => (
-            <section>
-              <div class="sec-h">
-                <b>{label}</b>
-                <span>{people.length}</span>
-              </div>
-              <ul class="linklist">
-                {people.map((a) => (
-                  <li>
-                    <div class="author-row">
-                      <span class="mono-av small" aria-hidden="true">
-                        {monogram(a.displayName)}
-                      </span>
-                      <div>
-                        <a href={`/authors/${a.slug}/`}>{a.displayName}</a>
-                        <p>
-                          {a.articles.length} {a.articles.length === 1 ? 'record' : 'records'}
-                          {a.school ? ` · ${a.school}` : ''}
-                        </p>
-                      </div>
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            </section>
+    {people.length === 0 ? (
+      <Empty title="No authors yet" body="An author page appears with a person's first published record." />
+    ) : (
+      <section class="sec" style="padding-top:0">
+        <ul class="people">
+          {people.map((p) => (
+            <li>
+              <a href={`/authors/${p.slug}/`}>{p.name}</a>
+              <span>{p.records.length} {p.records.length === 1 ? 'record' : 'records'}</span>
+            </li>
           ))}
-        </div>
-      ) : (
-        <Empty
-          title="No author pages yet"
-          body="An author page is created the first time someone publishes, listing everything they have published since. Nothing is created at graduation, and nothing here is ever fetched from a school directory."
-        />
-      )
-    }
+        </ul>
+      </section>
+    )}
   </div>
 </Base>
 
 <style>
-  .author-row {
+  .people { list-style: none; margin: 0; padding: 0; max-width: var(--measure-text); }
+  .people li {
     display: flex;
-    gap: 14px;
-    align-items: center;
+    justify-content: space-between;
+    padding: 13px 0;
+    border-bottom: 1px solid var(--rule-fine);
   }
-  .mono-av.small {
-    width: 42px;
-    height: 42px;
-    font-size: 0.95rem;
-    flex: none;
-  }
+  .people span { font-family: var(--face-num); font-size: 0.88rem; color: var(--ink-3); }
 </style>

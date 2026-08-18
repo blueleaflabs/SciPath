@@ -1,0 +1,135 @@
+# The engineering research process.
+#
+# Different from science in the middle, and the difference matters: an
+# engineering project does not have a hypothesis and does not run an
+# experiment. It builds something, tests it against a requirement, and
+# revises. Asking an engineering student to state a hypothesis produces a
+# sentence written to satisfy a form.
+#
+# Not used by any program yet. It exists because the next step is choosing the
+# process by the kind of project rather than by the program, and writing it
+# now is what proves the model holds for both.
+
+id: process-engineering
+kind: process
+name: Engineering research
+
+# Forms first. See the note in `process-science.yaml`: the phase order is
+# the display order, and the only phase that can end a season belongs where
+# somebody will see it.
+phases:
+  - { id: forms,       name: Forms and approvals }
+  - { id: topic,       name: Topic selection }
+  - { id: literature,  name: Literature review }
+  - { id: design,      name: Engineering design }
+  - { id: build,       name: Building }
+  - { id: test,        name: Testing }
+  - { id: revise,      name: Revision }
+  - { id: conclusions, name: Discussion and conclusions }
+
+steps:
+  - id: topic
+    name: Choose the problem
+    phase: topic
+    order: 10
+    owner: student
+    deliverables:
+      - { id: question, kind: text }
+    note: >-
+      A problem with a user, not a subject area. "Make a cheaper turbidity
+      sensor for creek monitoring" is a problem; "water quality" is a topic.
+
+  - id: literature
+    name: Read the prior work
+    phase: literature
+    order: 20
+    owner: student
+    requires: [topic]
+    deliverables:
+      - { id: literature_review, kind: link }
+    note: What already exists, what it costs, and where it falls short.
+
+  - id: design
+    name: Design it, with criteria
+    phase: design
+    order: 30
+    owner: student
+    requires: [literature]
+    deliverables:
+      - { id: research_plan, kind: link }
+      - { id: design_criteria, kind: text }
+    note: >-
+      The criteria are the point. Without a number to hit, testing has
+      nothing to report and revision has nothing to aim at.
+
+  - id: sponsor
+    name: Find an adult sponsor
+    phase: forms
+    order: 40
+    owner: student
+    deliverables:
+      - { id: sponsor_agreed, kind: text }
+
+  - id: permissions
+    name: Get the permissions the work needs
+    phase: forms
+    order: 50
+    owner: student
+    requires: [design, sponsor]
+    deliverables: []
+
+  - id: build
+    name: Build the prototype
+    phase: build
+    order: 60
+    owner: student
+    requires: [permissions]
+    deliverables: []
+
+  - id: notebook_check
+    name: Keep the notebook current
+    phase: build
+    order: 65
+    owner: student
+    repeats: { every: week }
+    deliverables: []
+
+  - id: test
+    name: Test it against the criteria
+    phase: test
+    order: 70
+    owner: student
+    requires: [build]
+    deliverables:
+      - { id: figures, kind: link }
+    note: >-
+      Against the criteria written down in the design phase, not against
+      whatever it turned out to be good at.
+
+  - id: revise
+    name: Revise and test again
+    phase: revise
+    order: 75
+    owner: student
+    requires: [test]
+    deliverables: []
+    note: >-
+      One cycle is a build. Judges look for what changed between versions and
+      why, which is the part that shows engineering rather than assembly.
+
+  - id: write
+    name: Write up the discussion and conclusions
+    phase: conclusions
+    order: 80
+    owner: student
+    requires: [revise]
+    deliverables:
+      - { id: manuscript, kind: link }
+
+  - id: present
+    name: Present it
+    phase: conclusions
+    order: 90
+    owner: student
+    requires: [write]
+    deliverables: []

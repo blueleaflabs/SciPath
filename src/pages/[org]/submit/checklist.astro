@@ -1,0 +1,165 @@
+---
+import { orgPaths } from '../../../lib/tenant-paths';
+export const getStaticPaths = orgPaths;
+
+import Base from '../../../layouts/Base.astro';
+import PageHead from '../../../components/PageHead.astro';
+import { allRules } from '../../../config/structure';
+import { shape } from '../../../lib/templates';
+
+/**
+ * Generated from the rule set the checker reads, not written alongside it.
+ * Two lists describing the same rules is exactly the drift the rest of this
+ * project builds tests to catch, and here it can be avoided outright: the
+ * list *is* the checks.
+ *
+ * A config import rather than a database one, so the archive still builds
+ * with Supabase absent.
+ */
+const rules = allRules(shape('imrad'));
+
+const automated = rules.filter((r) => r.kind !== 'human' && r.appliesTo.includes('article'));
+const human = rules.filter((r) => r.kind === 'human');
+const forEntries = rules.filter((r) => r.kind !== 'human' && r.appliesTo.includes('project'));
+
+const requirement = (r: (typeof rules)[number]): string | null => {
+  if (r.minWords && r.maxWords) return `${r.minWords} to ${r.maxWords} words`;
+  if (r.minWords) return `at least ${r.minWords} words`;
+  if (r.min && r.max) return `${r.min} to ${r.max}`;
+  if (r.min && r.min > 1) return `at least ${r.min}`;
+  return null;
+};
+---
+
+<Base
+  title="Pre-submission checklist"
+  description="Everything checked before a submission reaches a reviewer, and everything a person checks afterward."
+>
+  <PageHead
+    eyebrow="Publication"
+    title="Pre-submission checklist"
+    lede="This page is generated from the checks themselves rather than written next to them. If it is on the first list, the software checks it, and you will see the same wording inside the editor."
+  />
+
+  <div class="wrap">
+    <section class="sec" style="padding-top:0">
+      <div class="sec-h"><b>Checked automatically</b><span>{automated.length} items</span></div>
+      <ul class="check">
+        {automated.map((r) => (
+          <li>
+            <b>{r.label}</b>
+            {requirement(r) && <span class="req">{requirement(r)}</span>}
+            <p>{r.guidance}</p>
+          </li>
+        ))}
+      </ul>
+      <p class="t-sm" style="margin-top:14px">
+        These are cheaper for a machine to catch than for a reviewer to report,
+        and every one of them has been the reason a real submission bounced.
+      </p>
+    </section>
+
+    <section class="sec">
+      <div class="sec-h"><b>Checked by a person</b><span>Flagged for the reviewer</span></div>
+      <ul class="check">
+        {human.map((r) => (
+          <li>
+            <b>{r.label}</b>
+            <p>{r.guidance}</p>
+          </li>
+        ))}
+      </ul>
+    </section>
+
+    <section class="sec">
+      <div class="sec-h">
+        <b>If you are entering a project rather than a paper</b>
+        <span>{forEntries.length} items</span>
+      </div>
+      <p class="t-sm" style="max-width:var(--measure-text)">
+        A project entry records the work as the fair saw it: a title, an
+        abstract, a category, and what happened. There is no manuscript, so
+        most of the first list does not apply.
+      </p>
+      <ul class="inline">
+        {forEntries.map((r) => <li>{r.label}</li>)}
+      </ul>
+    </section>
+
+    <section class="sec">
+      <div class="note">
+        <h4>Work you finished somewhere else</h4>
+        <p>
+          If the paper is already written, none of the first list stops you. The
+          checks still run and you still see what they say, and they become
+          suggestions rather than a wall. What is asked for is a title, the
+          authors, a date, an abstract, keywords, a discipline, a license, and
+          the file.
+        </p>
+      </div>
+    </section>
+
+    <section class="sec">
+      <div class="note">
+        <h4>One last read</h4>
+        <p>
+          Read your abstract on its own and ask whether it states what you
+          found. An abstract that describes the procedure and stops is the
+          single most common thing a reviewer sends back.
+        </p>
+      </div>
+    </section>
+  </div>
+</Base>
+
+<style>
+  .check {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    max-width: var(--measure-text);
+  }
+  .check li {
+    border-top: 1px solid var(--rule-fine);
+    padding: 14px 0 14px 30px;
+    position: relative;
+  }
+  .check li::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 19px;
+    width: 15px;
+    height: 15px;
+    border: 2px solid var(--ink-3);
+  }
+  .check b {
+    font-size: 1rem;
+  }
+  .check .req {
+    font-family: var(--face-num);
+    font-size: 0.82rem;
+    color: var(--ink-3);
+    margin-left: 10px;
+  }
+  .check p {
+    margin: 5px 0 0;
+    color: var(--ink-2);
+    font-size: 0.94rem;
+    line-height: 1.55;
+  }
+  .inline {
+    list-style: none;
+    padding: 0;
+    margin: 16px 0 0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .inline li {
+    border: 1px solid var(--rule);
+    padding: 6px 12px;
+    font-family: var(--face-ui);
+    font-size: 0.84rem;
+  }
+</style>
