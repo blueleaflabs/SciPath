@@ -16,6 +16,7 @@ import yaml from 'js-yaml';
 import { validate } from '../src/lib/validate-template.ts';
 import { resolveProgram, datesFor } from '../src/lib/template-resolve.ts';
 import { loadLibrary } from '../scripts/template-library.mjs';
+import { migrationSql } from './migrations.mjs';
 
 let passed = 0;
 function test(name, fn) {
@@ -453,7 +454,7 @@ test('every project can be given a process', () => {
      first screen must not be "scientific method or engineering design?" and
      a project with no process has an empty calendar and a digest that never
      speaks. So whatever the default names has to exist. */
-  const migration = fs.readFileSync('supabase/migrations/0001_identity_and_tenancy.sql', 'utf8');
+  const migration = migrationSql();
   const fallback = migration.match(/process_id\s+text not null default '([\w-]+)'/);
 
   assert.ok(fallback, 'projects.process_id has no default');

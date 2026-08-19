@@ -29,6 +29,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import yaml from 'js-yaml';
+import { migrationSql } from './migrations.mjs';
 
 let passed = 0;
 function test(name, fn) {
@@ -41,10 +42,7 @@ function test(name, fn) {
   }
 }
 
-const migration = fs.readFileSync(
-  'supabase/migrations/0001_identity_and_tenancy.sql',
-  'utf8'
-);
+const migration = migrationSql();
 
 /* The `create table public.organizations` body, and only it. Reading the
    whole file would find `theme` and `mark` on other tables. */

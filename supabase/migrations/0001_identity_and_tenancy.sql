@@ -4589,7 +4589,29 @@ create policy step_warnings_edit on public.step_warnings
     and (app.is_advisor() or app.has_role('officer', program_id))
   );
 
-grant select, insert, update on public.step_warnings to authenticated;
+/* `service_role` alongside `authenticated`, which this line omitted.
+ 
+   Every other table declared below the blanket grant at 12.14a names both;
+   this one named only `authenticated`, so a script holding the secret key
+   could not so much as count the rows. It surfaced as `Could not count
+   step_warnings` with an empty message from a reset tool, which is a long way
+   from the line that caused it.
+ 
+   The blanket grant covers everything above it and nothing below, which the
+   comment there says plainly — and a single table drifting off the pattern
+   eighteen tables later is exactly the shape that warning describes.
+   `tests/scripts.mjs` now refuses a table declared below the blanket grant
+   that does not name `service_role`.
+ 
+   **Still one migration.** 11.7 splits the file at the first push, and a
+   deployment being tested is not that: nothing depends on this database that
+   cannot be rebuilt, so there is no history worth preserving and a second
+   file would only be a correction nobody needs to read. `0001` splits when
+   the first real work is in it. Until then a cloud project is rebuilt rather
+   than migrated, which is what `scripts/reset-cloud.mjs` prints the
+   statements for. */
+grant select, insert, update on public.step_warnings
+  to authenticated, service_role;
 
 /* The trigger comes from the list below rather than being written here.
    One list, so a table added without one is visible. */

@@ -223,8 +223,26 @@ async function main() {
     page += 1;
   }
 
-  /* Everything seeded from a template goes, so a renamed step does not leave
-     its old self behind. `template_id` is what marks a row as derived. */
+  /**
+   * **Programs are not deleted here, because they cannot be.**
+   *
+   * This block used to clear every template-derived program and its deadlines
+   * before rewriting them, so a renamed step left no old self behind. That
+   * delete is refused by the schema: 12.14a revokes DELETE on `programs` and
+   * `program_milestones` from `service_role`, deliberately, because nothing
+   * in this system is hard deleted and withholding the privilege is what
+   * stops a policy handing it back.
+   *
+   * **It had never run.** `npm run reset` recreates the database first, so
+   * `existing` is empty every time and the branch was skipped — a code path
+   * that only executes on a second seed against a database somebody kept.
+   * The first person to reach it was reseeding a cloud project. Dead code
+   * cannot be wrong until it runs, which is the whole difficulty with it.
+   *
+   * So it says what is in the way instead. Emptying those tables is a
+   * deliberate act with the owner's privilege, which is what
+   * `scripts/reset-cloud.mjs` prints the statement for.
+   */
   const { data: existing, error: existingError } = await db
     .from('programs')
     .select('id')
@@ -238,23 +256,11 @@ async function main() {
   if (existing?.length) {
     const ids = existing.map((p) => p.id);
 
-    /* Anything already taking part stops this. `participations` references
-       `programs` with ON DELETE RESTRICT, deliberately: a program with
-       projects in it is not something to quietly replace, because the
-       participations and their copied deadlines hang off it.
-       
-       So say what is in the way rather than deleting what can be deleted and
-       colliding on the insert.
-       
-       **This counted `opportunity_participations`**, which is the view that
-       excludes classes — so a project attached to a class or a club passed
-       the guard unseen, and the delete below then hit the restrict and
-       failed with a foreign key message naming a constraint instead of the
-       sentence written here to explain it. Same blind spot as the notebook
-       export had (22.25) and as 22.19's silent skip: after the merge, every
-       reader of the narrower thing has to be found rather than the ones
-       somebody noticed. The table, because the question is "is anything
-       attached", and both kinds are. */
+    /* Said first, because it is the more serious of the two: a program with
+       projects in it is not something to replace at all, and knowing that
+       changes what somebody does next. `participations` rather than
+       `opportunity_participations`, which is the view that excludes classes —
+       a project in a class passed this guard unseen (22.25). */
     const { count: participations } = await db
       .from('participations')
       .select('id', { count: 'exact', head: true })
@@ -265,27 +271,22 @@ async function main() {
         `\n${participations} project${participations === 1 ? ' is' : 's are'} already taking part ` +
           'in a program seeded from a template.\n\n' +
           'Rewriting the programs would orphan them, so this stops here.\n' +
-          'Run `npm run reset`, which rebuilds everything in order.\n'
+          'Locally, `npm run reset` rebuilds everything in order.\n'
       );
       process.exit(1);
     }
 
-    const { error: milestoneError } = await db
-      .from('program_milestones')
-      .delete()
-      .in('program_id', ids);
-
-    if (milestoneError) {
-      console.error(`Could not clear the old deadlines: ${milestoneError.message}`);
-      process.exit(1);
-    }
-
-    const { error: programError } = await db.from('programs').delete().in('id', ids);
-
-    if (programError) {
-      console.error(`Could not clear the old programs: ${programError.message}`);
-      process.exit(1);
-    }
+    console.error(
+      `\n${existing.length} program${existing.length === 1 ? '' : 's'} already seeded from a ` +
+        'template, and nothing is taking part in them.\n\n' +
+        'They have to go before these can be written, and this script cannot\n' +
+        'remove them: DELETE on `programs` and `program_milestones` is revoked\n' +
+        'from the service role, because nothing here is ever hard deleted.\n\n' +
+        'Locally:  npm run reset\n' +
+        'A cloud project:  node scripts/reset-cloud.mjs, then run the SQL it\n' +
+        'prints in the Supabase SQL Editor.\n'
+    );
+    process.exit(1);
   }
 
   console.log('\nPrograms from templates\n');

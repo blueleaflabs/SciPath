@@ -13,6 +13,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { migrationSql } from './migrations.mjs';
 
 let passed = 0;
 function test(name, fn) {
@@ -133,7 +134,7 @@ test('a copied milestone keeps the layer it came from', () => {
      migration has to carry `source` or a real entry loses it, and a student
      who cannot tell a club deadline from a fair rule starts treating real
      deadlines as advisory. */
-  const sql = fs.readFileSync('supabase/migrations/0001_identity_and_tenancy.sql', 'utf8');
+  const sql = migrationSql();
 
   /* There were four, in four functions, and I updated two by string match and
      missed two. Two of those four were dead: `start_entry` had been declared

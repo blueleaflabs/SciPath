@@ -59,7 +59,27 @@ if (!URL || !KEY) {
 
 const FILE = 'local-data/people.yaml';
 
+/**
+ * `--optional` is how `npm run reset` calls this.
+ *
+ * The file is gitignored and therefore absent on a fresh clone, in CI, and on
+ * anybody's machine but the one that wrote it. In the reset chain that has to
+ * be a skip: a seed that halts the whole rebuild because an optional file is
+ * missing makes the repository unusable to everyone except its author.
+ *
+ * Called directly it still fails, because then somebody asked for this
+ * specifically and a silent success would be a lie. Same fault, two answers,
+ * and the flag is which question was being asked.
+ */
+const optional = process.argv.includes('--optional');
+
 if (!fs.existsSync(FILE)) {
+  if (optional) {
+    console.log(`\nNo ${FILE}, so no advisor accounts. This is fine.`);
+    console.log(`Copy src/config/people.example.yaml to it to seed them.\n`);
+    process.exit(0);
+  }
+
   fail(
     `${FILE} does not exist.\n\n` +
       `Copy src/config/people.example.yaml to it and fill in the addresses.\n\n` +

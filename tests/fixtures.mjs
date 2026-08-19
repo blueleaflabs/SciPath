@@ -13,6 +13,7 @@ import fs from 'node:fs';
 import { loadLibrary } from '../scripts/template-library.mjs';
 import { resolveProgram, evaluate } from '../src/lib/template-resolve.ts';
 import * as templateResolve from '../src/lib/template-resolve.ts';
+import { migrationSql } from './migrations.mjs';
 
 let passed = 0;
 function test(name, fn) {
@@ -355,7 +356,7 @@ test('two fixtures apply for it, one of them awarded less than asked', () => {
 
 /* ── The schema accepts what the templates say ───────────────────────────── */
 
-const migration = fs.readFileSync('supabase/migrations/0001_identity_and_tenancy.sql', 'utf8');
+const migration = migrationSql();
 
 test('every kind a template declares is a kind the schema allows', () => {
   /* `kind: grant` resolved, validated, and was refused by a check constraint

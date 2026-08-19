@@ -74,12 +74,46 @@ tests/                  the two rules above, as scripts
 npm install
 npm run dev              # local
 npm run build            # astro build, then the Pagefind index
-npm test                 # contrast floor and archive independence
 PUBLIC_ORG=example npm run dev   # render a second organization
 ```
 
 Node 22. Cloudflare Pages build command is `npm run build`, output directory
 `dist`, with `NODE_VERSION` set to 22.
+
+### The tests
+
+Four suites, and all four have to be green. The last two need Postgres but not
+Docker: they apply the migration to a scratch database directly.
+
+```bash
+npm test                 # the schema, the templates, the pages
+npm run build
+npm run test:db          # what the migration does
+npm run test:probes      # passes only when a statement is refused
+```
+
+### Rebuilding a database
+
+Two commands. Each drops everything and seeds from scratch, and which one you
+get is which file you have.
+
+```bash
+npm run reset            # local:  reads .dev.vars
+npm run reset:cloud      # cloud:  reads .cloud.vars, asks for the project ref
+npm run verify:cloud     # count the cloud project, change nothing
+```
+
+Copy `.dev.vars.example` and `.cloud.vars.example` to fill those in. **They are
+two files on purpose**: `npm run reset` destroys whatever `.dev.vars` names, so
+a cloud project's credentials must never be in it.
+
+The local reset also seeds 69 fixture accounts on `demo.invalid`, thirteen
+scenarios and the published records. The cloud reset does not — those scripts
+refuse a target that is not loopback.
+
+Both seed advisor accounts from `local-data/people.yaml` if it exists.
+`src/config/people.example.yaml` shows the shape; it is gitignored because it
+holds real addresses.
 
 ## Data handling
 

@@ -1,6 +1,8 @@
 # Custom
 supabase/seed/local/
 .dev.vars
+.cloud.vars
+
 
 # Dependencies and build output
 node_modules/

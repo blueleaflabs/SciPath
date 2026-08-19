@@ -71,3 +71,32 @@ export function loadDevVars(dir = process.cwd()) {
 
   return applied;
 }
+
+/**
+ * The same, for `.cloud.vars`.
+ *
+ * A separate file, deliberately. Production credentials must never sit in
+ * `.dev.vars`, because `npm run reset` drops and recreates whatever that file
+ * points at — the one accident this project can least afford. Two files means
+ * a script has to say which world it belongs to, and the local chain has no
+ * way to reach the cloud one even by mistake.
+ *
+ * Gitignored alongside `.dev.vars`, and for the same reason: it holds the
+ * secret key, which bypasses row level security entirely.
+ */
+export function loadCloudVars(dir = process.cwd()) {
+  const file = path.join(dir, '.cloud.vars');
+  if (!fs.existsSync(file)) return [];
+
+  const values = parseDevVars(fs.readFileSync(file, 'utf8'));
+  const applied = [];
+
+  for (const [key, value] of Object.entries(values)) {
+    if (process.env[key] === undefined || process.env[key] === '') {
+      process.env[key] = value;
+      applied.push(key);
+    }
+  }
+
+  return applied;
+}

@@ -25,7 +25,7 @@
     "reset:storage": "node scripts/reset-storage.mjs",
     "seed:cases": "node scripts/seed-cases.mjs",
     "digest": "node --experimental-strip-types scripts/digest.mjs",
-    "reset": "node scripts/supabase.mjs db reset && node scripts/reset-storage.mjs && node scripts/seed-orgs.mjs && node scripts/seed-demo.mjs && node --experimental-strip-types scripts/seed-programs.mjs && node scripts/seed-scenarios.mjs && node scripts/seed-cases.mjs && node --experimental-strip-types scripts/seed-publish.mjs && node scripts/index-records.mjs",
+    "reset": "node scripts/supabase.mjs db reset && node scripts/reset-storage.mjs && node scripts/seed-orgs.mjs && node scripts/seed-demo.mjs && node --experimental-strip-types scripts/seed-programs.mjs && node scripts/seed-scenarios.mjs && node scripts/seed-cases.mjs && node scripts/seed-people.mjs --optional && node --experimental-strip-types scripts/seed-publish.mjs && node scripts/index-records.mjs",
     "seed:scenarios": "node scripts/seed-scenarios.mjs",
     "test:props": "node tests/dead-props.mjs",
     "test:structure": "node --experimental-strip-types tests/structure.mjs",
@@ -71,6 +71,7 @@
     "seed:orgs": "node scripts/seed-orgs.mjs",
     "seed:people": "node scripts/seed-people.mjs",
     "reset:cloud": "node scripts/reset-cloud.mjs",
+    "verify:cloud": "node scripts/reset-cloud.mjs --verify",
     "wipe:demo": "node scripts/wipe-demo.mjs"
   },
   "dependencies": {

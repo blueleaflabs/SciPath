@@ -18,6 +18,7 @@ import fs from 'node:fs';
 import { assess } from '../src/lib/attention.ts';
 import { loadLibrary } from '../scripts/template-library.mjs';
 import { resolveProgram, deliverablesFor, datesFor } from '../src/lib/template-resolve.ts';
+import { migrationSql } from './migrations.mjs';
 
 const library = loadLibrary();
 import {
@@ -213,10 +214,7 @@ test('the review form asks six questions and every key is unique', () => {
 /* ── The two copies agree ───────────────────────────────────────────────── */
 
 test('every action has a function behind it in the migration', () => {
-  const sql = fs.readFileSync(
-    'supabase/migrations/0001_identity_and_tenancy.sql',
-    'utf8'
-  );
+  const sql = migrationSql();
 
   /* Three actions are outcomes of one function rather than functions of
      their own, and one is a decision argument. Named here so that adding an
@@ -238,10 +236,7 @@ test('every action has a function behind it in the migration', () => {
 });
 
 test('no SQL transition writes a public label the table does not know', () => {
-  const sql = fs.readFileSync(
-    'supabase/migrations/0001_identity_and_tenancy.sql',
-    'utf8'
-  );
+  const sql = migrationSql();
   const known = new Set(Object.values(publicLabel));
   /* Labels the SQL adds for events that are not state changes. */
   known.add('Withdrawal requested by the authors');

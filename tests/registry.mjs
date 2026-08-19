@@ -13,6 +13,7 @@ import path from 'node:path';
 import yaml from 'js-yaml';
 import { resolveProgram, datesFor, windowEnd } from '../src/lib/template-resolve.ts';
 import { loadLibrary } from '../scripts/template-library.mjs';
+import { migrationSql } from './migrations.mjs';
 
 let passed = 0;
 function test(name, fn) {
@@ -335,7 +336,7 @@ test('the seed reads every program a school runs from a template', () => {
 });
 
 test('no program or deadline is written by the migration', () => {
-  const sql = fs.readFileSync('supabase/migrations/0001_identity_and_tenancy.sql', 'utf8');
+  const sql = migrationSql();
 
   assert.doesNotMatch(
     sql,

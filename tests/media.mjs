@@ -17,6 +17,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { migrationSql } from './migrations.mjs';
 
 let passed = 0;
 function test(name, fn) {
@@ -121,7 +122,7 @@ test('and prints the address behind a link', () => {
 test('a phase reaches the database', () => {
   /* Phases existed in the templates and stopped at the seed. A grouping
      nothing can query is a grouping that only exists in a YAML file. */
-  const sql = fs.readFileSync('supabase/migrations/0001_identity_and_tenancy.sql', 'utf8');
+  const sql = migrationSql();
 
   assert.match(sql, /phases\s+jsonb/, 'the program should carry its phase list');
 
@@ -134,7 +135,7 @@ test('a phase reaches the database', () => {
 test('every copy of a milestone carries the phase', () => {
   /* Four functions copy these, and the last time a column was added two of
      them were missed. */
-  const sql = fs.readFileSync('supabase/migrations/0001_identity_and_tenancy.sql', 'utf8');
+  const sql = migrationSql();
   const starts = [...sql.matchAll(/insert into public\.entry_milestones\b/g)].map((m) => m.index);
 
   const missing = starts.filter((at) => !/\bphase\b/.test(sql.slice(at, sql.indexOf(';', at))));

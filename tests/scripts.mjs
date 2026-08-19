@@ -17,6 +17,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { migrationSql } from './migrations.mjs';
 
 let passed = 0;
 function test(name, fn) {
@@ -106,7 +107,15 @@ for (const file of files) {
   }
   for (const m of text.matchAll(/\(([^)]*)\)\s*=>/g)) {
     for (const part of m[1].split(',')) {
-      const name = part.trim().split('=')[0].trim().replace(/[{}[\].]/g, '');
+      /* `(` among the stripped characters, for a doubled paren.
+      
+         `new Promise((resolve) => …` makes the match start at the outer
+         paren, so the group is `(resolve` and the parameter was recorded
+         under a name nothing could ever call. It reported `resolve`
+         undefined in a file that plainly defines it, which reads as a broken
+         check rather than a caught fault — and a check that cries wolf is one
+         somebody deletes. */
+      const name = part.trim().split('=')[0].trim().replace(/[{}[\]().]/g, '');
       if (name) provided.add(name);
     }
   }
@@ -469,7 +478,7 @@ test('the cloud reset empties every table the migration creates', () => {
    * `organizations` is excluded deliberately and named here so that the
    * exclusion is a decision rather than an omission.
    */
-  const sql = fs.readFileSync('supabase/migrations/0001_identity_and_tenancy.sql', 'utf8');
+  const sql = migrationSql();
   const inSchema = new Set([...sql.matchAll(/^create table public\.(\w+) \(/gm)].map((m) => m[1]));
 
   assert.ok(inSchema.size > 20, `read only ${inSchema.size} tables — widen the pattern`);
@@ -506,6 +515,119 @@ test('the cloud reset empties every table the migration creates', () => {
     [...orgBody.matchAll(/references public\.(\w+)/g)].map((m) => m[1]),
     [],
     'organizations now references another table, so the cascade would empty it too'
+  );
+});
+
+test('no script deletes from a table the schema revokes DELETE on', () => {
+  /**
+   * Twice in one session a script was written against a privilege the
+   * migration deliberately withholds.
+   *
+   * Nothing in this system is hard deleted — removal is a state column or an
+   * `archived_at` — so DELETE is revoked from `authenticated` and
+   * `service_role` on every table, and granted back on exactly two. A script
+   * using the secret key holds `service_role` and is bound by that.
+   *
+   * **Both instances were invisible until they ran.** `reset-cloud.mjs` failed
+   * on its first statement against a real project. `seed-programs.mjs` had a
+   * delete that could only execute on a second seed against a database
+   * somebody had kept, so `npm run reset` — which always starts empty — never
+   * reached it, and it sat wrong for months.
+   *
+   * A source check catches both, which is the argument for one: the run that
+   * would expose them is rare and expensive.
+   */
+  const sql = migrationSql();
+
+  /* A delete named in a comment explaining why it is not done is not a
+     delete, and this file's own scripts now contain several. */
+  const withoutComments = (text) =>
+    text.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/^\s*\/\/.*$/gm, ' ');
+
+  /* Granted back after the blanket revoke. Order matters in the file and so
+     it does here: a table revoked and then granted is allowed. */
+  const allowed = new Set(
+    [...sql.matchAll(/grant delete on ([^;]+?) to ([^;]+);/g)]
+      .filter((m) => /service_role/.test(m[2]))
+      .flatMap((m) => [...m[1].matchAll(/public\.(\w+)/g)].map((t) => t[1]))
+  );
+
+  assert.ok(
+    /revoke delete on all tables in schema public/.test(sql),
+    'the blanket revoke is gone — this check no longer describes the schema'
+  );
+
+  const problems = [];
+
+  for (const file of files) {
+    const text = withoutComments(fs.readFileSync(file, 'utf8'));
+
+    /* `.from('x')` followed by `.delete(` before the statement ends. Written
+       across lines in every real instance, so the gap is permissive. */
+    for (const m of text.matchAll(/\.from\(\s*'(\w+)'\s*\)[\s\S]{0,200}?\.delete\(/g)) {
+      if (!allowed.has(m[1])) {
+        problems.push(
+          `${path.relative('.', file)} deletes from ${m[1]}, which revokes DELETE from service_role`
+        );
+      }
+    }
+  }
+
+  assert.deepEqual(
+    [...new Set(problems)],
+    [],
+    'say what is in the way instead, or grant DELETE deliberately in the migration'
+  );
+});
+
+test('every table below the blanket grant names service_role', () => {
+  /**
+   * `grant ... on all tables in schema public` covers what exists at that
+   * point in the file and nothing declared after it. The migration says so in
+   * a comment, added after two tables were found to have received nothing.
+   *
+   * Eighteen tables are declared below that line. Seventeen name
+   * `service_role` in a grant of their own; `step_warnings` named only
+   * `authenticated`, and had since it was written. **A missing grant is
+   * silent** — the interface uses `authenticated` and worked perfectly, and
+   * the gap surfaced only when a script holding the secret key tried to count
+   * the rows, as an empty error message from a tool three files away.
+   *
+   * Checked here rather than in the database suite because it is a fact about
+   * the file: the suite applies the migration as the owner, who needs no
+   * grant, so nothing it does would ever notice.
+   */
+  const sql = migrationSql();
+
+  const blanket = sql.indexOf('grant select, insert, update on all tables in schema public');
+  assert.ok(blanket > 0, 'the blanket grant is gone — this check no longer describes the schema');
+
+  /* Every `grant ... to ... service_role;` statement, and the tables it
+     names. Split on the semicolon because these run across lines, and with
+     comments removed first — a comment sits above most of these grants, and
+     leaving it in means the chunk does not begin with the word `grant`. My
+     first version of this check missed two grants for exactly that reason and
+     reported two false positives, which is the same class of fault as the
+     thing it is looking for. */
+  const bare = sql.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/^\s*--.*$/gm, ' ');
+
+  const granted = new Set(
+    bare
+      .split(';')
+      .filter((statement) => /^\s*grant\b/i.test(statement) && /service_role/.test(statement))
+      .flatMap((statement) => [...statement.matchAll(/public\.(\w+)/g)].map((m) => m[1]))
+  );
+
+  const below = [...sql.matchAll(/create table public\.(\w+) \(/g)]
+    .filter((m) => m.index > blanket)
+    .map((m) => m[1]);
+
+  assert.ok(below.length > 5, `found only ${below.length} tables below the grant — widen the pattern`);
+
+  assert.deepEqual(
+    below.filter((t) => !granted.has(t)),
+    [],
+    'these are unreachable with the secret key; grant them explicitly'
   );
 });
 

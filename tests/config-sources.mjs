@@ -71,17 +71,22 @@ for (const file of scriptFiles) {
 
   if (reads.length === 0) continue;
 
-  test(`${file} loads .dev.vars before reading it`, () => {
+  test(`${file} loads its variables before reading them`, () => {
+    /* Either file. A script belongs to one world or the other: the local
+       chain reads `.dev.vars`, and the cloud one reads `.cloud.vars` because
+       `npm run reset` destroys whatever `.dev.vars` names and the two must
+       never be the same database. What matters is that it reads a file at
+       all rather than hoping the shell has the values. */
     assert.match(
       text,
-      /loadDevVars\(\)/,
+      /load(Dev|Cloud)Vars\(\)/,
       'a script that reads configuration must load it, not hope the shell has it'
     );
   });
 
   test(`${file} reads nothing undocumented`, () => {
     const undocumented = [...new Set(reads)].filter((name) => !documented.has(name));
-    assert.deepEqual(undocumented, [], 'add it to .dev.vars.example');
+    assert.deepEqual(undocumented, [], 'add it to .dev.vars.example or .cloud.vars.example');
   });
 }
 
