@@ -32,7 +32,7 @@ loadDevVars();
 const URL = process.env.PUBLIC_SUPABASE_URL ?? '';
 const PUBLISHABLE = process.env.PUBLIC_SUPABASE_PUBLISHABLE_KEY ?? '';
 const PASSWORD = process.env.DEMO_PASSWORD ?? 'scipath';
-const PRODUCTION_REF = 'mejibvorrfjiadnsvkyu';
+const PRODUCTION_REF = 'uctbxilvfzaoroffzgen';
 
 const local =
   /^https?:\/\/(127\.0\.0\.1|localhost)(:|\/|$)/.test(URL) && !URL.includes(PRODUCTION_REF);

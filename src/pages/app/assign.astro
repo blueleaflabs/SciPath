@@ -348,6 +348,25 @@ for (const r of clubRoles ?? []) {
 
 const holders = [...byPerson.values()];
 
+/**
+ * **A project reaches this queue only through a place its reader runs.**
+ *
+ * The pending list has been scoped by `mineToDecide` since 6.4; this list
+ * never was, so a teacher scoped to the class saw every project in the club
+ * as well — and could assign an officer to it. The scoping infrastructure was
+ * all here and this one query ignored it.
+ *
+ * That is not a display nicety. Two teachers each scoped to their own program
+ * is the arrangement `scope_id` exists for, and one of them reading the
+ * other's projects is the thing the scope was meant to prevent.
+ *
+ * Filtered on the project's *places* rather than on the project, because a
+ * project in the class and at the fair belongs to two people. Each sees it;
+ * each sees only their own half of it, which is the same shape as the
+ * per-place oversight below (22.18a).
+ */
+const runsThisPlace = (place: any) => runsEverything || myPrograms.includes(place.program_id);
+
 const rows = (projects ?? [])
   /* Only projects with a place in something. A refused request has no
      officer to assign and a pending one has nobody to assign it yet. */
@@ -361,7 +380,7 @@ const rows = (projects ?? [])
   const placesHere = [
     ...(cohortRows ?? []).filter((c: any) => c.project_id === p.id),
     ...(entries ?? []).filter((e: any) => e.project_id === p.id),
-  ];
+  ].filter(runsThisPlace);
 
   const placeIdsHere = new Set(placesHere.map((x: any) => x.id));
   const mine = (milestones ?? []).filter((m: any) => placeIdsHere.has(m.participation_id));
@@ -407,7 +426,10 @@ const rows = (projects ?? [])
     total: mine.length,
     worst: worstFinding(findings),
   };
-});
+})
+  /* A project all of whose places belong to somebody else is not a row with
+     nothing in it, it is not this reader's project at all. */
+  .filter((r: any) => r.places.length > 0);
 
 /**
  * **Looked after in every program it is in, not in one of them.**

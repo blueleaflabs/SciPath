@@ -31,7 +31,7 @@ loadDevVars();
 
 const URL_ = process.env.PUBLIC_SUPABASE_URL ?? '';
 const KEY = process.env.SUPABASE_SECRET_KEY ?? '';
-const PRODUCTION_REF = 'mejibvorrfjiadnsvkyu';
+const PRODUCTION_REF = 'uctbxilvfzaoroffzgen';
 
 if (!URL_ || !KEY) {
   console.error('PUBLIC_SUPABASE_URL and SUPABASE_SECRET_KEY are needed. They live in .dev.vars.');

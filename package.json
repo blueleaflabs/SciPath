@@ -69,6 +69,8 @@
     "test:frontmatter": "node tests/frontmatter.mjs",
     "test:probes": "bash tests/db/probes.sh",
     "seed:orgs": "node scripts/seed-orgs.mjs",
+    "seed:people": "node scripts/seed-people.mjs",
+    "reset:cloud": "node scripts/reset-cloud.mjs",
     "wipe:demo": "node scripts/wipe-demo.mjs"
   },
   "dependencies": {

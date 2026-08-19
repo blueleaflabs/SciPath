@@ -1,0 +1,81 @@
+# WHO GETS A ROLE, AND WHICH ACCOUNTS EXIST TO DEMONSTRATE WITH.
+#
+# Copy to `local-data/people.yaml`, which is gitignored, and fill in.
+#
+# **The addresses are not in this repository and must not be.** It is public,
+# and these are real people: a student's school address, and teachers' names
+# against accounts they have not yet agreed to.
+#
+# `local-data/` rather than here, because everything else in `src/config/` is
+# committed and read by the build — `orgs/` and `programs/` are globbed at
+# build time and could not be ignored without breaking CI. One invisible file
+# among visible ones is a trap for whoever reads this next. The mechanism is
+# version controlled; the people are not, which is the arrangement `.dev.vars`
+# already has.
+#
+# Run:
+#   PUBLIC_SUPABASE_URL=... SUPABASE_SECRET_KEY=... npm run seed:people
+#
+# Safe to run repeatedly. Programs must be seeded first, because a scoped role
+# names one.
+
+# ---------------------------------------------------------------------------
+# Reservations
+#
+# A row here means: when this address first signs in, grant this role. Nothing
+# is mailed and no password is shared, and an unclaimed row stays visible as
+# somebody invited who has not arrived.
+#
+# This is the path for real people on real school addresses. A reservation
+# cannot carry a scope, so a role claimed this way is held at the school.
+# ---------------------------------------------------------------------------
+reservations:
+  - org: montavista
+    email: first.last@example.org
+    name: First Last
+    role: advisor
+
+# ---------------------------------------------------------------------------
+# Accounts
+#
+# Addresses and passwords, created directly. This bypasses the school's domain
+# restricted signup, which is the point: these sit on a domain the project
+# controls rather than on the school's.
+#
+# Every account is flagged `demo` in its metadata, and `wipe-demo.mjs` finds
+# them by that flag rather than by domain. The domain here is the one a real
+# member of staff will eventually have, so it cannot also mean "safe to
+# delete".
+#
+# `roles` is a list. `program` names a template id and scopes the role to that
+# program; omit it for a role held at the school. **A scoped advisor sees only
+# their own program's projects**, which is the point of scoping: one teacher
+# reading another's projects is the thing being prevented.
+#
+# `population` defaults to staff.
+# ---------------------------------------------------------------------------
+accounts:
+  # A teacher responsible for one class, and nothing else.
+  - org: montavista
+    email: first_teacher@example.org
+    name: First Teacher
+    password: change-this
+    roles:
+      - { role: advisor, program: irpd-mvhs-2027 }
+
+  # A teacher responsible for one club.
+  - org: montavista
+    email: second_teacher@example.org
+    name: Second Teacher
+    password: change-this
+    roles:
+      - { role: advisor, program: mvhs-scvsefa-2027 }
+
+  # Somebody who oversees both, plus the school. An unscoped advisor role is
+  # the widest there is: it sees every program.
+  - org: montavista
+    email: coordinator@example.org
+    name: A Coordinator
+    password: change-this
+    roles:
+      - { role: advisor }

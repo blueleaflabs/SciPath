@@ -53,6 +53,22 @@ const db = createClient(URL_, KEY, { auth: { persistSession: false } });
    rather than a name pattern: a name can be typed by a person. */
 const FIXTURE_DOMAIN = '@demo.invalid';
 
+/**
+ * The marker on a demo account, which is a flag and not a domain.
+ *
+ * `seed-people.mjs` writes presentable accounts on the organization's own
+ * domain, because `demo.invalid` on screen during a demonstration reads as
+ * broken. That domain is exactly the namespace a real member of staff will
+ * one day have — so matching on it would make this tool destroy real
+ * accounts, and matching on `demo.invalid` alone would leave accounts holding
+ * advisor access that nothing can find.
+ *
+ * An explicit flag says what a namespace cannot. Set at creation and
+ * re-stamped on every seed, so an account made before the flag existed
+ * acquires it rather than becoming unreachable.
+ */
+const DEMO_FLAG = (account) => account?.user_metadata?.demo === true;
+
 /* The addresses are in `auth.users`, not in `public.users` — the application
    table holds a display name and a population and deliberately no email, so
    the admin API is the only place that can answer "is this a fixture". A
@@ -70,7 +86,8 @@ for (let page = 1; page <= 20; page += 1) {
 
   const batch = data?.users ?? [];
   for (const account of batch) {
-    if ((account.email ?? '').toLowerCase().endsWith(FIXTURE_DOMAIN)) {
+    const address = (account.email ?? '').toLowerCase();
+    if (address.endsWith(FIXTURE_DOMAIN) || DEMO_FLAG(account)) {
       fixtures.set(account.id, account.email);
     }
   }
@@ -110,7 +127,7 @@ for (const row of everyone ?? []) {
   }
 }
 
-console.log(`${ids.length} demo accounts on ${FIXTURE_DOMAIN}`);
+console.log(`${ids.length} demo accounts on ${FIXTURE_DOMAIN} or flagged demo`);
 console.log(`${projectIds.length} projects they are on`);
 
 if (shared.size > 0) {

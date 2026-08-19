@@ -29,7 +29,7 @@ const URL = process.env.PUBLIC_SUPABASE_URL ?? '';
 const KEY = process.env.SUPABASE_SECRET_KEY ?? '';
 const ORG_SLUG = process.env.DEMO_ORG ?? 'montavista';
 const FIXTURE_DOMAIN = 'demo.invalid';
-const PRODUCTION_REF = 'mejibvorrfjiadnsvkyu';
+const PRODUCTION_REF = 'uctbxilvfzaoroffzgen';
 
 function fail(message) {
   console.error(`\n${message}\n`);

@@ -421,4 +421,104 @@ test('no suite prints its tally before the last test', () => {
   assert.deepEqual(problems, [], 'move the console.log to the end of the file');
 });
 
+test('the production ref is one value, not four copies', () => {
+  /**
+   * Four scripts refuse to run against production by naming its project ref,
+   * and each holds its own copy of the string.
+   *
+   * The project was recreated in a different region, and every one of those
+   * copies went on naming a project that no longer exists — four guards that
+   * could not fire, saying nothing, because a guard only reports when it
+   * stops something. The loopback check beside them still held, which is the
+   * only reason this was harmless.
+   *
+   * Checking they agree rather than checking the value: the ref changes when
+   * a project is recreated, and a test that hardcodes it is the fifth copy.
+   */
+  const holders = files.filter((f) => /const PRODUCTION_REF = /.test(fs.readFileSync(f, 'utf8')));
+
+  assert.ok(
+    holders.length > 1,
+    'expected several scripts to name the production ref — widen the pattern'
+  );
+
+  const refs = new Map();
+  for (const file of holders) {
+    const ref = fs.readFileSync(file, 'utf8').match(/const PRODUCTION_REF = '([^']*)'/)?.[1];
+    refs.set(file, ref);
+  }
+
+  assert.equal(
+    new Set(refs.values()).size,
+    1,
+    `they disagree: ${[...refs].map(([f, r]) => `${path.relative('.', f)}=${r}`).join(', ')}`
+  );
+});
+
+test('the cloud reset empties every table the migration creates', () => {
+  /**
+   * `reset-cloud.mjs` names the tables it empties, in an order the foreign
+   * keys dictate. A table missing from that list is not an error at run time:
+   * it is simply never emptied, and the next seed collides with rows nobody
+   * expected to still be there.
+   *
+   * My first version of that list, written from memory, named two tables that
+   * do not exist and missed twelve that do — which is the argument for
+   * checking it against the schema rather than reading it carefully.
+   *
+   * `organizations` is excluded deliberately and named here so that the
+   * exclusion is a decision rather than an omission.
+   */
+  const sql = fs.readFileSync('supabase/migrations/0001_identity_and_tenancy.sql', 'utf8');
+  const inSchema = new Set([...sql.matchAll(/^create table public\.(\w+) \(/gm)].map((m) => m[1]));
+
+  assert.ok(inSchema.size > 20, `read only ${inSchema.size} tables — widen the pattern`);
+
+  const script = fs.readFileSync('scripts/reset-cloud.mjs', 'utf8');
+  const block = script.match(/const TABLES = \[([\s\S]*?)\];/)?.[1];
+
+  assert.ok(block, 'could not find TABLES in reset-cloud.mjs');
+
+  const listed = new Set([...block.matchAll(/'([^']+)'/g)].map((m) => m[1]));
+
+  const KEPT = new Set(['organizations']);
+
+  const missing = [...inSchema].filter((t) => !listed.has(t) && !KEPT.has(t));
+  const invented = [...listed].filter((t) => !inSchema.has(t));
+
+  assert.deepEqual(missing, [], 'these tables would never be emptied');
+  assert.deepEqual(invented, [], 'these are not tables in the migration');
+
+  /**
+   * And every one is deleted by a column it actually has.
+   *
+   * PostgREST refuses an unfiltered delete, so each table is filtered on a
+   * column that matches every row. Three of these have no `id` at all — their
+   * keys are composite — and a filter naming a column that does not exist
+   * fails at run time, partway through, on a database somebody has just
+   * decided to empty. That is the worst moment to find out.
+   */
+  const overrides = Object.fromEntries(
+    [...(script.match(/const DELETE_BY = \{([\s\S]*?)\};/)?.[1] ?? '').matchAll(
+      /(\w+):\s*'(\w+)'/g
+    )].map((m) => [m[1], m[2]])
+  );
+
+  const bodies = Object.fromEntries(
+    [...sql.matchAll(/create table public\.(\w+) \(([\s\S]*?)\n\);/g)].map((m) => [m[1], m[2]])
+  );
+
+  const wrong = [];
+
+  for (const table of listed) {
+    const column = overrides[table] ?? 'id';
+    const body = bodies[table] ?? '';
+    if (!new RegExp(`^\\s+${column}\\s+\\w`, 'm').test(body)) {
+      wrong.push(`${table} is deleted by "${column}", which it does not have`);
+    }
+  }
+
+  assert.deepEqual(wrong, [], 'the delete would fail partway through');
+});
+
 console.log(`${passed} script assertions passed. ${files.length} scripts read.`);

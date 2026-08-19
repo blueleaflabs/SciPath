@@ -42,7 +42,7 @@ const ORG_SLUGS = (process.env.DEMO_ORGS ?? 'montavista,svslc,scipath')
   .map((s) => s.trim())
   .filter(Boolean);
 
-const PRODUCTION_REF = 'mejibvorrfjiadnsvkyu';
+const PRODUCTION_REF = 'uctbxilvfzaoroffzgen';
 const FIXTURE_DOMAIN = 'demo.invalid';
 const PASSWORD = process.env.DEMO_PASSWORD ?? 'scipath';
 
