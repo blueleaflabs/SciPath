@@ -2234,7 +2234,7 @@ const sectionNo = new Map(sections.map((section, i) => [section.id, String(i + 1
 
   .phase-when,
   .phase-count {
-    font-family: var(--face-mono);
+    font-family: var(--face-num);
     font-size: 0.8rem;
     font-weight: 400;
     color: var(--ink-3);
@@ -2268,7 +2268,7 @@ const sectionNo = new Map(sections.map((section, i) => [section.id, String(i + 1
 
   .dl-need {
     margin-left: 10px;
-    font-family: var(--face-mono);
+    font-family: var(--face-num);
     font-size: 0.74rem;
     letter-spacing: 0.04em;
     text-transform: uppercase;
@@ -2347,7 +2347,7 @@ const sectionNo = new Map(sections.map((section, i) => [section.id, String(i + 1
   .dl-who {
     display: block;
     margin-top: 3px;
-    font-family: var(--face-mono);
+    font-family: var(--face-num);
     font-size: 0.76rem;
     color: var(--ink-3);
   }
@@ -2383,7 +2383,7 @@ const sectionNo = new Map(sections.map((section, i) => [section.id, String(i + 1
 
   .dl-limit {
     margin: 6px 0 0;
-    font-family: var(--face-mono);
+    font-family: var(--face-num);
     font-size: 0.8rem;
     color: var(--ink-2);
   }
@@ -2431,7 +2431,10 @@ const sectionNo = new Map(sections.map((section, i) => [section.id, String(i + 1
     font-family: var(--face-ui);
     font-size: 0.9rem;
     cursor: pointer;
-    color: var(--link);
+    /* `--link` is not a token and never was, so this summary took the
+       inherited ink rather than the quieter color it was asking for.
+       `--ink-3` is what `.linkish` uses for the same job. */
+    color: var(--ink-3);
     list-style: none;
   }
   .rec > summary::-webkit-details-marker { display: none; }

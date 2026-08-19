@@ -457,7 +457,25 @@ const looked = (r: any) => r.open.length === 0;
 const unassigned = rows.filter((r) => !looked(r));
 const assignedRows = rows.filter(looked);
 
-const load = holders.map((h: any) => ({
+/**
+ * The officers this reader is responsible for, and no others.
+ *
+ * `holders` is every officer at the school, which is what the dropdown on a
+ * row needs — `canTake` narrows that per project. The load list had no such
+ * narrowing, so a teacher scoped to the club read a roster including the
+ * class's Elders: people she cannot assign to anything, whose counts are of
+ * work she cannot see, listed under a heading that says *current load* as
+ * though it were hers to balance.
+ *
+ * The same rule as the projects above. An officer belongs here if a program
+ * they hold intersects the programs this reader runs — or if either side is
+ * unscoped, since an unscoped advisor runs everything and an unscoped officer
+ * fits anything.
+ */
+const mineToSee = (h: any) =>
+  runsEverything || h.anywhere || myPrograms.some((id: string) => h.scopes.has(id));
+
+const load = holders.filter(mineToSee).map((h: any) => ({
   id: h.id,
   name: h.name,
   role: h.role,
@@ -713,7 +731,7 @@ const fmt = (d: string | null) =>
               <tr>
                 <td>
                   <a href={`/app/project/${r.id}/`}>{r.title}</a>
-                  <span class="in">{(place.programs as any)?.name}</span>
+                  <span class="place">{(place.programs as any)?.name}</span>
                 </td>
                 <td class="who">
                   {held?.users?.display_name}
@@ -871,13 +889,22 @@ const fmt = (d: string | null) =>
   /* Which place this row is about. A project in the class and the club is
      two rows here, and without the program named they read as a duplicate
      rather than as two jobs. Under the title rather than beside it, because
-     the title is the link and the program is the qualifier. */
-  .in {
+     the title is the link and the program is the qualifier.
+  
+     **Called `.place`, not `.in`.** `ui.css` defines `.in` as a text input —
+     a border, a background, padding, a radius — and twenty-six pages use it
+     for exactly that. This span inherited all of it and rendered the
+     program's name inside what looked like a disabled form field, in
+     monospace, wrapped across two lines, under the title. Nothing was wrong
+     with either rule; two meanings had been given one name.
+  
+     In the page's own text face rather than the numeric one. The program is a
+     name being read, not a value being scanned, and monospace at this size
+     wraps a long one badly. */
+  .place {
     display: block;
     margin-top: 2px;
-    font-family: var(--face-num);
-    font-size: 0.78rem;
-    letter-spacing: 0.04em;
+    font-size: 0.86rem;
     color: var(--ink-3);
   }
 
@@ -915,7 +942,7 @@ const fmt = (d: string | null) =>
   .whom {
     display: block;
     margin-top: 3px;
-    font-family: var(--face-mono);
+    font-family: var(--face-num);
     font-size: 0.76rem;
     color: var(--ink-3);
   }

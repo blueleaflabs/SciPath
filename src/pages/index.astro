@@ -23,12 +23,6 @@ import { platform } from '../config/site';
 import { resolveProgram } from '../lib/templates';
 import { formatDate } from '../lib/dates';
 
-/* The phases of the standard research process, read from the template rather
-   than written here. There were five literals in `config/site.ts` describing
-   a competition's lifecycle, which stopped being true the moment a school ran
-   a course as well as a fair. A program that brings its own process shows its
-   own phases; this is what somebody with no program yet sees. */
-const phases = resolveProgram('process-standard').phases;
 import { openArchive } from '../lib/archive';
 
 const archive = await openArchive(Astro);
@@ -109,22 +103,43 @@ cachePublicPage(Astro);
       </div>
     </section>
 
-    <!-- The lifecycle is the product, so it is the first thing on the page. -->
-    <section aria-labelledby="lc" class="lifecycle card">
+    {/* The lifecycle is the product, so it is the first thing on the page.
+    
+        **These five are the product's shape, not a research process.** The
+        strip here rendered `process-standard`'s phases — approval, start,
+        design, work, tell — which is a way of doing research, one of several
+        the templates offer, and a project may be on any of them. What a
+        reader wants on a home page is what this thing does to their year, and
+        those are different questions that had been given one answer.
+    
+        Written out rather than resolved, for the same reason. A home page
+        describing the product cannot take its content from whichever process
+        a template happens to name; the previous version would have said
+        something different the day the default process changed, which is a
+        live open decision (23.3). */}
+    <section aria-labelledby="lc" class="lifecycle">
       <div class="lc-head">
         <h2 class="t-h2" id="lc">How research goes</h2>
         <p class="t-sm">
-          The same shape whether it ends at a fair, in a class, or in the
-          journal. Publication is the last part of it rather than a separate
-          thing to apply to.
+          Registration through publication, on one page that fills up as the
+          year goes.
         </p>
       </div>
-      <ol class="strip">
+      <ol class="steps">
         {
-          phases.map((phase, i) => (
-            <li class={i === 0 ? 'done' : ''}>
-              <span class="s">{phase.name ?? phase.id}</span>
-              <span class="d">{String(i + 1).padStart(2, '0')}</span>
+          [
+            ['Register', 'The project exists, with authors.'],
+            ['Work', 'Notes, files, shared writing.'],
+            ['Package', 'Deliverables and whatever the program requires.'],
+            ['Participate', 'A class milestone, a fair, or simply the work itself.'],
+            ['Share', 'A permanent record with its own address.'],
+          ].map(([name, blurb], i) => (
+            <li>
+              <span class="n" aria-hidden="true">{i + 1}</span>
+              <div class="step-card">
+                <p class="step-t">{name}</p>
+                <p class="step-d">{blurb}</p>
+              </div>
             </li>
           ))
         }
@@ -189,7 +204,7 @@ cachePublicPage(Astro);
             list is written here — both come from the organization record. */}
         {cohorts.length > 0 && (
           <>
-            <h3 class="t-lbl" style="margin:0 0 10px">Classes and clubs</h3>
+            <h3 class="group-h first">Classes and clubs</h3>
             <ul class="season">
               {cohorts.map((p: any) => (
                 <li>
@@ -203,7 +218,7 @@ cachePublicPage(Astro);
 
         {venues.length > 0 && (
           <>
-            <h3 class="t-lbl" style="margin:18px 0 10px">Fairs, grants and the journal</h3>
+            <h3 class="group-h">Fairs, grants and the journal</h3>
             <ul class="season">
               {venues.map((p: any) => (
                 <li>
@@ -301,6 +316,31 @@ cachePublicPage(Astro);
   /* This school's season. A list rather than cards, because the answer to
      "what could I take part in" is short and a card grid makes six names
      look like a catalog. */
+  /* The two group headings, which were `t-lbl`.
+  
+     That is the small uppercase label the section header above them already
+     uses, so a heading grouping four items rendered smaller and quieter than
+     the items themselves — the reader met *Classes and clubs* as a caption
+     rather than as a division, and the two groups blurred into one list of
+     six. Larger than what it groups, and in the interface face rather than
+     the editorial one, so it separates by size and by shape at once.
+  
+     Not uppercase. At this size letter-spaced capitals stop being a label and
+     start being a shout, and there is one of those at the top already. */
+  .group-h {
+    margin: 32px 0 4px;
+    font-family: var(--face-ui);
+    font-weight: 600;
+    font-size: 1.18rem;
+    color: var(--ink);
+  }
+
+  /* The first sits directly under the section rule, which is separation
+     enough on its own. */
+  .group-h.first {
+    margin-top: 8px;
+  }
+
   .season { list-style: none; margin: 0; padding: 0; }
   .season li {
     display: flex;
@@ -326,14 +366,72 @@ cachePublicPage(Astro);
   .hero .lede {
     margin-top: 18px;
   }
-  .lifecycle {
-    overflow: hidden;
-  }
-  .lc-head {
-    padding: 18px 20px 14px;
-  }
   .lc-head .t-sm {
     margin-top: 5px;
+    max-width: 60ch;
+  }
+
+  /* Five steps, each a numbered marker above a card.
+  
+     Not the bordered strip this replaced: five cells of a table read as a
+     table, one thing divided five ways, and these are five things that happen
+     one after another. Separated cards with the number outside them say
+     sequence, which is what the section is about.
+  
+     `auto-fit` rather than five columns, so the row becomes two and then one
+     on a narrow screen without a breakpoint deciding where. */
+  .steps {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+    gap: 18px;
+    margin: 22px 0 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .steps li {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  /* Outside the card and above it, so the eye counts the row before reading
+     any of it. */
+  .n {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 2.1rem;
+    height: 2.1rem;
+    border-radius: 50%;
+    background: var(--brand);
+    color: var(--brand-contrast);
+    font-family: var(--face-ui);
+    font-weight: 700;
+    font-size: 0.9rem;
+  }
+
+  .step-card {
+    flex: 1;
+    padding: 14px 16px;
+    background: var(--sunk);
+    border: 1px solid var(--rule-fine);
+    border-radius: var(--radius);
+  }
+
+  .step-t {
+    margin: 0;
+    font-family: var(--face-ui);
+    font-weight: 700;
+    font-size: 0.98rem;
+    color: var(--ink);
+  }
+
+  .step-d {
+    margin: 6px 0 0;
+    font-size: 0.9rem;
+    line-height: 1.5;
+    color: var(--ink-2);
   }
   @media (max-width: 640px) {
     .hero {

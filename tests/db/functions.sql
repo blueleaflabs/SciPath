@@ -1138,5 +1138,80 @@ begin
 end $body$;
 $fmt$, :'both_project', :'both_project', :'both_project', :'both_author') \gexec
 
+
+-- ---------------------------------------------------------------------------
+-- A reservation can be claimed by the person it names.
+--
+-- `user_roles_no_self_grant` refuses a row whose `user_id` is `auth.uid()`,
+-- and a claimed reservation is exactly that: the person signing in receives
+-- the role somebody reserved for them. The guard names two legitimate
+-- exceptions in its own comment; this was the third and was missed, so **no
+-- reservation could ever be claimed**. It surfaced on the finish signing up
+-- screen as `a role may not be granted to yourself`, which reads as though
+-- the person had done something wrong.
+--
+-- Asserted as the claiming user rather than as the owner, because that is the
+-- whole of the bug: as `postgres` the guard returns early and the broken
+-- version passes. Three attempts at this proof went green against the
+-- unfixed function before the impersonation was right — `set local` outside a
+-- transaction is a no-op, and `request.jwt.claims` is not the setting
+-- `auth.uid()` reads.
+-- ---------------------------------------------------------------------------
+
+\echo ''
+\echo '── Claiming a reservation'
+
+do $body$
+declare
+  v_org  uuid;
+  v_user uuid := '9f000000-0000-4000-8000-00000000c1a1';
+  v_n    int;
+begin
+  select id into v_org from public.organizations limit 1;
+
+  insert into auth.users (id, email) values (v_user, 'reserved@demo.invalid');
+
+  insert into public.users (id, org_id, display_name, population, status,
+    affiliation_state, consent_state, age_band)
+  values (v_user, v_org, 'Reserved Person', 'staff', 'active',
+    'domain_verified', 'not_required', '18_plus');
+
+  insert into public.role_reservations (org_id, email, display_name, role)
+  values (v_org, 'reserved@demo.invalid', 'Reserved Person', 'advisor');
+
+  /* As the person themselves. The guard compares against `auth.uid()`, so
+     running this as the owner would prove nothing. */
+  perform set_config('request.jwt.claim.sub', v_user::text, true);
+  perform set_config('role', 'authenticated', true);
+
+  v_n := app.claim_reservations(v_user, 'reserved@demo.invalid');
+
+  perform set_config('role', 'postgres', true);
+
+  if v_n <> 1 then
+    raise exception 'FAIL the reservation was not claimed (%)', v_n;
+  end if;
+  raise notice '  ok   the person it names may claim it';
+
+  if not exists (
+    select 1 from public.user_roles
+     where user_id = v_user and role = 'advisor' and revoked_at is null
+  ) then
+    raise exception 'FAIL claimed, but no role was granted';
+  end if;
+  raise notice '  ok   and the role is granted';
+
+  if exists (
+    select 1 from public.role_reservations
+     where lower(email) = 'reserved@demo.invalid' and claimed_at is null
+  ) then
+    raise exception 'FAIL the reservation still reads as unclaimed';
+  end if;
+  raise notice '  ok   and the reservation is marked claimed';
+exception when others then
+  perform set_config('role', 'postgres', true);
+  raise;
+end $body$;
+
 \echo ''
 \echo '  All function assertions passed.'

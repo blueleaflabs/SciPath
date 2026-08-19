@@ -52,7 +52,22 @@ reservations:
 # their own program's projects**, which is the point of scoping: one teacher
 # reading another's projects is the thing being prevented.
 #
-# `population` defaults to staff.
+# `population` defaults to staff, and a teacher needs nothing else: staff,
+# 18_plus and consent not_required are true of one.
+#
+# **A student has to say what it is.** Inheriting the teacher shape would write
+# `18_plus` and `not_required` onto a high schooler, and `not_required` means
+# nobody has to ask a parent — which is what gates publication. The script
+# refuses a minor whose consent is not_required rather than writing it.
+#
+#   population      student | staff
+#   age_band        13_17 | 18_plus     (there is no account below 13)
+#   consent_state   pending | active | paused | closed | not_required
+#   grad_year       2000-2100
+#
+# `pending` is a guardian who has been asked and not answered; `active` is one
+# who agreed. Both are worth having on screen in a demonstration, because what
+# a student sees differs.
 # ---------------------------------------------------------------------------
 accounts:
   # A teacher responsible for one class, and nothing else.
@@ -79,3 +94,27 @@ accounts:
     password: change-this
     roles:
       - { role: advisor }
+
+  # A student. Every field stated, because none of the teacher defaults is
+  # true of one.
+  - org: montavista
+    email: a_student@example.org
+    name: A Student
+    password: change-this
+    population: student
+    age_band: 13_17
+    consent_state: active
+    grad_year: 2027
+    roles: []
+
+  # The same student before a guardian has answered. Publication is blocked
+  # and the difference is visible on their own pages.
+  - org: montavista
+    email: waiting_student@example.org
+    name: Waiting Student
+    password: change-this
+    population: student
+    age_band: 13_17
+    consent_state: pending
+    grad_year: 2028
+    roles: []

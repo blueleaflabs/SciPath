@@ -29,6 +29,12 @@ jobs:
       - name: Archive independence
         run: npm run test:static
 
+      # A const is hoisted uninitialised, so a read above it is a run time
+      # error and not a parse error. One reached a seed and cost a full
+      # rebuild; an earlier one shipped in page frontmatter.
+      - name: Nothing is used before it is declared
+        run: npm run test:tdz
+
       # The date ordering check, tested on its own before anything around it.
       - name: Date ordering
         run: npm run test:dates
@@ -68,8 +74,19 @@ jobs:
           unset PUBLIC_SUPABASE_URL PUBLIC_SUPABASE_PUBLISHABLE_KEY SUPABASE_SECRET_KEY
           npm run build
 
+      # The archive rendered.
+      #
+      # These paths moved at 1.39, when the home page left the tenant tree
+      # and became on demand, and the step went on asserting the old ones —
+      # so CI has been red on this since, for a reason that is not a fault.
+      # What is prerendered now is the per-tenant chrome; the home page,
+      # /articles/ and /showcase/ are in the worker.
+      #
+      # Named per tenant rather than globbed, because "some directory
+      # rendered" is the uniformly-wrong-output pass of 19.9.
       - name: Check the archive actually rendered
         run: |
+          # A directory, not a file: the adapter emits a bundle.
           test -d dist/_worker.js
           test -f dist/_routes.json
           test -f dist/sitemap-index.xml
@@ -80,7 +97,7 @@ jobs:
             test -f "dist/$tenant/robots.txt"
             test -d "dist/$tenant/pagefind"
           done
-          
+
       # The second theme has to build too, not just parse.
       # Reads the built HTML rather than the source, so it catches a tenant
       # leak however it was caused.

@@ -1296,4 +1296,92 @@ test('no page hands children to a component that cannot render them', () => {
   );
 });
 
+test('no page puts a form control class on something that is not one', () => {
+  /**
+   * `ui.css` styles `.in` as a text input: a border, a background, padding, a
+   * radius. Twenty-six pages set it on an `<input>`, which is what it is for.
+   * One page set it on a `<span>` holding a program's name, and got the name
+   * rendered inside what looked like a disabled form field.
+   *
+   * **Nothing was wrong with either rule.** A page-scoped `.in` was written
+   * for that span, and Astro's scoped styles do not stop a global rule of the
+   * same name applying too — so the span took the input's look and the local
+   * rule only adjusted it. Two meanings had been given one name, and the
+   * cheaper one to change is the local one.
+   *
+   * Checked by name against the elements the class belongs on. A visual fault
+   * of this kind is invisible to every check here, because the markup is
+   * valid and the styles both apply exactly as written.
+   */
+  const controls = ['in', 'sel', 'btn-sub'];
+  const allowed = /^(input|select|textarea|button)$/i;
+
+  const problems = [];
+
+  for (const file of pages) {
+    const text = fs.readFileSync(file, 'utf8');
+
+    for (const cls of controls) {
+      /* The element name immediately before the class, on the same tag. */
+      for (const m of text.matchAll(
+        new RegExp(`<(\\w+)(?:\\s[^>]*?)?\\sclass="${cls}"`, 'g')
+      )) {
+        if (!allowed.test(m[1])) {
+          problems.push(
+            `${path.relative('.', file)} puts class="${cls}" on a <${m[1]}>, ` +
+              `which will take the form control's border and background`
+          );
+        }
+      }
+    }
+  }
+
+  assert.deepEqual(
+    [...new Set(problems)],
+    [],
+    'give it a name of its own rather than borrowing a control class'
+  );
+});
+
+test('every custom property a page uses is one the tokens define', () => {
+  /**
+   * `var(--font-mono)` appeared on four rules across two pages. There is no
+   * such token — it is `--face-num` — so the browser fell back to its own
+   * default monospace, which is a different face at a different weight and
+   * looks close enough to pass.
+   *
+   * **An undefined custom property fails silently by design**: the browser
+   * treats it as unset and moves on. Nothing errors, nothing warns, and the
+   * page renders in whatever the platform happens to supply. That makes it
+   * exactly the kind of fault this file exists for.
+   *
+   * Read from `tokens.css` rather than listed here, so a token added or
+   * renamed there does not need a second edit — and so this cannot go stale
+   * while continuing to pass (19.9).
+   */
+  const tokens = new Set(
+    [...fs.readFileSync('src/styles/tokens.css', 'utf8').matchAll(/^\s*(--[\w-]+)\s*:/gm)]
+      .map((m) => m[1])
+  );
+
+  assert.ok(tokens.size > 20, `read only ${tokens.size} tokens — widen the pattern`);
+
+  const problems = [];
+
+  for (const file of [...pages, 'src/styles/ui.css']) {
+    const text = fs.readFileSync(file, 'utf8');
+
+    for (const m of text.matchAll(/var\((--[\w-]+)/g)) {
+      /* A page may define its own, and does: scoped styles declare a few
+         locally. Only a name defined nowhere is a fault. */
+      if (tokens.has(m[1])) continue;
+      if (new RegExp(`${m[1]}\\s*:`).test(text)) continue;
+
+      problems.push(`${path.relative('.', file)} uses ${m[1]}, which nothing defines`);
+    }
+  }
+
+  assert.deepEqual([...new Set(problems)], [], 'the browser silently ignores an unknown token');
+});
+
 console.log(`${passed} ordering assertions passed. ${pages.length} pages read.`);

@@ -31,8 +31,26 @@ export interface Standing {
   isAdvisor: boolean;
   /** Runs the editorial queue. The advisor always is one, because the advisor decides. */
   isEditor: boolean;
-  /** Either club role: sees every project at the school. */
+  /** Either club role: has a queue of projects to look after. */
   runsTheClub: boolean;
+  /**
+   * The programs these roles are held in, and whether any is held at the
+   * school.
+   *
+   * **`scope_id` was fetched and then discarded here.** The middleware selects
+   * it, this reduced the rows to a list of names, and every page downstream
+   * asked *does this person run the club* — a question with no room in it for
+   * *which club*. So a club officer's own page listed every project at the
+   * school including the class's, with the class's Elder in the officer
+   * column: work they cannot act on, under a heading saying it is theirs.
+   *
+   * `anywhere` is somebody whose role names no program, which is the widest
+   * there is and fits everything. That is the right default for an advisor
+   * and wrong for an officer of one club, and only the scope can tell them
+   * apart.
+   */
+  scopes: string[];
+  anywhere: boolean;
 }
 
 /**
@@ -43,7 +61,7 @@ export interface Standing {
  * a question nobody asked.
  */
 export function standing(
-  roles: { role: string }[] = [],
+  roles: { role: string; scope_id?: string | null }[] = [],
   population?: string | null
 ): Standing {
   const names = roles
@@ -55,7 +73,14 @@ export function standing(
   const isOfficer = names.includes('officer');
   const isAdvisor = names.includes('advisor');
 
+  /* Only the roles that carry responsibility for other people's projects.
+     A `student` row is not scoped and would otherwise read as somebody who
+     runs everything. */
+  const running = roles.filter((r) => r.role === 'officer' || r.role === 'advisor');
+
   return {
+    scopes: [...new Set(running.map((r) => r.scope_id).filter(Boolean) as string[])],
+    anywhere: running.some((r) => !r.scope_id),
     names,
     isStudent: names.includes('student') || population === 'student',
     isOfficer,

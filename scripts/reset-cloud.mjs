@@ -38,13 +38,14 @@
  */
 
 import { spawn } from 'node:child_process';
-import { createClient } from '@supabase/supabase-js';
+import fs from 'node:fs';
 import readline from 'node:readline/promises';
+import { createClient } from '@supabase/supabase-js';
 import { loadCloudVars } from './dev-vars.mjs';
 
 /* `.cloud.vars`, not `.dev.vars`. The local file names the database
    `npm run reset` destroys, and the two must never be the same thing. */
-loadCloudVars();
+const cloudVars = loadCloudVars();
 
 const URL = process.env.PUBLIC_SUPABASE_URL;
 const KEY = process.env.SUPABASE_SECRET_KEY;
@@ -62,10 +63,28 @@ if (!URL || !KEY) {
   );
 }
 
+/**
+ * Say where the value came from, not just that it is wrong.
+ *
+ * Three things can supply `PUBLIC_SUPABASE_URL` and they do not have equal
+ * standing: an exported shell variable beats every file, `.cloud.vars` is
+ * what this script means, and `.dev.vars` names the database `npm run reset`
+ * destroys. Told only *this is the local database*, somebody edits the file
+ * that is already correct — the shell is invisible and therefore the last
+ * place anybody looks.
+ */
+function whereFrom(name) {
+  if (cloudVars.applied.includes(name)) return '.cloud.vars';
+  return 'the shell (there is no .cloud.vars)';
+}
+
 if (/^https?:\/\/(127\.0\.0\.1|localhost)(:|\/|$)/.test(URL)) {
   fail(
-    'This is the local database. Use `npm run reset`, which drops and recreates\n' +
-      'it properly. This script exists only for a cloud project.'
+    `PUBLIC_SUPABASE_URL is ${URL}, from ${whereFrom('PUBLIC_SUPABASE_URL')}.\n\n` +
+      'That is the local database, and `npm run reset` is the command for it.\n\n' +
+      'Put the project URL in .cloud.vars, which overrides the shell and is\n' +
+      'separate from .dev.vars because `npm run reset` destroys whatever that\n' +
+      'one names.'
   );
 }
 
@@ -75,25 +94,95 @@ if (!ref) fail(`Could not read a project ref out of ${URL}.`);
 const args = process.argv.slice(2);
 const verifyOnly = args.includes('--verify');
 
+/* Said out loud, above the block that names the project. A shell variable
+   exported for local work is invisible and long forgotten, and replacing one
+   silently is how somebody comes to distrust the tool rather than the
+   variable. */
+if (cloudVars.overrode.length > 0) {
+  console.log(`\n  .cloud.vars overrode ${cloudVars.overrode.join(', ')} from the shell`);
+}
+
 /**
- * Typed out, once.
+ * The CLI's link and `.cloud.vars` must name the same project.
  *
- * This used to want `--yes --project=<ref>`, which is two flags to compose
- * and both end up in shell history where a re-run costs a database. A prompt
- * asks at the moment it matters and cannot be recalled with an up arrow.
+ * They are two independent settings. `supabase db reset --linked` goes
+ * wherever `npx supabase link` last pointed, recorded in
+ * `supabase/.temp/project-ref`; everything else here goes wherever
+ * `.cloud.vars` says. **Nothing made them agree**, so a link left over from
+ * another project would have this script rebuild one database and then seed a
+ * different one — both steps reporting success, and the damage in the
+ * database nobody was looking at.
  *
- * The ref rather than "yes", because typing the name of the thing is the
- * check: somebody in the wrong terminal types the wrong name.
+ * Read rather than trusted, and checked before the confirmation prompt so
+ * that the ref somebody types is the ref that everything will use.
+ */
+const linkedRef = (() => {
+  const file = 'supabase/.temp/project-ref';
+  return fs.existsSync(file) ? fs.readFileSync(file, 'utf8').trim() : null;
+})();
+
+if (!verifyOnly) {
+  if (!linkedRef) {
+    fail(
+      `No project is linked, so the schema cannot be rebuilt.\n\n` +
+        `  npx supabase link --project-ref ${ref}`
+    );
+  }
+
+  if (linkedRef !== ref) {
+    fail(
+      `These disagree, and one of them is wrong:\n\n` +
+        `  .cloud.vars names   ${ref}\n` +
+        `  the CLI is linked to ${linkedRef}\n\n` +
+        `Rebuilding one and seeding the other would report success twice.\n\n` +
+        `  npx supabase link --project-ref ${ref}`
+    );
+  }
+}
+
+/**
+ * The whole environment, then one question.
+ *
+ * This asked for the project ref typed out, which is a good check and answers
+ * only half of it: somebody typing a ref correctly can still be pointed at
+ * the wrong bucket, or linked to a project the file does not name. What is
+ * actually needed is to *see* every setting that decides where this acts, at
+ * the moment of deciding, and then say yes to that rather than to a word.
+ *
+ * The two refusals above stay ahead of it — a local address, and a link
+ * disagreeing with the file, are not choices to offer somebody at eleven at
+ * night. This is for the ordinary case, where everything is right and worth
+ * reading anyway.
  */
 if (!verifyOnly) {
-  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  const bucketNamed = process.env.R2_BUCKET;
+  const r2Ready = ['R2_ACCOUNT_ID', 'R2_ACCESS_KEY_ID', 'R2_SECRET_ACCESS_KEY'].every(
+    (name) => process.env[name]
+  );
 
-  console.log(`\nThis empties ${ref} completely. There is no undo.`);
-  const typed = await rl.question(`Type the project ref to continue: `);
+  console.log(`
+  Project       ${ref}
+  URL           ${URL}
+  From          ${whereFrom('PUBLIC_SUPABASE_URL')}
+  CLI linked to ${linkedRef}
+  File storage  ${
+    r2Ready && bucketNamed ? bucketNamed : 'skipped — R2 credentials not set'
+  }
+
+  This drops every table and recreates it from the migration, removes every
+  account${r2Ready && bucketNamed ? `, empties ${bucketNamed}` : ''}, and then seeds the organizations, the programs, and
+  any advisor accounts in local-data/people.yaml.
+
+  There is no undo and no backup.
+`);
+
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  const answer = (await rl.question('  Proceed? (y/n) ')).trim().toLowerCase();
   rl.close();
 
-  if (typed.trim() !== ref) {
-    fail('That is not the project ref. Nothing has been changed.');
+  if (answer !== 'y' && answer !== 'yes') {
+    console.log('\n  Stopped. Nothing has been changed.\n');
+    process.exit(1);
   }
 }
 
@@ -251,8 +340,6 @@ function report({ counts, unreadable = [], accounts }) {
 }
 
 /* ------------------------------------------------------------------ */
-
-console.log(`\nProject ${ref}`);
 
 if (verifyOnly) {
   const clean = report(await census({ tolerant: true }));

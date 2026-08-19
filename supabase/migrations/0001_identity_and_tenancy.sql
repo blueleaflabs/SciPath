@@ -7497,8 +7497,28 @@ begin
          and ur.scope_id is null
          and ur.revoked_at is null
     ) then
+      /* Marked as a system grant, and bracketed so the flag does not outlive
+         the statement it covers.
+      
+         `user_roles_no_self_grant` refuses a row whose `user_id` is
+         `auth.uid()`, which is exactly what this is: the person signing in
+         receives the role somebody reserved for them. That guard names two
+         legitimate exceptions in its own comment — the baseline student role
+         and a consumed pending grant — and a claimed reservation is the third
+         and was missed, so **no reservation could ever be claimed**. It
+         surfaced as `a role may not be granted to yourself` on the finish
+         signing up screen, which reads as though the person had done
+         something wrong.
+      
+         Set here rather than around the loop because the flag suspends a
+         safety check, and the narrower the window the smaller the chance
+         something else slips through it. */
+      perform set_config('app.system_grant', 'on', true);
+
       insert into public.user_roles (org_id, user_id, role, granted_by)
       values (v_org, p_user_id, v_row.role, null);
+
+      perform set_config('app.system_grant', 'off', true);
     end if;
 
     update public.role_reservations

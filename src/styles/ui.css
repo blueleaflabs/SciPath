@@ -1127,7 +1127,10 @@ mark {
   font-size: 0.85rem;
   color: var(--masthead-ink);
   line-height: 1.7;
-  max-width: 74ch;
+  /* No measure. A measure keeps running prose readable, and this is two
+     short statements under a rule that spans the page — held to 74ch it
+     wrapped early and sat as a narrow column against a wide line, which
+     reads as something unfinished rather than as something considered. */
 }
 
 

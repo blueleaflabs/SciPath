@@ -1,0 +1,49 @@
+# Rebuilds the published-record search index.
+#
+# Records live in the record store, not in this repository, so nothing here
+# reads or writes student work as source. This job borrows the repository for
+# compute: it reads the store, runs Pagefind's indexer, and writes the index
+# back. Pagefind's indexer is a native binary and cannot run in a Worker,
+# which is the only reason a job exists at all.
+#
+# Fired by the application when something is published, and on a schedule as a
+# safety net in case a dispatch is ever lost.
+
+name: Index published records
+
+on:
+  repository_dispatch:
+    types: [records-changed]
+  schedule:
+    # Once a day. A missed dispatch means a record is unfindable until this
+    # runs, which is a nuisance rather than an outage.
+    - cron: '17 6 * * *'
+  workflow_dispatch:
+
+concurrency:
+  # One at a time. Two overlapping runs would race on the same index objects.
+  group: index-records
+  cancel-in-progress: false
+
+jobs:
+  index:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Build the index and write it back to the store
+        run: node scripts/index-records.mjs --remote
+        env:
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}

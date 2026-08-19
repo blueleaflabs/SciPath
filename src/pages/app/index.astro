@@ -500,16 +500,29 @@ if (supabase && account) {
 
     const ids = (projects ?? []).map((p: any) => p.id);
 
-    /* Per participation, not per project.
-    
-       This picked one entry per project with `.find`, which is arbitrary the
-       moment a project is in two programs — and it is the reason the table
-       could not be grouped by program or carry a selection state, both of
-       which belong to a participation rather than to the work. */
+    /**
+     * Per participation, not per project — and every kind of place.
+     *
+     * This picked one entry per project with `.find`, which is arbitrary the
+     * moment a project is in two programs, and it is the reason the table
+     * could not be grouped by program or carry a selection state.
+     *
+     * **It also read `opportunity_participations`**, which is the view that
+     * excludes classes and clubs. So a project whose only place is the
+     * Research Club matched nothing and rendered under *in no program* — a
+     * heading that means nobody has entered it anywhere, said about a project
+     * sitting in a club with an officer assigned to it. The same blind spot
+     * as the notebook export (22.25) and the seed guard, in a third place.
+     *
+     * `participations` rather than either view, because the question is
+     * everywhere this work is answerable. `programs(...)` resolves without
+     * naming the key because this is a table; on a view it would have to be
+     * spelled `programs:program_id` (19.9).
+     */
     const { data: entries } = ids.length
       ? await supabase
-          .from('opportunity_participations')
-          .select('id, project_id, status, selection_state, selection_decided_at, programs:program_id(id, name, season_year, fair_date, kind, roles, selection_cap)')
+          .from('participations')
+          .select('id, project_id, status, selection_state, selection_decided_at, programs(id, name, season_year, fair_date, kind, roles, selection_cap, program_role)')
           .in('project_id', ids)
           .in('status', ['entered', 'competed'])
       : { data: [] as any[] };
@@ -531,12 +544,32 @@ if (supabase && account) {
           .in('participation_id', entryIds)
       : { data: [] as any[] };
 
-    /* One row per participation, and a project in no program still gets a
-       row, because a project nobody has entered anywhere is exactly the one
-       an advisor should see. */
+    /**
+     * The places this person is responsible for, and no others.
+     *
+     * This listed one row per participation across the whole school, which is
+     * right for an unscoped advisor and wrong for an officer of one club: the
+     * club's officer saw the class's projects, with the class's Elder in the
+     * officer column, under a heading saying they were at their school and a
+     * count saying how many needed attention. None of it was theirs to act on.
+     *
+     * A project in no program is kept only for somebody unscoped. It is the
+     * project an advisor most needs to see — nobody has entered it anywhere,
+     * so no program's officer has any claim on it — and showing it to every
+     * officer of every club is how one unattached project appears in five
+     * queues at once.
+     */
+    const runsAnywhere = me.anywhere;
+    const runs = (programId?: string | null) =>
+      runsAnywhere || (programId ? me.scopes.includes(programId) : false);
+
     const pairs = (projects ?? []).flatMap((p: any) => {
-      const its = (entries ?? []).filter((e: any) => e.project_id === p.id);
-      return its.length ? its.map((entry: any) => ({ p, entry })) : [{ p, entry: null }];
+      const its = (entries ?? [])
+        .filter((e: any) => e.project_id === p.id)
+        .filter((e: any) => runs((e.programs as any)?.id));
+
+      if (its.length) return its.map((entry: any) => ({ p, entry }));
+      return runsAnywhere ? [{ p, entry: null }] : [];
     });
 
     watched = pairs.map(({ p, entry }: any) => {
@@ -1540,15 +1573,27 @@ const grouped = () => {
      A heading over a grid is enough on its own; a rule under it would make
      four sections compete with the section rules already on the page. */
   .group + .group { margin-top: 30px; }
+  /* Larger than what it groups.
+  
+     This was the small uppercase mono label, which is what the section header
+     above it already is — so *Classes and clubs* rendered quieter than the
+     cards beneath it and the groups blurred into one long list. In the
+     interface face at a heading size, it separates by size and by shape at
+     once. Matched to the signed-out season list on the home page, which had
+     the same fault and the same name for it.
+  
+     `--font-mono` was also wrong: the token is `--face-num`, and the
+     misspelling meant the browser's default monospace rather than the one
+     this site loads. Two faults in seven lines, both invisible unless
+     somebody looked. */
   .group-h {
-    font-family: var(--font-mono);
-    font-size: 0.78rem;
-    letter-spacing: 0.07em;
-    text-transform: uppercase;
-    color: var(--ink-2);
-    margin: 0 0 3px;
+    margin: 0 0 4px;
+    font-family: var(--face-ui);
+    font-weight: 600;
+    font-size: 1.18rem;
+    color: var(--ink);
   }
-  .group-b { margin: 0 0 12px; max-width: var(--measure-text); }
+  .group-b { margin: 0 0 14px; max-width: var(--measure-text); }
 
   .miss { color: var(--ink-3); font-style: italic; }
   .inline { display: flex; gap: 6px; align-items: center; }
@@ -1831,7 +1876,7 @@ const grouped = () => {
   /* Quiet, and not part of the link's name. */
   .yet {
     margin-left: 6px;
-    font-family: var(--face-mono);
+    font-family: var(--face-num);
     font-size: 0.76rem;
     letter-spacing: 0.02em;
     text-transform: none;

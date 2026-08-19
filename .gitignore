@@ -1,8 +1,6 @@
 # Custom
 supabase/seed/local/
 .dev.vars
-.cloud.vars
-
 
 # Dependencies and build output
 node_modules/
@@ -19,6 +17,10 @@ dist/
 # covered by any standard Node template.
 .dev.vars
 .dev.vars.*
+# The cloud project's credentials. Separate from .dev.vars on purpose:
+# `npm run reset` drops whatever .dev.vars points at.
+.cloud.vars
+.cloud.vars.*
 
 # Environment
 .env
@@ -34,6 +36,11 @@ prd/
 # Dumps, sample exports, and any working file with real names in it.
 # Named this rather than test/ so the test namespace stays clean: ignoring
 # a directory called test silently breaks CI the day someone adds a spec.
+#
+# `local-data/people.yaml` lives here: the addresses and passwords for the
+# advisor accounts, read by scripts/seed-people.mjs. Not in src/config/, where
+# everything is committed and read by the build — one invisible file among
+# visible ones is a trap. src/config/people.example.yaml shows the shape.
 local-data/
 
 # Editor and OS

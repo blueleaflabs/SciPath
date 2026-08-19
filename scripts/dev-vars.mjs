@@ -73,30 +73,38 @@ export function loadDevVars(dir = process.cwd()) {
 }
 
 /**
- * The same, for `.cloud.vars`.
+ * The same, for `.cloud.vars`, except that this file **wins**.
  *
- * A separate file, deliberately. Production credentials must never sit in
- * `.dev.vars`, because `npm run reset` drops and recreates whatever that file
- * points at — the one accident this project can least afford. Two files means
- * a script has to say which world it belongs to, and the local chain has no
- * way to reach the cloud one even by mistake.
+ * `loadDevVars` leaves anything already in the environment alone, so CI and a
+ * deployment can pass their own values. `.cloud.vars` is the opposite case: a
+ * developer's shell holds `PUBLIC_SUPABASE_URL=http://127.0.0.1:54321`
+ * because that is what local work needs, exported once and forgotten. With
+ * the usual precedence that shell variable beat the file, and
+ * `npm run reset:cloud` refused every time with *this is the local database*
+ * — correct, and useless, since the answer was to `unset` two variables
+ * before every run.
  *
- * Gitignored alongside `.dev.vars`, and for the same reason: it holds the
- * secret key, which bypasses row level security entirely.
+ * A file named `.cloud.vars`, read only by the scripts that act on a cloud
+ * project, is not ambiguous about what it means. Nothing in CI reads it, so
+ * there is no environment left to be polite to.
+ *
+ * Returns what it overrode as well as what it set, so a script can say so.
+ * Quietly replacing a value somebody exported on purpose is its own trap.
  */
 export function loadCloudVars(dir = process.cwd()) {
   const file = path.join(dir, '.cloud.vars');
-  if (!fs.existsSync(file)) return [];
+  if (!fs.existsSync(file)) return { applied: [], overrode: [] };
 
   const values = parseDevVars(fs.readFileSync(file, 'utf8'));
   const applied = [];
+  const overrode = [];
 
   for (const [key, value] of Object.entries(values)) {
-    if (process.env[key] === undefined || process.env[key] === '') {
-      process.env[key] = value;
-      applied.push(key);
-    }
+    const had = process.env[key];
+    if (had !== undefined && had !== '' && had !== value) overrode.push(key);
+    process.env[key] = value;
+    applied.push(key);
   }
 
-  return applied;
+  return { applied, overrode };
 }

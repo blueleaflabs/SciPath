@@ -51,8 +51,13 @@ const documented = new Set(
 /** Things the platform provides rather than things we configure. */
 const AMBIENT = new Set([
   'NODE_ENV', 'CI', 'PATH', 'HOME', 'PWD', 'TERM',
-  /* Bindings, which come from wrangler.jsonc rather than from a variable. */
-  'NOTEBOOK', 'SESSION',
+  /* Bindings, which come from wrangler.jsonc rather than from a variable.
+  
+     `ASSETS` is not in that file either: the platform provides it to any
+     worker deployed alongside static output, and the middleware uses it to
+     serve a tenant's prerendered pages — `next()` cannot reach those, because
+     a prerendered page is a file on the asset server and not a route. */
+  'NOTEBOOK', 'SESSION', 'ASSETS',
 ]);
 
 const scriptFiles = fs

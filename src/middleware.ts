@@ -132,7 +132,40 @@ export const onRequest = defineMiddleware(async (context, next) => {
     ) {
       return next();
     }
-    return next(`/${slug}${url.pathname}${url.search}`);
+    const target = `/${slug}${url.pathname}${url.search}`;
+
+    /**
+     * Fetched from the assets binding, not rewritten into the app.
+     *
+     * **`next()` cannot reach a prerendered page.** The adapter's handler
+     * looks for a static asset before middleware runs, using the path as it
+     * arrived — so a request for `/guides/` misses, because the file is at
+     * `/montavista/guides/`. Middleware then rewrites, and the rewritten path
+     * matches no route either: a prerendered page is a file on the asset
+     * server and was never in the worker's route table. Both halves look
+     * right and neither can find the other.
+     *
+     * Every prerendered public page therefore 404'd in production — the
+     * guides, the policies, submit, about, contact, every link in the footer.
+     * Only `/` and `/app/` worked, because those are on demand and really are
+     * routes. **None of it reproduces locally**: `astro dev` has no static
+     * output and serves every route through the app, so the one environment
+     * where this fails is the only one that matters.
+     *
+     * So ask the asset server directly. A 404 from it falls through to the
+     * app, which is what makes a genuinely missing page still render the 404
+     * route rather than an empty asset response.
+     */
+    const assets = (locals as Record<string, any>).runtime?.env?.ASSETS;
+
+    if (assets) {
+      const served = await assets.fetch(new URL(target, url.origin));
+      if (served.status !== 404) return served;
+    }
+
+    /* No binding during prerendering, where middleware also runs and the app
+       is the only thing there is. */
+    return next(target);
   }
 
   const runtime = (locals as Record<string, any>).runtime?.env;

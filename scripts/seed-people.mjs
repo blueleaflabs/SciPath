@@ -113,6 +113,22 @@ for (const row of doc.reservations ?? []) {
   }
 }
 
+/**
+ * A record that says something untrue about a person is worse than no record.
+ *
+ * Every account used to inherit a teacher's shape — `staff`, `18_plus`,
+ * `not_required` — which is true of a teacher and three lies about a student.
+ * The last is the one that matters: `not_required` is precisely the state
+ * meaning nobody has to ask a parent, and consent state is what gates
+ * publication. A seeded student would have published without a guardian ever
+ * being asked, which is the single thing this product is built not to do.
+ *
+ * So a student has to say what it is, and the combinations that cannot be
+ * true are refused here rather than written.
+ */
+const AGE_BANDS = ['13_17', '18_plus'];
+const CONSENT = ['pending', 'active', 'paused', 'closed', 'not_required'];
+
 for (const row of doc.accounts ?? []) {
   const what = `accounts entry for ${row.email ?? '(no email)'}`;
 
@@ -125,6 +141,50 @@ for (const row of doc.accounts ?? []) {
   for (const grant of row.roles ?? []) {
     if (!['student', 'officer', 'advisor', 'editor'].includes(grant.role)) {
       fail(`${what}: role is "${grant.role}", and must be student, officer, advisor or editor.`);
+    }
+  }
+
+  const population = row.population ?? 'staff';
+
+  if (!['student', 'staff'].includes(population)) {
+    fail(`${what}: population is "${population}", and must be student or staff.`);
+  }
+
+  if (row.age_band && !AGE_BANDS.includes(row.age_band)) {
+    fail(
+      `${what}: age_band is "${row.age_band}", and must be 13_17 or 18_plus.\n` +
+        `There is no account below 13, so under_13 cannot be seeded.`
+    );
+  }
+
+  if (row.consent_state && !CONSENT.includes(row.consent_state)) {
+    fail(`${what}: consent_state must be one of ${CONSENT.join(', ')}.`);
+  }
+
+  if (row.grad_year && (row.grad_year < 2000 || row.grad_year > 2100)) {
+    fail(`${what}: grad_year is outside the range the schema allows.`);
+  }
+
+  if (population === 'student') {
+    if (!row.age_band) {
+      fail(
+        `${what}: a student must state an age_band.\n\n` +
+          `Defaulting it would write 18_plus onto a high schooler, and the\n` +
+          `consent that follows from it is what gates publication.`
+      );
+    }
+
+    if (!row.consent_state) {
+      fail(`${what}: a student must state a consent_state. See ${FILE} for what each means.`);
+    }
+
+    if (row.age_band === '13_17' && row.consent_state === 'not_required') {
+      fail(
+        `${what}: a minor's guardian consent is not optional.\n\n` +
+          `\`not_required\` means nobody has to ask a parent, which is true of an\n` +
+          `adult and false of a thirteen year old. Use pending, active, paused\n` +
+          `or closed.`
+      );
     }
   }
 }
@@ -303,9 +363,14 @@ for (const person of accounts) {
       status: 'active',
       affiliation_state: 'domain_verified',
       affiliation_verified_at: new Date().toISOString(),
-      consent_state: 'not_required',
-      age_band: '18_plus',
+      /* Stated for a student and defaulted for a teacher, which is the one
+         case where the adult shape is the true one. */
+      consent_state: person.consent_state ?? 'not_required',
+      consent_requested_at:
+        person.consent_state === 'pending' ? new Date().toISOString() : null,
+      age_band: person.age_band ?? '18_plus',
       age_attested_at: new Date().toISOString(),
+      grad_year: person.grad_year ?? null,
     },
     { onConflict: 'id' }
   );

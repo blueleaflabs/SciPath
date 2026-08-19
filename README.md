@@ -99,9 +99,13 @@ get is which file you have.
 
 ```bash
 npm run reset            # local:  reads .dev.vars
-npm run reset:cloud      # cloud:  reads .cloud.vars, asks for the project ref
+npm run reset:cloud      # cloud:  reads .cloud.vars
 npm run verify:cloud     # count the cloud project, change nothing
 ```
+
+Both print the database they are about to destroy, where that value came from,
+and what will be removed, then wait for y/n. Answering anything else stops the
+chain.
 
 Copy `.dev.vars.example` and `.cloud.vars.example` to fill those in. **They are
 two files on purpose**: `npm run reset` destroys whatever `.dev.vars` names, so
