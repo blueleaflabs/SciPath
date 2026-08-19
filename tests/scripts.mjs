@@ -490,35 +490,23 @@ test('the cloud reset empties every table the migration creates', () => {
   assert.deepEqual(invented, [], 'these are not tables in the migration');
 
   /**
-   * And every one is deleted by a column it actually has.
+   * And `organizations` cannot be reached by the cascade.
    *
-   * PostgREST refuses an unfiltered delete, so each table is filtered on a
-   * column that matches every row. Three of these have no `id` at all — their
-   * keys are composite — and a filter naming a column that does not exist
-   * fails at run time, partway through, on a database somebody has just
-   * decided to empty. That is the worst moment to find out.
+   * The script says it leaves that table alone, and `truncate ... cascade`
+   * reaches any table holding a foreign key *into* one being truncated. A
+   * column added to `organizations` that pointed at, say, a user would make
+   * the comment a lie and empty the one table an interrupted reset is
+   * supposed to leave coherent.
    */
-  const overrides = Object.fromEntries(
-    [...(script.match(/const DELETE_BY = \{([\s\S]*?)\};/)?.[1] ?? '').matchAll(
-      /(\w+):\s*'(\w+)'/g
-    )].map((m) => [m[1], m[2]])
+  const orgBody = sql.match(/create table public\.organizations \(([\s\S]*?)\n\);/)?.[1];
+
+  assert.ok(orgBody, 'could not find create table public.organizations');
+
+  assert.deepEqual(
+    [...orgBody.matchAll(/references public\.(\w+)/g)].map((m) => m[1]),
+    [],
+    'organizations now references another table, so the cascade would empty it too'
   );
-
-  const bodies = Object.fromEntries(
-    [...sql.matchAll(/create table public\.(\w+) \(([\s\S]*?)\n\);/g)].map((m) => [m[1], m[2]])
-  );
-
-  const wrong = [];
-
-  for (const table of listed) {
-    const column = overrides[table] ?? 'id';
-    const body = bodies[table] ?? '';
-    if (!new RegExp(`^\\s+${column}\\s+\\w`, 'm').test(body)) {
-      wrong.push(`${table} is deleted by "${column}", which it does not have`);
-    }
-  }
-
-  assert.deepEqual(wrong, [], 'the delete would fail partway through');
 });
 
 console.log(`${passed} script assertions passed. ${files.length} scripts read.`);
