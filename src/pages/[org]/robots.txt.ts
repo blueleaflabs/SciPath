@@ -1,3 +1,4 @@
+
 import { orgPaths } from '../../lib/tenant-paths';
 export const getStaticPaths = orgPaths;
 

@@ -83,12 +83,14 @@ if (fs.existsSync('dist')) {
       .map((e) => e.name);
 
     assert.ok(tenants.length > 1, 'expected several tenants in dist');
+
     for (const tenant of tenants) {
       assert.ok(
         fs.existsSync(`dist/${tenant}/pagefind`),
         `${tenant} has no search index of its own`
       );
     }
+
     assert.equal(fs.existsSync('dist/pagefind'), false, 'a shared index is still there');
   });
 }

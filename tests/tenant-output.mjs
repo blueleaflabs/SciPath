@@ -54,6 +54,11 @@ const tenants = fs
   .filter((d) => !['pagefind', 'pdf'].includes(d.name))
   .map((d) => d.name);
 
+if (tenants.length === 0) {
+  console.error(`No tenant directories in ${DIST}/. Run npm run build first.`);
+  process.exit(1);
+}
+
 function htmlFiles(dir) {
   const out = [];
   for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
