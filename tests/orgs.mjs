@@ -150,6 +150,108 @@ test('every mark length the schema allows has a badge size', () => {
   }
 });
 
+/* ── The demonstration tenant ────────────────────────────────────────────── */
+
+test('a demo organization claims no email domain', () => {
+  /* `demo: true` is what permits fixtures to be written into the production
+     project, so the flag has to mean an organization that can never be
+     confused with a school. An address on a listed domain is precisely the
+     claim a real school makes, and a demo tenant making it would put fixture
+     accounts on a namespace somebody real might arrive from. */
+  for (const file of files) {
+    const doc = yaml.load(fs.readFileSync(path.join(dir, file), 'utf8'));
+    if (doc.demo !== true) continue;
+
+    assert.deepEqual(doc.domains ?? [], [], `${doc.id} carries signup domains`);
+    assert.deepEqual(doc.verified_domains ?? [], [], `${doc.id} carries verified domains`);
+    assert.notEqual(doc.signup_mode, 'domain', `${doc.id} signs up by domain`);
+  }
+});
+
+test('a demo organization runs the programs it is demonstrating', () => {
+  /* The tenant exists to show a real school's setup to that school's
+     teachers, so it lists the same template ids rather than copies of them.
+     `unique (org_id, slug, season_year)` on `programs` is what makes that the
+     ordinary case: a school level template gets a row per school, so two
+     organizations naming one template fork no calendar.
+  
+     An earlier version invented a school with a class inheriting IRPD through
+     `extends`. It resolved correctly and it was the wrong thing: a second
+     description of a calendar that already exists is a second thing to keep
+     true, and nobody looks at the one used only for demonstrations. */
+  const files = fs.readdirSync(dir).filter((f) => f.endsWith('.yaml'));
+  const bySlug = {};
+
+  for (const file of files) {
+    const doc = yaml.load(fs.readFileSync(path.join(dir, file), 'utf8'));
+    bySlug[doc.id] = doc;
+  }
+
+  for (const doc of Object.values(bySlug)) {
+    if (doc.demo !== true) continue;
+
+    assert.ok(
+      (doc.programs ?? []).length > 0,
+      `${doc.id} runs no programs, so there is nothing to demonstrate`
+    );
+
+    /* Every one of them belongs to some real school's list. A program that
+       exists only for the demonstration is the copy this test is about. */
+    const elsewhere = new Set(
+      Object.values(bySlug)
+        .filter((other) => other.demo !== true)
+        .flatMap((other) => other.programs ?? [])
+    );
+
+    const invented = (doc.programs ?? []).filter((id) => !elsewhere.has(id));
+
+    assert.deepEqual(
+      invented,
+      [],
+      `${doc.id} runs ${invented.join(', ')}, which no real organization runs`
+    );
+  }
+});
+
+test('the demo flag is declared where a school is described', () => {
+  /* `src/config/orgs/*.yaml` is the only description of a school, and
+     `org-shape.ts` is the shape of that description. A key read by a script
+     and absent from the interface is a field that exists in the files and
+     not in the document describing them, which is how the two copies this
+     directory exists to prevent get started again.
+  
+     Declared, so it travels through `shapeOrg` like every other field and a
+     consumer reads the record rather than reparsing the file. */
+  const shape = fs.readFileSync('src/config/org-shape.ts', 'utf8');
+
+  assert.match(shape, /demo\?: boolean/, 'the field belongs in the Org interface');
+  assert.match(shape, /demo: Boolean\(doc\.demo\)/, 'and in the mapper, or it never arrives');
+});
+
+test('the fixture seed reads the flag rather than naming a school', () => {
+  /* A list of permitted slugs inside the script is a list somebody edits
+     while pointed at production. The permission is a fact about the school,
+     so the script asks the school. */
+  const seed = fs.readFileSync('scripts/seed-demo.mjs', 'utf8');
+
+  assert.match(seed, /loadOrgs/, 'the guard has to read the organization records');
+  assert.match(seed, /org\.demo === true/, 'and decide on the flag');
+  /* The derivation, not just its use. Replacing the filter with an empty
+     list left every assertion about `notDemo.length` passing while the guard
+     permitted anything — a proof passing for the wrong reason, which is the
+     failure this suite exists to make impossible. */
+  assert.match(
+    seed,
+    /const notDemo = ORG_SLUGS\.filter\(\(slug\) => !demoOnly\.has\(slug\)\)/,
+    'the refused set has to be every slug the flag does not cover'
+  );
+  assert.match(
+    seed,
+    /notDemo\.length > 0/,
+    'stated as a refusal of everything else, so an unmarked slug is refused'
+  );
+});
+
 console.log(
   `\n${passed} organization assertions passed. ` +
     `${files.length} files read, mark ${markLimits.min}-${markLimits.max} from the migration.`

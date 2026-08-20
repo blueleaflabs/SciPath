@@ -1,0 +1,66 @@
+# The tenant demonstrations are given from, on demo.scipath.org.
+#
+# **Monta Vista's setup under a label that holds nothing real.** Not an
+# invented school: the whole point of a demonstration is that the people
+# watching recognize it, so this runs the same six programs Monta Vista runs —
+# the class, the club, the regional and state fairs, the micro grant and the
+# journal — from the same template files. Nothing is copied. A school level
+# template gets a row per school, which is what `unique (org_id, slug,
+# season_year)` on `programs` exists for and what the comment above it calls
+# the ordinary case, so listing the same ids here forks no calendar and leaves
+# nothing to drift.
+#
+# **A school, not an environment.** Standing up a second Supabase project and a
+# second Pages deployment to hold fixtures is the wrong shape: tenancy is
+# resolved by hostname and a school is one file. Its rows are separated from
+# Monta Vista's by `org_id` and by the policies `npm run test:probes` proves,
+# which is the same separation two real schools already rely on.
+#
+# What is different is that its people are invented and its credentials are
+# published, which is what `demo: true` says. `seed-demo` refuses to write
+# fixtures into a project that is not loopback unless every organization it was
+# pointed at carries the flag, so a mistyped `DEMO_ORGS` cannot reach a school
+# with real students in it.
+#
+# **The name is deliberately not Monta Vista's.** `tests/tenant-output.mjs`
+# compares tenant names by string: two schools sharing one would skip each
+# other's check and pass by comparing nothing, and a name containing another's
+# would fail as a leak. It also has to be legible on screen — somebody looking
+# at a demonstration should be able to tell it is one.
+
+id: demo
+
+name: Monta Vista Demo
+mark: MVD
+theme: proceedings
+record_prefix: DEMO
+timezone: America/Los_Angeles
+
+# Fixtures are made by the seed with the secret key, which does not consult
+# this. `invite` is what it means for everybody else: somebody who finds the
+# subdomain cannot make themselves an account in it.
+signup_mode: invite
+verified_domains: []
+domains: []
+
+# Read by `seed-demo`, and the reason this organization may be seeded on a host
+# that is not loopback. Declared in `src/config/org-shape.ts` like every other
+# field, so it travels as part of the record rather than being reparsed.
+demo: true
+
+contact_email: hello@blueleaflabs.org
+editorial_review: true
+showcase_note: >-
+  A working demonstration of the platform. Every project, person and record
+  here is invented.
+
+# Monta Vista's list, unchanged. Two of them are shared and seed once for
+# everybody; the other four are school level and get a row of their own under
+# this organization.
+programs:
+  - scvsefa-2027
+  - csef-2027
+  - mvhs-scvsefa-2027
+  - irpd-mvhs-2027
+  - grant-mvhs-micro-2027
+  - mvrj-2027

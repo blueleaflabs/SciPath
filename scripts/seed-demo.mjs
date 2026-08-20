@@ -27,6 +27,7 @@
 
 import { createClient } from '@supabase/supabase-js';
 import { loadDevVars } from './dev-vars.mjs';
+import { loadOrgs } from './orgs-library.mjs';
 import { originFor } from '../src/lib/deployment.ts';
 
 /* Read the file before reading the environment. A script that needs a file
@@ -74,6 +75,27 @@ if (!KEY.startsWith('sb_secret_') && !KEY.startsWith('eyJ')) {
   );
 }
 
+/**
+ * WHICH SCHOOLS MAY HOLD FIXTURES, WHICH IS A FACT ABOUT THE SCHOOL.
+ *
+ * `demo: true` in `src/config/orgs/*.yaml` marks an organization whose people
+ * are invented and whose credentials are published. There is one, and it is
+ * the tenant on demo.scipath.org.
+ *
+ * The flag lives on the school rather than in this file because this file is
+ * the thing that would be wrong. A list of permitted slugs here is a list
+ * somebody edits while pointed at production; a school that says of itself
+ * that it holds nothing real is checked against whatever `DEMO_ORGS` happens
+ * to say on the day.
+ */
+const demoOnly = new Set(
+  Object.values(loadOrgs())
+    .filter((org) => org.demo === true)
+    .map((org) => org.id)
+);
+
+const notDemo = ORG_SLUGS.filter((slug) => !demoOnly.has(slug));
+
 if (!isLoopback) {
   if (!allowRemote) {
     fail(
@@ -82,10 +104,34 @@ if (!isLoopback) {
         'the target, pass --allow-remote=<project-ref> explicitly.'
     );
   }
+
+  /**
+   * The production project, and the one case where it is allowed.
+   *
+   * The demonstration tenant lives in the same project as the schools, because
+   * a tenant is a file and not a deployment, and its rows are separated from
+   * theirs by `org_id` and by the policies `npm run test:probes` proves. So
+   * "fixtures never go to production" is too broad by exactly one school, and
+   * the narrow rule is: to production, only into schools that hold nothing
+   * real.
+   *
+   * Stated as a refusal of everything else rather than a permission, so a slug
+   * added to `DEMO_ORGS` in a hurry is refused rather than admitted.
+   */
   if (allowRemote === PRODUCTION_REF || URL.includes(PRODUCTION_REF)) {
-    fail(
-      'That is the production project. Fixtures never go there.\n' +
-        'See brief 12.11a.'
+    if (notDemo.length > 0) {
+      fail(
+        'That is the production project, and these are real schools:\n' +
+          `  ${notDemo.join(', ')}\n\n` +
+          'Only an organization whose file carries `demo: true` may be seeded\n' +
+          'there. Set DEMO_ORGS to those, or point at the local stack.\n' +
+          'See brief 12.11a.'
+      );
+    }
+
+    console.log(
+      `\nSeeding ${ORG_SLUGS.join(', ')} in the production project.\n` +
+        'Every one of them is marked `demo: true` and holds nothing real.'
     );
   }
 }
@@ -180,6 +226,7 @@ const PREFIX = {
   montavista: 'mv',
   svslc: 'svs',
   scipath: 'sp',
+  demo: 'dm',
 };
 
 /* `advisor` is bare and the rest carry a letter. Both become a number, so

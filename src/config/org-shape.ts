@@ -85,6 +85,21 @@ export interface Org {
   editorialReview: boolean;
   /** One sentence describing what this organization publishes. */
   showcaseNote: string;
+  /**
+   * True for an organization whose people are invented.
+   *
+   * There is one, and it is the tenant demonstrations are given from. Its
+   * accounts are fixtures, its credentials are published, and nothing in it
+   * is real — which is what makes it the only school `seed-demo` will write
+   * into on a host that is not loopback.
+   *
+   * **The permission is a fact about the school, so it is stored with the
+   * school.** A list of permitted slugs inside the seed script is a list
+   * somebody edits while pointed at production; a school that says of itself
+   * that it holds nothing real is checked against whatever the environment
+   * happens to say on the day.
+   */
+  demo?: boolean;
 }
 
 /**
@@ -112,5 +127,6 @@ export function shapeOrg(doc: any): Org {
     verifiedDomains: doc.verified_domains ?? [],
     editorialReview: Boolean(doc.editorial_review),
     showcaseNote: doc.showcase_note,
+    demo: Boolean(doc.demo),
   };
 }

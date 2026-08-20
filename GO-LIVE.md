@@ -26,7 +26,22 @@ source names a hostname.
 |---|---|---|
 | `montavista` | `montavista.scipath.org` | by school domain |
 | `svslc` | `svslc.scipath.org` | by invitation |
+| `demo` | `demo.scipath.org` | by invitation, and fixtures |
 | `scipath` | `scipath.org`, `www`, and any name matching no tenant | open |
+
+`demo` is a school like the others and not a separate environment. Its rows are
+separated from Monta Vista's by `org_id` and by the policies `test:probes`
+proves, which is the same separation two real schools already rely on. What is
+different is that its people are invented and its credentials are published, so
+its file carries `demo: true` — the flag `seed-demo` requires before it will
+write fixtures into this project. **Nothing real goes in it.**
+
+It runs Monta Vista's six programs from the same template files — the class,
+the club, both fairs, the micro grant and the journal — because a school level
+template gets a row per school and two organizations naming one template fork
+no calendar. So a demonstration shows IRPD's own twenty nine steps and the
+club's nineteen, not an imitation of them, and a change to the class reaches
+both.
 
 `example` is a fourth record in `src/config/orgs/` marked `provisioned: false`.
 It gets prerendered pages so the alternate theme is contrast-checked in CI, and
@@ -284,13 +299,27 @@ Then walk this, in order. Each one fails differently, which is the point.
 
 ## 7. Fixtures in production, and how they leave
 
-The demo accounts are in production deliberately for now, because a demo needs
-something to show. That is a knowing departure from 12.11a.
+Fixtures live in production deliberately, because a demonstration needs
+something to show. They live in **one school**, which is what makes it a
+narrower departure from 12.11a than it was: `demo`, on `demo.scipath.org`,
+whose file says `demo: true`.
 
-They are seeded by `npm run reset`, which you must **never** point at the cloud
-project. To get fixtures into production, run the individual seeds against the
-production URL with the credentials inline, the way `seed-orgs` was run in 2.3
-— not through `reset`.
+`seed-demo` refuses the production project unless every organization it was
+pointed at carries that flag, and it names the ones that do not:
+
+```bash
+DEMO_ORGS=demo \
+PUBLIC_SUPABASE_URL=... SUPABASE_SECRET_KEY=... \
+node scripts/seed-demo.mjs --allow-remote=<production-ref>
+```
+
+Both halves are required. Without `--allow-remote` it refuses any non-loopback
+target at all; with it, and with a real school in `DEMO_ORGS`, it refuses and
+says which. Never point `npm run reset` at the cloud project — it drops the
+database before it seeds anything.
+
+Add `demo.scipath.org` as a custom domain the same way as the others. Wildcards
+are not accepted, so every subdomain is named explicitly.
 
 When they go:
 

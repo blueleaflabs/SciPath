@@ -535,6 +535,40 @@ if (supabase && account) {
           .is('superseded_at', null)
       : { data: [] as any[] };
 
+    /**
+     * HOW BIG THE NOTEBOOK IS AND WHEN IT WAS LAST WRITTEN IN.
+     *
+     * The one fact an elder is actually looking for. "Who is behind" on a
+     * notebook means "who has not written in three weeks", and the table
+     * could not answer it: the link said `notebook` and gave no reason to
+     * click, so the only way to find a stalled record was to open twenty of
+     * them.
+     *
+     * A date rather than a count of days or a state, because 7.8 asks for
+     * facts with dates and no computed standing. A reader who wants to know
+     * whether three weeks is bad for this project in this week of the term
+     * is better at that judgment than any rule we could write here.
+     *
+     * `occurred_on` rather than `created_at`: the notebook is ordered by the
+     * day the work happened everywhere else, and two orderings of one record
+     * is how a row disagrees with the page it links to.
+     */
+    const { data: noteRows } = ids.length
+      ? await supabase
+          .from('field_notes')
+          .select('project_id, occurred_on')
+          .in('project_id', ids)
+      : { data: [] as any[] };
+
+    const notebookOf = new Map<string, { count: number; last: string | null }>();
+
+    for (const n of noteRows ?? []) {
+      const held = notebookOf.get(n.project_id) ?? { count: 0, last: null };
+      held.count += 1;
+      if (!held.last || n.occurred_on > held.last) held.last = n.occurred_on;
+      notebookOf.set(n.project_id, held);
+    }
+
     const entryIds = (entries ?? []).map((e: any) => e.id);
 
     const { data: milestones } = entryIds.length
@@ -602,6 +636,7 @@ if (supabase && account) {
         officers,
         selfManaged,
         sponsor,
+        notebook: notebookOf.get(p.id) ?? { count: 0, last: null },
         done: mine.filter((m: any) => m.completed_on).length,
         total: mine.length,
 
@@ -666,6 +701,24 @@ const mine = watched.filter((w) =>
 const counts = tally(watched.map((w) => w.verdict));
 
 /**
+ * WHICH CLASSES A NEW PROJECT COULD STILL BELONG TO.
+ *
+ * A class holds one place per student, so a cohort that already has this
+ * student's project in it cannot take a second. Offering it anyway produces a
+ * picker whose ordinary choice is refused by the server, which is the failure
+ * mode `holdsPlace` was written to avoid one screen further down.
+ *
+ * Read off `myEntries` rather than queried again: it already carries every
+ * cohort each of this person's projects sits in, and a second query would be
+ * a second thing to keep true.
+ */
+const cohortsTaken = new Set(
+  myEntries.flatMap((e: any) => (e.cohorts ?? []).map((c: any) => c.program_id))
+);
+
+const startableCohorts = myMemberships.filter((m: any) => !cohortsTaken.has(m.cohort_id));
+
+/**
  * The oversight table, grouped by program.
  *
  * This and the selection screen were the same list of the same projects with
@@ -715,6 +768,19 @@ const groups = (() => {
     return (a.program.name ?? '').localeCompare(b.program.name ?? '');
   });
 })();
+
+/* What `watched` is a list of, said in the words of whoever is reading it.
+   One phrase, derived once, because the count appears twice and two copies
+   of a noun are two chances to disagree about what was counted.
+ 
+   After `groups`, not beside `counts`: it reads the grouping to name a
+   single program, and a const that reads a const declared below it is a
+   reference error at request time rather than a build failure. */
+const where = me.anywhere
+  ? 'at the school'
+  : groups.length === 1 && groups[0].program
+    ? `in ${programTitle(groups[0].program)}`
+    : 'in your programs';
 
 /* Selected against the cap, per program. Only a competition selects: a class
    has nowhere to put projects forward to, so the column is absent rather
@@ -867,13 +933,28 @@ const grouped = () => {
             {me.names.length ? me.names.map((n) => roleLabel[n]).join(' · ') : org.name}
           </p>
           <h1 class="t-big">{account.display_name}</h1>
+          {/* "At the school" is true of somebody unscoped and false of
+              everybody else.
+          
+              The list under this line is `watched`, which is filtered to the
+              programs a person's roles name — so an elder of one class read
+              a count of their class's projects, described as the school's.
+              The number was right and the noun was wrong, which is the
+              harder kind to notice, and it is on the line a teacher reads
+              first.
+          
+              `me.anywhere` is the same discriminator the filter itself uses,
+              rather than a second guess at it: whoever the rows were chosen
+              for is whoever the sentence is about. 22.27. */}
           <p class="lede">
             {me.runsTheClub
               ? mine.length
-                ? `${mine.length} project${mine.length === 1 ? '' : 's'} in your care, ${watched.length} at the school.`
+                ? `${mine.length} project${mine.length === 1 ? '' : 's'} in your care, ${watched.length} ${where}.`
                 : watched.length
-                  ? `Nothing assigned to you yet. ${watched.length} project${watched.length === 1 ? '' : 's'} at the school.`
-                  : 'No projects have been registered at this school yet.'
+                  ? `Nothing assigned to you yet. ${watched.length} project${watched.length === 1 ? '' : 's'} ${where}.`
+                  : me.anywhere
+                    ? 'No projects have been registered at this school yet.'
+                    : 'No projects have been registered where you hold a role yet.'
               : me.isStudent
                 ? ''
                 : 'You are signed in. A club role is granted by an officer or the club advisor.'}
@@ -885,7 +966,7 @@ const grouped = () => {
                   three lines tall at the top of the page a teacher opens
                   first. */}
               <li><b>{mine.length}</b> in your care</li>
-              <li><b>{watched.length}</b> at the school</li>
+              <li><b>{watched.length}</b> {where}</li>
               <li><b>{watched.filter((w: any) => !w.sponsor).length}</b> no sponsor</li>
               <li><b>{watched.filter((w: any) => w.officers.length === 0 && w.selfManaged.length === 0).length}</b> no officer</li>
               <li class={counts.disqualifying > 0 ? 'bad' : ''}>
@@ -925,6 +1006,10 @@ const grouped = () => {
                         <th scope="col">{staffWord(group.program)}</th>
                         <th scope="col">Sponsor</th>
                         <th scope="col">Next</th>
+                        {/* Between what is coming and what is met, because it
+                            is the third fact of the same kind and the one
+                            most often looked for first. */}
+                        <th scope="col">Notebook</th>
                         <th scope="col">Obligations</th>
                         <th scope="col">Standing</th>
                         {/* Only where there is somewhere to go forward to. A
@@ -971,6 +1056,21 @@ const grouped = () => {
                             {w.next
                               ? <span class="next">{w.next.name}</span>
                               : <span class="none">Nothing outstanding</span>}
+                          </td>
+                          {/* The cell is the link, so the reason to open a
+                              notebook and the way in are the same thing. The
+                              export keeps its place on the title, where
+                              somebody assembling paperwork for several
+                              projects at once already looks. */}
+                          <td>
+                            {w.notebook.count > 0 ? (
+                              <a href={`/app/project/${w.id}/`}>
+                                {w.notebook.count} {w.notebook.count === 1 ? 'entry' : 'entries'}
+                                <span class="sub">last {formatDate(w.notebook.last, 'short')}</span>
+                              </a>
+                            ) : (
+                              <a href={`/app/project/${w.id}/`} class="miss">not started</a>
+                            )}
                           </td>
                           <td>{w.total ? `${w.done} of ${w.total}` : '—'}</td>
                           <td>
@@ -1056,7 +1156,7 @@ const grouped = () => {
                     : 'nothing yet'}
                 </span>
               </div>
-              {myEntries.length ? (
+              {myEntries.length > 0 && (
                 <ul class="linklist">
                   {myEntries.map((e) => (
                     <li>
@@ -1104,18 +1204,44 @@ const grouped = () => {
                     </li>
                   ))}
                 </ul>
-              ) : (
-                /* No noun here on purpose. With nothing joined we do not know
-                   whether this student's school runs a fair, a class, or
-                   both, and "no fair entered" is wrong for somebody whose
-                   only option is IRPD. */
-                <div class="note startbox">
-                  <h4>Nothing yet this season</h4>
-                  <p class="t-sm" style="max-width:var(--measure-text)">
-                    Start a project whenever you are ready. It does not have to
-                    be entered anywhere, or belong to a class, to be worth
-                    keeping a notebook for.
-                  </p>
+              )}
+
+              {/* ONE FORM, TWO SITUATIONS.
+              
+                  This was rendered only in the empty state, so the way to
+                  start a project disappeared the moment somebody had one.
+                  A student in a class who then wants to enter a fair with
+                  different work had no way to say so: the model has allowed
+                  it since the merge, and `app.entry_conflict` is written
+                  specifically to permit it, because a class is not a fair
+                  and only a fair refuses a student a second project.
+              
+                  Rendered once rather than twice. Two copies of a form with
+                  a cohort picker in it is two things to keep in agreement,
+                  and the picker is the part that will change again. Open on
+                  arrival for somebody with nothing, folded away for somebody
+                  who already has a project and is not usually here to start
+                  another. */}
+              <div class:list={['startbox', myEntries.length === 0 && 'note']}>
+                {myEntries.length === 0 && (
+                  <>
+                    {/* No noun here on purpose. With nothing joined we do not
+                        know whether this student's school runs a fair, a
+                        class, or both, and "no fair entered" is wrong for
+                        somebody whose only option is IRPD. */}
+                    <h4>Nothing yet this season</h4>
+                    <p class="t-sm" style="max-width:var(--measure-text)">
+                      Start a project whenever you are ready. It does not have
+                      to be entered anywhere, or belong to a class, to be
+                      worth keeping a notebook for.
+                    </p>
+                  </>
+                )}
+
+                <details class="starter" open={myEntries.length === 0}>
+                  <summary>
+                    {myEntries.length > 0 ? 'Start another project' : 'Start a project'}
+                  </summary>
 
                   <form method="POST" data-leaves-page class="startp">
                     <input type="hidden" name="action" value="start_project" />
@@ -1144,11 +1270,16 @@ const grouped = () => {
                         first-option rule, because the rule holds only while
                         the first option is the intended one, and that is
                         exactly the assumption that broke here. */}
-                    {myMemberships.length > 0 && (
+                    {/* A class this student is in and does not already have a
+                        project in. One place per student is the class's rule,
+                        so a cohort that already holds their work cannot take
+                        a second piece of it, and offering it would present a
+                        choice the server refuses. */}
+                    {startableCohorts.length > 0 && (
                       <label>
                         <span>Part of</span>
                         <select name="cohort_id">
-                          {myMemberships.map((m: any, i: number) => (
+                          {startableCohorts.map((m: any, i: number) => (
                             <option value={m.cohort_id} selected={i === 0}>
                               {programTitle(m.programs)}
                             </option>
@@ -1158,14 +1289,29 @@ const grouped = () => {
                       </label>
                     )}
 
-                    <p><button class="btn" type="submit">Start a project</button></p>
-                  </form>
+                    {/* Positive, and said only where it explains something:
+                        somebody in one class who already has its project sees
+                        no picker, and the reason is worth one line rather
+                        than a missing control. */}
+                    {startableCohorts.length === 0 && myMemberships.length > 0 && (
+                      <p class="t-sm" style="max-width:var(--measure-text)">
+                        This one stands on its own. Your class already holds a
+                        project of yours, and it keeps one place for each
+                        student; work for a fair is entered separately once it
+                        has a title.
+                      </p>
+                    )}
 
+                    <p><button class="btn" type="submit">Start the project</button></p>
+                  </form>
+                </details>
+
+                {myEntries.length === 0 && (
                   <p style="margin-top:6px">
                     <a href="#join">Or see what you can join</a>
                   </p>
-                </div>
-              )}
+                )}
+              </div>
             </section>
 
     <section class="sec" id="join">
@@ -1563,6 +1709,19 @@ const grouped = () => {
   .startbox { padding: 20px 22px 22px; }
   .startbox h4 { margin: 0 0 6px; }
   .startbox > .t-sm { margin: 0 0 18px; }
+
+  /* Folded, this is one line of interface under a list of projects, so it
+     has to read as something to do rather than as a heading. Open, the
+     summary is the form's title and the padding above it is the list's
+     rather than its own. */
+  .starter > summary {
+    cursor: pointer;
+    font-family: var(--face-ui);
+    font-size: 0.95rem;
+  }
+  .starter[open] > summary { margin-bottom: 16px; }
+  .startbox:not(.note) { padding: 14px 0 0; }
+
   .startbox .startp { margin: 0; }
   .startbox .startp label { display: block; margin: 0 0 14px; }
   .startbox .startp label > span { display: block; margin: 0 0 5px; }

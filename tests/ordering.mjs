@@ -1384,4 +1384,83 @@ test('every custom property a page uses is one the tokens define', () => {
   assert.deepEqual([...new Set(problems)], [], 'the browser silently ignores an unknown token');
 });
 
+/* ── What each page offers, and to whom ─────────────────────────────────── */
+
+test('the notebook page can reach its own export', () => {
+  /* The export is this page printed, and when the page was reduced to the
+     notebook and nothing else the control went with the four that belonged
+     elsewhere. It was reachable from the overview and from the participation
+     page, and not from the record it prints. */
+  const notebook = fs.readFileSync('src/pages/app/project/[id].astro', 'utf8');
+  assert.match(notebook, /href=\{`\/app\/project\/\$\{project\.id\}\/notebook\/`\}/);
+});
+
+test('somebody who is not an author is offered the way to write', () => {
+  /* An elder or a teacher may write in a notebook, and the form sits below a
+     block that can run to three cohorts and three entries. Reaching it by
+     scrolling past the record is how an observation goes unwritten. */
+  const notebook = fs.readFileSync('src/pages/app/project/[id].astro', 'utf8');
+  assert.match(notebook, /href="#observe"/, 'the hero needs a way to the form');
+  assert.match(notebook, /id="observe"/, 'and the form needs the anchor');
+});
+
+test('the export separates the authors\' record from observations', () => {
+  /* A judge is asking what the student did. An observation is a note by
+     somebody who is not an author of the project, which is already stored,
+     and the plain copy is the authors\' own. */
+  const exported = fs.readFileSync('src/pages/app/project/[id]/notebook.astro', 'utf8');
+
+  assert.match(exported, /authorIds/, 'the export has to know who the authors are');
+  assert.match(exported, /searchParams\.get\('observations'\)/, 'and which copy was asked for');
+  assert.match(
+    exported,
+    /const shown = withObservations \? all : all\.filter/,
+    'the plain copy is the default, so the common one answers the right question'
+  );
+});
+
+test('a student with a project can start another', () => {
+  /* The form was rendered only in the empty state, so the way to start a
+     project vanished the moment somebody had one. A class is not a fair and
+     only a fair refuses a student a second project. */
+  const overview = fs.readFileSync('src/pages/app/index.astro', 'utf8');
+
+  assert.match(overview, /Start another project/);
+
+  /* Offered from a cohort that does not already hold their work, because a
+     class keeps one place per student and the server refuses the second. */
+  assert.match(overview, /startableCohorts/);
+  assert.doesNotMatch(
+    overview,
+    /\{myMemberships\.map\(/,
+    'the picker should read the startable cohorts rather than every membership'
+  );
+});
+
+test('the oversight table says when the notebook was last written in', () => {
+  /* Being behind on a notebook means not having written in three weeks, and
+     the table could not say it: the link read `notebook` and gave no reason
+     to open one. A date, not a computed standing (7.8). */
+  const overview = fs.readFileSync('src/pages/app/index.astro', 'utf8');
+  assert.match(overview, /from\('field_notes'\)/, 'the count has to be read');
+  assert.match(overview, /<th scope="col">Notebook<\/th>/, 'and the column has to exist');
+});
+
+test('a scoped role is not told it is looking at the school', () => {
+  /* `watched` is filtered to the programs a person's roles name, so an elder
+     of one class read a count of their class described as the school's. The
+     number was right and the noun was wrong, on the line a teacher reads
+     first. 22.27. */
+  const overview = fs.readFileSync('src/pages/app/index.astro', 'utf8');
+
+  const claims = [...overview.matchAll(/at the school/g)];
+  assert.ok(claims.length > 0, 'the phrase should still exist for somebody unscoped');
+
+  assert.match(
+    overview,
+    /const where = me\.anywhere\s*\n\s*\? 'at the school'/,
+    'the claim has to be conditional on holding a role that reaches the school'
+  );
+});
+
 console.log(`${passed} ordering assertions passed. ${pages.length} pages read.`);

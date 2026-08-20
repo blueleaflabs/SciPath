@@ -286,6 +286,25 @@ const fmt = (d: string | null) =>
           entry page, which is where a project is actually run from, and four
           buttons here were four routes back into the same page by different
           names. */}
+      {/* Two controls, and the reasoning for each is different.
+      
+          This page was reduced to the notebook and nothing else, and four
+          buttons went with it, each a second route into a page that has its
+          own. The export went with them and should not have: it is this page
+          printed, so the page it prints was the one place it could not be
+          reached from, and somebody assembling paperwork the night before a
+          fair looks here first.
+      
+          The second control appears only for somebody who is not an author.
+          The form they want sits below a block that can run to three cohorts
+          and three entries, and an elder arriving to leave an observation
+          should not have to find it by scrolling past the record they came
+          to read. */}
+      <div class="actions">
+        <a class="btn" href={`/app/project/${project.id}/notebook/`}>Export</a>
+        {!iAuthor && <a class="btn" href="#observe">Add an observation</a>}
+      </div>
+
       {/* A fixed label, not the program's name.
       
           The name went in the button and a program called "Independent
@@ -447,7 +466,7 @@ const fmt = (d: string | null) =>
       </p>
     )}
 
-    <section class="sec">
+    <section class="sec" id="observe">
       <div class="sec-h">
         <b>{iAuthor ? 'Add to the notebook' : 'Add an observation'}</b>
         <span>Nothing is ever edited</span>
@@ -500,10 +519,22 @@ const fmt = (d: string | null) =>
         </div>
 
         <button class="btn" type="submit">{iAuthor ? 'Record this' : 'Add the observation'}</button>
+        {/* Said plainly, because the export default changed under this
+            sentence. Promising somebody their observation is printed, and
+            then leaving it out of the copy most people print, would be worse
+            than the behavior it replaced.
+        
+            The comment sits outside the expression rather than inside it. A
+            braced comment in JSX child position is a comment; the same thing
+            one line lower, inside the logical expression that follows, is a
+            block with nothing in it, and the error it raises names a line
+            two hundred above it. */}
         {!iAuthor && (
           <p class="fine">
-            Your name and role appear on it. It sits in the notebook alongside
-            the authors' entries and is exported with them.
+            Your name and role appear on it, and it sits in the notebook with
+            the authors' entries. The export carries it whenever somebody asks
+            for the observation log; the plain copy, which is the one a judge
+            is handed, is the authors' own record.
           </p>
         )}
       </form>

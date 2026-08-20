@@ -278,10 +278,44 @@ const { data: sponsor } = await supabase
   .limit(1)
   .maybeSingle();
 const roleOf = new Map<string, string>(attachments.map((a: any) => [a.users?.id, a.role]));
-const noteById = new Map((notes ?? []).map((n: any) => [n.id, n]));
 
-const first = notes?.[0]?.occurred_on ?? null;
-const last = notes?.[notes.length - 1]?.occurred_on ?? null;
+/**
+ * TWO KINDS OF ENTRY IN ONE STREAM, AND WHICH COPY THIS IS.
+ *
+ * An elder or a teacher may write in a notebook — `add_field_note` accepts a
+ * project author, any officer or advisor at the school, or the project's
+ * sponsor — and until now every one of those entries printed here alongside
+ * the students' own. That is right for a supervisor reading the record and
+ * wrong for the copy handed to a judge, who is being asked what the student
+ * did.
+ *
+ * **No new table.** The distinction is already stored: a note carries its
+ * author, and the project already knows who its authors are. An observation
+ * is a note by somebody who is not one of them.
+ *
+ * The plain export is therefore the authors' record, and the observation log
+ * is the thing you ask for. Defaulting the other way would mean the copy
+ * most often printed is the one that answers the wrong question, and nobody
+ * checks a box they did not know to look for.
+ *
+ * The same predicate labels the entries when they are included, which closes
+ * a hole: the marker used to be read off the attachment list, so a note by a
+ * teacher who is not attached to the project — the ordinary case for a class
+ * — printed with no marker at all, as though a student had written it.
+ */
+const authorIds = new Set(authors.map((a: any) => a.users?.id).filter(Boolean));
+const isObservation = (n: any) => !authorIds.has(n.author_id);
+
+const withObservations = Astro.url.searchParams.get('observations') === '1';
+
+const all = notes ?? [];
+const shown = withObservations ? all : all.filter((n: any) => !isObservation(n));
+const observationCount = all.filter((n: any) => isObservation(n)).length;
+
+const noteById = new Map(all.map((n: any) => [n.id, n]));
+
+const first = shown[0]?.occurred_on ?? null;
+const last = shown[shown.length - 1]?.occurred_on ?? null;
 
 const fmt = (d: string | null) =>
   d ? toDate(d)!.toLocaleDateString('en-US', {
@@ -308,8 +342,28 @@ const printedOn = new Date().toLocaleDateString('en-US', {
   </head>
 
   <body>
+    {/* The toolbar does not print, which is why the choice lives here: it is
+        a decision about the copy, made in front of the copy, and it leaves no
+        mark on the paper.
+    
+        A link would have done the same work, but the state is what matters —
+        somebody needs to see at a glance which copy is on screen before they
+        hand it over, and a checkbox shows that where a pair of links shows
+        only where you could go. */}
     <div class="toolbar">
       <a href={`/app/project/${id}/`}>Back to the project</a>
+
+      {observationCount > 0 && (
+        <label class="opt">
+          <input
+            type="checkbox"
+            checked={withObservations}
+            onchange={`location.search = this.checked ? '?observations=1' : ''`}
+          />
+          Include the observation log
+        </label>
+      )}
+
       <button class="btn" onclick="window.print()">Print or save as PDF</button>
     </div>
 
@@ -343,9 +397,23 @@ const printedOn = new Date().toLocaleDateString('en-US', {
 
           <dt>Entries</dt>
           <dd>
-            {notes?.length ?? 0}
+            {shown.length}
             {first && last && `, ${fmt(first)} to ${fmt(last)}`}
           </dd>
+
+          {/* Stated on the page rather than only in the toolbar, because the
+              toolbar does not print and a copy that carries supervisors'
+              entries should say so on its face. Positive: the line appears
+              when the log is in, and nothing claims its absence. */}
+          {withObservations && observationCount > 0 && (
+            <>
+              <dt>Includes</dt>
+              <dd>
+                {observationCount} observation{observationCount === 1 ? '' : 's'} recorded by
+                supervisors
+              </dd>
+            </>
+          )}
 
           <dt>Printed</dt>
           <dd>{printedOn}</dd>
@@ -363,7 +431,7 @@ const printedOn = new Date().toLocaleDateString('en-US', {
       <section class="entries">
         <h2>Entries</h2>
 
-        {(notes ?? []).map((n: any, i: number) => {
+        {shown.map((n: any, i: number) => {
           const mine = (media ?? []).filter((m: any) => m.note_id === n.id);
           const corrected = n.corrects_id ? noteById.get(n.corrects_id) : null;
           return (
@@ -372,9 +440,9 @@ const printedOn = new Date().toLocaleDateString('en-US', {
                 <span class="no">{i + 1}</span>
                 <b>{fmt(n.occurred_on)}</b>
                 <span>{n.users?.display_name}</span>
-                {roleOf.get(n.author_id) && roleOf.get(n.author_id) !== 'author' && (
+                {isObservation(n) && (
                   <span class="cap">
-                    officer note
+                    {roleOf.get(n.author_id) === 'officer' ? 'officer note' : 'observation'}
                   </span>
                 )}
               </div>
@@ -581,6 +649,18 @@ const printedOn = new Date().toLocaleDateString('en-US', {
     font-family: 'IBM Plex Sans', system-ui, sans-serif;
     font-size: 0.92rem;
   }
+  /* Between the two existing controls, so `space-between` keeps the way back
+     at one end and the print button at the other. */
+  .opt {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    margin-right: auto;
+    margin-left: 14px;
+    color: var(--ink-2, inherit);
+  }
+  .opt input { margin: 0; }
+
   .toolbar button {
     padding: 8px 14px;
     border: 1px solid var(--ink);
