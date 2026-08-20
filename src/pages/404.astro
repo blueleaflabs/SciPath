@@ -1,18 +1,35 @@
 ---
 /**
- * Prerendered, and it has to stay that way.
+ * On demand, and that is the whole fix for the prerendered pages.
  *
- * An unmatched path falls back to this route, so making it on demand makes
- * every unmatched path an on-demand route. The middleware then rewrites
- * /guides/ onto the prerendered /montavista/guides/, which Astro refuses:
- * rewriting from on demand to prerendered is forbidden. That took out every
- * public page at once, which is a steep price for the warning this was
- * meant to silence.
+ * **A static `404.html` is answered by Cloudflare before the worker runs.**
+ * That is what took out every public page: a request for `/guides/` matched
+ * no asset, Pages served this file, and the middleware — which would have
+ * rewritten it onto `/montavista/guides/` — was never invoked. Three attempts
+ * to fix it inside the middleware failed for the same reason each time, and a
+ * trace stamped onto every response returned nothing at all, which is what
+ * finally said so.
  *
- * The warning is that the layout reads request headers and a prerendered
- * page has none. It is harmless here: without a request the layout falls
- * back to the default organization, and this page names no tenant.
+ * The proof is in the artifact: `dist/404.html` carried a canonical of
+ * `/scipath/404/`, a path only build-time middleware could produce. The 404 a
+ * reader saw was a build output, not a rendered page.
+ *
+ * With no file to serve, Cloudflare has to ask the worker, and the middleware
+ * gets its turn.
+ *
+ * An earlier attempt at this was reverted, and the note left behind said why:
+ * making this on demand makes every unmatched path on demand, and the
+ * middleware then rewrote onto a prerendered route, which Astro forbids —
+ * taking out every public page. That is no longer how it works. The
+ * middleware fetches the file through the assets binding and returns it
+ * directly; `next()` is a wrapped fallback rather than the mechanism, so a
+ * refusal there reports itself instead of becoming a blank site.
+ *
+ * The cost is that a 404 is rendered rather than served from disk. It is one
+ * page, it names no tenant, and it is the rarest response on the site.
  */
+export const prerender = false;
+
 import Base from '../layouts/Base.astro';
 ---
 

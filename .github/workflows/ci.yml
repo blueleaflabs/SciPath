@@ -90,7 +90,10 @@ jobs:
           test -d dist/_worker.js
           test -f dist/_routes.json
           test -f dist/sitemap-index.xml
-          test -f dist/404.html
+          # No dist/404.html: the 404 is on demand, because a static one is
+          # served by Cloudflare before the worker and hides every public
+          # page. npm test asserts the same thing from the other side.
+          test ! -f dist/404.html
           for tenant in montavista svslc scipath example; do
             test -f "dist/$tenant/about/index.html"
             test -f "dist/$tenant/policies/index.html"

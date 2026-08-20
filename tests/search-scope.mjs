@@ -128,26 +128,63 @@ test('routes that serve files do not require a trailing slash', () => {
 });
 
 
-/* ── The 404 must stay prerendered ───────────────────────────────────────── */
+/* ── The 404 must stay on demand ─────────────────────────────────────────── */
 
-test('the not-found page is not on demand', () => {
-  /* An unmatched path falls back to this route, so making it on demand makes
-     every unmatched path an on-demand route. The middleware then rewrites
-     /guides/ onto the prerendered /montavista/guides/, and Astro refuses:
-     rewriting from on demand to prerendered is forbidden. It takes out every
-     public page at once, and the symptom names the page you asked for rather
-     than the 404, which is why it is worth a test rather than a comment. */
+test('the not-found page is on demand', () => {
+  /**
+   * **A static `404.html` is answered by Cloudflare before the worker runs**,
+   * and that is what made every prerendered public page unreachable: a
+   * request for `/guides/` matched no asset, Pages served the file, and the
+   * middleware that would have rewritten it onto `/montavista/guides/` was
+   * never invoked.
+   *
+   * This test used to assert the opposite, and its reasoning is worth keeping
+   * because it was half right: making the 404 on demand once did take out
+   * every public page, because the middleware's only mechanism was `next()`,
+   * and Astro forbids rewriting from an on-demand route to a prerendered one.
+   * The symptom was read as *the 404 must stay prerendered* when it was
+   * really *`next()` cannot reach a prerendered page*. A guard written from a
+   * symptom outlived the thing it was guarding against.
+   *
+   * The middleware fetches the file through the assets binding now and
+   * returns it directly; `next()` is a wrapped fallback rather than the
+   * mechanism. So the 404 can be on demand, and has to be.
+   */
   const page = fs.readFileSync('src/pages/404.astro', 'utf8');
-  assert.doesNotMatch(
+  assert.match(
     page,
     /export const prerender\s*=\s*false/,
-    'an on-demand 404 breaks the tenant rewrite for every public page'
+    'a prerendered 404 is served before the worker and hides every public page'
+  );
+});
+
+test('the middleware does not depend on next() to reach a prerendered page', () => {
+  /* The other half of the same rule. With the 404 on demand, an unmatched
+     path reaches the middleware — and if the only thing it does is `next()`
+     into a prerendered route, Astro throws and every public page fails at
+     once. The assets lookup is what makes the on-demand 404 safe. */
+  const middleware = fs.readFileSync('src/middleware.ts', 'utf8');
+
+  assert.match(
+    middleware,
+    /runtime\?\.env\?\.ASSETS/,
+    'the middleware must fetch the file rather than rewriting into it'
+  );
+
+  assert.match(
+    middleware,
+    /catch[\s\S]{0,120}rewritefailed/,
+    'a refused rewrite must report itself rather than becoming a blank site'
   );
 });
 
 if (fs.existsSync('dist')) {
-  test('the build emits a static 404', () => {
-    assert.ok(fs.existsSync('dist/404.html'), 'no prerendered 404 in the build');
+  test('the build emits no static 404', () => {
+    assert.equal(
+      fs.existsSync('dist/404.html'),
+      false,
+      'a static 404 is served before the worker and hides every public page'
+    );
   });
 }
 
