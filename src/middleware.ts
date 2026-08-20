@@ -106,6 +106,46 @@ export const onRequest = defineMiddleware(async (context, next) => {
   const isHome = url.pathname === '/';
   const needsSession = isHome || isNonTenantPath(url.pathname);
 
+  /**
+   * WHAT THIS REQUEST DID, ON THE RESPONSE ITSELF.
+   *
+   * **Temporary. Remove once the prerendered-page fault is understood.**
+   *
+   * Every public page 404s in production and none of it reproduces locally,
+   * because `astro dev` serves everything through the app and has no static
+   * output. Two attempts to fix it from here were guesses about a runtime I
+   * cannot observe, and both were wrong. This is the alternative to a third
+   * guess: make the deployment say what happened.
+   *
+   * Headers rather than logs, so one `curl -sI` answers it and nobody has to
+   * find a log stream. Prefixed and lowercase; they carry no user data and
+   * name only the path, the tenant and what a lookup returned.
+   *
+   * Response objects are immutable, so this rebuilds one. That costs a copy
+   * on every public request, which is the reason it does not stay.
+   */
+  const trace: Record<string, string> = {
+    host: url.hostname,
+    slug,
+    path: url.pathname,
+    /* Overwritten by whichever branch runs. Left as `session` it means the
+       rewrite never ran at all, which is one of the things worth knowing. */
+    branch: 'session',
+  };
+
+  const stamped = async (response: Response) => {
+    const out = new Response(response.body, response);
+    for (const [k, v] of Object.entries(trace)) {
+      try {
+        out.headers.set(`x-sp-${k}`, v.slice(0, 200));
+      } catch {
+        /* A header value the runtime refuses is not worth failing over. */
+      }
+    }
+    return out;
+  };
+
+
   if (!needsSession) {
     /* Every public route is prerendered once per tenant under /[org]/, so a
        request for svslc.scipath.org/articles/ is served the file built at
@@ -130,9 +170,13 @@ export const onRequest = defineMiddleware(async (context, next) => {
       url.pathname === '/404.html' ||
       url.pathname.startsWith('/sitemap')
     ) {
-      return next();
+      trace.branch = 'exempt';
+      return stamped(await next());
     }
+
+    trace.branch = 'rewrite';
     const target = `/${slug}${url.pathname}${url.search}`;
+    trace.rewrite = target;
 
     /**
      * Fetched as a file, by two routes, because one of them may not be there.
@@ -170,33 +214,49 @@ export const onRequest = defineMiddleware(async (context, next) => {
      */
     const asFile = new URL(target, url.origin).toString();
 
-    const assets = (locals as Record<string, any>).runtime?.env?.ASSETS;
+    const runtime = (locals as Record<string, any>).runtime;
+    const assets = runtime?.env?.ASSETS;
+
+    /* Which of the three possible worlds this is, said plainly: no runtime at
+       all (prerendering), a runtime with no binding, or a binding. Each
+       implies a different fix and they are indistinguishable from outside. */
+    trace.runtime = runtime ? 'yes' : 'no';
+    trace.bindings = runtime?.env ? Object.keys(runtime.env).sort().join(',') : 'none';
+    trace.assets = assets ? (typeof assets.fetch === 'function' ? 'fn' : 'no-fetch') : 'absent';
 
     if (assets?.fetch) {
       try {
         const served = await assets.fetch(asFile);
-        if (served.status !== 404) return served;
-      } catch {
-        /* A binding that is not what it looked like. Fall through rather
-           than turning a missing page into a 500. */
+        trace.assetstatus = String(served.status);
+        if (served.status !== 404) {
+          trace.served = 'assets';
+          return stamped(served);
+        }
+      } catch (error: any) {
+        trace.assetstatus = `threw:${error?.name ?? 'Error'}`;
       }
     }
 
     /* Only where there is a runtime at all. During prerendering middleware
        also runs, and fetching the site from inside its own build is both
        impossible and unnecessary — the app is the only thing there. */
-    if ((locals as Record<string, any>).runtime) {
+    if (runtime) {
       try {
         const served = await fetch(asFile, {
           headers: { accept: request.headers.get('accept') ?? 'text/html' },
         });
-        if (served.status !== 404) return served;
-      } catch {
-        /* Fall through to the app. */
+        trace.fetchstatus = String(served.status);
+        if (served.status !== 404) {
+          trace.served = 'fetch';
+          return stamped(served);
+        }
+      } catch (error: any) {
+        trace.fetchstatus = `threw:${error?.name ?? 'Error'}`;
       }
     }
 
-    return next(target);
+    trace.served = 'app';
+    return stamped(await next(target));
   }
 
   const runtime = (locals as Record<string, any>).runtime?.env;
@@ -208,7 +268,7 @@ export const onRequest = defineMiddleware(async (context, next) => {
 
   if (!isConfigured(runtime)) {
     locals.configured = false;
-    return next();
+    return stamped(await next());
   }
   locals.configured = true;
 
@@ -236,7 +296,7 @@ export const onRequest = defineMiddleware(async (context, next) => {
          remembered *here* or nowhere. */
       return context.redirect(signInWith(url));
     }
-    return next();
+    return stamped(await next());
   }
 
   locals.session = { id: user.id, email: user.email ?? null };
@@ -264,7 +324,7 @@ export const onRequest = defineMiddleware(async (context, next) => {
     if (url.pathname.startsWith(GUARDED) && url.pathname !== SIGNUP) {
       return context.redirect(SIGNUP);
     }
-    return next();
+    return stamped(await next());
   }
 
   /* Cheap and idempotent: keeps the identity mirror current, and refreshes
@@ -280,5 +340,5 @@ export const onRequest = defineMiddleware(async (context, next) => {
 
   locals.roles = roles ?? [];
 
-  return next();
+  return stamped(await next());
 });
