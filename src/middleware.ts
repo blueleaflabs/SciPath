@@ -217,46 +217,82 @@ export const onRequest = defineMiddleware(async (context, next) => {
     const runtime = (locals as Record<string, any>).runtime;
     const assets = runtime?.env?.ASSETS;
 
-    /* Which of the three possible worlds this is, said plainly: no runtime at
-       all (prerendering), a runtime with no binding, or a binding. Each
-       implies a different fix and they are indistinguishable from outside. */
     trace.runtime = runtime ? 'yes' : 'no';
     trace.bindings = runtime?.env ? Object.keys(runtime.env).sort().join(',') : 'none';
     trace.assets = assets ? (typeof assets.fetch === 'function' ? 'fn' : 'no-fetch') : 'absent';
 
+    /**
+     * Three spellings of the same file.
+     *
+     * A prerendered page is written as `guides/index.html`. Cloudflare's own
+     * asset server resolves a directory to its index — `curl` on
+     * `/montavista/guides/` returns 200 — but the binding is a narrower thing
+     * and there is no reason to assume it does the same. Ask for the
+     * directory, then the index, then the bare path, and take whichever
+     * answers.
+     *
+     * Cheap: the first hit returns, and on a miss all three are edge lookups
+     * against a store that already said no.
+     */
+    const bare = `/${slug}${url.pathname}`.replace(/\/+$/, '');
+    const spellings = [
+      `${bare}/${url.search}`,
+      `${bare}/index.html${url.search}`,
+      `${bare}${url.search}`,
+    ];
+
     if (assets?.fetch) {
-      try {
-        const served = await assets.fetch(asFile);
-        trace.assetstatus = String(served.status);
-        if (served.status !== 404) {
-          trace.served = 'assets';
-          return stamped(served);
+      for (const [i, path] of spellings.entries()) {
+        try {
+          const served = await assets.fetch(new URL(path, url.origin).toString());
+          trace[`a${i}`] = String(served.status);
+          if (served.status !== 404) {
+            trace.served = `assets:${i}`;
+            return stamped(served);
+          }
+        } catch (error: any) {
+          trace[`a${i}`] = `threw:${error?.name ?? 'Error'}`;
         }
-      } catch (error: any) {
-        trace.assetstatus = `threw:${error?.name ?? 'Error'}`;
       }
     }
 
-    /* Only where there is a runtime at all. During prerendering middleware
-       also runs, and fetching the site from inside its own build is both
-       impossible and unnecessary — the app is the only thing there. */
     if (runtime) {
-      try {
-        const served = await fetch(asFile, {
-          headers: { accept: request.headers.get('accept') ?? 'text/html' },
-        });
-        trace.fetchstatus = String(served.status);
-        if (served.status !== 404) {
-          trace.served = 'fetch';
-          return stamped(served);
+      for (const [i, path] of spellings.entries()) {
+        try {
+          const served = await fetch(new URL(path, url.origin).toString(), {
+            headers: { accept: request.headers.get('accept') ?? 'text/html' },
+          });
+          trace[`f${i}`] = String(served.status);
+          if (served.status !== 404) {
+            trace.served = `fetch:${i}`;
+            return stamped(served);
+          }
+        } catch (error: any) {
+          trace[`f${i}`] = `threw:${error?.name ?? 'Error'}`;
         }
-      } catch (error: any) {
-        trace.fetchstatus = `threw:${error?.name ?? 'Error'}`;
       }
     }
 
+    /**
+     * **`next()` into a prerendered route throws**, and that is why every
+     * earlier attempt left no trace at all: Astro refuses a rewrite from an
+     * on-demand route to a prerendered one, the throw escapes before anything
+     * can be stamped, and its error handling serves `dist/404.html` through
+     * the very binding this code was trying to use. The 404 somebody sees is
+     * a build artifact, which is how its canonical came to read
+     * `/scipath/404/` — a path only build-time middleware could produce.
+     *
+     * Caught, so a failure here reports itself instead of looking like a page
+     * that does not exist.
+     */
     trace.served = 'app';
-    return stamped(await next(target));
+
+    try {
+      return stamped(await next(target));
+    } catch (error: any) {
+      trace.rewritefailed = error?.name ?? 'Error';
+      return stamped(await next());
+    }
   }
 
   const runtime = (locals as Record<string, any>).runtime?.env;
