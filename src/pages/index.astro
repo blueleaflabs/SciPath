@@ -378,15 +378,33 @@ cachePublicPage(Astro);
      one after another. Separated cards with the number outside them say
      sequence, which is what the section is about.
   
-     `auto-fit` rather than five columns, so the row becomes two and then one
-     on a narrow screen without a breakpoint deciding where. */
+     **Five columns, stated.** This was `auto-fit` with a `minmax(11rem, …)`
+     floor, which computes how many tracks fit and then fills the row — and at
+     the width this page actually renders, five times eleven rem plus four
+     gaps came to just over the measure, so it laid out four and wrapped the
+     fifth onto a line of its own. A sequence broken across two rows stops
+     reading as a sequence, and `auto-fit` had been asked to decide something
+     that is not its business: there are five steps, and they are five because
+     the product has five.
+  
+     The breakpoints do the wrapping instead, where a narrow screen genuinely
+     cannot hold a row. Explicit, so the shape is a decision rather than an
+     outcome of arithmetic against whatever the container happens to be. */
   .steps {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
-    gap: 18px;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 14px;
     margin: 22px 0 0;
     padding: 0;
     list-style: none;
+  }
+
+  @media (max-width: 62rem) {
+    .steps { grid-template-columns: repeat(3, 1fr); }
+  }
+
+  @media (max-width: 40rem) {
+    .steps { grid-template-columns: 1fr; }
   }
 
   .steps li {

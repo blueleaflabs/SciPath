@@ -135,7 +135,7 @@ export const onRequest = defineMiddleware(async (context, next) => {
     const target = `/${slug}${url.pathname}${url.search}`;
 
     /**
-     * Fetched from the assets binding, not rewritten into the app.
+     * Fetched as a file, by two routes, because one of them may not be there.
      *
      * **`next()` cannot reach a prerendered page.** The adapter's handler
      * looks for a static asset before middleware runs, using the path as it
@@ -143,28 +143,59 @@ export const onRequest = defineMiddleware(async (context, next) => {
      * `/montavista/guides/`. Middleware then rewrites, and the rewritten path
      * matches no route either: a prerendered page is a file on the asset
      * server and was never in the worker's route table. Both halves look
-     * right and neither can find the other.
+     * right and neither can find the other, and every prerendered public page
+     * 404'd in production — the guides, the policies, submit, about, contact,
+     * every link in the footer. Only `/` and `/app/` worked, being on demand
+     * and therefore genuinely routes.
      *
-     * Every prerendered public page therefore 404'd in production — the
-     * guides, the policies, submit, about, contact, every link in the footer.
-     * Only `/` and `/app/` worked, because those are on demand and really are
-     * routes. **None of it reproduces locally**: `astro dev` has no static
-     * output and serves every route through the app, so the one environment
-     * where this fails is the only one that matters.
+     * **None of it reproduces locally.** `astro dev` has no static output and
+     * serves every route through the app, so the one environment where this
+     * fails is the only one that matters — which is why this is written to
+     * survive being wrong about the platform rather than to be clever about
+     * it.
      *
-     * So ask the asset server directly. A 404 from it falls through to the
-     * app, which is what makes a genuinely missing page still render the 404
-     * route rather than an empty asset response.
+     * Two routes, tried in order:
+     *
+     * 1. The `ASSETS` binding, which is how the adapter itself reaches static
+     *    files. Present on a Worker deployed with assets, and the direct way.
+     *
+     * 2. A plain fetch at the rewritten address. `_routes.json` **excludes**
+     *    every prerendered tenant path from the worker, so a request for
+     *    `/montavista/guides/` is served by the asset server and cannot
+     *    re-enter this middleware — the exclusion that makes the first
+     *    problem is what makes this safe from looping.
+     *
+     * A 404 from both falls through to the app, so a genuinely missing page
+     * still renders the 404 route rather than an empty asset response.
      */
+    const asFile = new URL(target, url.origin).toString();
+
     const assets = (locals as Record<string, any>).runtime?.env?.ASSETS;
 
-    if (assets) {
-      const served = await assets.fetch(new URL(target, url.origin));
-      if (served.status !== 404) return served;
+    if (assets?.fetch) {
+      try {
+        const served = await assets.fetch(asFile);
+        if (served.status !== 404) return served;
+      } catch {
+        /* A binding that is not what it looked like. Fall through rather
+           than turning a missing page into a 500. */
+      }
     }
 
-    /* No binding during prerendering, where middleware also runs and the app
-       is the only thing there is. */
+    /* Only where there is a runtime at all. During prerendering middleware
+       also runs, and fetching the site from inside its own build is both
+       impossible and unnecessary — the app is the only thing there. */
+    if ((locals as Record<string, any>).runtime) {
+      try {
+        const served = await fetch(asFile, {
+          headers: { accept: request.headers.get('accept') ?? 'text/html' },
+        });
+        if (served.status !== 404) return served;
+      } catch {
+        /* Fall through to the app. */
+      }
+    }
+
     return next(target);
   }
 
