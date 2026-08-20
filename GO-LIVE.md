@@ -123,14 +123,21 @@ an encrypted secret and nowhere else.
 
 - Site URL: `https://scipath.org`
 - Redirect URLs, one line each:
-  - `https://scipath.org/auth/callback`
-  - `https://www.scipath.org/auth/callback`
-  - `https://montavista.scipath.org/auth/callback`
-  - `https://svslc.scipath.org/auth/callback`
+  - `https://scipath.org/auth/callback/`
+  - `https://www.scipath.org/auth/callback/`
+  - `https://montavista.scipath.org/auth/callback/`
+  - `https://svslc.scipath.org/auth/callback/`
+  - `https://demo.scipath.org/auth/callback/`
 
-Supabase does not accept a wildcard subdomain here reliably, so list them. A
-tenant added later needs a line added here — put that on the checklist for
-adding a school.
+Supabase does not accept a wildcard subdomain here reliably, so list them. **A
+tenant added later needs a line added here**, and the failure is quiet: every
+school that already worked goes on working, so it reads as one school being
+broken rather than as a setting nobody added. `db reset` does not touch this,
+which is the same reason the existing lines survive a rebuild.
+
+`npm run reset:cloud` prints the full list at the end of a run, derived from
+`src/config/orgs/*.yaml`, so comparing it against the dashboard is ten seconds
+and does not require knowing which tenant is new.
 
 **2.6 Google sign-in.** A **new** OAuth client in Google Cloud, separate from
 your local one. Authorized redirect URI is Supabase's, not ours:

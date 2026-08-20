@@ -42,6 +42,8 @@ import fs from 'node:fs';
 import readline from 'node:readline/promises';
 import { createClient } from '@supabase/supabase-js';
 import { loadCloudVars } from './dev-vars.mjs';
+import { loadOrgs } from './orgs-library.mjs';
+import { originFor, apexOrigin } from '../src/lib/deployment.ts';
 
 /* `.cloud.vars`, not `.dev.vars`. The local file names the database
    `npm run reset` destroys, and the two must never be the same thing. */
@@ -504,21 +506,49 @@ if (!report(await census())) {
  * resolve one that has not been written yet — so the script that knows the
  * order should be the thing enforcing it.
  *
- * The demo fixtures are not here. They refuse a non-loopback target outright,
- * which is the right default until there is a decision about what a
- * demonstration should contain.
+ * **The demonstration fixtures are here, and only for the demonstration
+ * tenant.** They used to be left out because they refused a non-loopback
+ * target outright. That refusal is now narrower — `seed-demo` writes into a
+ * project that is not loopback when every organization it was pointed at
+ * carries `demo: true` — and until this software runs somewhere other than
+ * here, the cloud project *is* where demonstrations are given from. A fixture
+ * cast that exists only on one laptop is a cast nobody can show.
+ *
+ * `DEMO_ORGS` is set here rather than left to the script's default, which
+ * names the real schools because that is the right answer locally. The two
+ * environments seed different sets on purpose and the difference is exactly
+ * one thing: on a laptop every school gets a cast, in the cloud only the
+ * school that holds nothing real. `seed-demo` refuses the rest anyway; naming
+ * them here would produce a refusal in the middle of a reset that had already
+ * dropped the database.
+ *
+ * **The order is `npm run reset`'s order and must stay that way.** Fixtures
+ * run *before* the programs, which looks backwards and is not: an officer's
+ * role is scoped to a program, and `seed-programs` is the only thing that
+ * knows which officer runs which — so it grants those roles to accounts
+ * `seed-demo` has already created. Reversed, every account still appears and
+ * every scoped officer role is silently missing, which is a demonstration
+ * where the club has no officers and nothing errored.
  */
 const SEEDS = [
-  ['Organizations', ['scripts/seed-orgs.mjs']],
-  ['Programs', ['--experimental-strip-types', 'scripts/seed-programs.mjs']],
-  ['People', ['scripts/seed-people.mjs', '--optional']],
+  ['Organizations', ['scripts/seed-orgs.mjs'], {}],
+  [
+    'Demonstration fixtures',
+    ['scripts/seed-demo.mjs', `--allow-remote=${ref}`],
+    { DEMO_ORGS: 'demo' },
+  ],
+  ['Programs', ['--experimental-strip-types', 'scripts/seed-programs.mjs'], {}],
+  ['People', ['scripts/seed-people.mjs', '--optional'], {}],
 ];
 
-for (const [what, argv] of SEEDS) {
+for (const [what, argv, extraEnv] of SEEDS) {
   console.log(`\n${what}\n`);
 
   const code = await new Promise((resolve) => {
-    const child = spawn('node', argv, { stdio: 'inherit', env: process.env });
+    const child = spawn('node', argv, {
+      stdio: 'inherit',
+      env: { ...process.env, ...extraEnv },
+    });
     child.on('exit', (c) => resolve(c ?? 1));
     child.on('error', () => resolve(1));
   });
@@ -527,3 +557,44 @@ for (const [what, argv] of SEEDS) {
 }
 
 console.log(`\n${ref} is rebuilt and seeded.\n`);
+
+/**
+ * THE ONE SETTING THIS SCRIPT CANNOT WRITE.
+ *
+ * Supabase matches the address it is asked to return to against an allow list
+ * in the dashboard, and it does not accept a wildcard subdomain reliably — so
+ * every tenant is a line somebody types, and a tenant added later is a line
+ * somebody forgets. The failure is quiet in the way that costs an evening:
+ * every other school still signs in, so it reads as one school being broken
+ * rather than as a setting that was never added.
+ *
+ * It cannot be seeded from here — it is project configuration rather than
+ * schema, and `db reset` does not touch it, which is also why an existing
+ * tenant keeps working across a rebuild.
+ *
+ * So it is printed instead, derived from the same org files everything else
+ * reads, at the moment somebody is about to go and test sign-in. The list is
+ * complete rather than a diff: comparing it against the dashboard takes ten
+ * seconds and does not depend on knowing which tenant is new.
+ *
+ * The trailing slash is `src/pages/auth/signin.ts`'s, which builds
+ * `/auth/callback/` and is the string Supabase is actually asked to match.
+ */
+const callbacks = [
+  `${apexOrigin()}/auth/callback/`,
+  ...Object.values(loadOrgs())
+    /* The platform is the apex, already listed above. `example` has no
+       database row by declaration, so nobody can sign in to it and a line
+       for it is a line to wonder about later. */
+    .filter((org) => !org.isPlatform && org.provisioned)
+    .map((org) => `${originFor(org.subdomain ?? org.id)}/auth/callback/`),
+];
+
+console.log(`  Sign-in returns to these, and Supabase has to be told so:
+  Authentication -> URL Configuration -> Redirect URLs
+
+${callbacks.map((url) => `    ${url}`).join('\n')}
+
+  Already there for every tenant that worked before this run. A new one is a
+  new line, and without it Google sign-in fails for that school alone.
+`);

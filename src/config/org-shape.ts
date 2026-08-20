@@ -100,6 +100,16 @@ export interface Org {
    * happens to say on the day.
    */
   demo?: boolean;
+  /**
+   * False for a record that gets pages but no database row.
+   *
+   * `example` is one: it exists so the alternate theme is contrast-checked in
+   * CI, holds no students, and nothing is ever scoped to it. `seed-orgs`
+   * reads this off the document and skips it; anything else deciding whether
+   * a school can be signed in to has to ask the same question, which is why
+   * it belongs on the record rather than being reparsed.
+   */
+  provisioned?: boolean;
 }
 
 /**
@@ -128,5 +138,9 @@ export function shapeOrg(doc: any): Org {
     editorialReview: Boolean(doc.editorial_review),
     showcaseNote: doc.showcase_note,
     demo: Boolean(doc.demo),
+    /* Defaulted true, because every file but one omits it and a record that
+       said `undefined` would put the burden of remembering the default on
+       every caller. */
+    provisioned: doc.provisioned !== false,
   };
 }

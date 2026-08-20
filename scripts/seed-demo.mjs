@@ -38,7 +38,7 @@ const URL = process.env.PUBLIC_SUPABASE_URL ?? '';
 const KEY = process.env.SUPABASE_SECRET_KEY ?? '';
 /* Every tenant gets fixtures, so switching schools in the UI actually has
    something to show on the other side. */
-const ORG_SLUGS = (process.env.DEMO_ORGS ?? 'montavista,svslc,scipath')
+const ORG_SLUGS = (process.env.DEMO_ORGS ?? 'montavista,svslc,scipath,demo')
   .split(',')
   .map((s) => s.trim())
   .filter(Boolean);

@@ -631,4 +631,38 @@ test('every table below the blanket grant names service_role', () => {
   );
 });
 
+test('the two resets seed the same things in the same order', () => {
+  /* Two chains describe the same rebuild — `npm run reset` in package.json
+     for the local stack, `SEEDS` in reset-cloud.mjs for the project — and
+     nothing compared them. A seed added to one is a seed the other silently
+     does without, and the way that surfaces is a demonstration missing its
+     cast rather than an error.
+  
+     Only the seeds they share are compared. The local chain also runs the
+     scenarios, the cases, publishing and the search index, all of which
+     refuse a non-loopback target by design. What must agree is the order of
+     the four that run in both, because `seed-programs` grants scoped officer
+     roles to accounts `seed-demo` has already created. */
+  const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+  const cloud = fs.readFileSync('scripts/reset-cloud.mjs', 'utf8');
+
+  const SHARED = ['seed-orgs', 'seed-demo', 'seed-programs', 'seed-people'];
+  const order = (text) =>
+    [...text.matchAll(/scripts\/(seed-[a-z]+)\.mjs/g)]
+      .map((m) => m[1])
+      .filter((name) => SHARED.includes(name))
+      .filter((name, i, all) => all.indexOf(name) === i);
+
+  const local = order(pkg.scripts.reset);
+  const block = cloud.slice(cloud.indexOf('const SEEDS = ['));
+
+  assert.deepEqual(
+    order(block),
+    local,
+    'the cloud reset seeds a different set, or in a different order, than npm run reset'
+  );
+
+  assert.ok(local.length === SHARED.length, `npm run reset no longer runs ${SHARED.join(', ')}`);
+});
+
 console.log(`${passed} script assertions passed. ${files.length} scripts read.`);
