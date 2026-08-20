@@ -171,10 +171,13 @@ test('the middleware does not depend on next() to reach a prerendered page', () 
     'the middleware must fetch the file rather than rewriting into it'
   );
 
+  /* And the rewrite is wrapped. Astro throws when an on-demand route
+     rewrites into a prerendered one, and an uncaught throw here is every
+     public page failing at once rather than one page missing. */
   assert.match(
     middleware,
-    /catch[\s\S]{0,120}rewritefailed/,
-    'a refused rewrite must report itself rather than becoming a blank site'
+    /try \{\s*return await next\(target\);\s*\} catch \{/,
+    'a refused rewrite must be caught rather than becoming a blank site'
   );
 });
 

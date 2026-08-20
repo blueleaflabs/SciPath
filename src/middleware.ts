@@ -106,46 +106,6 @@ export const onRequest = defineMiddleware(async (context, next) => {
   const isHome = url.pathname === '/';
   const needsSession = isHome || isNonTenantPath(url.pathname);
 
-  /**
-   * WHAT THIS REQUEST DID, ON THE RESPONSE ITSELF.
-   *
-   * **Temporary. Remove once the prerendered-page fault is understood.**
-   *
-   * Every public page 404s in production and none of it reproduces locally,
-   * because `astro dev` serves everything through the app and has no static
-   * output. Two attempts to fix it from here were guesses about a runtime I
-   * cannot observe, and both were wrong. This is the alternative to a third
-   * guess: make the deployment say what happened.
-   *
-   * Headers rather than logs, so one `curl -sI` answers it and nobody has to
-   * find a log stream. Prefixed and lowercase; they carry no user data and
-   * name only the path, the tenant and what a lookup returned.
-   *
-   * Response objects are immutable, so this rebuilds one. That costs a copy
-   * on every public request, which is the reason it does not stay.
-   */
-  const trace: Record<string, string> = {
-    host: url.hostname,
-    slug,
-    path: url.pathname,
-    /* Overwritten by whichever branch runs. Left as `session` it means the
-       rewrite never ran at all, which is one of the things worth knowing. */
-    branch: 'session',
-  };
-
-  const stamped = async (response: Response) => {
-    const out = new Response(response.body, response);
-    for (const [k, v] of Object.entries(trace)) {
-      try {
-        out.headers.set(`x-sp-${k}`, v.slice(0, 200));
-      } catch {
-        /* A header value the runtime refuses is not worth failing over. */
-      }
-    }
-    return out;
-  };
-
-
   if (!needsSession) {
     /* Every public route is prerendered once per tenant under /[org]/, so a
        request for svslc.scipath.org/articles/ is served the file built at
@@ -167,131 +127,81 @@ export const onRequest = defineMiddleware(async (context, next) => {
          this has to be rewritten like every other public path. Leaving it
          out was how three schools came to share one index. */
       url.pathname.startsWith('/pdf/') ||
+      /* The not-found route, which is on demand now (see 404.astro) and has
+         no tenant copy to rewrite to. `.html` was the only spelling exempted
+         while it was a file. */
+      url.pathname === '/404' ||
+      url.pathname === '/404/' ||
       url.pathname === '/404.html' ||
       url.pathname.startsWith('/sitemap')
     ) {
-      trace.branch = 'exempt';
-      return stamped(await next());
+      return next();
     }
-
-    trace.branch = 'rewrite';
     const target = `/${slug}${url.pathname}${url.search}`;
-    trace.rewrite = target;
 
     /**
-     * Fetched as a file, by two routes, because one of them may not be there.
+     * Fetched as a file, because `next()` cannot reach one.
      *
-     * **`next()` cannot reach a prerendered page.** The adapter's handler
-     * looks for a static asset before middleware runs, using the path as it
-     * arrived — so a request for `/guides/` misses, because the file is at
-     * `/montavista/guides/`. Middleware then rewrites, and the rewritten path
-     * matches no route either: a prerendered page is a file on the asset
-     * server and was never in the worker's route table. Both halves look
-     * right and neither can find the other, and every prerendered public page
-     * 404'd in production — the guides, the policies, submit, about, contact,
-     * every link in the footer. Only `/` and `/app/` worked, being on demand
-     * and therefore genuinely routes.
+     * A public page is prerendered once per organization under `/[org]/`, and
+     * a reader asks for it without the slug. Rewriting with `next()` does not
+     * work: it asks the worker's route table, and a prerendered page is a
+     * file on the asset server, not a route. Astro refuses the rewrite
+     * outright — an on-demand route may not rewrite into a prerendered one —
+     * so the throw has to be caught rather than relied upon.
      *
-     * **None of it reproduces locally.** `astro dev` has no static output and
-     * serves every route through the app, so the one environment where this
-     * fails is the only one that matters — which is why this is written to
-     * survive being wrong about the platform rather than to be clever about
-     * it.
+     * The assets binding is how the adapter itself reaches static files, and
+     * it is the mechanism here.
      *
-     * Two routes, tried in order:
+     * **This code was correct for a long time and never once ran.** A static
+     * `dist/404.html` was answered by Cloudflare before the worker was
+     * invoked at all, so every request for a public page was resolved by that
+     * file and the middleware never got a turn. Three fixes were written
+     * inside a function nothing was calling. The tell, when a trace was
+     * finally stamped onto every response, was that the trace headers did not
+     * appear either. `404.astro` is on demand now, which is what gives this
+     * its turn, and `tests/search-scope.mjs` holds both halves of that rule
+     * together.
      *
-     * 1. The `ASSETS` binding, which is how the adapter itself reaches static
-     *    files. Present on a Worker deployed with assets, and the direct way.
-     *
-     * 2. A plain fetch at the rewritten address. `_routes.json` **excludes**
-     *    every prerendered tenant path from the worker, so a request for
-     *    `/montavista/guides/` is served by the asset server and cannot
-     *    re-enter this middleware — the exclusion that makes the first
-     *    problem is what makes this safe from looping.
-     *
-     * A 404 from both falls through to the app, so a genuinely missing page
-     * still renders the 404 route rather than an empty asset response.
-     */
-    const asFile = new URL(target, url.origin).toString();
-
-    const runtime = (locals as Record<string, any>).runtime;
-    const assets = runtime?.env?.ASSETS;
-
-    trace.runtime = runtime ? 'yes' : 'no';
-    trace.bindings = runtime?.env ? Object.keys(runtime.env).sort().join(',') : 'none';
-    trace.assets = assets ? (typeof assets.fetch === 'function' ? 'fn' : 'no-fetch') : 'absent';
-
-    /**
-     * Three spellings of the same file.
-     *
-     * A prerendered page is written as `guides/index.html`. Cloudflare's own
-     * asset server resolves a directory to its index — `curl` on
-     * `/montavista/guides/` returns 200 — but the binding is a narrower thing
-     * and there is no reason to assume it does the same. Ask for the
-     * directory, then the index, then the bare path, and take whichever
-     * answers.
-     *
-     * Cheap: the first hit returns, and on a miss all three are edge lookups
-     * against a store that already said no.
+     * Three spellings, because a page is written as `guides/index.html` and a
+     * file is written as `robots.txt`. The directory form answers a page; the
+     * bare form answers a file; the explicit index is between them. The first
+     * hit returns, so the ordinary case is one lookup.
      */
     const bare = `/${slug}${url.pathname}`.replace(/\/+$/, '');
+
     const spellings = [
       `${bare}/${url.search}`,
       `${bare}/index.html${url.search}`,
       `${bare}${url.search}`,
     ];
 
-    if (assets?.fetch) {
-      for (const [i, path] of spellings.entries()) {
-        try {
-          const served = await assets.fetch(new URL(path, url.origin).toString());
-          trace[`a${i}`] = String(served.status);
-          if (served.status !== 404) {
-            trace.served = `assets:${i}`;
-            return stamped(served);
-          }
-        } catch (error: any) {
-          trace[`a${i}`] = `threw:${error?.name ?? 'Error'}`;
-        }
-      }
-    }
+    const assets = (locals as Record<string, any>).runtime?.env?.ASSETS;
 
-    if (runtime) {
-      for (const [i, path] of spellings.entries()) {
+    if (assets?.fetch) {
+      for (const spelling of spellings) {
         try {
-          const served = await fetch(new URL(path, url.origin).toString(), {
-            headers: { accept: request.headers.get('accept') ?? 'text/html' },
-          });
-          trace[`f${i}`] = String(served.status);
-          if (served.status !== 404) {
-            trace.served = `fetch:${i}`;
-            return stamped(served);
-          }
-        } catch (error: any) {
-          trace[`f${i}`] = `threw:${error?.name ?? 'Error'}`;
+          const served = await assets.fetch(new URL(spelling, url.origin).toString());
+          if (served.status !== 404) return served;
+        } catch {
+          /* A binding that is not what it looked like. Try the next
+             spelling, then fall through: a missing page is a 404, not a
+             500. */
         }
       }
     }
 
     /**
-     * **`next()` into a prerendered route throws**, and that is why every
-     * earlier attempt left no trace at all: Astro refuses a rewrite from an
-     * on-demand route to a prerendered one, the throw escapes before anything
-     * can be stamped, and its error handling serves `dist/404.html` through
-     * the very binding this code was trying to use. The 404 somebody sees is
-     * a build artifact, which is how its canonical came to read
-     * `/scipath/404/` — a path only build-time middleware could produce.
+     * The rewrite, which Astro may refuse.
      *
-     * Caught, so a failure here reports itself instead of looking like a page
-     * that does not exist.
+     * Reached when nothing above answered — a genuinely missing page, or a
+     * build with no runtime, which is what prerendering is. `next(target)`
+     * renders it if the route is on demand and throws if it is prerendered,
+     * and a throw here must not become a blank site.
      */
-    trace.served = 'app';
-
     try {
-      return stamped(await next(target));
-    } catch (error: any) {
-      trace.rewritefailed = error?.name ?? 'Error';
-      return stamped(await next());
+      return await next(target);
+    } catch {
+      return next();
     }
   }
 
@@ -304,7 +214,7 @@ export const onRequest = defineMiddleware(async (context, next) => {
 
   if (!isConfigured(runtime)) {
     locals.configured = false;
-    return stamped(await next());
+    return next();
   }
   locals.configured = true;
 
@@ -332,7 +242,7 @@ export const onRequest = defineMiddleware(async (context, next) => {
          remembered *here* or nowhere. */
       return context.redirect(signInWith(url));
     }
-    return stamped(await next());
+    return next();
   }
 
   locals.session = { id: user.id, email: user.email ?? null };
@@ -360,7 +270,7 @@ export const onRequest = defineMiddleware(async (context, next) => {
     if (url.pathname.startsWith(GUARDED) && url.pathname !== SIGNUP) {
       return context.redirect(SIGNUP);
     }
-    return stamped(await next());
+    return next();
   }
 
   /* Cheap and idempotent: keeps the identity mirror current, and refreshes
@@ -376,5 +286,5 @@ export const onRequest = defineMiddleware(async (context, next) => {
 
   locals.roles = roles ?? [];
 
-  return stamped(await next());
+  return next();
 });
