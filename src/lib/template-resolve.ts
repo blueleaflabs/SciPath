@@ -113,6 +113,8 @@ export interface Step {
 export interface Program {
   id: string;
   family?: string;
+  /** What the people in it call it. "IRPD", not the sentence it stands for. */
+  short_name?: string;
   kind?: 'competition' | 'course' | 'publication' | 'process' | 'independent' | 'showcase';
   name: string;
   version?: number;
@@ -157,6 +159,8 @@ export interface Resolved {
   processId?: string | null;
   id: string;
   name: string;
+  /** What the people in it call it, where that is shorter than its name. */
+  short_name?: string;
   family?: string;
   kind: string;
   version: number;
@@ -431,6 +435,12 @@ export function resolveProgram(
   const resolved: Resolved = {
     id: last.id,
     name: last.name,
+    /* This layer's own, exactly like `name` above it and for the same
+       reason. Walking the chain for one looked more forgiving and was
+       wrong: a club that prepares for a fair inherited the fair's
+       abbreviation and called itself by it. A program with no short name
+       says its full name, which is always correct if sometimes long. */
+    short_name: last.short_name,
     family: last.family,
     kind: last.kind ?? 'competition',
 

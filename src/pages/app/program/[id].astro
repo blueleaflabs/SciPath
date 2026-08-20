@@ -29,8 +29,6 @@ import { signInWith } from '../../../lib/next-path';
 import {
   programTitle,
   programKind,
-  staffWord,
-  memberWord,
 } from '../../../lib/program-names';
 
 const { session, account, roles } = Astro.locals;
@@ -51,7 +49,7 @@ const { data: programRow } = await supabase
   .from('programs')
   .select(
     'id, name, season_year, kind, program_role, joining, status, level, ' +
-      'description, fair_date, website_url, advances_to_fairs, places, roles, org_id'
+      'description, fair_date, website_url, advances_to_fairs, places, roles, org_id, short_name'
   )
   .eq('id', id)
   .maybeSingle();
@@ -95,9 +93,6 @@ const { data: membership } = await supabase
 
 const isCohort = program.program_role === 'cohort';
 const state = (membership as any)?.state ?? null;
-
-const dateLabel =
-  program.kind === 'course' ? 'Ends' : program.kind === 'grant' ? 'Closes' : 'Judging';
 ---
 
 <Base title={programTitle(program)} noindex={true}>
@@ -121,58 +116,36 @@ const dateLabel =
 
     {program.description && <p class="blurb">{program.description}</p>}
 
-    <dl class="facts">
-      {program.kind !== 'independent' && (
-        <>
-          <dt>{dateLabel}</dt>
-          <dd>{formatDate(program.fair_date, 'long', 'to be announced')}</dd>
-        </>
-      )}
-
-      <dt>Joining</dt>
-      <dd>
-        {program.joining === 'approval'
-          ? `By approval, decided by the ${staffWord(program).toLowerCase()}s`
-          : 'Open to anybody at this school'}
-      </dd>
-
-      {program.advances_to_fairs?.length > 0 && (
-        <>
-          <dt>Advances to</dt>
-          <dd>{program.advances_to_fairs.join(' and ')}</dd>
-        </>
-      )}
-
-      {program.places && (
-        <>
-          <dt>Places</dt>
-          <dd>{program.places}</dd>
-        </>
-      )}
-
-      {/* Named, not hidden behind the heading. A student going to the fair's
-          own site is going for rules and forms we do not copy, and they
-          should be able to see they are leaving. */}
-      {program.website_url && (
-        <>
-          <dt>Official site</dt>
-          <dd>
-            <a href={program.website_url} target="_blank" rel="noopener noreferrer">
-              {new URL(program.website_url).hostname.replace(/^www\./, '')}
-            </a>
-          </dd>
-        </>
-      )}
-    </dl>
+    {/* The terms of joining are not here.
+    
+        When it ends, how you get in, how many places there are, what it
+        advances to — those decide whether to join, and they are on the card
+        that offers joining. Somebody already in the class is reading this
+        page for the dates below, and four lines of eligibility above them is
+        four lines to scroll past every time.
+    
+        The site stays, because it is not a term. A student going to the
+        program's own site is going for rules and forms this does not copy,
+        and nothing else on the page offers a way to them. */}
+    {program.website_url && (
+      <dl class="facts">
+        <dt>Official site</dt>
+        <dd>
+          <a href={program.website_url} target="_blank" rel="noopener noreferrer">
+            {new URL(program.website_url).hostname.replace(/^www\./, '')}
+          </a>
+        </dd>
+      </dl>
+    )}
 
     {dated.length > 0 && (
       <section class="sec">
+        {/* The heading and the dates, and nothing between them. The
+            paragraph that stood here explained that a joined copy is frozen
+            — true, and the wrong place for it. It belongs where somebody's
+            dates could actually differ from these, which is their own entry
+            page, and above a list of dates it read as filler. */}
         <div class="sec-h"><b>Published dates</b></div>
-        <p class="t-sm" style="max-width:var(--measure-text)">
-          {isCohort
-            ? `What the ${memberWord(program, 'plural').toLowerCase()} are held to. Your own copy is made when you join, so a date moved afterwards does not rewrite what you were told.`
-            : 'What this program publishes. Your own copy is made when you enter, so a date moved afterwards does not rewrite what you were told.'}
-        </p>
 
         <ul class="dates">
           {dated.map((m: any) => (
@@ -181,7 +154,16 @@ const dateLabel =
               <span class="what">
                 {m.name}
                 {m.form_number && <span class="t-sm"> · form {m.form_number}</span>}
-                {m.source === 'school' && <span class="t-sm"> · your school's own</span>}
+                {/* Which program set it, said in the program's own words.
+                    "Your school's own" describes where a date came from
+                    without naming it, and every date on this page came from
+                    the same place, so it read as a label rather than a
+                    distinction. The short name is what a student calls this
+                    program out loud; without one, its full name is long but
+                    never wrong. */}
+                {m.source === 'school' && (
+                  <span class="t-sm"> · {program.short_name ?? program.name}</span>
+                )}
               </span>
             </li>
           ))}

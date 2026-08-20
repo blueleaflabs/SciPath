@@ -164,6 +164,19 @@
   flex-wrap: wrap;
 }
 
+/* One row above the narrow breakpoint.
+ 
+   The lockup keeps its width — it is the school's name and mark, and a
+   masthead that abbreviates those is a masthead that has given up. Everything
+   to the right of it shrinks instead, down to the search field, which is the
+   only element in the bar that loses nothing but characters. Below 720px the
+   wrap above is the only honest behavior and stands. */
+@media (min-width: 721px) {
+  .mast-in { flex-wrap: nowrap; }
+  .mast-in .lockup { flex: 0 0 auto; }
+  .mast-in .mnav-bar { flex: 1 1 auto; justify-content: flex-end; }
+}
+
 .lockup {
   display: flex;
   align-items: center;

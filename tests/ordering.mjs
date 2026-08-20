@@ -1463,4 +1463,133 @@ test('a scoped role is not told it is looking at the school', () => {
   );
 });
 
+test('the printed notebook says whose school it is', () => {
+  /* The web pages open with the lockup and this did not, so a notebook
+     handed to a judge named its school on the fifth line of a definition
+     list. Not `Masthead.astro` itself, which carries navigation and a
+     sign-out form: the same two elements, restated for paper. */
+  const exported = fs.readFileSync('src/pages/app/project/[id]/notebook.astro', 'utf8');
+
+  assert.match(exported, /class="lockup"/, 'the title page needs the lockup');
+  assert.match(exported, /data-len=\{String\(org\.mark\.length\)\}/, 'sized by mark length');
+  assert.match(exported, /\.lockup \.badge\[data-len='6'\]/, 'and a rule for the longest mark');
+});
+
+test('the printed page holds its margins where a print dialog cannot reach', () => {
+  /* An `@page` margin alone was not enough: Chrome remembers the margin
+     setting from whatever was printed last, and `Margins: None` overrides any
+     stylesheet. Top and bottom have to stay in `@page`, because only a page
+     margin repeats on every sheet; left and right live on the block, where
+     nothing in the dialog can remove them. */
+  const exported = fs.readFileSync('src/pages/app/project/[id]/notebook.astro', 'utf8');
+
+  const page = exported.match(/@page \{\s*margin: ([^;]+);/);
+  assert.ok(page, 'the export needs an @page rule');
+  assert.match(page[1], /\b0\b/, 'the horizontal page margin belongs on the block');
+
+  const book = exported.match(/\.book \{[^}]*padding: ([^;]+);[^}]*box-shadow: none/s);
+  assert.ok(book, 'the print rule for .book should set padding');
+  assert.match(book[1], /mm/, 'and it is a physical measure, because it is a page margin');
+});
+
+test('the masthead is one row wherever there is room for one', () => {
+  /* `flex-wrap: wrap` was the whole answer, so the consent flag — about a
+     hundred and fifty pixels of a row with none to spare — split the bar in
+     two and left the rule between the sections in the middle of nowhere.
+     Above the narrow breakpoint nothing wraps and the search field gives up
+     width instead; below it, wrapping is the only honest behavior. */
+  const ui = fs.readFileSync('src/styles/ui.css', 'utf8');
+  const mast = fs.readFileSync('src/components/Masthead.astro', 'utf8');
+
+  assert.match(ui, /\.mast-in \{ flex-wrap: nowrap; \}/, 'the outer row must not split');
+  assert.match(mast, /\.mnav-bar \{ flex-wrap: nowrap; min-width: 0; \}/,
+    'and the group must be allowed to shrink below its content');
+
+  /* The field is what shrinks, and it can only do that if it is allowed to
+     go smaller than its basis. A min-width removed here is a bar that
+     overflows instead of wrapping, which is worse than what was there. */
+  assert.match(mast, /\.mnav-find \{[^}]*min-width: [\d.]+rem/s, 'the search field sets a floor');
+});
+
+test('a pending guardian is visible on a page the server did not render', () => {
+  /* The flag was rendered from the account, so it appeared on the app and
+     not on the archive, the guides or the showcase — and a student waiting
+     on a guardian is limited on all of them. The hint cookie already carries
+     the name for exactly this reason; it carries the state beside it. */
+  const hint = fs.readFileSync('src/lib/session-hint.ts', 'utf8');
+  const mast = fs.readFileSync('src/components/Masthead.astro', 'utf8');
+
+  assert.match(hint, /consentState/, 'the hint has to carry the state');
+  assert.match(hint, /'pending' \|\| consentState === 'paused'/,
+    'and write only the two states the masthead has a word for');
+
+  assert.match(mast, /data-consent/, 'the prerendered cluster needs the element');
+  assert.match(mast, /words\[state\]/, 'and the script has to choose the word');
+});
+
+test('the OAuth return address comes from configuration, not from a header', () => {
+  /* `redirectTo` was built from `url.origin`, which is the Host the client
+     sent — the one address on the deployment derived from a claim rather
+     than from the tenant and the root domain. A request with an unexpected
+     Host would build a return address to match it, and the only thing
+     refusing the result would be Supabase's redirect allow list, which is a
+     good backstop and a poor primary.
+  
+     `originFor` reads what the allow list is generated from, so the address
+     sent to Google is on the list by construction rather than by two paths
+     agreeing. The apex is its own case: the platform tenant is served at the
+     root, and `originFor` would name a subdomain that does not exist. */
+  const signin = fs.readFileSync('src/pages/auth/signin.ts', 'utf8');
+
+  assert.match(signin, /originFor\(org\.subdomain \?\? org\.id\)/, 'the tenant decides the origin');
+  assert.match(signin, /org\.isPlatform \? apexOrigin\(\)/, 'and the apex is not a subdomain');
+  assert.doesNotMatch(
+    signin,
+    /redirectTo:.*url\.origin/,
+    'the Host header must not decide where Google returns somebody'
+  );
+});
+
+test('the deadlines table has as many cells as it has headings', () => {
+  /* Five headings and four cells: Status and Action were declared and one
+     cell did both, so every row was short and the table carried a column
+     that never held anything. Free on a wide screen, which is why it lasted,
+     and part of why the page would not fit on a phone. */
+  const entry = fs.readFileSync('src/pages/app/project/[id]/in/[program].astro', 'utf8');
+
+  const head = entry.slice(entry.indexOf('<table class="tbl phased">'));
+  const headings = [...head.slice(0, head.indexOf('</thead>')).matchAll(/<th scope="col"/g)];
+
+  /* From the data row, not from `<tbody>`. The first row after it is the
+     phase heading, which is one `th` with a colspan and no cells at all —
+     counting from there compared four headings against zero and failed on
+     a table that was correct. */
+  const row = head.slice(head.indexOf('group.rows.map('));
+  const cells = [...row.slice(0, row.indexOf('</tr>')).matchAll(/<td[ >]/g)];
+
+  assert.equal(cells.length, headings.length, 'a heading with no cell is an empty column');
+  assert.match(head, /colspan="4"/, 'and the phase heading spans what is actually there');
+});
+
+test('the deadlines table stops being a table on a phone', () => {
+  /* Four columns, one of them a form with a select and a button, is wider
+     than a 390px screen — and a table that overflows widens the page rather
+     than clipping, so every other section scrolls sideways with it. Not a
+     horizontal scroller: this file already says why, of a different table.
+     Stacked, each cell labelled by the heading it no longer sits under. */
+  const entry = fs.readFileSync('src/pages/app/project/[id]/in/[program].astro', 'utf8');
+
+  assert.match(entry, /data-label="Due"/, 'each cell carries its own heading');
+  assert.match(entry, /data-label="Obligation"/);
+  assert.match(entry, /data-label="Set by"/);
+  assert.match(entry, /data-label="Status"/);
+
+  assert.match(entry, /content: attr\(data-label\)/, 'and the narrow layout prints it');
+  assert.match(
+    entry,
+    /@media \(max-width: 640px\) \{\s*\.phased,/,
+    'the collapse belongs to the narrow breakpoint the rest of the page uses'
+  );
+});
+
 console.log(`${passed} ordering assertions passed. ${pages.length} pages read.`);

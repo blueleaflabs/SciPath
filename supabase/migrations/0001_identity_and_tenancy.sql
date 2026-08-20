@@ -1321,6 +1321,16 @@ create table public.programs (
   org_id        uuid references public.organizations on delete restrict,
   slug          text not null,
   name          text not null,
+
+  -- What the people in it call it. "IRPD", not "Interdisciplinary Research
+  -- and Project Design" -- the name a student says out loud, which is the one
+  -- that fits in a table cell and beside a date.
+  --
+  -- Optional, because most programs do not have one and a program without one
+  -- should say its full name rather than an abbreviation somebody invented
+  -- for it. The templates have carried `short_name` since they were written
+  -- and nothing until now read it.
+  short_name    text,
   season_year   int not null,                  -- the year the fair is held
   fair_date     date,
   registration_opens_on date,

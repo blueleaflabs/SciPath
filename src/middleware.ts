@@ -262,7 +262,12 @@ export const onRequest = defineMiddleware(async (context, next) => {
      loaded: no extra query, and a changed display name corrects itself on
      the next request rather than persisting until somebody signs out. */
   if (account?.display_name) {
-    setSessionHint(context.cookies, account.display_name, url.protocol === 'https:');
+    setSessionHint(
+      context.cookies,
+      account.display_name,
+      url.protocol === 'https:',
+      account.consent_state ?? null
+    );
   }
 
   if (!account) {

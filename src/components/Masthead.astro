@@ -140,8 +140,14 @@ const isCurrent = (href: string) => here === href || (href !== '/' && here.start
                 </a>
               </li>
 
+              {/* The same two elements as the rendered cluster above, filled
+                  in by the script below. Present and empty rather than built
+                  in script: markup written by JavaScript is markup no test
+                  reads, and the flag has a shape the stylesheet has to know
+                  about either way. */}
               <li class="mnav-who" data-known hidden>
                 <a href="/app/" data-name></a>
+                <span class="mnav-flag" data-consent hidden></span>
               </li>
               <li data-known hidden>
                 <form method="POST" action="/auth/signout/">
@@ -174,9 +180,16 @@ const isCurrent = (href: string) => here === href || (href !== '/' && here.start
         .find((c) => c.startsWith(hint + '='));
       if (!raw) return;
 
+      /* `name|state`, and the name is encoded, so a pipe can only be the
+         delimiter. A cookie written by an older build carries no pipe and
+         reads as a name with no state, which is the correct answer for it. */
+      const value = raw.slice(hint.length + 1);
+      const cut = value.indexOf('|');
+      const state = cut === -1 ? '' : value.slice(cut + 1);
+
       let name = '';
       try {
-        name = decodeURIComponent(raw.slice(hint.length + 1));
+        name = decodeURIComponent(cut === -1 ? value : value.slice(0, cut));
       } catch {
         return;
       }
@@ -185,6 +198,21 @@ const isCurrent = (href: string) => here === href || (href !== '/' && here.start
       const who = document.querySelector('[data-name]');
       if (who) who.textContent = name;
 
+      /* The consent flag, on a page the server could not render it on.
+      
+         A student waiting on a guardian is limited everywhere, not only on
+         the pages that happen to be rendered per request, and finding that
+         out by walking into a refusal is worse than being told. The word is
+         chosen here rather than carried in the cookie so that changing it is
+         a change to this file. */
+      const flag = document.querySelector('[data-consent]');
+      const words = { pending: 'Consent pending', paused: 'Consent needed' };
+
+      if (flag && words[state]) {
+        flag.textContent = words[state];
+        flag.removeAttribute('hidden');
+      }
+
       document.querySelectorAll('[data-anon]').forEach((el) => el.setAttribute('hidden', ''));
       document.querySelectorAll('[data-known]').forEach((el) => el.removeAttribute('hidden'));
     })();
@@ -192,11 +220,30 @@ const isCurrent = (href: string) => here === href || (href !== '/' && here.start
 )}
 
 <style>
+  /* ONE ROW, AND WHAT GIVES WAY BEFORE IT BECOMES TWO.
+  
+     `wrap` was the whole answer, so the row split whenever the total ran over
+     — which is silent, looks like a rendering fault, and puts the section
+     rule between the sections it is meant to separate.
+  
+     Above the narrow breakpoint nothing wraps, and the pressure goes where it
+     costs least: `min-width: 0` lets this group shrink below its content, and
+     the search field is the only child that can lose width without losing
+     meaning. A nav item that wraps loses a section; a field that narrows
+     loses characters somebody is about to type over anyway.
+  
+     Below it, wrapping is the only honest behavior, and it comes back. */
   .mnav-bar {
     display: flex;
     align-items: center;
     gap: 22px;
     flex-wrap: wrap;
+  }
+
+  @media (min-width: 721px) {
+    .mnav-bar { flex-wrap: nowrap; min-width: 0; }
+    .mnav { flex-wrap: nowrap; }
+    .mnav-acct { flex-wrap: nowrap; }
   }
 
   .mnav-acct {
@@ -256,15 +303,36 @@ const isCurrent = (href: string) => here === href || (href !== '/' && here.start
   .mnav-go:focus-visible { color: var(--masthead-ink); }
   .mnav-find svg { width: 15px; height: 15px; display: block; }
 
-  .mnav-who { display: flex; align-items: center; gap: 8px; }
+  /* THE FLAG GOES UNDER THE NAME, NOT BESIDE IT.
+  
+     Beside it, "CONSENT PENDING" is about a hundred and fifty pixels of a row
+     that has none to spare: the bar broke into two lines, the lockup on one
+     and everything else on the other, and the rule that separates the
+     sections ended up in the middle of nowhere. Shrinking the search field
+     buys back most of it and not all, and buying it back at one width only
+     moves the break to the next width down.
+  
+     Under it costs nothing at all. The bar is already two lines tall because
+     the lockup is — the school's name over the platform suffix — so a name
+     with a marker beneath it is the same shape in the same height, and it is
+     the shape this masthead already uses to say a second thing about a
+     first. */
+  .mnav-who {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    justify-content: center;
+    gap: 2px;
+    line-height: 1.2;
+  }
 
   .mnav-flag {
     font-family: var(--face-num);
-    font-size: 0.72rem;
-    line-height: 1.5;
+    font-size: 0.66rem;
+    line-height: 1.4;
     text-transform: uppercase;
     letter-spacing: 0.06em;
-    padding: 1px 7px;
+    padding: 0 5px;
     border: 1px solid currentColor;
     color: var(--masthead-ink-2);
     white-space: nowrap;

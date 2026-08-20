@@ -45,11 +45,29 @@ interface CookieJar {
   delete: (name: string, options?: Record<string, unknown>) => void;
 }
 
-/** After a successful sign-in, by either route. */
+/**
+ * TWO FACTS, ONE COOKIE.
+ *
+ * The name, and whether the account is waiting on a guardian. The second is
+ * here for the same reason as the first: a prerendered page cannot ask, and a
+ * student whose consent is pending needs to see that wherever they are rather
+ * than only on the pages the server happens to render for them.
+ *
+ * `name|state`, and the delimiter is safe by construction — the name is put
+ * through `encodeURIComponent`, which turns a pipe into `%7C`. Two cookies
+ * would have been two things to expire independently.
+ *
+ * Nothing here is a secret. This cookie is deliberately readable by script,
+ * carries what the person's own masthead already shows them, and says nothing
+ * a page they are looking at does not. A state absent from the cookie means
+ * an account in good standing, which is the ordinary case and the one worth
+ * keeping short.
+ */
 export function setSessionHint(
   cookies: CookieJar,
   displayName: string,
-  secure = true
+  secure = true,
+  consentState: string | null = null
 ): void {
   /* Encoded, because a cookie value may not carry a comma, a semicolon or a
      space, and a display name may carry all three.
@@ -64,7 +82,17 @@ export function setSessionHint(
      writer is told not to repeat it. This way the value in the jar is the
      value this module says it is, and the reader's single `decodeURIComponent`
      is the exact inverse of the line above it. */
-  cookies.set(SESSION_HINT, encodeURIComponent(displayName), {
+  /* Only the two states the masthead has a word for. Anything else — active,
+     not required, or a value this build has never heard of — is written as
+     nothing rather than passed through, so an unknown state cannot reach the
+     bar as a flag nobody can read. */
+  const flagged = consentState === 'pending' || consentState === 'paused' ? consentState : null;
+
+  const value = flagged
+    ? `${encodeURIComponent(displayName)}|${flagged}`
+    : encodeURIComponent(displayName);
+
+  cookies.set(SESSION_HINT, value, {
     encode: (value: string) => value,
     path: '/',
     /* Readable by the script in the masthead, which is the entire point. The

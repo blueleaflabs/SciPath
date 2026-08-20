@@ -2,6 +2,8 @@ export const prerender = false;
 
 import type { APIRoute } from 'astro';
 import { serverClient, isConfigured } from '../../lib/supabase';
+import { activeOrg } from '../../lib/tenant';
+import { originFor, apexOrigin } from '../../lib/deployment';
 import { safeNext, HOME } from '../../lib/next-path';
 
 /**
@@ -42,11 +44,34 @@ export const GET: APIRoute = async ({ request, cookies, url, locals, redirect })
 
   const supabase = serverClient(request, cookies, runtime);
 
+  /**
+   * WHERE GOOGLE SENDS SOMEBODY BACK, AND WHERE THAT ADDRESS COMES FROM.
+   *
+   * It was `url.origin`, which is the Host header the client sent. That is
+   * the wrong source for this one value: every other address on the
+   * deployment is derived from the organization and the root domain, and
+   * this one was derived from a claim made by whoever asked. A request
+   * arriving with an unexpected Host would build a return address to match
+   * it, and the only thing that would refuse the result is Supabase's
+   * redirect allow list — which is a good backstop and a poor primary.
+   *
+   * `originFor` reads the same two facts the allow list is generated from:
+   * the tenant that the middleware already resolved, and this deployment's
+   * root domain. So the address sent to Google is the address on the list by
+   * construction, rather than by two paths agreeing.
+   *
+   * The apex is its own case. The platform tenant is served at the root
+   * rather than under a label, and `originFor('scipath')` would name a
+   * subdomain that does not exist.
+   */
+  const org = activeOrg({ locals: locals as { org?: unknown } });
+  const origin = org.isPlatform ? apexOrigin() : originFor(org.subdomain ?? org.id);
+
   const { data, error } = await supabase.auth.signInWithOAuth({
     provider: 'google',
     options: {
       scopes: SCOPES,
-      redirectTo: new URL('/auth/callback/', url.origin).href,
+      redirectTo: new URL('/auth/callback/', origin).href,
     },
   });
 

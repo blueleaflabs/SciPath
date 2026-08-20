@@ -1285,18 +1285,25 @@ const sectionNo = new Map(sections.map((section, i) => [section.id, String(i + 1
       <table class="tbl phased">
         <thead>
           <tr>
+            {/* Four, and there were five.
+            
+                The header declared Status and Action; the body has one cell
+                that does both — it says what was recorded and offers the way
+                to record it — so every row was a cell short and the table
+                carried a column that never held anything. Invisible on a
+                wide screen, where an empty track costs nothing, and part of
+                why this would not fit on a narrow one. */}
             <th scope="col">Due</th>
             <th scope="col">Obligation</th>
             <th scope="col">Set by</th>
             <th scope="col">Status</th>
-            <th scope="col"><span class="sr">Action</span></th>
           </tr>
         </thead>
         <tbody>
           {grouped.map((group) => (
             <>
               <tr class="phase-row">
-                <th colspan="5" scope="colgroup">
+                <th colspan="4" scope="colgroup">
                   <span class="phase-name">{group.name}</span>
                   {group.window && (
                     <span class="phase-when">{group.window.from} to {group.window.to}</span>
@@ -1314,19 +1321,23 @@ const sectionNo = new Map(sections.map((section, i) => [section.id, String(i + 1
             const f = byId.get(m.id);
             return (
               <tr class={f?.severity === 'disqualifying' ? 'row-bad' : f?.severity === 'urgent' ? 'row-warn' : ''}>
-                <td>{fmt(m.due_on)}</td>
-                <td>
+                {/* `data-label` is what the narrow layout prints in place of
+                    the heading it can no longer show. On the cell rather
+                    than in the stylesheet so one place says what a column
+                    is called. */}
+                <td data-label="Due">{fmt(m.due_on)}</td>
+                <td data-label="Obligation">
                   {m.name}
                   {m.blocks_experimentation && <span class="gate">must precede work</span>}
                 </td>
-                <td>
+                <td data-label="Set by">
                   {/* Whose deadline this is. A student who cannot tell a
                       club deadline from a fair rule starts treating real
                       deadlines as advisory, and the fair's November date is
                       one where that ends a season. */}
                   <span class:list={['whose', m.source]}>{whose[m.source] ?? 'The program'}</span>
                 </td>
-                <td class="act">
+                <td class="act" data-label="Status">
                   {m.satisfied_by ? (
                     derived(m)?.href ? (
                       <a class="linkish" href={derived(m)?.href}>{derived(m)?.verb}</a>
@@ -2226,6 +2237,85 @@ const sectionNo = new Map(sections.map((section, i) => [section.id, String(i + 1
   .phased tbody tr:hover td { background: var(--ready-bg); }
 
   .phased tbody .phase-row:first-child th { padding-top: 10px; border-top: 0; }
+
+  /* ── The deadlines table on a phone ───────────────────────────────────
+  
+     Four columns, one of which holds a date, one a sentence, and one a form
+     with a select and a button in it. On a 390px screen that is wider than
+     the screen, and a table that overflows does not clip: it widens the
+     page, so every other section on it scrolls sideways too. That is what
+     was happening — the whole page moved, not the table.
+  
+     Not a horizontal scroller. This file already says why, of a different
+     table: a horizontal scroller hides its own last column, and here that
+     column is the one with the controls in it.
+  
+     So the row stops being a row. Each becomes a small block with its cells
+     stacked, each cell labelled by the heading it no longer sits under —
+     the pattern `.queue` and `.facts` already use one breakpoint above.
+     `display: block` on the parts of a table takes the table semantics away
+     from the layout and leaves them in the markup, where a screen reader
+     still finds them.
+  
+     The phase headings stay full width and keep their rule, because they
+     are what makes nineteen obligations five stretches of three. */
+  @media (max-width: 640px) {
+    .phased,
+    .phased tbody,
+    .phased tr,
+    .phased td {
+      display: block;
+      width: auto;
+    }
+
+    /* Off the layout, not out of the document. */
+    .phased thead {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+      clip: rect(0 0 0 0);
+    }
+
+    .phased tbody tr:not(.phase-row) {
+      padding: 4px 0 12px;
+      border-bottom: 1px solid var(--rule-fine);
+    }
+
+    .phased tbody tr td {
+      padding: 6px 14px;
+      border: 0;
+    }
+
+    /* The heading, printed where the heading used to be. */
+    .phased tbody td::before {
+      content: attr(data-label);
+      display: block;
+      margin-bottom: 2px;
+      font-family: var(--face-ui);
+      font-size: 0.72rem;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--ink-3);
+    }
+
+    /* The obligation is what somebody is looking for, so it reads as the
+       title of the block rather than as its second field. */
+    .phased tbody td[data-label='Obligation'] {
+      font-size: 1.02rem;
+      padding-top: 2px;
+    }
+    .phased tbody td[data-label='Obligation']::before { display: none; }
+
+    /* The date belongs with it, above it, small. */
+    .phased tbody td[data-label='Due'] { padding-bottom: 0; }
+
+    .phased .phase-row,
+    .phased .phase-row th {
+      display: block;
+      width: auto;
+    }
+  }
 
   .phase-name {
     font-size: 1.02rem;

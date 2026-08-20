@@ -445,6 +445,10 @@ async function main() {
         org_id: shared ? null : org.id,
         slug: resolved.id,
         name: resolved.name,
+
+        /* What the people in it call it. Carried in the templates since they
+           were written and read by nothing until the row learned it. */
+        short_name: resolved.short_name ?? null,
         season_year: file.season ?? new Date().getFullYear(),
         family: resolved.family ?? null,
         kind: resolved.kind,

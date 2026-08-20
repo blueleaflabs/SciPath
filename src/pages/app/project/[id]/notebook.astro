@@ -1,6 +1,7 @@
 ---
 export const prerender = false;
 
+import { platform } from '../../../../config/site';
 import { activeOrg } from '../../../../lib/tenant';
 import { toDate } from '../../../../lib/dates';
 import { parseVideo } from '../../../../lib/video';
@@ -369,6 +370,27 @@ const printedOn = new Date().toLocaleDateString('en-US', {
 
     <article class="book">
       <header class="title">
+        {/* THE SCHOOL'S MARK, ON THE PAPER.
+        
+            The web pages open with the lockup and this did not, so a printed
+            notebook arrived at a fair identifying its school on the fifth
+            line of a definition list and nowhere else. What a judge picks up
+            should say whose it is before it says anything else, and it should
+            look like the site it came from.
+        
+            The same two elements as `Masthead.astro`, and deliberately not
+            that component: it carries navigation, a sign-out form and an
+            account menu, none of which mean anything on paper. Only the
+            lockup is shared, and `data-len` is what makes a six character
+            mark stay a block rather than becoming a bar. */}
+        <div class="lockup">
+          <span class="badge" data-len={String(org.mark.length)} aria-hidden="true">{org.mark}</span>
+          <span class="names">
+            <span class="org">{org.name}</span>
+            {!org.isPlatform && <span class="plat">{platform.lockupSuffix}</span>}
+          </span>
+        </div>
+
         <p class="kicker">Research notebook</p>
         <h1>{project.title}</h1>
         {project.question && <p class="q">{project.question}</p>}
@@ -383,9 +405,6 @@ const printedOn = new Date().toLocaleDateString('en-US', {
           {officers.length > 0 && (<><dt>Club officer</dt>
           <dd>{officers.map((m: any) => m.users?.display_name).join(', ')}</dd></>)}
 
-          <dt>School</dt>
-          <dd>{org.name}</dd>
-
           {/* Every place, not only the fairs. A project's class is as much a
               part of where the work sits as the competition it went to, and
               this line read "Entered" over a list that silently excluded it. */}
@@ -396,10 +415,11 @@ const printedOn = new Date().toLocaleDateString('en-US', {
           <dd>{fmt(project.started_on)}</dd>
 
           <dt>Entries</dt>
-          <dd>
-            {shown.length}
-            {first && last && `, ${fmt(first)} to ${fmt(last)}`}
-          </dd>
+          {/* One expression, not two on two lines. Adjacent expressions are
+              separated by the newline between them, which printed as
+              "2 , August 19" — a space before a comma, on the title page of
+              the thing a judge is handed. */}
+          <dd>{`${shown.length}${first && last ? `, ${fmt(first)} to ${fmt(last)}` : ''}`}</dd>
 
           {/* Stated on the page rather than only in the toolbar, because the
               toolbar does not print and a copy that carries supervisors'
@@ -832,28 +852,93 @@ const printedOn = new Date().toLocaleDateString('en-US', {
     word-break: break-all;
     max-width: 26ch;
   }
+  /* The lockup, on paper.
+  
+     `ui.css` is not loaded here — this document is its own page and carries
+     only what it needs — so the two elements are restated rather than
+     imported. Same shape, sized for print: a mark that reads at arm's length
+     across a judging hall rather than at a screen's distance.
+  
+     The step down by mark length is the same rule and for the same reason. A
+     six character mark at the two character size stops being a block and
+     becomes a bar. */
+  .lockup {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin: 0 0 22px;
+  }
+  .lockup .badge {
+    min-width: 34px;
+    padding-inline: 5px;
+    height: 34px;
+    box-sizing: border-box;
+    background: var(--ink);
+    color: var(--paper);
+    flex: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: var(--face-ui);
+    font-weight: 800;
+    font-size: 0.86rem;
+    letter-spacing: -0.03em;
+  }
+  .lockup .badge[data-len='4'] { font-size: 0.78rem; letter-spacing: -0.04em; }
+  .lockup .badge[data-len='5'] { font-size: 0.68rem; letter-spacing: -0.05em; }
+  .lockup .badge[data-len='6'] { font-size: 0.6rem; letter-spacing: -0.05em; }
+  .lockup .names {
+    display: flex;
+    flex-direction: column;
+    line-height: 1.2;
+  }
+  .lockup .org {
+    font-family: var(--face-ui);
+    font-weight: 600;
+    font-size: 1rem;
+  }
+  .lockup .plat {
+    font-family: var(--face-ui);
+    font-size: 0.72rem;
+    color: var(--ink-3);
+  }
+
   .fine { font-size: 0.9rem; color: var(--ink-3); }
   .empty { color: var(--ink-3); }
 
-  /* The printed page.
-   
-     Without an @page rule the browser uses its own margin, which puts the
-     first line against the edge and gives a judge nowhere to write. Nobody
-     reads this on a screen: it is exported, printed, and handed over. */
+  /* THE PRINTED PAGE, AND WHY THE MARGIN IS IN TWO PLACES.
+  
+     An `@page` margin was here and the first line still printed against the
+     edge. The rule is in the built stylesheet and the stylesheet is served —
+     so the rule is not the thing that failed. What can still override it is
+     the browser: Chrome remembers the margin setting from whatever was
+     printed last, and `More settings -> Margins -> None` wins over any
+     stylesheet.
+  
+     So the two edges are held differently. Top and bottom stay in `@page`,
+     because only a page margin repeats on every sheet — padding on a block
+     applies once at its start and once at its end, and the middle pages of a
+     six page notebook would have neither.
+  
+     Left and right move into the block, where nothing in a print dialog can
+     take them away. `@page` gives up its horizontal margin at the same time,
+     so the two never add up to an inch and a half of white. */
   @page {
-    margin: 20mm 18mm 18mm;
+    margin: 20mm 0 18mm;
   }
 
   @media print {
     body { background: var(--paper); }
     .toolbar { display: none; }
 
-    /* The page's margin is the margin now; the frame around the block was
-       there to look like paper on a screen. */
+    /* The frame around the block was there to look like paper on a screen.
+       The horizontal padding is not decoration: it is the left and right
+       margin of the printed page, kept here because a page margin can be
+       overridden from the print dialog and a block's padding cannot. */
     .book {
       max-width: none;
       margin: 0;
-      padding: 0;
+      padding: 0 18mm;
       border: 0;
       box-shadow: none;
     }
