@@ -37,9 +37,10 @@ const pageTitle = `${title} · ${org.name}`;
  * written, with the slug in its own canonical tag, pointing at an address
  * that answers nothing. A tag naming a URL that 404s is worse than no tag.
  *
- * Only this tenant's own slug is stripped, never any tenant's. `/demo/` is
- * both a platform page and another tenant's slug, and it is a real address
- * at the platform.
+ * Only this tenant's own slug is stripped, never any tenant's. A platform
+ * address whose first segment happens to match some other school's slug is
+ * still a real address, and stripping against the whole set rather than
+ * against the one would take it apart.
  */
 const slugPrefix = `/${org.id}`;
 const path =

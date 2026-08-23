@@ -736,7 +736,7 @@ test('a page that explains the work ends with a way in', () => {
     'src/pages/[org]/for-educators.astro',
     'src/pages/[org]/for-student-leaders.astro',
     'src/pages/get-started/index.astro',
-    'src/pages/demo/index.astro',
+    'src/pages/try/index.astro',
     'src/pages/for-organizations/index.astro',
   ];
 
@@ -790,7 +790,7 @@ test('the demonstration page publishes the credentials the seed makes', () => {
      Both the page and `scripts/seed-demo.mjs` read the same module. Broken
      deliberately to check this fails: writing one address into the page
      makes it fail here. */
-  const page = copyOf('src/pages/demo/index.astro');
+  const page = copyOf('src/pages/try/index.astro');
 
   assert.match(page, /demoSignIns\(\)/,
     'the page should read the accounts rather than restate them');

@@ -45,7 +45,16 @@ export const NON_TENANT_TREES = [
      `tests/tenant-routes.mjs` compares directory entries. A file called
      `demo.astro` would satisfy one of them and not the other. */
   'get-started',
-  'demo',
+  /* **Not `demo`, which is a tenant slug.** It was, for one session, and the
+     collision showed up on the prerender pass: `isNonTenantPath` answered yes
+     for `/demo/about/`, so every page of the demonstration tenant skipped the
+     tenant guard and took the session branch, reading request headers that do
+     not exist on a prerendered page. Twenty warnings in the deploy log, all of
+     them on `/demo/` lines and none on any other tenant's.
+
+     A tree name and a slug share one namespace, and `tests/paths.mjs` refuses
+     an overlap now rather than trusting whoever adds the next school. */
+  'try',
   'for-organizations',
 ] as const;
 

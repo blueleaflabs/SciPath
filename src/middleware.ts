@@ -87,15 +87,48 @@ const HEADERS: Record<string, string> = {
  * Wrapping the handler rather than adding a header at each `return next()`:
  * there are four of those, and a fifth added later would be a response
  * without headers that looks exactly like the others.
+ *
+ * **A response that did not come from a render has immutable headers, and
+ * `set` on one throws.** This is where every prerendered public page went.
+ * The assets binding hands back a `Response` whose headers are guarded, as
+ * does `Response.redirect`, and the loop below reached straight past that and
+ * called `set` on it. The `TypeError` propagated out of the middleware, Astro
+ * rendered its error page, the middleware threw again on the way out, and
+ * Astro retried with middleware switched off. What a reader saw was a 404 on
+ * `/about/`, `/guides/`, `/policies/` and every other public page, on every
+ * tenant, while `/` — the one page whose response is freshly rendered and
+ * therefore mutable — worked perfectly.
+ *
+ * **The tell was the absent headers, not the 404.** A response carrying
+ * `X-Astro-Noop: true` and none of these five is Astro's second attempt, and
+ * the only way to reach the second attempt is for the first to have thrown.
+ * That is 19.9's rule about a trace whose absence is the informative part,
+ * arriving from the opposite direction: in 1.66 the headers were missing
+ * because the middleware never ran, and here because it ran and died.
+ *
+ * The copy is made only when the original refuses, so an ordinary rendered
+ * response is not rebuilt on every request. Rebuilding unconditionally would
+ * also be wrong for the statuses that must carry no body.
  */
-export const onRequest = defineMiddleware(async (context, next) => {
-  const response = await handle(context, next);
-
+function stamp(response: Response): void {
   for (const [name, value] of Object.entries(HEADERS)) {
     if (!response.headers.has(name)) response.headers.set(name, value);
   }
+}
 
-  return response;
+export const onRequest = defineMiddleware(async (context, next) => {
+  const response = await handle(context, next);
+
+  try {
+    stamp(response);
+    return response;
+  } catch {
+    /* Immutable. Rebuild it, which is the only way to carry both the body
+       somebody asked for and the headers every response here promises. */
+    const copy = new Response(response.body, response);
+    stamp(copy);
+    return copy;
+  }
 });
 
 const handle = async (context: any, next: any) => {

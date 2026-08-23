@@ -57,25 +57,35 @@ test('the platform front door is not tenant scoped', () => {
      middleware's copy of it would be rewritten to /{slug}/get-started/ and
      match nothing. There is one list and both read it; this asserts the
      three are on it. */
-  for (const tree of ['get-started', 'demo', 'for-organizations']) {
+  for (const tree of ['get-started', 'try', 'for-organizations']) {
     assert.equal(isNonTenantPath(`/${tree}/`), true, tree);
     assert.ok(fs.existsSync(`src/pages/${tree}/index.astro`), `src/pages/${tree}/ is missing`);
   }
 });
 
-test('the demonstration page and the demonstration tenant share a prefix', () => {
-  /* `demo` is both a platform page and a tenant slug, so /demo/ is the
-     platform's page while /demo/about/ is the demonstration school's about
-     page as the build wrote it. That works because the platform page is an
-     index and claims nothing beneath it, and it stops working the moment
-     somebody adds src/pages/demo/anything-else.astro.
+test('no tree shares a name with a tenant', () => {
+  /* **A tree name and a tenant slug are one namespace, and nothing said so.**
+     `demo` was both for a session: the platform's demonstration page at
+     `/demo/`, and the demonstration school, whose pages are built at
+     `/demo/about/` and the rest. `isNonTenantPath('/demo/about/')` then
+     answered yes, so every page of that one tenant skipped the tenant guard
+     during prerendering and took the session branch instead, reading request
+     headers a prerendered page does not have. Twenty warnings in the deploy
+     log, every one on a `/demo/` line.
 
-     Pinned rather than renamed. /demo/ is the address somebody guesses and
-     the one on every button, and the overlap is safe as long as it stays one
-     file. */
-  const entries = fs.readdirSync('src/pages/demo');
-  assert.deepEqual(entries, ['index.astro'],
-    'the platform demo tree must hold nothing but its index');
+     The guard written at the time checked that the tree held a single file,
+     which was true and had nothing to do with it. This is the check that
+     would have caught it, and it catches the other direction too: a school
+     added tomorrow whose slug happens to be `search` or `records`. */
+  const slugs = fs
+    .readdirSync('src/config/orgs')
+    .filter((f) => f.endsWith('.yaml') || f.endsWith('.yml'))
+    .map((f) => f.replace(/\.ya?ml$/, ''));
+
+  assert.ok(slugs.length >= 2, 'no tenants found, so this compared nothing');
+
+  const clashes = NON_TENANT_TREES.filter((tree) => slugs.includes(tree));
+  assert.deepEqual(clashes, [], 'a tree and a tenant cannot share a name');
 });
 
 test('a longer name that merely starts the same is not one', () => {
