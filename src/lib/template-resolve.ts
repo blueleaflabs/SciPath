@@ -147,7 +147,69 @@ export interface Program {
   publishes_to?: string;
   staff_from?: string[];
   accepts_from?: string[];
+
+  /**
+   * WHERE THIS TEMPLATE CAME FROM, AND WHETHER IT IS STILL TRUE.
+   *
+   * A template is somebody's reading of a rulebook on a particular day, and
+   * a rulebook changes annually. Nothing here recorded who read it, what
+   * they read, or when — so a file written for the 2026 rules and never
+   * touched looked exactly like one checked last week, and the only way to
+   * tell was to read the fair's site yourself.
+   *
+   * `verified_on` is the one that does work. Everything else is a reference;
+   * that field is a clock. A year after it, the program's advisor is told,
+   * because a stale template is a professional problem for whoever runs the
+   * program and an unactionable worry for a student.
+   *
+   * A missing field is not a failure. A school's own class has no rulebook
+   * and no rules year, and demanding one would produce a filled-in field
+   * that means nothing.
+   */
+  provenance?: Provenance;
+
   [key: string]: any;
+}
+
+/**
+ * Provenance, with its dates made into days.
+ *
+ * `verified_on: 2026-08-22` unquoted is parsed as a timestamp by every YAML
+ * loader, so a field written to be compared and printed arrives as a `Date`
+ * and renders as *Sat Aug 22 2026 00:00:00 GMT+0000*. Quoting it in the files
+ * would work until the first person who forgets, and forgetting produces a
+ * date that still looks like a date.
+ *
+ * `asDay` above already does this for anchors and was written for the same
+ * reason. One copy: a second would be a second answer to *what is a day*.
+ */
+function cleanProvenance(raw: Provenance | undefined): Provenance | undefined {
+  if (!raw) return undefined;
+
+  return {
+    ...raw,
+    verified_on: asDay(raw.verified_on) ?? undefined,
+    changes: (raw.changes ?? []).map((c) => ({ on: asDay(c.on) ?? '', what: c.what })),
+  };
+}
+
+export interface Provenance {
+  /** A person, named. "The club" cannot be asked what it read. */
+  owner?: string;
+  /** What they read. The document, not the fair's home page. */
+  source_url?: string;
+  /** The season the rules belong to, where the rules have seasons. */
+  rules_year?: number;
+  /** The day somebody last read the source and confirmed this against it. */
+  verified_on?: string;
+  /**
+   * What changed for somebody working against this, most recent first.
+   *
+   * Not a commit log. Git already holds every edit, and a second copy of
+   * that is a copy that goes stale; this is the short list of changes a
+   * student or an advisor would want to have been told about.
+   */
+  changes?: { on: string; what: string }[];
 }
 
 /* ── Resolving one program through its chain ──────────────────────────────── */
@@ -161,6 +223,19 @@ export interface Resolved {
   name: string;
   /** What the people in it call it, where that is shorter than its name. */
   short_name?: string;
+
+  /** This program's own reading of a rulebook, and when. */
+  provenance?: Provenance;
+  /**
+   * Every layer's, nearest first.
+   *
+   * A regional fair that inherits ISEF's forms inherits ISEF's rulebook, and
+   * somebody checking a form needs both readings: the fair's, and the one
+   * behind it. Layers that record nothing are left out rather than shown as
+   * blanks.
+   */
+  provenance_chain?: (Provenance & { id: string; name: string })[];
+
   family?: string;
   kind: string;
   version: number;
@@ -173,6 +248,20 @@ export interface Resolved {
   limits: Record<string, any>;
   categories: { id: string; name: string }[];
   roles: { staff: { singular: string; plural: string }; member: { singular: string; plural: string } };
+
+  /**
+   * Cohort, opportunity, or neither.
+   *
+   * Set by `resolveProgram` and absent from this interface, so `seed-programs`
+   * read `resolved.role` off a value the checker said had no such property —
+   * and the whole distinction between a class and a fair rests on it.
+   */
+  role: 'cohort' | 'opportunity' | 'none';
+
+  /** An opportunity only this cohort's members may enter, where there is one. */
+  openToCohort?: string | null;
+  /** The fair a cohort prepares for, where it prepares for one. */
+  preparesFor?: string | null;
   program: Program;
 }
 
@@ -441,6 +530,20 @@ export function resolveProgram(
        abbreviation and called itself by it. A program with no short name
        says its full name, which is always correct if sometimes long. */
     short_name: last.short_name,
+
+    /* This layer's own, and the chain's behind it. A regional fair that
+       inherits ISEF's forms inherits ISEF's rulebook, so its own reading is
+       what shows and ISEF's is what stands behind it — two things somebody
+       checking a form actually needs, and one of them would be lost by
+       taking only the nearest.
+    
+       Nearest first, so `provenance[0]` is always this program's own. */
+    provenance: cleanProvenance(last.provenance),
+    provenance_chain: chain
+      .map((layer) => ({ id: layer.id, name: layer.name, ...cleanProvenance(layer.provenance) }))
+      .filter((p) => p.owner || p.source_url || p.verified_on)
+      .reverse(),
+
     family: last.family,
     kind: last.kind ?? 'competition',
 

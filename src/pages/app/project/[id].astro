@@ -2,6 +2,7 @@
 export const prerender = false;
 
 import Base from '../../../layouts/Base.astro';
+import { identify } from '../../../lib/filetype';
 import { formatDate } from '../../../lib/dates';
 import AppShell from '../../../components/AppShell.astro';
 import { activeOrg } from '../../../lib/tenant';
@@ -78,9 +79,14 @@ if (Astro.request.method === 'POST') {
         } else if (!blob.available()) {
           error = 'The note was saved. File storage is not configured on this deployment.';
         } else {
-          const path = notePath(id!, noteId, file.name);
+          const kind = await identify(file);
+
+          if (!kind || !kind.mime.startsWith('image/')) {
+            error = 'That is not an image we can store. Use a JPEG, PNG, WebP or GIF.';
+          } else {
+          const path = notePath(id!, noteId, file.name, kind.ext);
           try {
-            await blob.put(path, await file.arrayBuffer(), file.type || 'image/jpeg');
+            await blob.put(path, await file.arrayBuffer(), kind.mime);
             const { error: mErr } = await supabase.rpc('attach_note_media', {
               p_note_id: noteId,
               p_storage_path: path,
@@ -90,6 +96,7 @@ if (Astro.request.method === 'POST') {
           } catch (e: any) {
             error = `Note saved, but the image did not upload: ${e.message}`;
           }
+        }
         }
       }
     }
@@ -594,8 +601,10 @@ const fmt = (d: string | null) =>
      and a 4000px photograph of a notebook page is no more legible than a
      1600px one. Falls through untouched if anything goes wrong. */
   const MAX_EDGE = 1600;
-  const form = document.querySelector('form.notef');
-  const input = form?.querySelector('input[name="image"]');
+  /* `querySelector` returns `Element`, which has no `files` and no `submit`.
+     Named at the declaration so the closure below reads the real thing. */
+  const form = document.querySelector('form.notef') as HTMLFormElement | null;
+  const input = form?.querySelector('input[name="image"]') as HTMLInputElement | null;
 
   form?.addEventListener('submit', async (event) => {
     const file = input?.files?.[0];
@@ -608,10 +617,12 @@ const fmt = (d: string | null) =>
       const canvas = document.createElement('canvas');
       canvas.width = Math.round(bitmap.width * scale);
       canvas.height = Math.round(bitmap.height * scale);
-      canvas.getContext('2d').drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+      canvas.getContext('2d')?.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
 
-      const blob = await new Promise((res) => canvas.toBlob(res, 'image/jpeg', 0.82));
-      if (blob) {
+      const blob = await new Promise<Blob | null>((res) =>
+        canvas.toBlob(res, 'image/jpeg', 0.82)
+      );
+      if (blob && input) {
         const transfer = new DataTransfer();
         transfer.items.add(new File([blob], file.name.replace(/\.\w+$/, '.jpg'), { type: 'image/jpeg' }));
         input.files = transfer.files;
@@ -619,7 +630,7 @@ const fmt = (d: string | null) =>
     } catch {
       /* Send the original. */
     }
-    form.submit();
+    form?.submit();
   });
 </script>
 </Base>

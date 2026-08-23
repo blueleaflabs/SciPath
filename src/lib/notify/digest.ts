@@ -126,12 +126,19 @@ export function renderDigest(input: DigestInput): Digest | null {
 
   const parts: string[] = [];
 
-  const mine = input.mine.map((s) => block(s, input.origin)).filter(Boolean);
+  /* `filter(Boolean)` narrows nothing: TypeScript keeps `(string | null)[]`,
+     so concatenating it into a `string[]` fails. A predicate says what the
+     filter is actually doing. */
+  const mine = input.mine
+    .map((s) => block(s, input.origin))
+    .filter((b): b is string => Boolean(b));
   if (mine.length > 0) parts.push(['YOURS', ''].concat(mine).join('\n'));
 
   /* Grouped by project, because somebody with nine of them reads nine short
      blocks rather than one long list. */
-  const watched = input.watched.map((s) => block(s, input.origin)).filter(Boolean);
+  const watched = input.watched
+    .map((s) => block(s, input.origin))
+    .filter((b): b is string => Boolean(b));
   if (watched.length > 0) parts.push(['LOOKED AFTER BY YOU', ''].concat(watched).join('\n'));
 
   if (input.settingsPath) {

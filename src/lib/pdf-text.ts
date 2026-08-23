@@ -78,7 +78,16 @@ function decodeHex(raw: string): string {
 async function inflate(bytes: Uint8Array): Promise<Uint8Array | null> {
   for (const format of ['deflate', 'deflate-raw'] as const) {
     try {
-      const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream(format));
+      /* `.buffer` rather than the view.
+      
+         TypeScript 5.7 made `Uint8Array` generic over its buffer, and
+         `BlobPart` accepts `ArrayBuffer` rather than `ArrayBufferLike` — so a
+         view whose buffer might be shared no longer satisfies it. Passing the
+         buffer is also what the runtime wanted: a view over a larger pool
+         would have carried the bytes either side of it. */
+      const stream = new Blob([bytes.buffer as ArrayBuffer])
+        .stream()
+        .pipeThrough(new DecompressionStream(format));
       return new Uint8Array(await new Response(stream).arrayBuffer());
     } catch {
       /* Try the other framing before giving up. */

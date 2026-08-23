@@ -5,7 +5,7 @@ import Base from '../../../layouts/Base.astro';
 import { formatDate } from '../../../lib/dates';
 import AppShell from '../../../components/AppShell.astro';
 import { activeOrg } from '../../../lib/tenant';
-import { serverClient } from '../../../lib/supabase';
+import { one, serverClient } from '../../../lib/supabase';
 import { standing } from '../../../lib/roles';
 import {
   actionsFor,
@@ -316,7 +316,7 @@ const confirmation = didAction
         <section class="sec">
           <div class="sec-h">
             <b>What you can do</b>
-            <span>{submission.users?.display_name ?? 'Unclaimed'}</span>
+            <span>{one(submission.users)?.display_name ?? 'Unclaimed'}</span>
           </div>
 
           {/* Why Accept is not here.
@@ -391,9 +391,20 @@ const confirmation = didAction
                       )}
                     </div>
 
+                    {/* A grave action stays quiet. Everything else is a
+                        button and looks like one.
+                    
+                        The comment sits above the element, not among its
+                        attributes. A braced comment in attribute position is
+                        not a comment at all: the parser is reading attributes
+                        there, so the brace opens an expression and the
+                        closing sequence closes nothing. It surfaced as
+                        "unterminated string literal" twenty lines later, on
+                        a line holding no string. Same trap as the one in
+                        19.9, in a place nothing had looked — and the comment
+                        explaining it must not quote the terminator, which is
+                        how the first attempt at this failed too. */}
                     <button
-                      {/* A grave action stays quiet. Everything else is a
-                          button and looks like one. */}
                       class:list={['btn', action.grave && 'btn-q']}
                       type="submit"
                     >

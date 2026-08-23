@@ -446,6 +446,15 @@ const printedOn = new Date().toLocaleDateString('en-US', {
           kept in order, which is a discipline device rather than proof against
           a determined author, and it is offered as no more than that.
         </p>
+
+        {/* On the paper, because paper is what a judge is handed and the
+            screen is not there to qualify it. Restated rather than shared:
+            this document carries only its own styles, and a component whose
+            CSS lives elsewhere would print unstyled. */}
+        <p class="authority">
+          SciPath is a planning and recordkeeping aid. Your Adult Sponsor,
+          SRC/IRB and destination fair remain authoritative.
+        </p>
       </header>
 
       <section class="entries">
@@ -900,6 +909,16 @@ const printedOn = new Date().toLocaleDateString('en-US', {
   .lockup .plat {
     font-family: var(--face-ui);
     font-size: 0.72rem;
+    color: var(--ink-3);
+  }
+
+  .authority {
+    margin: 14px 0 0;
+    padding-top: 10px;
+    border-top: 1px solid var(--rule-fine);
+    font-family: var(--face-ui);
+    font-size: 0.82rem;
+    line-height: 1.5;
     color: var(--ink-3);
   }
 

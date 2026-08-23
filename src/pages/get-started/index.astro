@@ -1,0 +1,133 @@
+---
+/**
+ * THE FRONT DOOR, AND WHY IT IS NOT UNDER [org]/.
+ *
+ * Three people arrive at scipath.org and want different first steps: a
+ * student with no school behind them, a student whose school already runs
+ * this, and an adult deciding whether to run it. A school's own site has no
+ * such fork, because arriving at montavista.scipath.org has already answered
+ * the question. So this belongs to the platform, is registered in
+ * `NON_TENANT_TREES`, and sends a school's visitor to that school's home
+ * page rather than offering them a choice they have already made.
+ */
+export const prerender = false;
+
+import Base from '../../layouts/Base.astro';
+import PageHead from '../../components/PageHead.astro';
+import { activeOrg } from '../../lib/tenant';
+import { platform } from '../../config/site';
+
+const org = activeOrg(Astro);
+if (!org.isPlatform) return Astro.redirect('/', 301);
+---
+
+<Base
+  title="Get started"
+  description="Start a project on your own, sign in at a school that already runs SciPath, or bring it to your program."
+>
+  <PageHead
+    eyebrow="Get started"
+    title="Choose how you are using SciPath"
+    lede="Three ways in. The first one takes about a minute."
+  />
+
+  <div class="wrap">
+    <section class="sec">
+      <div class="doors">
+        <div class="card pad door">
+          <p class="t-lbl">I am working on my own</p>
+          <p class="t-sm">
+            You do not need a school, a club, or a teacher who has done this before. Start a
+            project here, choose the fair or the program you are aiming at, and work through
+            what it asks for. Aged 13 and over.
+          </p>
+          <div class="row">
+            <a class="btn" href="/app/">Create an account</a>
+          </div>
+        </div>
+
+        <div class="card pad door">
+          <p class="t-lbl">My school or program already uses it</p>
+          <p class="t-sm">
+            Your school has its own address on {platform.name}, and your account lives there
+            rather than here. Open that address and sign in with the account or the invitation
+            it recognizes. If you do not know it, ask whoever runs the class or the club.
+          </p>
+          <div class="row">
+            <a class="btn btn-2" href="/contact/">Ask us which address</a>
+          </div>
+        </div>
+
+        <div class="card pad door">
+          <p class="t-lbl">I want to run this for my students</p>
+          <p class="t-sm">
+            Schools, clubs, homeschool groups and fair associations run their own programs
+            with their own dates, roles and students. Organizations are set up deliberately
+            rather than by signup, so that the roles and the data boundaries are right before
+            anybody enters.
+          </p>
+          <div class="row">
+            <a class="btn btn-2" href="/for-organizations/">For organizations</a>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="sec">
+      <div class="sec-h"><b>Not ready to make anything</b><span>Reasonable</span></div>
+      <p class="t-sm" style="max-width:var(--measure-text)">
+        The demonstration is a full season already in progress, with invented students and
+        invented projects. Sign in as a student, a program leader or a teacher and look
+        around. Nothing there is real and nothing you do there reaches a school.
+      </p>
+      <div class="row" style="margin-top:18px">
+        <a class="btn btn-2" href="/demo/">Open the demonstration</a>
+        <a class="btn btn-q" href="/how-it-works/">How it works</a>
+      </div>
+    </section>
+
+    {/* **The publication permission sentence is not here yet, deliberately.**
+
+        The draft copy carried "students aged 13 to 17 must obtain permission
+        from a parent or guardian before anything can be published publicly",
+        and that sentence must not be published before the flow that
+        implements it exists. It does not: `notifications.recipient_id` is
+        not null against `users`, so the queue cannot address a guardian who
+        has no account, and no job implements the pausing and deletion the
+        privacy page describes. A promise on a public page that the software
+        does not keep is worse than no page.
+
+        What is true today is the age floor, which is stated above and is
+        enforced at signup. The rest belongs here the day the guardian flow
+        ships. */}
+    <section class="sec cta">
+      <div class="sec-h"><b>Before you sign up</b><span>Worth two minutes</span></div>
+      <div class="row">
+        <a class="btn btn-2" href="/policies/privacy/">What is stored about you</a>
+        <a class="btn btn-q" href="/guides/">Guides</a>
+      </div>
+    </section>
+  </div>
+</Base>
+
+<style>
+  .doors {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 16px;
+  }
+  @media (max-width: 62rem) {
+    .doors { grid-template-columns: 1fr; }
+  }
+  .door {
+    display: flex;
+    flex-direction: column;
+  }
+  .door .t-sm {
+    margin-top: 10px;
+    flex: 1;
+  }
+  .door .row {
+    margin-top: 18px;
+  }
+</style>

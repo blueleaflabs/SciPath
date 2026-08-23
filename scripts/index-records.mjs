@@ -23,6 +23,7 @@
 
 import * as pagefind from 'pagefind';
 import { loadDevVars } from './dev-vars.mjs';
+import { openBucket } from './notebook-bucket.mjs';
 
 loadDevVars();
 
@@ -31,26 +32,21 @@ const REMOTE = process.argv.includes('--remote');
 /* ── Reaching the store ──────────────────────────────────────────────────── */
 
 /**
- * Miniflare's proxy serializes everything crossing into the worker, and its
- * decoder asserts on a typed array whose byte offset is not zero. Pagefind
- * hands back Node Buffers, which are views onto a shared pool and therefore
- * almost never start at zero, so writing one straight through fails with an
- * assertion from inside devalue that says nothing about what went wrong.
+ * The bucket, and the wrapper this file wants over it.
  *
- * Copying into a fresh ArrayBuffer sidesteps the view entirely. Text passes
- * through untouched.
+ * `openBucket` returns R2's own binding shape, local or real, chosen from the
+ * Supabase target. This adds the two conveniences the indexer uses: a `list`
+ * that follows the cursor to the end, and a `put` that takes a content type
+ * directly. Both used to be written twice here, once per bucket, which is how
+ * the local and remote paths came to disagree about what `get` returns.
  */
-function normalize(body) {
-  if (typeof body === 'string') return body;
-  const bytes = new Uint8Array(body);
-  return bytes.buffer;
-}
+async function openStore() {
+  const store = await openBucket({ url: process.env.PUBLIC_SUPABASE_URL ?? '', remote: REMOTE });
 
-async function localBucket() {
-  const { getPlatformProxy } = await import('wrangler');
-  const proxy = await getPlatformProxy();
-  const bucket = proxy.env.NOTEBOOK;
-  if (!bucket) throw new Error('No NOTEBOOK binding. Check wrangler.jsonc.');
+  if (!store) throw new Error('No NOTEBOOK binding. Check wrangler.jsonc.');
+
+  const { bucket } = store;
+
   return {
     bucket,
     async list(prefix) {
@@ -64,73 +60,9 @@ async function localBucket() {
       return out;
     },
     get: (key) => bucket.get(key),
-    put: (key, body, contentType) =>
-      bucket.put(key, normalize(body), { httpMetadata: { contentType } }),
-    done: () => proxy.dispose(),
+    put: (key, body, contentType) => bucket.put(key, body, { httpMetadata: { contentType } }),
+    done: () => store.dispose(),
   };
-}
-
-/**
- * The real bucket, over R2's S3 API. Used by the CI job, which has no
- * wrangler session and no local state directory.
- */
-async function remoteBucket() {
-  const { AwsClient } = await import('aws4fetch');
-
-  const account = need('R2_ACCOUNT_ID');
-  const bucketName = need('R2_BUCKET');
-  const base = `https://${account}.r2.cloudflarestorage.com/${bucketName}`;
-
-  const client = new AwsClient({
-    accessKeyId: need('R2_ACCESS_KEY_ID'),
-    secretAccessKey: need('R2_SECRET_ACCESS_KEY'),
-    service: 's3',
-    region: 'auto',
-  });
-
-  return {
-    async list(prefix) {
-      const keys = [];
-      let token;
-      do {
-        const url = new URL(base);
-        url.searchParams.set('list-type', '2');
-        url.searchParams.set('prefix', prefix);
-        if (token) url.searchParams.set('continuation-token', token);
-
-        const response = await client.fetch(url.toString());
-        if (!response.ok) throw new Error(`list ${prefix}: ${response.status}`);
-        const xml = await response.text();
-
-        for (const match of xml.matchAll(/<Key>([^<]+)<\/Key>/g)) keys.push(match[1]);
-        token = xml.match(/<NextContinuationToken>([^<]+)</)?.[1];
-      } while (token);
-      return keys;
-    },
-    async get(key) {
-      const response = await client.fetch(`${base}/${key}`);
-      if (!response.ok) return null;
-      return { text: () => response.text() };
-    },
-    async put(key, body, contentType) {
-      const response = await client.fetch(`${base}/${key}`, {
-        method: 'PUT',
-        body,
-        headers: { 'Content-Type': contentType },
-      });
-      if (!response.ok) throw new Error(`put ${key}: ${response.status}`);
-    },
-    done: () => {},
-  };
-}
-
-function need(name) {
-  const value = process.env[name];
-  if (!value) {
-    console.error(`${name} is not set. See .dev.vars.example.`);
-    process.exit(1);
-  }
-  return value;
 }
 
 /* ── Indexing ────────────────────────────────────────────────────────────── */
@@ -227,7 +159,7 @@ async function indexOrg(store, org) {
 
 /* ── Run ─────────────────────────────────────────────────────────────────── */
 
-const store = REMOTE ? await remoteBucket() : await localBucket();
+const store = await openStore();
 
 /* Every organization with a manifest. Discovered from the store rather than
    from the config, so this works the same in CI where the config is not

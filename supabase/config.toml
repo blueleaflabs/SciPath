@@ -183,7 +183,14 @@ enable_anonymous_sign_ins = false
 # Manual linking is what "add a personal login" calls. Brief 6.3.
 enable_manual_linking = true
 # Passwords shorter than this value will be rejected as weak. Minimum 6, recommended 8 or more.
-minimum_password_length = 6
+# Eight, matching the reset form.
+#
+# The form asked for eight and this allowed six, so a password Supabase
+# accepted could be refused by the page that set it, and a password the page
+# accepted was held to a weaker rule everywhere else. Two numbers for one
+# policy means the lower one is the real policy and the higher one is
+# decoration.
+minimum_password_length = 8
 # Passwords that do not meet the following requirements will be rejected as weak. Supported values
 # are: `letters_digits`, `lower_upper_letters_digits`, `lower_upper_letters_digits_symbols`
 password_requirements = ""

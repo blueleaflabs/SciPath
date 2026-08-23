@@ -72,6 +72,18 @@ export interface RecordEntry {
   /** One address, stored and never fetched. The page shows a still until
    *  somebody presses play. */
   video?: string | null;
+
+  /**
+   * Our own still for that video, where one was captured.
+   *
+   * Declared because `RecordDetail` reads it and the interface did not have
+   * it: a published page preferred a poster nobody could store. The
+   * alternative on a YouTube record is `i.ytimg.com`, which is a request to
+   * somebody else before a reader has pressed anything — so this being
+   * absent from the type was the difference between the click-to-load
+   * promise holding and not.
+   */
+  videoPoster?: string | null;
   references: string[];
   dataLinks: { label: string; url: string }[];
   license: string;
@@ -169,6 +181,57 @@ export function upsert(manifest: Manifest, record: RecordEntry): Manifest {
     updatedAt: new Date().toISOString(),
     records: [...rest, record].sort((a, b) => b.publishedOn.localeCompare(a.publishedOn)),
   };
+}
+
+/**
+ * TAKE ONE OUT.
+ *
+ * The mirror of `upsert`, and it did not exist: an account deletion removed a
+ * record's rows from the database and left its public page, its files and its
+ * manifest entry exactly where they were. The archive is static, so a record
+ * with no row behind it does not stop being readable — it stops being
+ * *listed*, which is worse: still at its address, still in search, and no
+ * longer reachable by anybody who could ask for it to come down.
+ *
+ * Matching on the identifier rather than the slug, because two records can
+ * share a slug across years and the identifier is what the row carried.
+ */
+export function withdraw(manifest: Manifest, recordId: string): Manifest {
+  return {
+    ...manifest,
+    updatedAt: new Date().toISOString(),
+    records: manifest.records.filter((r) => r.recordId !== recordId),
+  };
+}
+
+/**
+ * Every object belonging to one record, so a caller can remove them.
+ *
+ * Listed rather than derived from `keysFor`, because a record's directory
+ * accumulates: figures added after publication, a regenerated PDF, a bundle.
+ * Deriving the names would delete the ones this file happens to know about
+ * and leave the rest as orphans nobody lists.
+ */
+export async function objectsFor(
+  bucket: Bucket,
+  org: string,
+  record: { recordKind: string; year: number; slug: string }
+): Promise<string[]> {
+  if (!bucket.list) return [];
+
+  const space = record.recordKind === 'project' ? 'projects' : 'articles';
+  const prefix = `${prefixFor(org)}/${space}/${record.year}/${record.slug}/`;
+
+  const keys: string[] = [];
+  let cursor: string | undefined;
+
+  do {
+    const page: any = await bucket.list({ prefix, cursor });
+    keys.push(...(page.objects ?? []).map((o: any) => o.key));
+    cursor = page.truncated ? page.cursor : undefined;
+  } while (cursor);
+
+  return keys;
 }
 
 /** Everything a reader should see, newest first. */

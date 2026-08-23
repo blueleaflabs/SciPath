@@ -1,0 +1,189 @@
+---
+import { orgPaths } from '../../lib/tenant-paths';
+export const getStaticPaths = orgPaths;
+
+import Base from '../../layouts/Base.astro';
+import PageHead from '../../components/PageHead.astro';
+import { activeOrg } from '../../lib/tenant';
+import { platform } from '../../config/site';
+
+const org = activeOrg(Astro);
+
+/* Where a call to action goes depends on who is reading. At the platform
+   there is a choice to make first, because an independent student and a
+   school arrive at the same address. At a school there is not: the account
+   already means something here. */
+const start = org.isPlatform ? '/get-started/' : '/app/';
+
+/**
+ * THE FIVE STAGES, WRITTEN OUT.
+ *
+ * The same five the home page names, and for the same reason they are
+ * written rather than resolved: these are what the software does to a year,
+ * not a way of doing research. A project's research process comes from its
+ * program and may be any of several. If this page read one of them it would
+ * describe a different product the day a default changed.
+ */
+const stages = [
+  {
+    name: 'Register the project',
+    body:
+      'A question, the people working on it, and the program it belongs to. That is enough to start. Everything after this hangs on a project that exists.',
+  },
+  {
+    name: 'Follow the path the program sets',
+    body:
+      'A class, a fair, a journal and an independent project each ask for different things at different times. The dates, forms, deliverables and limits that apply to yours are on the project page, resolved from the program you joined.',
+  },
+  {
+    name: 'Keep the record while you work',
+    body:
+      'Dated notes, files, links, decisions and observations, appended as the work happens. A wet lab student photographs a notebook page. A software student pastes a commit summary. Both satisfy the same requirement.',
+  },
+  {
+    name: 'Prepare and take part',
+    body:
+      'Assemble what the program asks for, then record what happened: the entry, the presentation, the placement, the award, the feedback. A season leaves evidence rather than a memory.',
+  },
+  {
+    name: 'Publish the result',
+    body:
+      'Finished work becomes a public record with a stable address, a citation, named authors and a stated contribution. It resolves years later, which is the point of it.',
+  },
+];
+
+/**
+ * The three checks worth naming, because they are the ones a student loses a
+ * season to. Each has an external owner, which is the rule: the software has
+ * no authority of its own and every place it is strict is a place somebody
+ * else refuses the work.
+ */
+const strict = [
+  {
+    title: 'Approval before experimentation',
+    body:
+      'Forms that must be signed before work begins are checked against the date the work actually started. Getting that order wrong disqualifies students every year, and no reminder catches it reliably.',
+  },
+  {
+    title: 'Limits somebody else enforces',
+    body:
+      'An abstract over the word limit and a board over the size limit are refused at the fair, so they are shown as limits here, at the moment somebody is working on the thing.',
+  },
+  {
+    title: 'Everything else is a warning',
+    body:
+      'A step out of order or a late deliverable is recorded and never blocked. Software that refuses to record what happened gets lied to, and is then holding a tidy fiction.',
+  },
+];
+---
+
+<Base
+  title="How it works"
+  description="One project, from the first question to a permanent record: what SciPath asks for at each stage and what it checks."
+>
+  <PageHead
+    eyebrow="How it works"
+    title="One project, first question to permanent record"
+    lede="SciPath follows a project while it happens, so nobody has to reconstruct its history the week before it is due."
+  />
+
+  <div class="wrap">
+    <section class="sec">
+      <div class="sec-h"><b>The five stages</b><span>One page fills up as the year goes</span></div>
+      <ol class="stages">
+        {
+          stages.map((s, i) => (
+            <li>
+              <span class="num" aria-hidden="true">{i + 1}</span>
+              <div>
+                <p class="stage-t">{s.name}</p>
+                <p class="stage-d">{s.body}</p>
+              </div>
+            </li>
+          ))
+        }
+      </ol>
+    </section>
+
+    <section class="sec">
+      <div class="sec-h"><b>Strict in three places</b><span>Forgiving everywhere else</span></div>
+      <div class="grid-3">
+        {
+          strict.map((s) => (
+            <div class="card pad">
+              <p class="t-lbl">{s.title}</p>
+              <p class="t-sm" style="margin-top:9px">{s.body}</p>
+            </div>
+          ))
+        }
+      </div>
+    </section>
+
+    <section class="sec">
+      <div class="sec-h"><b>What it leaves alone</b><span>Stated plainly</span></div>
+      <div class="prose">
+        <p>
+          {platform.name} organizes research. It does not do the research. It writes nothing,
+          grades nothing, ranks nobody against anybody, and computes no readiness score. It
+          does not read the documents a student links to, and no student work trains a model.
+        </p>
+        <p>
+          It also has no authority over a fair or a school. It did not set the deadline and it
+          cannot grant an exception. What it can do is put the rule in front of somebody while
+          they are working, and keep the evidence that they met it.
+        </p>
+      </div>
+    </section>
+
+    <section class="sec cta">
+      <div class="sec-h"><b>Start</b><span>A project takes a question and a name</span></div>
+      <div class="row">
+        <a class="btn" href={start}>Start a project</a>
+        {org.isPlatform && <a class="btn btn-2" href="/demo/">Open the demonstration</a>}
+        <a class="btn btn-q" href="/guides/">Read the guides first</a>
+      </div>
+    </section>
+  </div>
+</Base>
+
+<style>
+  .stages {
+    list-style: none;
+    margin: 4px 0 0;
+    padding: 0;
+  }
+  .stages li {
+    display: flex;
+    gap: 16px;
+    padding: 18px 0;
+    border-top: 1px solid var(--rule-fine);
+  }
+  .num {
+    display: flex;
+    flex: 0 0 auto;
+    align-items: center;
+    justify-content: center;
+    width: 2.1rem;
+    height: 2.1rem;
+    border-radius: 50%;
+    background: var(--brand);
+    color: var(--brand-contrast);
+    font-family: var(--face-ui);
+    font-weight: 700;
+    font-size: 0.9rem;
+  }
+  .stage-t {
+    margin: 2px 0 0;
+    font-family: var(--face-ui);
+    font-weight: 700;
+    font-size: 1.05rem;
+    color: var(--ink);
+  }
+  .stage-d {
+    margin: 6px 0 0;
+    max-width: var(--measure-text);
+    font-size: 0.94rem;
+    line-height: 1.6;
+    color: var(--ink-2);
+  }
+</style>

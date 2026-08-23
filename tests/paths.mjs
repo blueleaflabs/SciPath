@@ -12,6 +12,7 @@
  */
 
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import { NON_TENANT_TREES, ROOT_FILES, isNonTenantPath } from '../src/config/routes.ts';
 
 let passed = 0;
@@ -45,6 +46,38 @@ test('a tenant page is not mistaken for one', () => {
   }
 });
 
+test('the platform front door is not tenant scoped', () => {
+  /* The three pages that belong to the platform rather than to a school:
+     the fork between an independent account and a school one, the
+     demonstration, and the pitch to run this. A school's visitor has already
+     answered the question each of them asks, and each redirects them home.
+
+     Named here because a page under `src/pages/` that is not in this list
+     fails `test:routes` outright, and one that is in the list but not in the
+     middleware's copy of it would be rewritten to /{slug}/get-started/ and
+     match nothing. There is one list and both read it; this asserts the
+     three are on it. */
+  for (const tree of ['get-started', 'demo', 'for-organizations']) {
+    assert.equal(isNonTenantPath(`/${tree}/`), true, tree);
+    assert.ok(fs.existsSync(`src/pages/${tree}/index.astro`), `src/pages/${tree}/ is missing`);
+  }
+});
+
+test('the demonstration page and the demonstration tenant share a prefix', () => {
+  /* `demo` is both a platform page and a tenant slug, so /demo/ is the
+     platform's page while /demo/about/ is the demonstration school's about
+     page as the build wrote it. That works because the platform page is an
+     index and claims nothing beneath it, and it stops working the moment
+     somebody adds src/pages/demo/anything-else.astro.
+
+     Pinned rather than renamed. /demo/ is the address somebody guesses and
+     the one on every button, and the overlap is safe as long as it stays one
+     file. */
+  const entries = fs.readdirSync('src/pages/demo');
+  assert.deepEqual(entries, ['index.astro'],
+    'the platform demo tree must hold nothing but its index');
+});
+
 test('a longer name that merely starts the same is not one', () => {
   /* /apple is not /app. Comparing a prefix without the separator would have
      said otherwise. */
@@ -68,7 +101,6 @@ test('the root files are named without a path', () => {
 
 /* ── The canonical form ──────────────────────────────────────────────────── */
 
-import fs from 'node:fs';
 const middleware = fs.readFileSync('src/middleware.ts', 'utf8');
 
 test('a page without its trailing slash redirects rather than rendering twice', () => {
@@ -109,8 +141,23 @@ test('the home page loads a session', () => {
 test('nothing returns before the session is decided', () => {
   /* A `return next()` above `needsSession` skips session loading for that
      path, which is the shape of the bug both times. The redirect above it is
-     the one legitimate early exit, because it renders nothing. */
-  const beforeSession = middleware.slice(0, middleware.indexOf('const needsSession'));
+     the one legitimate early exit, because it renders nothing.
+  
+     **Measured from the handler, not from the top of the file.** Response
+     headers are applied by wrapping the handler, and the wrapper's own
+     `return handle(context, next)` sits above `needsSession` — which this
+     read as an early exit skipping the session. It is not one: it is the
+     whole handler, and everything the rule is about happens inside it.
+  
+     Widening the exception would have been the wrong repair. The rule cares
+     about returns *within* the handler, so the slice starts where the handler
+     does, and a genuine early return added tomorrow still fails. */
+  const from = middleware.indexOf('const handle = async (context');
+  assert.notEqual(from, -1, 'the handler should be findable — has it been renamed?');
+
+  const body = middleware.slice(from);
+  const beforeSession = body.slice(0, body.indexOf('const needsSession'));
+
   const exits = [...beforeSession.matchAll(/return (next\(\)|new Response)/g)];
   assert.deepEqual(
     exits.map((m) => m[0]),

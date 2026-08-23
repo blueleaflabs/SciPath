@@ -32,11 +32,31 @@ const org = Astro.props.org ?? activeOrg(Astro);
  * is where a reader looks for them and where they stop competing with the
  * archive for a glance.
  */
-const nav = [
-  { href: '/showcase/', label: 'Showcase' },
-  { href: '/guides/', label: 'Guides' },
-  { href: '/submit/', label: 'Publish' },
-];
+/**
+ * **The platform's nav is not the school's.** A school's visitor arrived
+ * because they are at that school, and what they want from the bar is the
+ * archive and the guides. Somebody at the front door has been told nothing
+ * and is deciding, so they get the two pages that decide it: what this does,
+ * and a season they can open without making an account.
+ *
+ * Still four items rather than seven. The audience pages route from the home
+ * page and the footer, which is where somebody choosing between four
+ * descriptions of themselves is already looking. Publishing is a thing you
+ * do after starting, so at the front door it sits in the footer and at a
+ * school, where people arrive mid-season, it does not.
+ */
+const nav = org.isPlatform
+  ? [
+      { href: '/how-it-works/', label: 'How it works' },
+      { href: '/showcase/', label: 'Showcase' },
+      { href: '/guides/', label: 'Guides' },
+      { href: '/demo/', label: 'Demo' },
+    ]
+  : [
+      { href: '/showcase/', label: 'Showcase' },
+      { href: '/guides/', label: 'Guides' },
+      { href: '/submit/', label: 'Publish' },
+    ];
 
 /* The working surface, reachable from every page. On a prerendered page
    there is no session to read, so the label is the invitation rather than the

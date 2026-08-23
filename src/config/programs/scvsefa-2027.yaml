@@ -9,6 +9,20 @@
 # `work`, which is where the research happens. That gap is what a club fills.
 
 id: scvsefa-2027
+
+# Who read the source this is built from, what they read, and when. A year
+# after `verified_on` the program's advisor is told: a rulebook and a school
+# calendar both change annually, and a file nobody has looked at since last
+# season looks exactly like one checked this morning.
+provenance:
+  owner: Rohan Agarwal
+  source_url: https://scvsefa.org/
+  rules_year: 2027
+  verified_on: 2026-08-22
+  changes:
+    - on: 2026-08-22
+      what: First reading. Inherits ISEF's forms and rulebook; the dates and the categories here are the fair's own.
+
 family: scvsefa
 extends: isef
 kind: competition

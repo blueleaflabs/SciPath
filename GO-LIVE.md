@@ -311,8 +311,26 @@ something to show. They live in **one school**, which is what makes it a
 narrower departure from 12.11a than it was: `demo`, on `demo.scipath.org`,
 whose file says `demo: true`.
 
-`seed-demo` refuses the production project unless every organization it was
-pointed at carries that flag, and it names the ones that do not:
+Three scripts invent people — `seed-demo`, `seed-scenarios`, `seed-cases` —
+and all three ask the same question, from `scripts/fixture-target.mjs`: a host
+that is not loopback needs `--allow-remote`, and takes only organizations
+whose own file carries `demo: true`. A real school in the list is refused by
+name.
+
+`npm run reset:cloud` runs all of them, into `demo`, so the deployed tenant
+holds what a laptop holds: the fourteen fixture accounts, the thirteen
+scenarios, the cases, two published records and a search index over them. One
+case is skipped there and says so — it needs a co-author at a second school,
+and the second school has no fixtures in the deployed project.
+
+`.cloud.vars` needs `PUBLIC_ROOT_DOMAIN=scipath.org` alongside the Supabase
+and R2 values. Every address the reset prints is built from it — the tenants,
+and the redirect URLs to register — and its default is a laptop's, so without
+it the run tells you to register `http://demo.localhost:4321/auth/callback/`.
+The reset refuses to start when it is absent and the project is a deployed
+one, before anything is dropped.
+
+To run one on its own:
 
 ```bash
 DEMO_ORGS=demo \
@@ -320,10 +338,8 @@ PUBLIC_SUPABASE_URL=... SUPABASE_SECRET_KEY=... \
 node scripts/seed-demo.mjs --allow-remote=<production-ref>
 ```
 
-Both halves are required. Without `--allow-remote` it refuses any non-loopback
-target at all; with it, and with a real school in `DEMO_ORGS`, it refuses and
-says which. Never point `npm run reset` at the cloud project — it drops the
-database before it seeds anything.
+Never point `npm run reset` at the cloud project — it drops the database
+before it seeds anything.
 
 Add `demo.scipath.org` as a custom domain the same way as the others. Wildcards
 are not accepted, so every subdomain is named explicitly.
@@ -349,9 +365,26 @@ joined unless told twice.
   `R2_SECRET_ACCESS_KEY` as GitHub Actions secrets for `index-records.yml`.
   Without them publishing still works and the index updates on the nightly run
   at 06:17 UTC.
-- **Mail.** Nothing sends until something drains the notifications outbox, which
-  does not exist yet (open decision 69). Setting `RESEND_API_KEY` today would
-  change nothing.
+- **Mail.** The drain exists now: `npm run send` prints what would go, and
+  `npm run send -- --send` hands it to the transport. The Worker's `scheduled`
+  handler does the same thing on a cron trigger, and that trigger is set to
+  midnight on 1 January — deliberately, so nothing sends unattended before
+  somebody has watched a run by hand.
+
+  Before the first real send, three settings and one habit:
+
+  - `MAIL_TRANSPORT=resend` and `RESEND_API_KEY`. Without the first, the
+    transport is the console and nothing leaves.
+  - `MAIL_ALLOWLIST` holding **one address, your own**. Every fixture is on
+    `demo.invalid` and refused outright, but the demo tenant's queue also
+    holds real-looking rows.
+  - Run `npm run send` with no flag first. It changes nothing.
+
+  The send window is an hour. Anything older is marked `skipped` with a reason
+  rather than sent, so a queue that has been filling for months cannot mail
+  everybody a year of arrears on its first run. A cron schedule sparser than
+  that window would skip messages rather than send them late; `tests/scripts.mjs`
+  compares the two and fails if they disagree.
 
 ---
 

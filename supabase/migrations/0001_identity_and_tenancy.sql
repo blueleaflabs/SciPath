@@ -101,6 +101,16 @@ create table public.organizations (
   signup_mode      text not null default 'domain'
                      check (signup_mode in ('domain', 'open', 'invite')),
   requires_mentor boolean not null default true,
+
+  -- Served at the apex rather than under a label.
+  --
+  -- The org files have carried `is_platform` since there were three of them,
+  -- and the database did not. Nothing needed it until something in SQL had to
+  -- build an address: `subdomain || '.' || root` is right for every school and
+  -- produces `scipath.scipath.org` for the one tenant whose subdomain *is* the
+  -- root. A link in an email is the first place that shows, and it shows to
+  -- somebody who cannot get back.
+  is_platform     boolean not null default false,
   status         text not null default 'provisioning'
                    check (status in ('provisioning', 'active', 'suspended')),
   created_at     timestamptz not null default now(),
@@ -395,8 +405,27 @@ create table public.notifications (
   -- not leave in the same second (20.11).
   send_after    timestamptz not null default now(),
 
+  -- 'processing' is the state this table was missing.
+  --
+  -- The claim used `for update skip locked` and handed the rows back still
+  -- `pending`, on the reasoning that the lock kept a second drain off them.
+  -- It does not: the lock ends when the claiming transaction returns, which
+  -- is *before* the sender has sent anything. A second drain starting a
+  -- moment later saw the same pending rows, took them, and sent them again.
+  --
+  -- The comment above the table asserted a guarantee the code never provided,
+  -- which is the failure 19.9 keeps collecting.
   state         text not null default 'pending'
-                check (state in ('pending', 'sent', 'failed', 'skipped')),
+                check (state in ('pending', 'processing', 'sent', 'failed', 'skipped')),
+
+  -- Who holds it, and until when.
+  --
+  -- A token rather than a boolean, so settling can require the *same* claim:
+  -- a drain that stalls past its lease and comes back to settle a row that
+  -- somebody else has since taken must not be able to.
+  claim_token   uuid,
+  claimed_until timestamptz,
+
   attempts      int not null default 0,
   last_error    text,
 
@@ -698,6 +727,190 @@ end;
 $$;
 
 grant execute on function public.sync_identities() to authenticated;
+-- Moved above `complete_signup` rather than left with the rest of the
+-- roster machinery. That function now requires a reservation before it
+-- will admit anybody to a school whose `signup_mode` is `invite`, and
+-- `tests/sql-order.mjs` refuses a function that reads a table created
+-- later in the file: the migration applies top to bottom, so a forward
+-- reference works on every database that already has the table and fails
+-- on a fresh reset, which is the one place nobody is watching.
+
+-- ===========================================================================
+-- THE ROSTER
+--
+-- A club starts with a spreadsheet. This accepts one.
+--
+-- The important thing it does NOT do is create accounts. Signup is where the
+-- age band is collected and guardian permission is requested, and a roster
+-- that provisioned people directly would walk around both. For a list that is
+-- mostly minors, that is the one shortcut this system cannot take.
+--
+-- So a row is a reservation rather than a person: this address, when it signs
+-- up, holds this role. The person still signs up normally, still meets the age
+-- gate, still triggers the consent flow. The role attaches on the way in.
+--
+-- This is the same mechanism the teacher sponsor already uses. A sponsor is
+-- matched by email because a sponsor may never have an account, and if they
+-- ever sign in, the match is the grant. Roles now work the same way, which
+-- also solves the bootstrap: an organization is provisioned with a file
+-- naming its advisor, nobody holds anything until a real person signs in with
+-- that address, and no path inside the application can grant advisor at all.
+-- ===========================================================================
+
+create table public.role_reservations (
+  id           uuid primary key default gen_random_uuid(),
+  org_id       uuid not null references public.organizations on delete restrict,
+
+  email        text not null,
+  display_name text,
+  role         text not null check (role in ('advisor', 'officer', 'editor')),
+
+  added_by     uuid references public.users on delete restrict,
+  created_at   timestamptz not null default now(),
+
+  -- An unclaimed row is visibly different from a granted one, which is the
+  -- whole point of keeping it after it has been used.
+  claimed_at   timestamptz,
+  claimed_by   uuid references public.users on delete restrict
+);
+
+-- Addresses are compared case insensitively everywhere else here, so the
+-- uniqueness has to be too.
+create unique index role_reservations_uq
+  on public.role_reservations (org_id, lower(email), role)
+  where claimed_at is null;
+
+create index role_reservations_email_idx
+  on public.role_reservations (lower(email)) where claimed_at is null;
+
+alter table public.role_reservations enable row level security;
+
+grant select, insert, update, delete on public.role_reservations
+  to authenticated, service_role;
+
+create policy role_reservations_read on public.role_reservations
+  for select to authenticated
+  using (org_id = (select app.org_id()) and (select app.is_staff()));
+
+create policy role_reservations_write on public.role_reservations
+  for insert to authenticated
+  with check (org_id = (select app.org_id()) and (select app.is_advisor()));
+
+create policy role_reservations_update on public.role_reservations
+  for update to authenticated
+  using (org_id = (select app.org_id()) and (select app.is_advisor()));
+
+create policy role_reservations_delete on public.role_reservations
+  for delete to authenticated
+  using (org_id = (select app.org_id()) and (select app.is_advisor()));
+
+-- ---------------------------------------------------------------------------
+-- LEAVING.
+--
+-- **Nothing is kept that only points at you; anything that also belongs to
+-- somebody else needs their yes, and if they say no you come off it instead.**
+--
+-- That sentence is the whole policy, and the shape of these two tables is what
+-- makes it answerable before anything is destroyed. A deletion that discovers
+-- halfway through that a project has a co-author has already done damage.
+--
+-- The earlier design said projects archive and nothing is ever hard deleted.
+-- That is not compatible with somebody asking to be gone: they are asking
+-- because they do not want to be found, and an archive is a place to be found
+-- in. So this deletes, and the request exists only to collect the permissions
+-- that deleting somebody else's record requires.
+--
+-- There is deliberately no tombstone. A stand-in user carrying orphaned
+-- attribution is a row every page then has to decide how to display, on every
+-- surface, forever — and the twenty-two nullable references here mean most
+-- attribution simply becomes null and nothing has to display anything.
+-- ---------------------------------------------------------------------------
+
+create table public.account_deletions (
+  id            uuid primary key default gen_random_uuid(),
+  org_id        uuid not null references public.organizations on delete restrict,
+
+  -- Not `on delete cascade`. The request is the thing that decides whether the
+  -- user may go; a cascade from the user would mean the record vanishes at the
+  -- moment it is most needed.
+  user_id       uuid not null references public.users on delete restrict,
+
+  -- 'pending' while somebody is being asked. 'ready' when every approval is
+  -- in. 'refused' when one was declined, which is not a failure: it means the
+  -- person leaves and their shared work stays.
+  state         text not null default 'pending'
+                check (state in ('pending', 'ready', 'refused', 'done')),
+
+  -- What the person chose when told a project has co-authors: take the project
+  -- with them if everyone agrees, or simply come off it.
+  shared_intent text not null default 'ask'
+                check (shared_intent in ('ask', 'leave')),
+
+  requested_at  timestamptz not null default now(),
+  settled_at    timestamptz,
+
+  -- A receipt, and nothing that could rebuild what was removed. Counts only.
+  -- The policy promises no recoverable copy; a log naming projects and titles
+  -- would be one.
+  removed       jsonb not null default '{}'::jsonb,
+
+  unique (user_id)
+);
+
+-- One row per person who has to say yes.
+--
+-- Two kinds. A co-author is asked about a project they share. A teacher is
+-- asked about something the departing person wrote *for other people* — the
+-- guidance an officer left on a program, a review of somebody else's
+-- manuscript — where there is no remaining participant to reassign it to and
+-- deleting it takes something from the club rather than from the person.
+create table public.account_deletion_approvals (
+  id            uuid primary key default gen_random_uuid(),
+  deletion_id   uuid not null references public.account_deletions on delete cascade,
+  org_id        uuid not null references public.organizations on delete restrict,
+
+  -- Who is being asked. Also `restrict`: an approver deleting their own
+  -- account while holding somebody else's request open is a real sequence,
+  -- and it should refuse rather than silently drop the question.
+  approver_id   uuid not null references public.users on delete restrict,
+
+  -- What they are being asked about, so the message can name it.
+  about_kind    text not null check (about_kind in ('project', 'program')),
+  about_id      uuid,
+
+  state         text not null default 'pending'
+                check (state in ('pending', 'approved', 'declined')),
+
+  asked_at      timestamptz not null default now(),
+  answered_at   timestamptz,
+
+  unique (deletion_id, approver_id, about_kind, about_id)
+);
+
+create index account_deletion_approvals_pending_idx
+  on public.account_deletion_approvals (approver_id) where state = 'pending';
+
+alter table public.account_deletions enable row level security;
+alter table public.account_deletion_approvals enable row level security;
+
+grant select, insert, update, delete on public.account_deletions
+  to authenticated, service_role;
+grant select, insert, update, delete on public.account_deletion_approvals
+  to authenticated, service_role;
+
+-- Your own request, and nobody else's. Staff have no read here on purpose:
+-- an advisor does not need a list of who is thinking about leaving.
+create policy account_deletions_own on public.account_deletions
+  for select to authenticated
+  using (org_id = (select app.org_id()) and user_id = (select auth.uid()));
+
+-- What you have been asked to answer.
+create policy account_deletion_approvals_mine on public.account_deletion_approvals
+  for select to authenticated
+  using (org_id = (select app.org_id()) and approver_id = (select auth.uid()));
+
+
+
 
 
 -- ===========================================================================
@@ -767,6 +980,36 @@ begin
   end if;
 
   select au.email into v_email from auth.users au where au.id = v_uid;
+
+  /* AN INVITE TENANT ACTUALLY REQUIRES AN INVITATION.
+  
+     `signup_mode` had three values and this function read none of them: a
+     school set to `invite` accepted anybody who reached its subdomain and
+     completed this form. The mode was a label on a record and nothing
+     enforced it, which is the shape of failure 19.9 collects — and here the
+     label is the entire admission policy for a school that has decided not
+     to admit by domain.
+  
+     A `role_reservations` row is the invitation. It is what an advisor
+     uploads from a roster, it already carries the address and the role, and
+     `app.claim_reservations` consumes it a few lines below. So this is not a
+     new mechanism: it is the existing one being required rather than merely
+     honored when present.
+  
+     Matched case insensitively, because every other address comparison here
+     is, and unclaimed, because an invitation is one person's. */
+  if v_org.signup_mode = 'invite' then
+    if not exists (
+      select 1 from public.role_reservations r
+       where r.org_id = v_org.id
+         and lower(r.email) = lower(v_email)
+         and r.claimed_at is null
+    ) then
+      raise exception
+        'This school admits people by invitation. Ask an advisor to add % to the roster.',
+        v_email;
+    end if;
+  end if;
 
   select i.identity_data ->> 'hd' into v_hd
     from auth.identities i
@@ -909,7 +1152,8 @@ create or replace function app.provision_org(
   p_domains     jsonb default '[]'::jsonb,
   p_address     text  default null,
   p_phone       text  default null,
-  p_requires_mentor boolean default true
+  p_requires_mentor boolean default true,
+  p_is_platform boolean default false
 )
 returns uuid
 language plpgsql
@@ -922,11 +1166,13 @@ declare
 begin
   insert into public.organizations
     (slug, subdomain, lockup_name, mark, theme, signup_mode,
-     requires_mentor, postal_address, phone, status)
+     requires_mentor, postal_address, phone, status, is_platform)
   values
     (p_slug, p_subdomain, p_lockup_name, p_mark, p_theme, p_signup_mode,
-     p_requires_mentor, p_address, p_phone, 'active')
-  on conflict (slug) do update set subdomain = excluded.subdomain
+     p_requires_mentor, p_address, p_phone, 'active', p_is_platform)
+  on conflict (slug) do update set
+    subdomain = excluded.subdomain,
+    is_platform = excluded.is_platform
   returning id into v_org;
 
   for d in select * from jsonb_array_elements(p_domains)
@@ -962,7 +1208,8 @@ create or replace function public.provision_org(
   p_domains     jsonb default '[]'::jsonb,
   p_address     text  default null,
   p_phone       text  default null,
-  p_requires_mentor boolean default true
+  p_requires_mentor boolean default true,
+  p_is_platform boolean default false
 )
 returns uuid
 language sql
@@ -971,16 +1218,16 @@ set search_path = ''
 as $$
   select app.provision_org(
     p_slug, p_subdomain, p_lockup_name, p_mark, p_theme, p_signup_mode,
-    p_domains, p_address, p_phone, p_requires_mentor
+    p_domains, p_address, p_phone, p_requires_mentor, p_is_platform
   );
 $$;
 
 revoke all on function public.provision_org(
-  text, text, text, text, text, text, jsonb, text, text, boolean
+  text, text, text, text, text, text, jsonb, text, text, boolean, boolean
 ) from public, anon, authenticated;
 
 grant execute on function public.provision_org(
-  text, text, text, text, text, text, jsonb, text, text, boolean
+  text, text, text, text, text, text, jsonb, text, text, boolean, boolean
 ) to service_role;
 
 
@@ -3687,6 +3934,48 @@ notify pgrst, 'reload schema';
 -- Hiding the controls is not the enforcement. This is.
 -- ---------------------------------------------------------------------------
 
+-- ---------------------------------------------------------------------------
+-- A URL SOMEBODY ELSE WILL CLICK.
+--
+-- Three functions took one and stored whatever arrived. The forms carry
+-- `type="url"`, which is a hint to a browser and nothing to a direct RPC
+-- call: `javascript:`, `data:text/html`, `vbscript:` and `file:` all reached
+-- the column, and the pages render these as links for other people.
+--
+-- **Normalized rather than merely checked.** A trimmed empty string becomes
+-- null instead of an empty link; a scheme is compared case insensitively,
+-- because `JaVaScRiPt:` is the same scheme and a regex anchored on lowercase
+-- is a regex somebody walks around.
+--
+-- `https` and `http`. Not `mailto:`, which no field here is for, and nothing
+-- else: a scheme allowlist that grows on request stops being one.
+-- ---------------------------------------------------------------------------
+
+create or replace function app.safe_url(p_url text, p_what text default 'link')
+returns text
+language plpgsql
+immutable
+as $$
+declare
+  v_url text := nullif(btrim(coalesce(p_url, '')), '');
+begin
+  if v_url is null then return null; end if;
+
+  if v_url !~* '^https?://[^\s]+$' then
+    raise exception
+      'A % has to be a web address beginning https:// or http://.', p_what;
+  end if;
+
+  -- Whitespace inside an address is how a second one gets smuggled into an
+  -- attribute. Anything genuine is percent encoded before it gets here.
+  if v_url ~ '[[:space:]]' then
+    raise exception 'A % cannot contain spaces.', p_what;
+  end if;
+
+  return v_url;
+end;
+$$;
+
 create or replace function public.record_deliverable(
   p_participation_id     uuid,
   p_milestone_id uuid,
@@ -3761,7 +4050,9 @@ begin
      external_url, storage_path, submitted_at, created_by)
   values
     (v_org, p_participation_id, p_milestone_id, p_type, trim(p_label), p_signed_on,
-     nullif(trim(coalesce(p_external_url, '')), ''),
+     /* Checked here, not by the form. `type="url"` is a hint to a browser
+        and nothing at all to a direct RPC call. */
+     app.safe_url(p_external_url, 'link to a deliverable'),
      nullif(trim(coalesce(p_storage_path, '')), ''),
      now(), auth.uid())
   returning id into v_id;
@@ -3802,6 +4093,9 @@ declare
   v_org uuid;
   v_id  uuid;
 begin
+  /* Kept as its own refusal rather than delegating, because the message
+     here names the field. The scheme rule is the same one `app.safe_url`
+     applies, and the test that reads every URL-taking function checks both. */
   if p_url !~* '^https?://' then
     raise exception 'a link has to start with http:// or https://';
   end if;
@@ -4704,8 +4998,25 @@ begin
          a.user_id, auth.uid(), 'participation', p_participation_id,
          jsonb_build_object('program_id', v_program, 'note',
            nullif(trim(coalesce(p_note, '')), '')),
+         /* The decision, and which one.
+         
+            This was `place_declined:{entry}` and nothing more, so a student
+            refused, resubmitting, and refused again was told once: the
+            unique constraint on `(recipient_id, dedupe_key)` swallowed the
+            second as a duplicate of the first. That constraint is right —
+            it is what makes a retry or a second drain safe — so the key has
+            to carry what changed rather than the constraint being loosened.
+         
+            A count of decisions already recorded, which is stable under
+            replay: the same decision re-enqueued produces the same key,
+            and a genuinely new one does not. A timestamp would have made
+            every replay a new message. */
          case when p_grant then 'place_granted:' else 'place_declined:' end
-           || p_participation_id
+           || p_participation_id || ':' ||
+           (select count(*) from public.audit_log l
+             where l.entity_type = 'participations'
+               and l.entity_id = p_participation_id
+               and l.action in ('place.granted', 'place.declined'))
     from public.participations e
     join public.project_authors a
       on a.project_id = e.project_id and a.role = 'author'
@@ -5665,7 +5976,7 @@ begin
          date_precision = coalesce(p_date_precision, 'month'),
          record_kind    = coalesce(p_record_kind, 'article'),
          body_format    = coalesce(p_body_format, 'full-text'),
-         external_url   = nullif(btrim(coalesce(p_external_url, '')), '')
+         external_url   = app.safe_url(p_external_url, 'manuscript link')
    where id = p_manuscript_id
    returning updated_at into v_current;
 
@@ -7399,76 +7710,6 @@ grant execute on function public.revoke_club_role(uuid, text) to authenticated;
 notify pgrst, 'reload schema';
 
 
--- ===========================================================================
--- THE ROSTER
---
--- A club starts with a spreadsheet. This accepts one.
---
--- The important thing it does NOT do is create accounts. Signup is where the
--- age band is collected and guardian permission is requested, and a roster
--- that provisioned people directly would walk around both. For a list that is
--- mostly minors, that is the one shortcut this system cannot take.
---
--- So a row is a reservation rather than a person: this address, when it signs
--- up, holds this role. The person still signs up normally, still meets the age
--- gate, still triggers the consent flow. The role attaches on the way in.
---
--- This is the same mechanism the teacher sponsor already uses. A sponsor is
--- matched by email because a sponsor may never have an account, and if they
--- ever sign in, the match is the grant. Roles now work the same way, which
--- also solves the bootstrap: an organization is provisioned with a file
--- naming its advisor, nobody holds anything until a real person signs in with
--- that address, and no path inside the application can grant advisor at all.
--- ===========================================================================
-
-create table public.role_reservations (
-  id           uuid primary key default gen_random_uuid(),
-  org_id       uuid not null references public.organizations on delete restrict,
-
-  email        text not null,
-  display_name text,
-  role         text not null check (role in ('advisor', 'officer', 'editor')),
-
-  added_by     uuid references public.users on delete restrict,
-  created_at   timestamptz not null default now(),
-
-  -- An unclaimed row is visibly different from a granted one, which is the
-  -- whole point of keeping it after it has been used.
-  claimed_at   timestamptz,
-  claimed_by   uuid references public.users on delete restrict
-);
-
--- Addresses are compared case insensitively everywhere else here, so the
--- uniqueness has to be too.
-create unique index role_reservations_uq
-  on public.role_reservations (org_id, lower(email), role)
-  where claimed_at is null;
-
-create index role_reservations_email_idx
-  on public.role_reservations (lower(email)) where claimed_at is null;
-
-alter table public.role_reservations enable row level security;
-
-grant select, insert, update, delete on public.role_reservations
-  to authenticated, service_role;
-
-create policy role_reservations_read on public.role_reservations
-  for select to authenticated
-  using (org_id = (select app.org_id()) and (select app.is_staff()));
-
-create policy role_reservations_write on public.role_reservations
-  for insert to authenticated
-  with check (org_id = (select app.org_id()) and (select app.is_advisor()));
-
-create policy role_reservations_update on public.role_reservations
-  for update to authenticated
-  using (org_id = (select app.org_id()) and (select app.is_advisor()));
-
-create policy role_reservations_delete on public.role_reservations
-  for delete to authenticated
-  using (org_id = (select app.org_id()) and (select app.is_advisor()));
-
-
 -- ---------------------------------------------------------------------------
 -- Claiming.
 --
@@ -7985,7 +8226,15 @@ begin
       (record_id, display_order, display_name, user_id, grad_year,
        affiliation_verified, byline_only)
     values (v_id, v_order, a.display_name, a.user_id, a.grad_year,
-            a.affiliation_state = 'verified', false);
+            /* The two states that mean verified, named.
+            
+               This compared against `'verified'`, which is not one of the
+               four values the column allows — so it was false for everybody,
+               always, and every published author was marked unverified. A
+               check constraint cannot catch a literal in a comparison, and
+               nothing else read the flag, so the only symptom was a small
+               piece of metadata quietly wrong on every record. */
+            a.affiliation_state in ('domain_verified', 'mentor_verified'), false);
   end loop;
 
   update public.submissions set state = 'exported' where id = p_submission_id;
@@ -8120,6 +8369,69 @@ notify pgrst, 'reload schema';
 -- nothing else: no sections, no references, no submission.
 -- ===========================================================================
 
+
+-- ---------------------------------------------------------------------------
+-- WHO MAY BE PUBLISHED, ASKED IN ONE PLACE.
+--
+-- `submit_manuscript` checked this and the two functions that actually make
+-- something public did not. A record could therefore be generated and marked
+-- live for a project whose authors include a minor with no guardian
+-- confirmation — the exact thing the consent state exists to prevent, reached
+-- by the path that does the publishing rather than the path that asks for it.
+--
+-- **Called again at the live transition, not only at generation.** Those are
+-- separate acts, minutes or weeks apart, and a guardian may withdraw consent
+-- in between. Checking once at the start makes the check a formality.
+--
+-- Returns the names rather than a boolean, so the refusal can say who is
+-- waiting. A student told "somebody has not been confirmed" cannot act; a
+-- student told which co-author can go and ask them.
+-- ---------------------------------------------------------------------------
+
+create or replace function app.unconsented_authors(p_project_id uuid)
+returns text
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select string_agg(u.display_name, ', ')
+    from public.project_authors a
+    join public.users u on u.id = a.user_id
+   where a.project_id = p_project_id
+     and a.role = 'author'
+     -- Accepted authorship only. Somebody invited and not yet agreed is not
+     -- an author, and holding a publication for their guardian would block a
+     -- paper on the consent of a person who has not said they wrote it.
+     and a.accepted_at is not null
+     and u.consent_state not in ('active', 'not_required');
+$$;
+
+create or replace function app.refuse_unless_consented(p_project_id uuid)
+returns void
+language plpgsql
+stable
+security definer
+set search_path = ''
+as $$
+declare
+  v_waiting text := app.unconsented_authors(p_project_id);
+begin
+  if v_waiting is not null then
+    raise exception
+      'Guardian permission has not been confirmed for %. Nothing can be published before it is.',
+      v_waiting;
+  end if;
+end;
+$$;
+
+-- Defined above the two functions that call it, not beside the other
+-- publication helpers. `tests/sql-order.mjs` refuses a call to a function
+-- defined later in the file, because the migration is applied top to
+-- bottom: a forward reference works on every database that already has
+-- the function and fails on a fresh reset, which is the one place
+-- nobody is watching.
+
 create or replace function public.generate_project_record(
   p_project_id   uuid,
   p_slug         text,
@@ -8154,6 +8466,14 @@ begin
   if v_org is null then
     raise exception 'no such project';
   end if;
+
+  /* Every author's guardian, before an identifier is minted.
+  
+     `submit_manuscript` checked this and this did not, so the path that
+     actually makes something public was the one path that did not ask. An
+     editor with a direct call could allocate a record for a project whose
+     authors include a minor nobody has confirmed. */
+  perform app.refuse_unless_consented(p_project_id);
 
   /* Which entry this record is of. Named, or the only one with a result.
   
@@ -8266,7 +8586,15 @@ begin
       (record_id, display_order, display_name, user_id, grad_year,
        affiliation_verified, byline_only)
     values (v_id, v_order, a.display_name, a.user_id, a.grad_year,
-            a.affiliation_state = 'verified', false);
+            /* The two states that mean verified, named.
+            
+               This compared against `'verified'`, which is not one of the
+               four values the column allows — so it was false for everybody,
+               always, and every published author was marked unverified. A
+               check constraint cannot catch a literal in a comparison, and
+               nothing else read the flag, so the only symptom was a small
+               piece of metadata quietly wrong on every record. */
+            a.affiliation_state in ('domain_verified', 'mentor_verified'), false);
   end loop;
 
   perform app.audit(v_org, 'record.generated', 'records', null, null,
@@ -8303,6 +8631,14 @@ begin
   if v_org is null then
     raise exception 'no such record';
   end if;
+
+  /* Asked again, at the moment it becomes public.
+  
+     Generation and going live are separate acts, minutes or weeks apart, and
+     a guardian may withdraw consent in between. A check performed only at
+     the start is a check on the wrong moment. */
+  perform app.refuse_unless_consented(
+    (select r.project_id from public.records r where r.id = p_record_id));
 
   update public.records
      set confirmed_by = auth.uid(), confirmed_at = now()
@@ -8581,6 +8917,751 @@ end;
 $$;
 
 grant execute on function public.save_project_video(uuid, text) to authenticated;
+
+-- ---------------------------------------------------------------------------
+-- WHAT LEAVING WOULD COST, ASKED BEFORE ANYTHING IS DESTROYED.
+--
+-- Three lists, and a page can render all of them without changing a row:
+--
+--   projects_alone   go with you, entirely
+--   projects_shared  need every other author to agree, or you come off them
+--   programs         things you wrote for other people, needing a teacher
+--
+-- Read as the person themselves rather than with the secret key, so what a
+-- confirmation screen shows is bounded by the same policies as everything
+-- else they can see.
+-- ---------------------------------------------------------------------------
+
+create or replace function public.deletion_impact()
+returns jsonb
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  with me as (select auth.uid() as id),
+
+  mine as (
+    select pa.project_id
+      from public.project_authors pa, me
+     where pa.user_id = me.id and pa.role = 'author'
+  ),
+
+  others as (
+    select m.project_id, count(*) as n
+      from mine m
+      join public.project_authors pa
+        on pa.project_id = m.project_id and pa.role = 'author'
+      join me on true
+     where pa.user_id <> me.id
+     group by m.project_id
+  )
+
+  select jsonb_build_object(
+    'projects_alone', coalesce((
+      select jsonb_agg(jsonb_build_object('id', p.id, 'title', p.title))
+        from mine m
+        join public.projects p on p.id = m.project_id
+       where not exists (select 1 from others o where o.project_id = m.project_id)
+    ), '[]'::jsonb),
+
+    'projects_shared', coalesce((
+      select jsonb_agg(jsonb_build_object('id', p.id, 'title', p.title, 'others', o.n))
+        from others o
+        join public.projects p on p.id = o.project_id
+    ), '[]'::jsonb),
+
+    -- Written for other people, with nobody to hand them to. The guidance an
+    -- officer left on a program's step, and reviews of manuscripts that are
+    -- not theirs.
+    'warnings', coalesce((
+      select count(*) from public.step_warnings w, me
+       where w.written_by = me.id and w.retired_at is null
+    ), 0),
+
+    'reviews', coalesce((
+      select count(*) from public.reviews r, me where r.reviewer_id = me.id
+    ), 0),
+
+    -- Their own words, everywhere, including observations left on projects
+    -- belonging to other people. Deleted either way; counted so the
+    -- confirmation can say how much.
+    'notes', coalesce((
+      select count(*) from public.field_notes n, me where n.author_id = me.id
+    ), 0),
+
+    'published', coalesce((
+      select count(*) from public.record_authors ra, me where ra.user_id = me.id
+    ), 0)
+  );
+$$;
+
+grant execute on function public.deletion_impact() to authenticated;
+
+-- ---------------------------------------------------------------------------
+-- MAY THIS ADDRESS BE SENT A PASSWORD RESET?
+--
+-- One question, answered by the database, because the page asking it is not
+-- signed in and `identities` is readable only by its owner. The route read
+-- that table anonymously, got nothing back, and concluded from the empty
+-- result that the address was password-capable — so a Google-only account
+-- would have been mailed a recovery link, and following it would have set a
+-- password on an account that never had one. Two ways in, created by a lookup
+-- that could not see.
+--
+-- **It answers about a scheme, not about a person.** It returns false for an
+-- address with no account at all, which is the same answer an unknown address
+-- deserves, and the route says the same sentence either way. Nothing here can
+-- be used to discover who has an account.
+--
+-- Deliberately narrow: one boolean, one argument, no row ever leaves.
+-- ---------------------------------------------------------------------------
+
+create or replace function public.may_reset_password(p_email text)
+returns boolean
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select exists (
+    select 1
+      from public.identities i
+     where lower(i.email) = lower(btrim(p_email))
+       and i.revoked_at is null
+       and i.provider = 'email'
+  );
+$$;
+
+-- Callable while signed out, because that is the only state it is used in.
+grant execute on function public.may_reset_password(text) to anon, authenticated;
+
+-- ---------------------------------------------------------------------------
+-- CLAIMING AND SETTLING.
+--
+-- The two halves of a drain, in the database rather than in the sender.
+--
+-- **`for update skip locked` is the whole point.** Two drains overlapping — a
+-- cron trigger that has not finished when the next fires — would otherwise
+-- both read the same pending rows and send them both. Claiming marks them in
+-- the same statement that selects them, and a second drain running at the
+-- same moment simply steps over what the first is holding.
+--
+-- The recipient's address and name are joined here rather than looked up by
+-- the sender, so a message cannot be built for somebody who has since deleted
+-- their account: the join returns nothing and the row is settled as skipped.
+-- ---------------------------------------------------------------------------
+
+create or replace function public.claim_notifications(
+  p_limit         int default 50,
+  p_since_minutes int default 60,
+  p_dry_run       boolean default false,
+  p_lease_minutes int default 5
+)
+returns table (
+  id           uuid,
+  kind         text,
+  payload      jsonb,
+  attempts     int,
+  verdict      text,
+  claim_token  uuid,
+  to_email     text,
+  to_name      text,
+  org_name     text,
+  url          text
+)
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_token uuid := gen_random_uuid();
+begin
+  return query
+  with taken as (
+    select n.id
+      from public.notifications n
+     where n.attempts < 3
+       and n.send_after <= now()
+       and (
+         n.state = 'pending'
+         -- A lease that has run out. The drain holding it died, or the Worker
+         -- was evicted mid-send. Recovered rather than stranded: without this
+         -- a single crash leaves a message unsendable forever, and `pending`
+         -- is not a state anybody would think to look for it in.
+         or (n.state = 'processing' and n.claimed_until < now())
+       )
+     order by n.send_after
+     limit p_limit
+     for update skip locked
+  ),
+  marked as (
+    update public.notifications n
+       set state = case
+             when p_dry_run then n.state
+             when n.created_at < now() - make_interval(mins => p_since_minutes)
+               then 'skipped'
+             else 'processing'
+           end,
+           claim_token = case when p_dry_run then n.claim_token else v_token end,
+           claimed_until = case
+             when p_dry_run then n.claimed_until
+             else now() + make_interval(mins => p_lease_minutes)
+           end,
+           last_error = case
+             when p_dry_run then n.last_error
+             when n.created_at < now() - make_interval(mins => p_since_minutes)
+               then 'older than the send window'
+             else n.last_error
+           end
+      from taken t
+     where n.id = t.id
+     returning n.id, n.kind, n.payload, n.attempts, n.created_at, n.recipient_id
+  )
+  select m.id,
+         m.kind,
+         m.payload,
+         m.attempts,
+         case when m.created_at < now() - make_interval(mins => p_since_minutes)
+              then 'stale' else 'send' end,
+         v_token,
+         i.email,
+         u.display_name,
+         o.lockup_name,
+         /* The apex for the platform tenant, a label for a school.
+         
+            `subdomain || '.' || root` is right for every school and produces
+            `scipath.scipath.org` for the one tenant whose subdomain *is* the
+            root — a broken link, in an email, to somebody who cannot get
+            back. `is_platform` is on the organization for this. */
+         'https://' ||
+           case when o.is_platform then '' else o.subdomain || '.' end ||
+           coalesce(current_setting('app.root_domain', true), 'scipath.org') || '/app/'
+    from marked m
+    join public.users u on u.id = m.recipient_id
+    join public.organizations o on o.id = u.org_id
+    left join lateral (
+      select i.email from public.identities i
+       where i.user_id = u.id and i.revoked_at is null
+       order by i.is_primary desc, i.created_at
+       limit 1
+    ) i on true;
+end;
+$$;
+
+revoke execute on function public.claim_notifications(int, int, boolean, int)
+  from public, authenticated;
+grant execute on function public.claim_notifications(int, int, boolean, int) to service_role;
+
+
+/**
+ * SETTLING, AND ONLY WHAT YOU HOLD.
+ *
+ * The token is required. A drain that stalled past its lease, had its rows
+ * recovered by another drain, and then came back to report success would
+ * otherwise mark as `sent` a message the second drain is still sending — or
+ * has already sent, making the count wrong in the one direction that hides a
+ * duplicate.
+ *
+ * Returns whether it settled anything, so the caller can tell the difference
+ * between working and shouting into a lease it no longer holds.
+ */
+create or replace function public.settle_notification(
+  p_id    uuid,
+  p_token uuid,
+  p_state text,
+  p_error text default null
+)
+returns boolean
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_n int;
+begin
+  update public.notifications
+     set state = p_state,
+         attempts = attempts + 1,
+         last_error = p_error,
+         claim_token = null,
+         claimed_until = null,
+         sent_at = case when p_state = 'sent' then now() else sent_at end
+   where id = p_id
+     and claim_token = p_token;
+
+  get diagnostics v_n = row_count;
+  return v_n = 1;
+end;
+$$;
+
+revoke execute on function public.settle_notification(uuid, uuid, text, text)
+  from public, authenticated;
+grant execute on function public.settle_notification(uuid, uuid, text, text) to service_role;
+
+-- ---------------------------------------------------------------------------
+-- DELETING AN ACCOUNT.
+--
+-- Called with the secret key, after the interface has taken a typed
+-- confirmation and after every approval that was needed is in. It does not
+-- ask whether the person meant it; that conversation happened above it.
+--
+-- **The order is the policy.** Rows that only point at the person go. Rows
+-- that also belong to somebody else keep existing and stop pointing at them —
+-- twenty-two of the forty-three references here are nullable, so most
+-- attribution simply becomes null and no page has to render anything for a
+-- person who is gone.
+--
+-- Where a not-null column sits on a row that survives, it is repointed at a
+-- **remaining author**: a real person still on the project, now responsible
+-- for it. Not a stand-in. The alternative was deleting a co-author's recorded
+-- deliverables and uploaded images because somebody else left.
+--
+-- What this cannot reach, and what therefore has to happen around it:
+--
+--   * the objects in R2 keyed by the projects deleted here
+--   * the search index, which is rebuilt rather than edited
+--   * the row in `auth.users`, which belongs to the auth schema
+--
+-- Named because a passing test here would otherwise imply they were covered.
+-- `scripts/delete-account.mjs` does all three around this call.
+-- ---------------------------------------------------------------------------
+
+create or replace function public.delete_account(p_user_id uuid)
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_org       uuid;
+  v_alone     uuid[];
+  v_shared    uuid[];
+  v_removed   jsonb;
+  v_files     jsonb;
+  v_records   jsonb;
+  v_project   uuid;
+  v_heir      uuid;
+begin
+  select org_id into v_org from public.users where id = p_user_id;
+  if v_org is null then raise exception 'No such account'; end if;
+
+  /* Projects where they are the only author go entirely. Projects with
+     somebody else on them stay, and the second list is what the approvals
+     above were about: by the time this runs, anything still shared is
+     something the person chose to come off rather than take. */
+  select coalesce(array_agg(pa.project_id), '{}')
+    into v_alone
+    from public.project_authors pa
+   where pa.user_id = p_user_id and pa.role = 'author'
+     and not exists (
+       select 1 from public.project_authors o
+        where o.project_id = pa.project_id and o.role = 'author'
+          and o.user_id <> p_user_id
+     );
+
+  select coalesce(array_agg(pa.project_id), '{}')
+    into v_shared
+    from public.project_authors pa
+   where pa.user_id = p_user_id and pa.role = 'author'
+     and exists (
+       select 1 from public.project_authors o
+        where o.project_id = pa.project_id and o.role = 'author'
+          and o.user_id <> p_user_id
+     );
+
+  /* Every file that will be orphaned, collected before the rows that name
+     them go. The bucket is not reachable from SQL, so these are handed back
+     for the caller to remove — the one thing in this function whose result
+     has to be acted on rather than read. */
+  select coalesce(jsonb_agg(path), '[]'::jsonb) into v_files from (
+    select nm.storage_path as path
+      from public.note_media nm
+      join public.field_notes n on n.id = nm.note_id
+     where n.author_id = p_user_id
+    union all
+    select pi.storage_path from public.project_images pi
+     where pi.project_id = any(v_alone)
+    union all
+    select d.storage_path from public.deliverables d
+      join public.participations pt on pt.id = d.participation_id
+     where pt.project_id = any(v_alone) and d.storage_path is not null
+    union all
+    select mf.storage_path from public.manuscript_figures mf
+      join public.manuscripts m on m.id = mf.manuscript_id
+     where m.project_id = any(v_alone)
+  ) all_files;
+
+  /* The published records that go with them, named so the caller can take
+     their public pages down.
+  
+     A record whose rows are deleted does not stop being readable: the archive
+     is static, so it stays at its address and in the search index and merely
+     stops being listed — which is worse than either, because nobody can find
+     it to ask for it to come down. Only records of projects that are going
+     entirely: a shared project keeps its record along with its authors. */
+  select coalesce(jsonb_agg(jsonb_build_object(
+           'id', r.id, 'kind', r.record_kind, 'year', r.year,
+           'slug', r.slug, 'org', o.slug)), '[]'::jsonb)
+    into v_records
+    from public.records r
+    join public.organizations o on o.id = r.org_id
+   where r.project_id = any(v_alone);
+
+  v_removed := jsonb_build_object(
+    'projects', coalesce(array_length(v_alone, 1), 0),
+    'left', coalesce(array_length(v_shared, 1), 0),
+    'notes', (select count(*) from public.field_notes where author_id = p_user_id),
+    'records', (select count(*) from public.record_authors where user_id = p_user_id),
+    'files', v_files,
+    'published', v_records
+  );
+
+  -- ── Everything they wrote, wherever it is ────────────────────────────────
+  --
+  -- Including observations left on other people's projects. Their words.
+  --
+  -- The photographs attached to a note come first: `note_media` points at
+  -- `field_notes` with `restrict`, so deleting the notes underneath them
+  -- raises. The first version of this omitted the table entirely and the
+  -- test passed, because the fixture had no photographs in it.
+  delete from public.note_media where note_id in (
+    select id from public.field_notes where author_id = p_user_id);
+  delete from public.field_notes where author_id = p_user_id;
+
+  -- ── Projects that are only theirs ────────────────────────────────────────
+  --
+  -- Children first, in foreign key order. `restrict` everywhere means a
+  -- wrong order raises rather than orphaning, which is the right way round.
+  if array_length(v_alone, 1) > 0 then
+    delete from public.record_authors where record_id in (
+      select id from public.records where project_id = any(v_alone));
+    delete from public.records where project_id = any(v_alone);
+
+    /* Keyed on the submission, not the review. `review_findings` carries
+       `submission_id` and a round; there is no `review_id` on it, and the
+       first version of this assumed there was. */
+    delete from public.review_findings where submission_id in (
+      select s.id from public.submissions s
+       join public.manuscripts m on m.id = s.manuscript_id
+      where m.project_id = any(v_alone));
+    delete from public.reviews where submission_id in (
+      select s.id from public.submissions s
+       join public.manuscripts m on m.id = s.manuscript_id
+      where m.project_id = any(v_alone));
+    delete from public.state_events where submission_id in (
+      select s.id from public.submissions s
+       join public.manuscripts m on m.id = s.manuscript_id
+      where m.project_id = any(v_alone));
+    delete from public.submissions where manuscript_id in (
+      select id from public.manuscripts where project_id = any(v_alone));
+    delete from public.manuscript_figures where manuscript_id in (
+      select id from public.manuscripts where project_id = any(v_alone));
+    delete from public.manuscript_sections where manuscript_id in (
+      select id from public.manuscripts where project_id = any(v_alone));
+    delete from public.manuscripts where project_id = any(v_alone);
+
+    /* A deliverable hangs off a participation, not off a project: the same
+       document can satisfy deadlines in two programs, and it is recorded
+       once per place. */
+    delete from public.deliverables where participation_id in (
+      select id from public.participations where project_id = any(v_alone));
+    delete from public.entry_milestones where participation_id in (
+      select id from public.participations where project_id = any(v_alone));
+    delete from public.project_sponsors where participation_id in (
+      select id from public.participations where project_id = any(v_alone));
+    delete from public.participations where project_id = any(v_alone);
+
+    delete from public.project_images where project_id = any(v_alone);
+    delete from public.project_links where project_id = any(v_alone);
+    delete from public.project_authors where project_id = any(v_alone);
+    delete from public.projects where id = any(v_alone);
+  end if;
+
+  -- ── Projects that survive without them ───────────────────────────────────
+  --
+  -- Not-null attribution is handed to somebody still on the project. Chosen
+  -- by earliest acceptance, so it is the person who has been there longest
+  -- rather than whoever the planner happened to return first.
+  foreach v_project in array coalesce(v_shared, '{}') loop
+    select pa.user_id into v_heir
+      from public.project_authors pa
+     where pa.project_id = v_project and pa.role = 'author'
+       and pa.user_id <> p_user_id
+     order by pa.accepted_at nulls last, pa.id
+     limit 1;
+
+    update public.projects set created_by = v_heir
+     where id = v_project and created_by = p_user_id;
+    update public.deliverables set created_by = v_heir
+     where created_by = p_user_id and participation_id in (
+       select id from public.participations where project_id = v_project);
+    update public.project_links set added_by = v_heir
+     where project_id = v_project and added_by = p_user_id;
+    update public.project_images set uploaded_by = v_heir
+     where project_id = v_project and uploaded_by = p_user_id;
+    update public.manuscripts set created_by = v_heir
+     where project_id = v_project and created_by = p_user_id;
+    update public.manuscript_figures set added_by = v_heir
+     where added_by = p_user_id and manuscript_id in (
+       select id from public.manuscripts where project_id = v_project);
+
+    delete from public.project_authors
+     where project_id = v_project and user_id = p_user_id;
+  end loop;
+
+  -- ── Written for other people, with a teacher's yes ───────────────────────
+  /* The findings belong to the submission and the round rather than to a
+     reviewer, so a departing reviewer's review goes and the findings raised
+     in that round stay with the manuscript they were raised against. */
+  delete from public.reviews where reviewer_id = p_user_id;
+  delete from public.step_warnings where written_by = p_user_id;
+
+  -- ── Attribution that may simply stop pointing at them ────────────────────
+  --
+  -- Twenty-two columns, and the reason no stand-in user is needed. A name
+  -- disappears; the fact stays, with its date.
+  update public.user_roles set granted_by = null where granted_by = p_user_id;
+  update public.pending_role_grants set consumed_by = null where consumed_by = p_user_id;
+  update public.audit_log set actor_user_id = null where actor_user_id = p_user_id;
+  update public.notifications set actor_id = null where actor_id = p_user_id;
+  update public.memberships set decided_by = null where decided_by = p_user_id;
+  update public.participations set added_by = null where added_by = p_user_id;
+  update public.participations set decided_by = null where decided_by = p_user_id;
+  update public.participations set selection_decided_by = null
+   where selection_decided_by = p_user_id;
+  update public.participations set result_recorded_by = null
+   where result_recorded_by = p_user_id;
+  update public.entry_milestones set completed_by = null where completed_by = p_user_id;
+  update public.deliverables set verified_by = null where verified_by = p_user_id;
+  update public.project_sponsors set confirmed_by = null where confirmed_by = p_user_id;
+  update public.step_warnings set confirmed_by = null where confirmed_by = p_user_id;
+  update public.step_warnings set retired_by = null where retired_by = p_user_id;
+  update public.manuscript_sections set updated_by = null where updated_by = p_user_id;
+  update public.submissions set submitted_by = null where submitted_by = p_user_id;
+  update public.submissions set assigned_editor = null where assigned_editor = p_user_id;
+  update public.submissions set decided_by = null where decided_by = p_user_id;
+  update public.state_events set actor_id = null where actor_id = p_user_id;
+  update public.reviews set assigned_by = null where assigned_by = p_user_id;
+  update public.review_findings set created_by = null where created_by = p_user_id;
+  update public.role_reservations set added_by = null where added_by = p_user_id;
+  update public.role_reservations set claimed_by = null where claimed_by = p_user_id;
+  update public.records set generated_by = null where generated_by = p_user_id;
+  update public.records set confirmed_by = null where confirmed_by = p_user_id;
+
+  -- Rows left with a not-null pointer at a project that survived: the sponsor
+  -- record they filed, which belongs to a participation that is not theirs.
+  update public.project_sponsors set recorded_by = (
+    select pa.user_id from public.project_authors pa
+      join public.participations pt on pt.project_id = pa.project_id
+     where pt.id = public.project_sponsors.participation_id
+       and pa.role = 'author' and pa.user_id <> p_user_id
+     order by pa.accepted_at nulls last, pa.id limit 1)
+   where recorded_by = p_user_id;
+
+  -- ── The person ───────────────────────────────────────────────────────────
+  delete from public.record_authors where user_id = p_user_id;
+  delete from public.memberships where user_id = p_user_id;
+  delete from public.project_authors where user_id = p_user_id;
+  delete from public.notifications where recipient_id = p_user_id;
+  delete from public.notification_settings where user_id = p_user_id;
+  delete from public.guardian_consents where user_id = p_user_id;
+  delete from public.user_roles where user_id = p_user_id;
+  delete from public.identities where user_id = p_user_id;
+
+  delete from public.account_deletion_approvals where approver_id = p_user_id;
+
+  update public.account_deletions
+     set state = 'done', settled_at = now(), removed = v_removed
+   where user_id = p_user_id;
+
+  delete from public.users where id = p_user_id;
+
+  /* The receipt outlives the person and names nothing. Counts only: a log
+     carrying titles would be the recoverable copy the policy says there is
+     not one of. */
+  delete from public.account_deletions where user_id = p_user_id;
+
+  return v_removed;
+end;
+$$;
+
+revoke execute on function public.delete_account(uuid) from public, authenticated;
+grant execute on function public.delete_account(uuid) to service_role;
+
+-- ---------------------------------------------------------------------------
+-- ASKING, AND ANSWERING.
+--
+-- The two tables existed and nothing could write to them: a student with a
+-- co-authored project reached a page that told them what was needed and gave
+-- them no way to ask.
+--
+-- **One author cannot unilaterally delete what two people made.** That is the
+-- rule these functions exist for. If everyone agrees, the shared work goes
+-- with the person leaving; if anybody declines, the person still leaves and
+-- their name comes off it. Nobody is trapped, and nobody's work is destroyed
+-- by somebody else's decision.
+-- ---------------------------------------------------------------------------
+
+create or replace function public.request_account_deletion(p_intent text default 'ask')
+returns uuid
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_uid     uuid := auth.uid();
+  v_org     uuid;
+  v_id      uuid;
+  v_project record;
+begin
+  if v_uid is null then raise exception 'not authenticated'; end if;
+  if p_intent not in ('ask', 'leave') then raise exception 'unknown intent %', p_intent; end if;
+
+  select org_id into v_org from public.users where id = v_uid;
+
+  /* One open request per person. Asking twice should not produce two sets of
+     approvals for the same co-author to answer differently. */
+  insert into public.account_deletions (org_id, user_id, shared_intent)
+  values (v_org, v_uid, p_intent)
+  on conflict (user_id) do update set shared_intent = excluded.shared_intent
+  returning id into v_id;
+
+  delete from public.account_deletion_approvals where deletion_id = v_id and state = 'pending';
+
+  /* `leave` asks nobody: the person comes off shared work and it stays. It
+     is the choice, not a failure to make one. */
+  if p_intent = 'leave' then
+    update public.account_deletions set state = 'ready' where id = v_id;
+    return v_id;
+  end if;
+
+  -- Every co-author of every project they share.
+  for v_project in
+    select distinct pa.project_id, other.user_id as approver
+      from public.project_authors pa
+      join public.project_authors other
+        on other.project_id = pa.project_id and other.role = 'author'
+       and other.user_id <> v_uid
+     where pa.user_id = v_uid and pa.role = 'author'
+  loop
+    insert into public.account_deletion_approvals
+      (deletion_id, org_id, approver_id, about_kind, about_id)
+    values (v_id, v_org, v_project.approver, 'project', v_project.project_id)
+    on conflict do nothing;
+  end loop;
+
+  -- And a teacher, for anything written for other people: guidance left on a
+  -- program, and reviews of manuscripts that are not theirs. There is no
+  -- remaining participant to hand those to.
+  if exists (select 1 from public.step_warnings where written_by = v_uid and retired_at is null)
+     or exists (select 1 from public.reviews where reviewer_id = v_uid) then
+    insert into public.account_deletion_approvals
+      (deletion_id, org_id, approver_id, about_kind, about_id)
+    select v_id, v_org, r.user_id, 'program', null
+      from public.user_roles r
+     where r.org_id = v_org and r.role = 'advisor' and r.revoked_at is null
+    on conflict do nothing;
+  end if;
+
+  /* Nobody to ask is not the same as nobody has answered. */
+  if not exists (select 1 from public.account_deletion_approvals where deletion_id = v_id) then
+    update public.account_deletions set state = 'ready' where id = v_id;
+  end if;
+
+  return v_id;
+end;
+$$;
+
+grant execute on function public.request_account_deletion(text) to authenticated;
+
+
+/**
+ * Answering one.
+ *
+ * Only the person asked, and only their own row. A decline settles the whole
+ * request as `refused`, which is not a failure: it means the person leaves
+ * and the shared work stays with whoever is left.
+ */
+create or replace function public.answer_deletion_approval(
+  p_approval_id uuid,
+  p_approve     boolean
+)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_uid uuid := auth.uid();
+  v_del uuid;
+begin
+  update public.account_deletion_approvals
+     set state = case when p_approve then 'approved' else 'declined' end,
+         answered_at = now()
+   where id = p_approval_id
+     and approver_id = v_uid
+     and state = 'pending'
+  returning deletion_id into v_del;
+
+  if v_del is null then
+    raise exception 'That is not yours to answer, or it has been answered already.';
+  end if;
+
+  if not p_approve then
+    update public.account_deletions
+       set state = 'refused', shared_intent = 'leave', settled_at = now()
+     where id = v_del;
+    return;
+  end if;
+
+  if not exists (
+    select 1 from public.account_deletion_approvals
+     where deletion_id = v_del and state = 'pending'
+  ) then
+    update public.account_deletions set state = 'ready', settled_at = now() where id = v_del;
+  end if;
+end;
+$$;
+
+grant execute on function public.answer_deletion_approval(uuid, boolean) to authenticated;
+
+
+/**
+ * MAY I GO YET?
+ *
+ * Asked of the database rather than worked out in the route, because the
+ * route got it wrong in a way that looked right: it selected pending rows
+ * from `account_deletion_approvals` as the person leaving, and the read
+ * policy on that table exposes rows where the caller is the *approver*. It
+ * therefore counted the approvals somebody was waiting to answer, not the
+ * ones they were waiting on — almost always none, so the guard passed and
+ * meant nothing.
+ *
+ * A function reading by `deletion_id` cannot make that mistake.
+ */
+create or replace function public.deletion_ready()
+returns jsonb
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select coalesce(
+    (select jsonb_build_object(
+       'state', d.state,
+       'intent', d.shared_intent,
+       'waiting', (select count(*) from public.account_deletion_approvals a
+                    where a.deletion_id = d.id and a.state = 'pending'),
+       'declined', (select count(*) from public.account_deletion_approvals a
+                     where a.deletion_id = d.id and a.state = 'declined'))
+       from public.account_deletions d
+      where d.user_id = auth.uid()),
+    jsonb_build_object('state', 'none', 'waiting', 0, 'declined', 0)
+  );
+$$;
+
+grant execute on function public.deletion_ready() to authenticated;
 
 notify pgrst, 'reload schema';
 

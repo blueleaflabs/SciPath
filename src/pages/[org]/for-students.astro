@@ -1,0 +1,125 @@
+---
+import { orgPaths } from '../../lib/tenant-paths';
+export const getStaticPaths = orgPaths;
+
+import Base from '../../layouts/Base.astro';
+import PageHead from '../../components/PageHead.astro';
+import { activeOrg } from '../../lib/tenant';
+import { platform } from '../../config/site';
+
+const org = activeOrg(Astro);
+const start = org.isPlatform ? '/get-started/' : '/app/';
+
+/**
+ * WRITTEN FOR THE STUDENT WITH NOBODY BEHIND THEM.
+ *
+ * A student at a well resourced school has a parent who knows what the forms
+ * are, a teacher with time, and often a family friend with a lab. This page
+ * is for the other one, who is the reason the software exists (2.5). It says
+ * so without saying it, by answering the questions that student actually has
+ * and by never assuming a club, an officer or a teacher who has done this
+ * before.
+ */
+const does = [
+  'See every milestone, form and deadline that applies to your project, in one place.',
+  'Keep a dated notebook of what you actually did, appended as you go rather than written up afterward.',
+  'Know which approvals have to be signed before you are allowed to start collecting data.',
+  'Run one project through several places at once: a class, a fair, a journal.',
+  'Keep what came of it, including the entry, the placement, the award and the feedback.',
+  'Publish a permanent record with its own address, which still resolves in four years.',
+];
+---
+
+<Base
+  title="For students"
+  description="Run a research project without losing a season to a form nobody told you about."
+>
+  <PageHead
+    eyebrow="For students"
+    title="Spend less of the year working out what comes next"
+    lede="Your project should not live across a spreadsheet, a shared folder, an email thread and somebody else's memory."
+  />
+
+  <div class="wrap">
+    <section class="sec">
+      <div class="sec-h"><b>What you get</b><span>Six things, plainly</span></div>
+      <ul class="does">
+        {does.map((line) => <li>{line}</li>)}
+      </ul>
+    </section>
+
+    <section class="sec">
+      <div class="sec-h"><b>If there is nothing at your school</b><span>Start anyway</span></div>
+      <div class="prose">
+        <p>
+          Most high schools have no research club and no officer who has done this before. The
+          things that disqualify a project are almost never intellectual. They are procedural:
+          a signature obtained a week late, an abstract over the word limit, a survey that
+          counted as human participants research and nobody said so.
+        </p>
+        <p>
+          The programs in {platform.name} carry that knowledge as dates, requirements and
+          plain sentences about why each one matters. A student with no club gets the same
+          checklist as a student with one.
+        </p>
+      </div>
+      {org.isPlatform && (
+        <div class="row" style="margin-top:20px">
+          <a class="btn btn-2" href="/get-started/">Start on your own</a>
+        </div>
+      )}
+    </section>
+
+    <section class="sec">
+      <div class="sec-h"><b>Applications</b><span>Evidence, not another badge</span></div>
+      <div class="prose">
+        <p>
+          Nothing here scores you, ranks you or issues a credential. What it gives you is a
+          record: the question you asked, the work you did, which parts were yours, and what
+          came of it. Authorship is stated, contribution is stated, and the address does not
+          move.
+        </p>
+        <p>
+          That is worth more to somebody reading an application than a number would be, and it
+          is the only claim we can make honestly.
+        </p>
+      </div>
+    </section>
+
+    <section class="sec cta">
+      <div class="sec-h"><b>Start</b><span>A question and a name is enough</span></div>
+      <div class="row">
+        <a class="btn" href={start}>Start a project</a>
+        {org.isPlatform && <a class="btn btn-2" href="/demo/">See it with a season already in it</a>}
+        <a class="btn btn-q" href="/guides/">Guides</a>
+      </div>
+    </section>
+  </div>
+</Base>
+
+<style>
+  .does {
+    margin: 4px 0 0;
+    padding: 0;
+    list-style: none;
+    max-width: var(--measure-text);
+  }
+  .does li {
+    padding: 12px 0 12px 26px;
+    border-top: 1px solid var(--rule-fine);
+    font-size: 0.98rem;
+    line-height: 1.6;
+    color: var(--ink-2);
+    position: relative;
+  }
+  .does li::before {
+    content: '';
+    position: absolute;
+    left: 4px;
+    top: 1.32em;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--brand);
+  }
+</style>

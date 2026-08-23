@@ -1,0 +1,131 @@
+---
+import { orgPaths } from '../../lib/tenant-paths';
+export const getStaticPaths = orgPaths;
+
+import Base from '../../layouts/Base.astro';
+import PageHead from '../../components/PageHead.astro';
+import { activeOrg } from '../../lib/tenant';
+import { platform } from '../../config/site';
+
+const org = activeOrg(Astro);
+
+/* A teacher at a school already running this asks the school. A teacher
+   arriving at the platform is asking whether to run it at all. */
+const talk = org.isPlatform ? '/for-organizations/' : '/contact/';
+
+/**
+ * WRITTEN TO BE SENT TO ONE TEACHER.
+ *
+ * Not a features page. The teacher deciding whether to try this has a class
+ * to run and forty minutes of prep, and what they want to know is what lands
+ * on their desk in week three, what it replaces, and what they are agreeing
+ * to on behalf of students. Those are the three sections.
+ */
+const sees = [
+  {
+    title: 'Every project at once',
+    body:
+      'One table: whose project, what stage, what is outstanding, when it is due. Sorted so the thing needing attention is at the top rather than found by scrolling.',
+  },
+  {
+    title: 'What is missing, by name',
+    body:
+      'Approvals not yet signed, deliverables past their date, dependencies ignored, and the date-order checks that disqualify a project at a fair.',
+  },
+  {
+    title: 'The notebook, as evidence',
+    body:
+      'Dated entries a student appended while working. Enough to answer whether a project is real, and to answer it in a minute rather than a meeting.',
+  },
+  {
+    title: 'Review and publication',
+    body:
+      'Completed work moves through a documented review with named reviewers and faculty oversight, and publishes to a permanent public record.',
+  },
+];
+---
+
+<Base
+  title="For educators"
+  description="A concise view of where every project in your program stands, what is missing, and who needs attention."
+>
+  <PageHead
+    eyebrow="For educators"
+    title="See the whole program without chasing every student"
+    lede="A status report rather than a dashboard. The obligations of every project in one place, and the ones nobody has met at the top."
+  />
+
+  <div class="wrap">
+    <section class="sec">
+      <div class="sec-h"><b>What you see</b><span>Four things</span></div>
+      <div class="grid-2">
+        {
+          sees.map((s) => (
+            <div class="card pad">
+              <p class="t-lbl">{s.title}</p>
+              <p class="t-sm" style="margin-top:9px">{s.body}</p>
+            </div>
+          ))
+        }
+      </div>
+    </section>
+
+    <section class="sec">
+      <div class="sec-h"><b>What it replaces</b><span>And what it does not</span></div>
+      <div class="prose">
+        <p>
+          It replaces the spreadsheet of who has turned in which form, the folder of last
+          year's deadlines, and the reconstruction of a project's history in the week before
+          a fair. Your dates, deliverables and requirements are held as a program, so next
+          year's class inherits them rather than the officers taking them home.
+        </p>
+        <p>
+          It is not a learning management system and does not want to be one. It does not
+          grade, does not compute a readiness score, and does not rank one student's project
+          against another's. It handles the research-specific coordination that a general
+          classroom tool leaves to email.
+        </p>
+        <p>
+          There is no private adult-to-student messaging channel. Guidance is given at the
+          program or the project level, where it is visible to the people responsible for
+          the student.
+        </p>
+      </div>
+    </section>
+
+    <section class="sec">
+      <div class="sec-h"><b>What you are agreeing to</b><span>The questions that get asked second</span></div>
+      <div class="prose">
+        <p>
+          {platform.name} carries no advertising, sells no data, builds no profiles, and never
+          reads or analyzes student work with a model. Publication is a deliberate act that
+          requires the author's consent on every path that reaches it, and a published record
+          can be withdrawn.
+        </p>
+        <p>
+          The software is free and open source. A school can run its own copy, hold its own
+          students' data, and keep operating regardless of what happens to us. Records export
+          in a documented format rather than being locked behind a login.
+          <a href={platform.repoUrl} target="_blank" rel="noopener noreferrer">The source is public.</a>
+        </p>
+      </div>
+      <div class="row" style="margin-top:20px">
+        <a class="btn btn-2" href="/policies/privacy/">What is stored</a>
+        <a class="btn btn-q" href="/policies/editorial/">What review actually is</a>
+      </div>
+    </section>
+
+    <section class="sec cta">
+      <div class="sec-h"><b>Try it on one program</b><span>A class, a club, or a season</span></div>
+      <p class="t-sm" style="max-width:var(--measure-text)">
+        The demonstration runs a full season with invented students, so a first look costs
+        nothing and touches no real work. After that, a pilot means one program, your dates,
+        and your students.
+      </p>
+      <div class="row">
+        {org.isPlatform && <a class="btn" href="/demo/">Open the demonstration</a>}
+        <a class={org.isPlatform ? 'btn btn-2' : 'btn'} href={talk}>Talk about a pilot</a>
+      </div>
+    </section>
+  </div>
+</Base>

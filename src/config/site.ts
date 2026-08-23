@@ -22,8 +22,17 @@ export const platform = {
   operatorCredit: 'A project of Blue Leaf Labs, a registered 501(c)(3) nonprofit.',
 } as const;
 
-/** Canonical origin. Set to the custom domain once DNS is cut over. */
-export const siteUrl = 'https://scipath.pages.dev';
+/*
+ * There was a `siteUrl` constant here, `https://scipath.pages.dev`, and it
+ * was the origin every canonical tag, citation URL and sitemap line was
+ * built from. Two things were wrong with it. It named a host that is no
+ * longer where this runs, and it was one origin for every tenant, so four
+ * schools each declared the same canonical address for the same path.
+ *
+ * The deployment knows where it is. `originForOrg()` in `src/lib/deployment`
+ * builds a tenant's address from `PUBLIC_ROOT_DOMAIN`, which is the one
+ * value that differs between a laptop, a preview and production.
+ */
 
 /*
  * There were five lifecycle stages here, and they were a competition's

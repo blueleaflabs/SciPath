@@ -108,10 +108,23 @@ cachePublicPage(Astro);
 <script>
   const form = document.getElementById('search-form') as HTMLFormElement | null;
   const input = document.getElementById('q') as HTMLInputElement | null;
-  const results = document.getElementById('results');
-  const status = document.getElementById('status');
-  const browse = document.getElementById('browse');
-  if (!form || !input || !results || !status || !browse) throw new Error('search markup missing');
+  /* Checked first, then held as non-null.
+  
+     The throw narrows all five, and that narrowing does not survive into the
+     callbacks defined further down — so every use inside them was reported as
+     possibly null. The check still runs and still throws on missing markup;
+     these three are simply re-bound afterwards so the closures can see what
+     the check established. */
+  const resultsEl = document.getElementById('results');
+  const statusEl = document.getElementById('status');
+  const browseEl = document.getElementById('browse');
+  if (!form || !input || !resultsEl || !statusEl || !browseEl) {
+    throw new Error('search markup missing');
+  }
+
+  const results: HTMLElement = resultsEl;
+  const status: HTMLElement = statusEl;
+  const browse: HTMLElement = browseEl;
 
   let pagefind: any = null;
 

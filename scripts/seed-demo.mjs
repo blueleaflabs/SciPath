@@ -27,12 +27,14 @@
 
 import { createClient } from '@supabase/supabase-js';
 import { loadDevVars } from './dev-vars.mjs';
-import { loadOrgs } from './orgs-library.mjs';
+import { fixtureTarget, FIXTURE_PREFIX, numberOf } from './fixture-target.mjs';
 import { originFor } from '../src/lib/deployment.ts';
 
 /* Read the file before reading the environment. A script that needs a file
    should read the file rather than print instructions for loading it. */
 loadDevVars();
+
+import { FIXTURE_DOMAIN, DEFAULT_PASSWORD, fixtureAddress } from '../src/config/demo-accounts.mjs';
 
 const URL = process.env.PUBLIC_SUPABASE_URL ?? '';
 const KEY = process.env.SUPABASE_SECRET_KEY ?? '';
@@ -43,17 +45,16 @@ const ORG_SLUGS = (process.env.DEMO_ORGS ?? 'montavista,svslc,scipath,demo')
   .map((s) => s.trim())
   .filter(Boolean);
 
-const PRODUCTION_REF = 'uctbxilvfzaoroffzgen';
-const FIXTURE_DOMAIN = 'demo.invalid';
-const PASSWORD = process.env.DEMO_PASSWORD ?? 'scipath';
+/* Read rather than restated. `/demo/` publishes three of these addresses,
+   and an address published on a public page has to be the address the seed
+   wrote or the page is a guess about its own product. */
+const PASSWORD = process.env.DEMO_PASSWORD ?? DEFAULT_PASSWORD;
 
 /* ── Guard 1 ─────────────────────────────────────────────────────────────── */
 
 const allowRemote = process.argv
   .find((a) => a.startsWith('--allow-remote='))
   ?.split('=')[1];
-
-const isLoopback = /^https?:\/\/(127\.0\.0\.1|localhost)(:|\/|$)/.test(URL);
 
 if (!URL || !KEY) {
   fail(
@@ -75,66 +76,13 @@ if (!KEY.startsWith('sb_secret_') && !KEY.startsWith('eyJ')) {
   );
 }
 
-/**
- * WHICH SCHOOLS MAY HOLD FIXTURES, WHICH IS A FACT ABOUT THE SCHOOL.
- *
- * `demo: true` in `src/config/orgs/*.yaml` marks an organization whose people
- * are invented and whose credentials are published. There is one, and it is
- * the tenant on demo.scipath.org.
- *
- * The flag lives on the school rather than in this file because this file is
- * the thing that would be wrong. A list of permitted slugs here is a list
- * somebody edits while pointed at production; a school that says of itself
- * that it holds nothing real is checked against whatever `DEMO_ORGS` happens
- * to say on the day.
- */
-const demoOnly = new Set(
-  Object.values(loadOrgs())
-    .filter((org) => org.demo === true)
-    .map((org) => org.id)
-);
+/* The one rule about where invented people may be written lives in
+   `fixture-target.mjs`, because three scripts need it and three copies of it
+   had already drifted apart. */
+const target = fixtureTarget({ url: URL, slugs: ORG_SLUGS, allowRemote });
 
-const notDemo = ORG_SLUGS.filter((slug) => !demoOnly.has(slug));
-
-if (!isLoopback) {
-  if (!allowRemote) {
-    fail(
-      `Refusing to seed fixtures into ${URL}.\n` +
-        'Fixtures belong on the local stack. If a second project is genuinely\n' +
-        'the target, pass --allow-remote=<project-ref> explicitly.'
-    );
-  }
-
-  /**
-   * The production project, and the one case where it is allowed.
-   *
-   * The demonstration tenant lives in the same project as the schools, because
-   * a tenant is a file and not a deployment, and its rows are separated from
-   * theirs by `org_id` and by the policies `npm run test:probes` proves. So
-   * "fixtures never go to production" is too broad by exactly one school, and
-   * the narrow rule is: to production, only into schools that hold nothing
-   * real.
-   *
-   * Stated as a refusal of everything else rather than a permission, so a slug
-   * added to `DEMO_ORGS` in a hurry is refused rather than admitted.
-   */
-  if (allowRemote === PRODUCTION_REF || URL.includes(PRODUCTION_REF)) {
-    if (notDemo.length > 0) {
-      fail(
-        'That is the production project, and these are real schools:\n' +
-          `  ${notDemo.join(', ')}\n\n` +
-          'Only an organization whose file carries `demo: true` may be seeded\n' +
-          'there. Set DEMO_ORGS to those, or point at the local stack.\n' +
-          'See brief 12.11a.'
-      );
-    }
-
-    console.log(
-      `\nSeeding ${ORG_SLUGS.join(', ')} in the production project.\n` +
-        'Every one of them is marked `demo: true` and holds nothing real.'
-    );
-  }
-}
+if (target.refuse) fail(target.refuse);
+if (target.note) console.log(target.note);
 
 /* ── Fixtures ────────────────────────────────────────────────────────────── */
 
@@ -222,25 +170,10 @@ const ROLES = [
  * Every name is still obviously fictional, which is what 12.11 asks for, and
  * more obviously so than a plausible invented person was.
  */
-const PREFIX = {
-  montavista: 'mv',
-  svslc: 'svs',
-  scipath: 'sp',
-  demo: 'dm',
-};
-
-/* `advisor` is bare and the rest carry a letter. Both become a number, so
-   the handles keep their shape and the names read in order. */
-function numberOf(handle) {
-  const [, suffix] = handle.split('.');
-  if (!suffix) return 1;
-  return suffix.charCodeAt(0) - 96;
-}
-
 /** The fourteen for one school, named from their handles. */
 function castFor(slug) {
-  const prefix = PREFIX[slug];
-  if (!prefix) fail(`No prefix for "${slug}". Add one to PREFIX in this file.`);
+  const prefix = FIXTURE_PREFIX[slug];
+  if (!prefix) fail(`No fixture prefix for "${slug}". Add one in fixture-target.mjs.`);
 
   return ROLES.map((role) => {
     const kind = role.handle.split('.')[0];
@@ -298,7 +231,7 @@ async function seedOrg(slug) {
     /* Namespaced per tenant. The handle is the same at every school and the
        person behind it is not, so an account can never be reused across two
        of them and a name on a page says which school it belongs to. */
-    const email = `${slug}.${person.handle}@${FIXTURE_DOMAIN}`;
+    const email = fixtureAddress(slug, person.handle);
 
     /* Guard 2, asserted rather than assumed. */
     if (!email.endsWith(`@${FIXTURE_DOMAIN}`)) {

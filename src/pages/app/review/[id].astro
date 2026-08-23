@@ -246,11 +246,15 @@ const due = new Date(review.due_at).toLocaleDateString('en-US', {
                   </label>
                 ))}
               </div>
+              {/* `prompt`, not `text`. There is no `text` on a review question,
+                  so this label read "Why, briefly: undefined" to every screen
+                  reader since it was written — on the one control whose only
+                  name is its label. */}
               <textarea
                 class="ta grow"
                 name={`${q.key}_comment`}
                 rows="2"
-                aria-label={`Why, briefly: ${q.text}`}
+                aria-label={`Why, briefly: ${q.prompt}`}
               ></textarea>
               <small>Why, briefly.</small>
             </fieldset>
@@ -288,11 +292,11 @@ const due = new Date(review.due_at).toLocaleDateString('en-US', {
 </Base>
 
 <script>
-  const grow = (field) => {
+  const grow = (field: HTMLTextAreaElement) => {
     field.style.height = 'auto';
     field.style.height = `${field.scrollHeight + 2}px`;
   };
-  for (const field of document.querySelectorAll('textarea.grow')) {
+  for (const field of document.querySelectorAll<HTMLTextAreaElement>('textarea.grow')) {
     field.style.overflowY = 'hidden';
     grow(field);
     field.addEventListener('input', () => grow(field));

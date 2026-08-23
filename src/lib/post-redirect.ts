@@ -36,6 +36,20 @@ export interface Outcome {
   error?: string | null;
   /** It worked, and this says what happened. */
   note?: string | null;
+  /**
+   * The answer was no, and there is nothing to correct.
+   *
+   * A third kind, because it is not either of the others. An error is a
+   * thing to fix and send again; a note is a thing that happened. A refusal
+   * ends the exchange, and the page that renders one owes somebody a
+   * different shape entirely rather than a red sentence they will try to
+   * work around.
+   *
+   * A flag, not a sentence: the words belong to the page that knows what was
+   * refused, and a message travelling in an address is a message somebody
+   * can rewrite before sending the link on.
+   */
+  refused?: boolean;
 }
 
 /**
@@ -48,7 +62,8 @@ export interface Outcome {
 export function afterPost(url: URL, outcome: Outcome): Response {
   const params = new URLSearchParams();
 
-  if (outcome.error) params.set('e', outcome.error.slice(0, MAX));
+  if (outcome.refused) params.set('no', '1');
+  else if (outcome.error) params.set('e', outcome.error.slice(0, MAX));
   else if (outcome.note) params.set('m', outcome.note.slice(0, MAX));
 
   const query = params.toString();
@@ -60,10 +75,15 @@ export function afterPost(url: URL, outcome: Outcome): Response {
 }
 
 /** Read back what the redirect carried. Seed the page's own variables here. */
-export function outcomeFrom(url: URL): { error: string | null; note: string | null } {
+export function outcomeFrom(url: URL): {
+  error: string | null;
+  note: string | null;
+  refused: boolean;
+} {
   return {
     error: url.searchParams.get('e'),
     note: url.searchParams.get('m'),
+    refused: url.searchParams.get('no') === '1',
   };
 }
 

@@ -6,6 +6,24 @@
   "compatibility_date": "2026-05-01",
   "compatibility_flags": ["nodejs_compat"],
 
+  // THE CLOCK.
+  //
+  // Cloudflare calls the Worker's `scheduled` export on this schedule.
+  // `src/worker.js` is what receives it and drains the notification outbox.
+  //
+  // **Midnight on the first of January, deliberately.** Nothing in that queue
+  // has ever been sent and no message has been read by anybody outside this
+  // project, so a trigger firing the moment it is deployed would make the
+  // first real send an unattended one. The wiring is what needed proving.
+  //
+  // Change it to something like "*/15 * * * *" when somebody has watched
+  // `npm run send` do the same work by hand and is willing to own the result.
+  // The send window in `drain.ts` is an hour, so a schedule sparser than that
+  // will skip messages as stale rather than send them late.
+  "triggers": {
+    "crons": ["0 0 1 1 *"]
+  },
+
   "r2_buckets": [
     {
       // Notebook photographs and signed forms. Private: no public URL, no

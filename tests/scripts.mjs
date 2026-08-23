@@ -446,21 +446,38 @@ test('the production ref is one value, not four copies', () => {
    */
   const holders = files.filter((f) => /const PRODUCTION_REF = /.test(fs.readFileSync(f, 'utf8')));
 
+  /* There is one now, and this used to insist on several.
+  
+     The test was written when four scripts each named the ref, and it checked
+     that the four agreed — the best available answer while there were four.
+     They are one: `scripts/fixture-target.mjs` holds it and the scripts that
+     need it import it. So the assertion inverts. Insisting on several would
+     mean a test failing because the thing it was written to prevent had been
+     made impossible, which is how a guard outlives what it guarded. */
   assert.ok(
-    holders.length > 1,
-    'expected several scripts to name the production ref — widen the pattern'
+    holders.length <= 1,
+    `the ref is defined in ${holders.length} places: ${holders
+      .map((f) => path.relative('.', f))
+      .join(', ')}`
   );
 
-  const refs = new Map();
-  for (const file of holders) {
-    const ref = fs.readFileSync(file, 'utf8').match(/const PRODUCTION_REF = '([^']*)'/)?.[1];
-    refs.set(file, ref);
-  }
+  /* And nothing else writes the value out. A literal ref anywhere is a fifth
+     copy that will go on naming a project that no longer exists — silently,
+     because a guard only reports when it stops something. */
+  const defined = holders.length
+    ? fs.readFileSync(holders[0], 'utf8').match(/const PRODUCTION_REF = '([^']*)'/)?.[1]
+    : null;
 
-  assert.equal(
-    new Set(refs.values()).size,
-    1,
-    `they disagree: ${[...refs].map(([f, r]) => `${path.relative('.', f)}=${r}`).join(', ')}`
+  if (!defined) return;
+
+  const literals = files.filter(
+    (f) => !holders.includes(f) && fs.readFileSync(f, 'utf8').includes(defined)
+  );
+
+  assert.deepEqual(
+    literals.map((f) => path.relative('.', f)),
+    [],
+    'import PRODUCTION_REF rather than writing it out again'
   );
 });
 
@@ -646,7 +663,20 @@ test('the two resets seed the same things in the same order', () => {
   const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
   const cloud = fs.readFileSync('scripts/reset-cloud.mjs', 'utf8');
 
-  const SHARED = ['seed-orgs', 'seed-demo', 'seed-programs', 'seed-people'];
+  /* Every seed the local reset runs. It used to be four — the ones the cloud
+     happened to have — which meant the test could only catch a divergence
+     among those and said nothing about the four it did not run. The cloud
+     runs all of them now, into the demonstration tenant, so the comparison
+     is the whole chain. */
+  const SHARED = [
+    'seed-orgs',
+    'seed-demo',
+    'seed-programs',
+    'seed-scenarios',
+    'seed-cases',
+    'seed-people',
+    'seed-publish',
+  ];
   const order = (text) =>
     [...text.matchAll(/scripts\/(seed-[a-z]+)\.mjs/g)]
       .map((m) => m[1])
@@ -663,6 +693,340 @@ test('the two resets seed the same things in the same order', () => {
   );
 
   assert.ok(local.length === SHARED.length, `npm run reset no longer runs ${SHARED.join(', ')}`);
+
+  /* The index is not a seed and does not match the pattern above, so it is
+     checked on its own. A cloud reset that leaves it out gives the
+     demonstration a showcase whose search finds nothing. */
+  assert.match(pkg.scripts.reset, /index-records/, 'the local reset indexes what it published');
+  assert.match(cloud, /index-records\.mjs', '--remote'/, 'and so does the cloud reset');
+});
+
+test('one rule about where fixtures may be written, and one set of names', () => {
+  /* Three scripts invent people, and each carried its own copy of both
+     facts. The copies had already drifted: `seed-demo` grew an
+     `--allow-remote` escape while the other two kept a flat refusal, and
+     `seed-cases` had a prefix map with three schools in it where `seed-demo`
+     had four — so a case seeded against the fourth looked up
+     `undefined_student9`, found nobody, and made a project with no author.
+  
+     Neither drift was visible until it ran. */
+  const inventors = ['scripts/seed-demo.mjs', 'scripts/seed-scenarios.mjs', 'scripts/seed-cases.mjs'];
+
+  for (const file of inventors) {
+    const text = fs.readFileSync(file, 'utf8');
+
+    assert.match(text, /fixtureTarget\(/, `${file} decides for itself where fixtures may go`);
+    assert.doesNotMatch(
+      text,
+      /127\\\.0\\\.0\\\.1/,
+      `${file} carries its own copy of the loopback test`
+    );
+    assert.doesNotMatch(
+      text,
+      /montavista: '/,
+      `${file} carries its own copy of the prefix map`
+    );
+  }
+
+  /* And the shared one is the only place either is stated. */
+  const shared = fs.readFileSync('scripts/fixture-target.mjs', 'utf8');
+  assert.match(shared, /export const FIXTURE_PREFIX/);
+  assert.match(shared, /export function fixtureTarget/);
+  assert.match(shared, /org\.demo === true/, 'and it decides on the flag, not on a list');
+});
+
+test('the cases do not name the schools they are seeded into', () => {
+  /* `seedSchool('montavista')` and `seedSchool('svslc')` were written out,
+     which was fine while the only target was a laptop holding every school.
+     The demonstration tenant is the only school that may receive invented
+     people in the deployed project, so the list has to be something a run
+     can state. */
+  const cases = fs.readFileSync('scripts/seed-cases.mjs', 'utf8');
+
+  assert.doesNotMatch(cases, /seedSchool\('/, 'the schools come from the environment');
+  assert.match(cases, /DEMO_ORGS/, 'which is what names them');
+
+  /* A case wanting a co-author at a school this run did not seed is skipped
+     rather than written with one author and a summary describing two. */
+  assert.match(cases, /elsewhere\.has\(c\.with\.school\)/, 'and an absent partner skips its case');
+});
+
+test('the files go where the rows go', () => {
+  /* Three scripts write into the notebook bucket and only `index-records`
+     could reach the real one. The other two called `getPlatformProxy`
+     unconditionally, so a cloud seed wrote its showcase images into
+     `.wrangler` on the machine that ran it, said "written to local file
+     storage", and left the demonstration with a showcase full of nothing.
+     Nothing failed, which is what made it expensive.
+  
+     The Supabase target decides, because asking somebody to keep a second
+     flag in agreement with the first is asking for the run where they do
+     not. */
+  const writers = [
+    'scripts/seed-scenarios.mjs',
+    'scripts/seed-publish.mjs',
+    'scripts/index-records.mjs',
+  ];
+
+  for (const file of writers) {
+    const text = fs.readFileSync(file, 'utf8');
+
+    assert.match(text, /openBucket\(/, `${file} has to ask which bucket`);
+    /* The call, not the name. Two of these explain in a comment why the
+       proxy has to be disposed, which is worth keeping and is not a use of
+       it. A test that cannot tell prose from code deletes the prose. */
+    assert.doesNotMatch(
+      text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\*.*$/gm, ''),
+      /getPlatformProxy/,
+      `${file} reaches for the local bucket directly`
+    );
+  }
+
+  const shared = fs.readFileSync('scripts/notebook-bucket.mjs', 'utf8');
+  assert.match(shared, /const wantRemote = remote \?\? !isLoopback/, 'the target decides');
+  assert.match(shared, /R2_ACCOUNT_ID/, 'and a remote run needs the credentials named');
+});
+
+test('a seed signs in only as somebody invented', () => {
+  /* `actingAs` refused any target but the local stack, which was the same
+     rule as everywhere else until the demonstration tenant moved into the
+     deployed project — and then it stopped a seed halfway, after the
+     projects were already written.
+  
+     The target was the wrong thing to check. What matters is whose session
+     it is, and a fixture address ends in a reserved domain that resolves
+     nowhere and that no real person can hold. */
+  const actAs = fs.readFileSync('scripts/act-as.mjs', 'utf8');
+
+  assert.match(actAs, /demo\.invalid/, 'the fixture domain is the check');
+  assert.match(actAs, /email\.endsWith/, 'and it is made against the address');
+  assert.doesNotMatch(
+    actAs,
+    /127\\\.0\\\.0\\\.1/,
+    'the target is not what decides who may be signed in as'
+  );
+});
+
+test('a seed names the school it seeded, not the one it was written for', () => {
+  /* Both of these print a block at the end telling somebody what to try and
+     who to sign in as, and both had it written out: `mv_student9`,
+     `montavista.localhost:4321`. True of every run until there was more than
+     one school to seed into, and then it named accounts that do not exist at
+     a host nobody is testing.
+  
+     `seed-scenarios` was fixed and its neighbor was not, which is the
+     argument for checking both rather than the one that was noticed. */
+  for (const file of ['scripts/seed-scenarios.mjs', 'scripts/seed-cases.mjs']) {
+    const code = fs
+      .readFileSync(file, 'utf8')
+      /* Comments quote the names they removed, and explaining a fix is not
+         committing it again. */
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/^\s*\*.*$/gm, '');
+
+    assert.doesNotMatch(code, /\bmv_\w+/, `${file} names a Monta Vista fixture`);
+    assert.doesNotMatch(code, /\bsvs_\w+/, `${file} names an SVSLC fixture`);
+    assert.doesNotMatch(code, /localhost:4321/, `${file} names a laptop's address`);
+  }
+});
+
+test('addresses are built when asked, not when the module loaded', () => {
+  /* An ES import is evaluated before any statement in the file that imports
+     it, so a module capturing `process.env` at the top was read before
+     `loadCloudVars()` ran and never saw `.cloud.vars`. That is how the cloud
+     reset printed `http://demo.localhost:4321/auth/callback/` as the redirect
+     URL to register in a production dashboard — and printed it beside a check
+     on the same variable that passed, which is a fix that changes nothing
+     sitting next to the thing it failed to fix. */
+  const deployment = fs.readFileSync('src/lib/deployment.ts', 'utf8');
+
+  assert.match(deployment, /function currentRootDomain\(\)/, 'the domain is read by a function');
+
+  for (const fn of ['originFor', 'apexOrigin']) {
+    const body = deployment.slice(deployment.indexOf(`export function ${fn}`));
+    assert.match(
+      body.slice(0, body.indexOf('}')),
+      /currentRootDomain\(\)/,
+      `${fn} has to ask again rather than close over the import-time value`
+    );
+  }
+
+  /* And the cloud reset refuses to act at all when the value is a laptop's,
+     before anything is dropped rather than in its last line of output. */
+  const cloud = fs.readFileSync('scripts/reset-cloud.mjs', 'utf8');
+  assert.match(cloud, /PUBLIC_ROOT_DOMAIN is \$\{domain/, 'and says so up front');
+});
+
+test('the sender has words for every kind that is enqueued', () => {
+  /* Nine kinds have been enqueued since the outbox was written and nothing
+     turned any of them into a sentence — `platform.ts` was named in the
+     schema's own comment and did not exist, which is why nothing has ever
+     been sent.
+  
+     A kind with no entry is not a crash: the drain marks it skipped. But it
+     is a message nobody wrote, and it should fail here rather than be
+     discovered as silence. */
+  const sql = fs.readFileSync('supabase/migrations/0001_identity_and_tenancy.sql', 'utf8');
+  const platform = fs.readFileSync('src/lib/notify/platform.ts', 'utf8');
+
+  /* Read from the insert statements themselves, not from the whole file.
+     Matching `values (v_org, '...'` anywhere collected `active`, `pending`
+     and every other literal that happens to sit in that position in some
+     other table's insert. */
+  const enqueued = new Set();
+
+  for (const at of [...sql.matchAll(/insert into public\.notifications/g)]) {
+    const block = sql.slice(at.index, at.index + 900);
+    const stop = block.indexOf('on conflict');
+    const body = stop === -1 ? block : block.slice(0, stop);
+
+    for (const m of body.matchAll(/then '([a-z_]+)' else '([a-z_]+)' end/g)) {
+      enqueued.add(m[1]);
+      enqueued.add(m[2]);
+    }
+    for (const m of body.matchAll(/select v_org,\s*\n?\s*'([a-z_]+)'/g)) enqueued.add(m[1]);
+    for (const m of body.matchAll(/values \(v_org, '([a-z_]+)'/g)) enqueued.add(m[1]);
+  }
+
+  assert.ok(enqueued.size >= 5, `read only ${enqueued.size} kinds — widen the pattern`);
+
+  const written = new Set(
+    [...platform.matchAll(/^  ([a-z_]+): \(m\) => \(\{/gm)].map((m) => m[1])
+  );
+
+  const unwritten = [...enqueued].filter((k) => !written.has(k)).sort();
+  assert.deepEqual(unwritten, [], 'these are queued and have no message written for them');
+});
+
+test('the send window is tight, and widening it is deliberate', () => {
+  /* A queue that has been filling since the outbox was written would, on its
+     first drain, mail everybody a year of arrears. Anything older than the
+     window is marked skipped and stays in the table as a decision rather
+     than being sent or lost. */
+  const drain = fs.readFileSync('src/lib/notify/drain.ts', 'utf8');
+  const send = fs.readFileSync('scripts/send.mjs', 'utf8');
+
+  const minutes = Number(drain.match(/SINCE_MINUTES = (\d+)/)?.[1]);
+  assert.ok(minutes > 0 && minutes <= 120, `the default window is ${minutes} minutes`);
+
+  assert.match(send, /--send/, 'and sending is opt in');
+  assert.match(drain, /dryRun = false/, 'with looking as the default');
+});
+
+test('the Worker has somewhere for a cron trigger to arrive', () => {
+  /* The adapter's default entry exports `fetch` and nothing else, so a cron
+     trigger had nowhere to land. `src/worker.js` wraps that entry rather
+     than replacing it — the request handling it performs is internal to the
+     adapter, and a copy of it here would be a second copy to keep in step
+     through every upgrade. */
+  const worker = fs.readFileSync('src/worker.js', 'utf8');
+  const config = fs.readFileSync('astro.config.mjs', 'utf8');
+
+  assert.match(worker, /scheduled: async \(event, env, context\)/, 'the handler has to exist');
+  assert.match(worker, /astroExports\(manifest\)/, 'and delegate fetch to the adapter');
+  assert.match(config, /workerEntryPoint: \{ path: 'src\/worker\.js' \}/, 'and be pointed at');
+
+  /* `waitUntil`, not an awaited call. Cloudflare ends the invocation when the
+     handler returns, and a drain still sending at that moment leaves messages
+     marked claimed and never delivered. */
+  assert.match(worker, /context\.waitUntil\(/, 'the work has to outlive the handler');
+});
+
+test('the cron schedule is one somebody chose', () => {
+  /* Nothing in the outbox has ever been sent. A trigger firing on deploy
+     would make the first real send an unattended one, so the schedule is a
+     year out and changing it is a deliberate act.
+  
+     Also: a schedule sparser than the send window skips messages as stale
+     rather than sending them late, so the two are checked against each
+     other rather than each being plausible alone. */
+  const raw = fs.readFileSync('wrangler.jsonc', 'utf8').replace(/^\s*\/\/.*$/gm, '');
+  const config = JSON.parse(raw);
+
+  assert.ok(Array.isArray(config.triggers?.crons), 'wrangler has to declare the trigger');
+  assert.equal(config.triggers.crons.length, 1, 'one schedule, so there is one thing to reason about');
+
+  const [minute, hour, day, month] = config.triggers.crons[0].split(' ');
+  const yearly = day !== '*' && month !== '*';
+
+  const drain = fs.readFileSync('src/lib/notify/drain.ts', 'utf8');
+  const windowMinutes = Number(drain.match(/SINCE_MINUTES = (\d+)/)?.[1]);
+
+  if (!yearly) {
+    const everyN = minute.startsWith('*/') ? Number(minute.slice(2)) : hour === '*' ? 60 : 1440;
+    assert.ok(
+      everyN <= windowMinutes,
+      `the trigger runs every ${everyN} minutes and the send window is ${windowMinutes}`
+    );
+  }
+});
+
+test('a claimed message is held, not left for the next drain', () => {
+  /* The first version claimed with `for update skip locked` and handed rows
+     back still `pending`, with a comment asserting that this prevented two
+     drains sending the same message. It does not: the lock ends when the
+     claim's transaction returns, which is before anything has been sent.
+  
+     A rule asserted in a comment while enforcing nothing is the failure
+     19.9 keeps collecting, and this one was mine. */
+  const sql = fs.readFileSync('supabase/migrations/0001_identity_and_tenancy.sql', 'utf8');
+  const drain = fs.readFileSync('src/lib/notify/drain.ts', 'utf8');
+
+  assert.match(sql, /'pending', 'processing', 'sent', 'failed', 'skipped'/,
+    'the outbox needs a state for a message somebody is sending');
+  assert.match(sql, /claim_token   uuid/, 'and a token saying who holds it');
+  assert.match(sql, /claimed_until timestamptz/, 'and a lease, so a crash is recoverable');
+
+  /* Settling requires the token back. Without that, a drain whose lease was
+     recovered can still mark as sent a message another drain is sending. */
+  assert.match(sql, /and claim_token = p_token/, 'settling has to require the claim');
+  assert.match(drain, /row\.claim_token/, 'and the sender has to carry it');
+});
+
+test('a link in an email is not scipath.scipath.org', () => {
+  /* `subdomain || '.' || root` is right for every school and produces
+     `scipath.scipath.org` for the one tenant whose subdomain is the root.
+     It is a broken link, in an email, to somebody who cannot get back. */
+  const sql = fs.readFileSync('supabase/migrations/0001_identity_and_tenancy.sql', 'utf8');
+
+  assert.match(sql, /is_platform     boolean not null default false/,
+    'the database has to know which tenant is the apex');
+  assert.match(
+    sql,
+    /case when o\.is_platform then '' else o\.subdomain \|\| '\.' end/,
+    'and the address builder has to ask'
+  );
+});
+
+test('nothing compares a column against a value it cannot hold', () => {
+  /* Both publication functions tested `affiliation_state = 'verified'`, and
+     the column allows `unverified`, `domain_verified`, `mentor_verified` and
+     `lapsed`. It was false for everybody, always: every published author was
+     marked unverified, and nothing surfaced it because a check constraint
+     cannot see a literal in a comparison and nothing else read the flag.
+  
+     Checked here rather than in the DB suite. A behavioral test would have to
+     construct a verified author, a project with no record, and a publication
+     — and my first attempt at one passed with the bug still in place, which
+     is worse than no test at all. Reading the constraint and then reading
+     every comparison against it cannot pass for the wrong reason. */
+  const sql = fs.readFileSync('supabase/migrations/0001_identity_and_tenancy.sql', 'utf8');
+
+  const allowed = new Set(
+    (sql.match(/check \(affiliation_state in\s*\n?\s*\(([^)]*)\)/)?.[1] ?? '')
+      .split(',')
+      .map((v) => v.trim().replace(/'/g, ''))
+      .filter(Boolean)
+  );
+
+  assert.ok(allowed.size >= 3, `read only ${allowed.size} states — widen the pattern`);
+
+  const compared = [
+    ...sql.matchAll(/affiliation_state\s*(?:=|in)\s*\(?\s*'([a-z_]+)'/g),
+  ].map((m) => m[1]);
+
+  const impossible = [...new Set(compared)].filter((v) => !allowed.has(v));
+  assert.deepEqual(impossible, [], 'compared against values the column cannot hold');
 });
 
 console.log(`${passed} script assertions passed. ${files.length} scripts read.`);

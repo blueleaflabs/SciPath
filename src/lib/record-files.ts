@@ -59,13 +59,19 @@ const extOf = (path: string) => (path.match(/\.([a-z0-9]+)$/i)?.[1] ?? 'png').to
  * Uploads are checked against this on the way in, so the list is the
  * allowlist as well as the lookup.
  */
+/* SVG is gone, and its absence is the point.
+ 
+   The comment above says this list is the allowlist as well as the lookup,
+   so `svg: 'image/svg+xml'` was permission: an SVG served same-origin from a
+   public record page carries `<script>`, event handlers and external
+   references, which is stored cross-site scripting reachable by renaming a
+   file. Nothing a science fair figure needs requires one. */
 const MIME: Record<string, string> = {
   png: 'image/png',
   jpg: 'image/jpeg',
   jpeg: 'image/jpeg',
   webp: 'image/webp',
   gif: 'image/gif',
-  svg: 'image/svg+xml',
   pdf: 'application/pdf',
 };
 
@@ -135,7 +141,12 @@ export async function assembleRecord(
      structural check takes one: this module is used by the seed as well as
      the application, and the registry is bundled by Vite. */
   const rules = sectionsFor(record.record_kind, documentShape);
-  const bodyByKey = new Map((sections ?? []).map((s: any) => [s.section_key, s.body]));
+  /* Typed, because `new Map(pairs)` from an `any[]` infers `Map<any, {}>` —
+     and `{}` is not a string, so the value read out of it below could not be
+     assigned to a section body. The two parameters say what the pairs are. */
+  const bodyByKey = new Map<string, string>(
+    (sections ?? []).map((s: any) => [s.section_key, s.body])
+  );
 
   const figureList = (figures ?? []).map((f: any) => ({
     number: f.number,
@@ -288,7 +299,7 @@ export async function assembleRecord(
     methods: record.methods ?? [],
     dataSources: record.data_sources ?? [],
     outputs: record.outputs ?? [],
-    entries: entryList.map((e) => ({
+    entries: entryList.map((e: any) => ({
       program: e.program,
       season: e.season,
       category: e.category,
@@ -297,12 +308,12 @@ export async function assembleRecord(
       awards: e.awards,
       advancedTo: e.advanced_to,
     })),
-    figures: figureList.map((f) => ({
+    figures: figureList.map((f: any) => ({
       src: assetUrl(keys.figure(f.number, f.ext)),
       caption: f.caption,
       alt: f.alt,
     })),
-    shots: shotList.map((i) => ({
+    shots: shotList.map((i: any) => ({
       src: assetUrl(`${keys.dir}/shot-${i.position}.${i.ext}`),
       caption: i.caption,
       alt: i.alt,

@@ -55,6 +55,18 @@ export const GET: APIRoute = async ({ params, request, cookies, locals }) => {
   const object = await blobStore(locals).get(path);
   if (!object) return new Response('Not found', { status: 404 });
 
+  /* Shown, or handed over.
+  
+     An image is displayed inline because that is what it is for. Anything
+     else is served as an attachment: a PDF opened inline runs in an origin
+     that holds somebody's notebook, and a type this route did not expect
+     should never be rendered as a document at all.
+  
+     The filename is the stored path's last segment, which was generated from
+     the detected type rather than from what anybody typed. */
+  const inline = object.contentType.startsWith('image/');
+  const name = path.split('/').pop() ?? 'file';
+
   return new Response(object.body, {
     headers: {
       'Content-Type': object.contentType,
@@ -62,6 +74,12 @@ export const GET: APIRoute = async ({ params, request, cookies, locals }) => {
          outlive the permission that allowed it. */
       'Cache-Control': 'private, max-age=0, must-revalidate',
       'X-Content-Type-Options': 'nosniff',
+      'Content-Disposition': inline
+        ? `inline; filename="${name}"`
+        : `attachment; filename="${name}"`,
+      /* Nothing served from here belongs in a frame, and nothing in it needs
+         to run. Both are cheap on a route that returns bytes. */
+      'Content-Security-Policy': "default-src 'none'; sandbox; frame-ancestors 'none'",
     },
   });
 };

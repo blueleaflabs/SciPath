@@ -91,11 +91,23 @@ export function standing(
 }
 
 export function isAuthorOf(
-  attachments: { role: string; users?: { id?: string } | null }[] = [],
+  /* The embed either way.
+  
+     PostgREST returns an object for a to-one embed and the generated types
+     describe every embed as an array, so callers arrive with both shapes
+     depending on whether the value has been cast on the way. Accepting both
+     here is honest about that; narrowing to one meant every caller either
+     matched or was cast to `any`, and an `any` here decides authorship. */
+  attachments: { role: string; users?: { id?: string } | { id?: string }[] | null }[] = [],
   userId?: string
 ): boolean {
   if (!userId) return false;
-  return attachments.some((a) => a.role === 'author' && a.users?.id === userId);
+
+  return attachments.some((a) => {
+    if (a.role !== 'author') return false;
+    const user = Array.isArray(a.users) ? a.users[0] : a.users;
+    return user?.id === userId;
+  });
 }
 
 /**
@@ -109,7 +121,13 @@ export function isAuthorOf(
  */
 export const GRANTABLE: ClubRole[] = ['officer', 'editor'];
 
-export const roleLabel: Record<ClubRole, string> = {
+/* Keyed by `ClubRole` and read with whatever a database row carried, which is
+   a `string`. Both are true: the map is complete for the roles that exist,
+   and a row can hold one this build has never heard of — every call site
+   already writes `roleLabel[r.role] ?? r.role` for exactly that reason.
+   `Partial<Record<...>>` with a string key says so, and keeps the values
+   checked. */
+export const roleLabel: Partial<Record<string, string>> & Record<ClubRole, string> = {
   student: 'Student',
   officer: 'Club officer',
   advisor: 'Teacher club advisor',

@@ -1,6 +1,6 @@
 ---
 import { activeOrg } from '../lib/tenant';
-import { siteUrl } from '../config/site';
+import { originForOrg } from '../lib/deployment';
 import { themeFonts } from '../config/fonts';
 import Masthead from '../components/Masthead.astro';
 import Footer from '../components/Footer.astro';
@@ -21,7 +21,35 @@ const { title, description, noindex = false } = Astro.props;
 const org = activeOrg(Astro);
 
 const pageTitle = `${title} · ${org.name}`;
-const canonical = new URL(Astro.url.pathname, siteUrl).href;
+/**
+ * THE CANONICAL ADDRESS, WHICH IS NOT THE PATH THIS RENDERED AT.
+ *
+ * Two things were wrong with the one line this replaces.
+ *
+ * The origin was a constant naming a host the site no longer answers on, and
+ * it was one origin for four tenants, so every school declared the same
+ * canonical address for the same path and asked a crawler to keep one of
+ * them. That is `originForOrg`.
+ *
+ * And the path is the build path. A public page is prerendered once per
+ * tenant at `/{slug}/about/`, and the middleware pushes the slug on at
+ * request time so nobody ever sees it — but the page has already been
+ * written, with the slug in its own canonical tag, pointing at an address
+ * that answers nothing. A tag naming a URL that 404s is worse than no tag.
+ *
+ * Only this tenant's own slug is stripped, never any tenant's. `/demo/` is
+ * both a platform page and another tenant's slug, and it is a real address
+ * at the platform.
+ */
+const slugPrefix = `/${org.id}`;
+const path =
+  Astro.url.pathname === slugPrefix
+    ? '/'
+    : Astro.url.pathname.startsWith(`${slugPrefix}/`)
+      ? Astro.url.pathname.slice(slugPrefix.length)
+      : Astro.url.pathname;
+
+const canonical = new URL(path, originForOrg(org)).href;
 const fontHref = themeFonts[org.theme];
 ---
 

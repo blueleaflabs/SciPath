@@ -174,8 +174,21 @@ test('every type the app accepts is a type the record store can serve', () => {
 
   const served = new Set([...block.matchAll(/^\s*(\w+):/gm)].map((m) => m[1]));
 
-  /* What the seed writes and what an upload accepts. */
-  const accepted = ['png', 'jpg', 'jpeg', 'webp', 'gif', 'svg', 'pdf'];
+  /* Read from the detector rather than listed here.
+  
+     This was a hand-written list including `svg`, which was true when an SVG
+     could be uploaded. `src/lib/filetype.ts` now decides what may be stored,
+     so the served map has to cover exactly that and a second list would be a
+     second thing to keep in step. */
+  const detector = fs.readFileSync('src/lib/filetype.ts', 'utf8');
+  const accepted = [
+    ...new Set([...detector.matchAll(/ext: '(\w+)'/g)].map((m) => m[1])),
+    /* jpeg is stored as jpg and served under both, because a file already in
+       the bucket may carry either. */
+    'jpeg',
+  ];
+
+  assert.ok(accepted.length >= 4, `read only ${accepted.length} types — widen the pattern`);
 
   const missing = accepted.filter((ext) => !served.has(ext));
   assert.deepEqual(missing, [], 'these would be served as octet-stream');

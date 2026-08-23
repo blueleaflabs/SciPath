@@ -82,6 +82,13 @@ for (const file of files) {
     p_signup_mode: doc.signup_mode ?? 'domain',
     p_domains: doc.domains ?? [],
     p_requires_mentor: doc.requires_mentor ?? true,
+
+    /* Which tenant is served at the apex. The org files have carried this
+       since there were three of them; the database is learning it now
+       because something in SQL has to build an address, and
+       `subdomain || '.' || root` gives `scipath.scipath.org` for the one
+       tenant whose subdomain is the root. */
+    p_is_platform: doc.is_platform === true,
     p_address: doc.address ?? null,
     p_phone: doc.phone ?? null,
   });

@@ -19,9 +19,19 @@
  * actually have done it. A fixture in a state the interface cannot produce
  * teaches whoever clicks through it something untrue.
  *
- * Local only, and the guard is the same shape as every other one here: an
- * environment check rather than a flag, because a flag is something somebody
- * forgets on the one occasion it mattered.
+ * **Only ever an invented person.** The guard used to be the target: local
+ * stack or nothing. That was the same rule as everywhere else while fixtures
+ * only existed on a laptop, and it stopped being right when the
+ * demonstration tenant moved into the deployed project — `seed-scenarios`
+ * reached the point of recording a fair result and refused, halfway through
+ * a seed, having already written the projects.
+ *
+ * The target is the wrong thing to check here anyway. What matters is whose
+ * session this is, and the answer is bounded by construction: a fixture's
+ * address ends in `demo.invalid`, a reserved domain that cannot receive mail
+ * and that no real person can hold. So this signs in as somebody invented or
+ * it does not sign in, wherever the project is, and there is nothing to
+ * forget.
  */
 
 import { createClient } from '@supabase/supabase-js';
@@ -32,10 +42,10 @@ loadDevVars();
 const URL = process.env.PUBLIC_SUPABASE_URL ?? '';
 const PUBLISHABLE = process.env.PUBLIC_SUPABASE_PUBLISHABLE_KEY ?? '';
 const PASSWORD = process.env.DEMO_PASSWORD ?? 'scipath';
-const PRODUCTION_REF = 'uctbxilvfzaoroffzgen';
 
-const local =
-  /^https?:\/\/(127\.0\.0\.1|localhost)(:|\/|$)/.test(URL) && !URL.includes(PRODUCTION_REF);
+/* The domain every fixture address carries. Reserved by RFC 6761: it resolves
+   nowhere, so an account on it is invented whatever project it lives in. */
+const FIXTURE_DOMAIN = 'demo.invalid';
 
 /* One client per address. A scenario loop asks for the same officer nine
    times and nine sign-ins is nine round trips for one session. */
@@ -49,8 +59,12 @@ const sessions = new Map();
  * nothing, which is the failure this whole file exists to remove.
  */
 export async function actingAs(email) {
-  if (!local) {
-    throw new Error('actingAs is for the local stack only.');
+  if (!email.endsWith(`@${FIXTURE_DOMAIN}`)) {
+    throw new Error(
+      `actingAs will only sign in as a fixture, and ${email} is not one.\n` +
+        `Fixture addresses end in @${FIXTURE_DOMAIN}, which is a reserved\n` +
+        'domain no real person can hold.'
+    );
   }
 
   if (!PUBLISHABLE) {

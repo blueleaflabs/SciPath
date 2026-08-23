@@ -25,8 +25,17 @@ export const getStaticPaths: GetStaticPaths = withTenants(async () => {
  */
 const slug = Astro.params.slug;
 
-const guide =
-  Astro.props.guide ??
+/* Typed from the collection rather than from props.
+ 
+   `Astro.props` on a rewritten route is `{}` as far as the checker knows, so
+   the union with it collapsed the whole thing to `{}` and every `guide.data`
+   below was an error. Reading the collection's own entry type keeps the
+   frontmatter checked — a renamed field in `guides.ts` should fail here, and
+   with `any` it would not. */
+type Guide = Awaited<ReturnType<typeof getCollection<'guides'>>>[number];
+
+const guide: Guide | undefined =
+  (Astro.props.guide as Guide | undefined) ??
   (await getCollection('guides')).find((g) => g.id === slug);
 
 if (!guide) {

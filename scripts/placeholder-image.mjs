@@ -1,3 +1,4 @@
+import { deflateSync, crc32 } from 'node:zlib';
 /**
  * PLACEHOLDER IMAGES FOR THE FIXTURES.
  *
@@ -73,6 +74,105 @@ export function placeholderSvg(seed, width = 1200, height = 900) {
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" width="${width}" height="${height}" role="img"><title>Placeholder</title>${parts.join(
     ''
   )}</svg>`;
+}
+
+/* ── The same picture, as a PNG ───────────────────────────────────────────── */
+
+/**
+ * WHY THE FIXTURES STOPPED BEING SVG.
+ *
+ * An SVG is a document. Served same-origin it carries `<script>`, event
+ * handlers and external references, so uploads refuse it and the record store
+ * no longer has a media type for it — which left the seeded showcase images
+ * as the one kind of file the platform will not serve.
+ *
+ * A fixture that is a kind of file no student could upload is a fixture that
+ * tests a path nobody takes. So these are PNGs, drawn the same way and
+ * encoded here: a scanline per row, deflated, with the four chunks a decoder
+ * requires. About forty lines against a dependency, on a script that already
+ * has `node:zlib`.
+ */
+
+function chunk(type, body) {
+  const length = Buffer.alloc(4);
+  length.writeUInt32BE(body.length);
+
+  const typed = Buffer.concat([Buffer.from(type, 'ascii'), body]);
+  const crc = Buffer.alloc(4);
+  crc.writeUInt32BE(crc32(typed) >>> 0);
+
+  return Buffer.concat([length, typed, crc]);
+}
+
+/**
+ * A gradient sky with a ridge line, in the same colors as the SVG.
+ *
+ * Not the same picture pixel for pixel — reimplementing polygon fill would be
+ * a rasterizer — but the same shape of thing: a landscape a reader recognizes
+ * as a placeholder rather than as somebody's data.
+ */
+export function placeholderPng(seed, width = 1200, height = 800) {
+  const random = rng(seed);
+  const hue = Math.floor(random() * 360);
+
+  const rows = [];
+
+  for (let y = 0; y < height; y += 1) {
+    /* One filter byte per scanline, then RGB triples. Filter 0 is "none",
+       which costs bytes and removes every chance of an off-by-one in a
+       predictor. */
+    const row = Buffer.alloc(1 + width * 3);
+    const t = y / height;
+
+    for (let x = 0; x < width; x += 1) {
+      const ridge = 0.55 + 0.12 * Math.sin((x / width) * Math.PI * 2 + seedNumber(seed));
+      const ground = t > ridge;
+
+      const [r, g, b] = ground
+        ? hsl(hue, 0.28, 0.22 + 0.1 * ((t - ridge) / (1 - ridge)))
+        : hsl(hue, 0.34, 0.55 + 0.3 * (1 - t / ridge));
+
+      row[1 + x * 3] = r;
+      row[2 + x * 3] = g;
+      row[3 + x * 3] = b;
+    }
+
+    rows.push(row);
+  }
+
+  const header = Buffer.alloc(13);
+  header.writeUInt32BE(width, 0);
+  header.writeUInt32BE(height, 4);
+  header[8] = 8;   // bit depth
+  header[9] = 2;   // color type: truecolor
+  header[10] = 0;  // deflate
+  header[11] = 0;  // adaptive filtering
+  header[12] = 0;  // no interlace
+
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    chunk('IHDR', header),
+    chunk('IDAT', deflateSync(Buffer.concat(rows))),
+    chunk('IEND', Buffer.alloc(0)),
+  ]);
+}
+
+function seedNumber(seed) {
+  let n = 0;
+  for (const c of String(seed)) n = (n * 31 + c.charCodeAt(0)) % 1000;
+  return n / 159;
+}
+
+function hsl(h, s, l) {
+  const c = (1 - Math.abs(2 * l - 1)) * s;
+  const x = c * (1 - Math.abs(((h / 60) % 2) - 1));
+  const m = l - c / 2;
+
+  const [r, g, b] =
+    h < 60 ? [c, x, 0] : h < 120 ? [x, c, 0] : h < 180 ? [0, c, x]
+    : h < 240 ? [0, x, c] : h < 300 ? [x, 0, c] : [c, 0, x];
+
+  return [r, g, b].map((v) => Math.max(0, Math.min(255, Math.round((v + m) * 255))));
 }
 
 /** Caption and alt for each, so the fixtures satisfy the same rules as real ones. */

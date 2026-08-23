@@ -369,8 +369,16 @@ export function checkStructure(input: CheckInput): Finding[] {
 export interface ChecklistItem {
   ruleId: string;
   label: string;
-  /** done means nothing to report. Advisory is worth fixing and blocks nothing. */
-  status: 'done' | 'blocking' | 'advisory';
+  /**
+   * done means nothing to report. Advisory is worth fixing and blocks
+   * nothing. Human means nobody can check it automatically and it goes to a
+   * reviewer.
+   *
+   * `'human'` was missing here while `Severity` has had it since it was
+   * written, so the one status a checklist cannot decide for itself was the
+   * one it could not represent — and the map below assigns exactly that.
+   */
+  status: 'done' | Severity;
   /** The finding where there is one, otherwise what the rule is asking for. */
   message: string;
   key: string;

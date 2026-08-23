@@ -38,6 +38,31 @@ function walk(dir) {
 
 const pages = walk('src/pages');
 
+/**
+ * A PAGE WITHOUT ITS COMMENTS.
+ *
+ * Every assertion below that looks for a sentence in a page must read this
+ * rather than the file. The check that a public page ends with a way in
+ * asserted `Sign in to join one` against `src/pages/index.astro`, and passed
+ * for a year on a comment quoting the copy that had been replaced. The live
+ * link said something else, and the assertion would equally have passed a
+ * page with no link at all, which is the one thing it existed to prevent.
+ *
+ * Comments in this codebase quote the copy they explain, deliberately and
+ * usefully. That is exactly why a test may not read them.
+ */
+function copyOf(file) {
+  const text = fs.readFileSync(file, 'utf8');
+  return text
+    .replace(/\{\/\*[\s\S]*?\*\/\}/g, ' ')
+    .replace(/\/\*[\s\S]*?\*\//g, ' ');
+}
+
+/** Every public page: everything outside the working surface. */
+const publicPages = pages.filter(
+  (f) => !f.includes(`${path.sep}app${path.sep}`) && !f.includes(`${path.sep}auth${path.sep}`)
+);
+
 test('every deadline query orders by date first', () => {
   /* A query against milestones that orders by anything else is showing a
      student a list whose first row is not the next thing due. */
@@ -699,18 +724,36 @@ test('neither page claims a process nobody runs', () => {
   assert.doesNotMatch(page, /Collected from mentors and judges/);
 });
 
-test('a public page ends with a way in', () => {
-  /* One file rather than two: `/deadlines/` is withdrawn. The rule is
-     unchanged — a page that explains the work and then stops is a page that
-     sends somebody back to a search engine. */
-  const page = fs.readFileSync('src/pages/[org]/mistakes.astro', 'utf8');
-  assert.match(page, /class="sec cta"/, 'no call to action');
-  assert.match(page, /href="\/app\//, 'no link to signing in');
+test('a page that explains the work ends with a way in', () => {
+  /* A page that explains the work and then stops sends somebody back to a
+     search engine. Every page written to be read before signing up carries a
+     call to action, and the link in it has to be a link rather than a
+     sentence in a comment, which is why this reads `copyOf`. */
+  const explainers = [
+    'src/pages/[org]/mistakes.astro',
+    'src/pages/[org]/how-it-works.astro',
+    'src/pages/[org]/for-students.astro',
+    'src/pages/[org]/for-educators.astro',
+    'src/pages/[org]/for-student-leaders.astro',
+    'src/pages/get-started/index.astro',
+    'src/pages/demo/index.astro',
+    'src/pages/for-organizations/index.astro',
+  ];
 
-  /* And the season list on the front page, which is where the withdrawn one
-     sent people. */
-  const home = fs.readFileSync('src/pages/index.astro', 'utf8');
-  assert.match(home, /Sign in to join one/);
+  const problems = [];
+  for (const file of explainers) {
+    const copy = copyOf(file);
+    if (!/class="sec cta"/.test(copy)) problems.push(`${file}: no call to action`);
+    if (!/href=\{?['"/]/.test(copy)) problems.push(`${file}: the call to action leads nowhere`);
+  }
+
+  /* The home page's way in is the button in the hero, and the season list
+     below it at a school. Both are links, and neither may be a comment. */
+  const home = copyOf('src/pages/index.astro');
+  assert.match(home, /class="btn" href=/, 'the home page has no primary action');
+  assert.match(home, /join one<\/a>/, 'the season list has no way in');
+
+  assert.deepEqual(problems, []);
 });
 
 test('no public page claims what nothing has earned', () => {
@@ -722,12 +765,43 @@ test('no public page claims what nothing has earned', () => {
      Numbers are the same argument. "28 deadlines across 3 programs" is a
      claim, and a claim typed into a page drifts away from the software the
      week somebody adds a program. */
-  for (const file of ['src/pages/index.astro', 'src/pages/[org]/about.astro',
-                      'src/pages/[org]/mistakes.astro']) {
-    const page = fs.readFileSync(file, 'utf8');
-    assert.doesNotMatch(page, /\b(hundreds|thousands|schools trust|trusted by)\b/i,
-      `${file}: nothing here has users yet, so nothing here may imply it`);
+  /* **Enumerated, and then it was three files.** The list named the three
+     public pages that existed when it was written, so the six added since
+     were outside the rule that was supposed to apply to every public page.
+     Anything enumerating the pages is a page inventory, and a page inventory
+     maintained by hand is a page inventory that is wrong. */
+  const problems = [];
+  for (const file of publicPages) {
+    const copy = copyOf(file);
+    if (/\b(hundreds|thousands|schools trust|trusted by|join \d)\b/i.test(copy)) {
+      problems.push(`${file}: nothing here has users yet, so nothing here may imply it`);
+    }
   }
+  assert.deepEqual(problems, []);
+});
+
+test('the demonstration page publishes the credentials the seed makes', () => {
+  /* A page that prints a sign-in has to print the one that exists. Typing
+     the address here would make this a second copy of a fact the seed owns,
+     and the copy drifts the first week somebody renames a handle — leaving
+     the front door of the product advertising a password that does not
+     work.
+
+     Both the page and `scripts/seed-demo.mjs` read the same module. Broken
+     deliberately to check this fails: writing one address into the page
+     makes it fail here. */
+  const page = copyOf('src/pages/demo/index.astro');
+
+  assert.match(page, /demoSignIns\(\)/,
+    'the page should read the accounts rather than restate them');
+  assert.match(page, /demo-accounts/,
+    'and read them from the module the seed writes from');
+  assert.doesNotMatch(page, /@demo\.invalid/,
+    'a fixture address is written here rather than read');
+
+  const seed = fs.readFileSync('scripts/seed-demo.mjs', 'utf8');
+  assert.match(seed, /demo-accounts\.mjs/,
+    'the seed should read the same module the page does');
 });
 
 /* ── A refused place is not a place ──────────────────────────────────────── */
@@ -1590,6 +1664,391 @@ test('the deadlines table stops being a table on a phone', () => {
     /@media \(max-width: 640px\) \{\s*\.phased,/,
     'the collapse belongs to the narrow breakpoint the rest of the page uses'
   );
+});
+
+test('every compliance surface says who is actually authoritative', () => {
+  /* The platform reads a rulebook and works out which forms a project needs.
+     That is useful and it is not authority: the Adult Sponsor signs, the SRC
+     or IRB approves, the destination fair decides what it accepts, and any
+     of them can be stricter than what is shown or can have changed since the
+     template was written.
+  
+     The failure is specific. A student reads "nothing further required",
+     does not ask their sponsor, and finds out at check-in — which is a
+     season, against two lines of text.
+  
+     One component, so the wording is the same three authorities everywhere.
+     The printed notebook restates it in its own styles, because that
+     document carries no shared stylesheet and a component's CSS would print
+     as nothing. */
+  const surfaces = [
+    'src/pages/app/project/[id]/in/[program].astro',
+    'src/pages/app/program/[id].astro',
+  ];
+
+  for (const file of surfaces) {
+    assert.match(
+      fs.readFileSync(file, 'utf8'),
+      /<Authority/,
+      `${file} tells somebody what a rulebook requires and does not say who decides`
+    );
+  }
+
+  const printed = fs.readFileSync('src/pages/app/project/[id]/notebook.astro', 'utf8');
+  assert.match(printed, /remain authoritative/, 'the printed record needs it on the paper');
+
+  /* And the sentence is one sentence. A second copy that drifts says
+     something slightly weaker than the one beside it. */
+  const component = fs.readFileSync('src/components/Authority.astro', 'utf8');
+  assert.match(component, /Adult Sponsor, SRC\/IRB and\s+destination fair remain authoritative/);
+});
+
+test('a password reset says the same thing to everybody', () => {
+  /* Whether an address has an account, and whether that account uses a
+     password, are both things a stranger can learn by watching how this
+     route replies. `signInWithPassword` already answers one way whoever is
+     asking; this has to agree, or the pair of them still gives the answer.
+  
+     So the send is decided silently and the reply never varies — which
+     means the result of `resetPasswordForEmail` must not be read. */
+  const forgot = fs.readFileSync('src/pages/auth/forgot.ts', 'utf8');
+
+  assert.doesNotMatch(
+    forgot,
+    /(const|let)\s*\{?\s*(data|error)[^\n]*await supabase\.auth\.resetPasswordForEmail/,
+    'reading the result is how the reply comes to depend on it'
+  );
+  assert.match(forgot, /redirect\(`\/auth\/reset\/\?asked=1`/, 'one destination, always');
+});
+
+test('a Google account is not sent a password link', () => {
+  /* Supabase will send a recovery link for an account that has never had a
+     password, and following it sets one — turning one way in into two
+     without anybody deciding that. `identities` records the provider for
+     every way in that has been used, so it is the thing to ask. */
+  const forgot = fs.readFileSync('src/pages/auth/forgot.ts', 'utf8');
+  const sql = fs.readFileSync('supabase/migrations/0001_identity_and_tenancy.sql', 'utf8');
+
+  /* Asked of the database, not read from the table.
+  
+     This selected from `identities` while signed out — a table whose only
+     read policy is `identities_read_self` — so the query returned nothing
+     for every address, and an empty result was read as "probably a password
+     account". A Google-only account would have been mailed a link, and
+     following it would have set a password on an account that never had
+     one.
+  
+     An empty result and a negative answer are not the same thing, and this
+     is the assertion that says so. */
+  assert.doesNotMatch(
+    forgot,
+    /from\('identities'\)/,
+    'a signed-out page cannot read that table and must not appear to'
+  );
+  assert.match(forgot, /rpc\('may_reset_password'/, 'it has to ask');
+  assert.match(forgot, /mayReset === true/, 'and treat anything but a yes as a no');
+
+  assert.match(sql, /and i\.provider = 'email'/, 'and the function has to check the provider');
+});
+
+test('the reset page builds its return address from the tenant', () => {
+  /* Same reason as `signin.ts`: this address has to be the one on
+     Supabase's redirect allow list, and deriving it from the request's Host
+     means it can differ from the registered one in ways nothing catches. */
+  const forgot = fs.readFileSync('src/pages/auth/forgot.ts', 'utf8');
+
+  assert.match(forgot, /originFor\(org\.subdomain \?\? org\.id\)/);
+  assert.doesNotMatch(forgot, /redirectTo:.*url\.origin/);
+});
+
+test('a deletion is confirmed against something only its owner knows', () => {
+  /* GitHub asks for a repository's name so that muscle memory cannot supply
+     it. The equivalent here is the person's own address — and it is checked
+     again on the server, because a screen is not a guard. */
+  const route = fs.readFileSync('src/pages/app/account/delete.ts', 'utf8');
+
+  assert.match(route, /typed !== expected/, 'the typed confirmation is compared server side');
+  assert.match(route, /session\.email/, 'against the address on their own session');
+
+  /* And the account acted on is never named by the request. A parameter
+     here would mean the secret key could be pointed at anybody. */
+  assert.match(route, /p_user_id: account\.id/);
+  assert.doesNotMatch(
+    route,
+    /form\.get\('user_id'\)|p_user_id: .*form/,
+    'whose account is deleted must come from the session, never from the body'
+  );
+});
+
+test('the three things outside SQL are done by the route', () => {
+  /* `delete_account` removes rows. The files, the authentication record and
+     the search index are not rows, and the legal review names all three. A
+     passing DB suite says nothing about any of them. */
+  const route = fs.readFileSync('src/pages/app/account/delete.ts', 'utf8');
+
+  assert.match(route, /bucket\.delete\(key\)/, 'the orphaned files have to be removed');
+  assert.match(route, /auth\.admin\.deleteUser/, 'and the authentication record');
+
+  /* Rows first. A failure the other way leaves rows pointing at files that
+     are gone, which is a broken page for everybody else on a shared
+     project. */
+  assert.ok(
+    route.indexOf("rpc('delete_account'") < route.indexOf('bucket.delete'),
+    'the rows go before the files'
+  );
+});
+
+test('nothing is deleted while somebody has still to answer', () => {
+  /* The screen hides the form, and the route checks anyway: two different
+     failures, and only one of them is visible. */
+  const route = fs.readFileSync('src/pages/app/account/delete.ts', 'utf8');
+  const screen = fs.readFileSync('src/pages/app/account/index.astro', 'utf8');
+
+  /* Asked of the database, not selected from the table.
+  
+     The route used to read `account_deletion_approvals` directly, and the
+     read policy on it exposes rows where the caller is the *approver* — not
+     the person leaving. It counted approvals somebody was waiting to answer
+     for other people, which is almost always none, so the guard passed and
+     meant nothing. A query whose result is inverted from what its variable
+     is called is the hardest kind to see. */
+  assert.doesNotMatch(
+    route,
+    /from\('account_deletion_approvals'\)/,
+    'that policy exposes the approver\'s rows, not the requester\'s'
+  );
+  assert.match(route, /rpc\('deletion_ready'\)/, 'the route has to ask');
+  assert.match(route, /Number\(ready\.waiting\) > 0/, 'and act on the answer');
+  assert.match(route, /Nothing has been deleted/, 'and say so plainly');
+  assert.match(screen, /\{!needsAsking && \(/, 'the form appears only when nothing is shared');
+});
+
+test('nothing renders Markdown except the one renderer', () => {
+  /* `RecordDetail.astro` called `marked.parse` directly, so a manuscript
+     containing a literal script tag was published as a script tag — on the
+     one surface where the author and the reader are different people.
+  
+     `tests/markdown.mjs` proves the renderer is safe. This proves nothing
+     goes around it, which is the half a hostile-input suite cannot see. */
+  /* Components as well as pages. `pages` walks `src/pages` only, and the
+     file that had this bug lives in `src/components` — a suite that reads
+     one directory cannot find a fault in the other. */
+  const everywhere = pages.concat(walk('src/components'), walk('src/lib'));
+
+  for (const file of everywhere) {
+    const text = fs.readFileSync(file, 'utf8');
+
+    /* The one place allowed to, and the reason the others need not. */
+    if (path.basename(file) === 'notes.ts') continue;
+
+    assert.doesNotMatch(
+      text,
+      /marked\.parse\(/,
+      `${path.relative('.', file)} parses Markdown itself instead of using renderMarkdown`
+    );
+  }
+});
+
+test('setting a password needs a recovery link, not merely a session', () => {
+  /* The page rendered its form whenever `getSession()` returned anything,
+     and `updateUser({ password })` succeeds for any signed-in session. So
+     somebody who had signed in with Google and never had a password could
+     open this address and set one — two ways in, created without following
+     any link and without the account's owner being asked. */
+  const reset = fs.readFileSync('src/pages/auth/reset.astro', 'utf8');
+
+  assert.match(reset, /const recovering = Boolean\(session\) &&/, 'a session alone is not enough');
+  assert.match(reset, /cookies\.get\(RECOVERY\)/, 'the exchange has to have left proof');
+  assert.match(reset, /if \(!recovering\)/, 'and the POST has to require it');
+
+  /* httpOnly so no script can mint it, and cleared when spent so the window
+     does not outlive what it was opened for. */
+  assert.match(reset, /httpOnly: true/);
+  assert.match(reset, /cookies\.delete\(RECOVERY/);
+});
+
+test('a school that admits by invitation requires one', () => {
+  /* `signup_mode` had three values and `complete_signup` read none of them:
+     a school set to `invite` accepted anybody who reached its subdomain.
+     The mode was a label on a record with nothing enforcing it, and for such
+     a school it is the entire admission policy. */
+  const sql = fs.readFileSync('supabase/migrations/0001_identity_and_tenancy.sql', 'utf8');
+  const signup = sql.slice(sql.indexOf('create or replace function public.complete_signup('));
+  const body = signup.slice(0, signup.indexOf('$$;'));
+
+  assert.match(body, /v_org\.signup_mode = 'invite'/, 'the mode has to be read');
+  assert.match(body, /from public\.role_reservations/, 'and an invitation looked for');
+  assert.match(body, /r\.claimed_at is null/, 'an invitation being one person\'s');
+});
+
+test('a refused under-13 signup leaves no identity behind', () => {
+  /* The age question is asked after sign-in, because there is nowhere to ask
+     it before — so by the time the answer arrives, Google or a password has
+     already created a row in `auth.users`. Refusing and leaving it there
+     means a twelve year old holds an authentication record at a service that
+     has just told them it kept nothing. */
+  const welcome = fs.readFileSync('src/pages/app/welcome.astro', 'utf8');
+
+  assert.match(welcome, /auth\.admin\.deleteUser\(uid\)/, 'the identity has to be removed');
+  assert.match(welcome, /if \(gone\) console\.error/, 'and the result checked, not assumed');
+  assert.match(welcome, /await supabase\.auth\.signOut\(\)/, 'and the session ended');
+
+  /* And the log says what happened without saying who. Whose refusal it was
+     is exactly the thing not to write down about a child just declined. */
+  assert.doesNotMatch(
+    welcome,
+    /console\.error\([^)]*(uid|email|session\.)/,
+    'the log must not identify the person'
+  );
+});
+
+test('no upload boundary trusts what the browser said a file was', () => {
+  /* `file.type` and `file.name` are whatever the person posting put in the
+     multipart body. An HTML page named `figure.png` and declared
+     `image/png` was stored as an image and served from our origin. */
+  const boundaries = [
+    'src/pages/app/project/[id]/in/[program].astro',
+    'src/pages/app/project/[id]/manuscript.astro',
+    'src/pages/app/project/[id].astro',
+  ];
+
+  for (const file of boundaries) {
+    const text = fs.readFileSync(file, 'utf8');
+    if (!text.includes('blob.put(')) continue;
+
+    assert.match(text, /await identify\(file\)/, `${file} stores without reading the bytes`);
+    assert.doesNotMatch(
+      text,
+      /blob\.put\([^)]*file\.type/,
+      `${file} stores the type the browser claimed`
+    );
+  }
+});
+
+test('media is served as bytes, not as a document', () => {
+  /* A PDF opened inline runs in an origin holding somebody's notebook, and a
+     type this route did not expect should never render as a document at
+     all. */
+  const media = fs.readFileSync('src/pages/app/media/[...path].ts', 'utf8');
+
+  assert.match(media, /'X-Content-Type-Options': 'nosniff'/);
+  assert.match(media, /attachment; filename=/, 'anything not an image is handed over');
+  assert.match(media, /default-src 'none'; sandbox/, 'and nothing in it may run');
+});
+
+test('the privacy page does not claim more than the pages do', () => {
+  /* It said reading the site stores nothing about you at all, while every
+     page requests Google Fonts — which sends an IP address and a browser
+     string to Google before anybody has clicked anything.
+  
+     The claim and the request are checked against each other rather than
+     each being read alone, so self-hosting the fonts later lets the stronger
+     sentence come back, and adding a third-party request tomorrow fails
+     here rather than making the page untrue. */
+  const privacy = fs.readFileSync('src/pages/[org]/policies/privacy.astro', 'utf8');
+  const base = fs.readFileSync('src/layouts/Base.astro', 'utf8');
+
+  const thirdParty = /fonts\.googleapis\.com|fonts\.gstatic\.com/.test(base);
+
+  if (thirdParty) {
+    assert.match(
+      privacy,
+      /Google Fonts/,
+      'the pages contact Google and the privacy page does not say so'
+    );
+  }
+});
+
+test('a deletion reports what it could not finish', () => {
+  /* `deleteUser` returns `{ error }` rather than throwing, so the try/catch
+     around it caught nothing and a failure to remove the authentication
+     record was reported as success — leaving somebody able to sign in again
+     after being told their account was permanently deleted.
+  
+     Neither can be undone from the route, because the row that would find
+     them is already gone. So both are logged, loudly and without naming
+     anybody: a failure nobody records is a failure nobody fixes. */
+  const route = fs.readFileSync('src/pages/app/account/delete.ts', 'utf8');
+
+  assert.match(route, /const \{ error: authError \} = await admin\.auth\.admin\.deleteUser/);
+  assert.match(route, /if \(authError\) console\.error/, 'the result has to be read');
+  assert.match(route, /stranded\.push\(key\)/, 'and a file that would not delete counted');
+});
+
+test('deleting an account takes its published pages down', () => {
+  /* Rows in `records` going away changes nothing a reader can see: the
+     archive is static, so a withdrawn record stays at its address, stays in
+     the search index, and merely stops being listed — the worst of the three
+     states, because it is still readable and no longer reachable by anybody
+     who could ask for it to come down. */
+  const route = fs.readFileSync('src/pages/app/account/delete.ts', 'utf8');
+  const store = fs.readFileSync('src/lib/records-store.ts', 'utf8');
+  const sql = fs.readFileSync('supabase/migrations/0001_identity_and_tenancy.sql', 'utf8');
+
+  assert.match(sql, /'published', v_records/, 'the function has to name them');
+  assert.match(store, /export function withdraw/, 'and the store has to be able to remove one');
+  assert.match(route, /withdraw\(manifest, record\.id\)/, 'and the route has to do it');
+
+  /* Listed, not derived. A record's directory accumulates figures and
+     regenerated files, and deriving the names deletes the ones this code
+     happens to know about. */
+  assert.match(store, /export async function objectsFor/);
+  assert.match(route, /objectsFor\(bucket, org, record\)/);
+
+  /* The manifest is read once and written once, however many records go. A
+     read-modify-write per record is a race with itself. */
+  const reads = [...route.matchAll(/readManifest\(/g)].length;
+  assert.equal(reads, 1, 'the manifest is read once, outside the loop');
+});
+
+test('both sides of a deletion request have a control', () => {
+  /* The functions existed and nothing could call them: a student with a
+     co-authored project reached a page that told them what was needed and
+     gave them no way to ask, and a co-author had no way to answer. */
+  const screen = fs.readFileSync('src/pages/app/account/index.astro', 'utf8');
+
+  assert.match(screen, /rpc\('request_account_deletion'/, 'asking has to be possible');
+  assert.match(screen, /rpc\('answer_deletion_approval'/, 'and so does answering');
+  assert.match(screen, /name="act" value="leave"/, 'and leaving without asking');
+
+  /* The screen asks the database what its own request is waiting on, for the
+     same reason the route does: reading the approvals table here answers a
+     different question that looks like the right one. */
+  assert.match(screen, /rpc\('deletion_ready'\)/);
+});
+
+test('no braced comment sits among an element\'s attributes', () => {
+  /* In attribute position the parser is reading attributes, so a brace opens
+     an expression and the closing sequence closes nothing. It surfaces as
+     "unterminated string literal" twenty lines further on, at a line holding
+     no string — and the checker then reports a cascade of nonsense for the
+     whole file, which is how one of these hid in `editorial/[id].astro`
+     while its errors were dismissed as a parser artifact.
+  
+     A comment opening on a line whose previous non-blank line ends in a tag
+     name or an attribute, rather than in `>` or `}`, is one of these. */
+  const problems = [];
+
+  for (const file of pages.concat(walk('src/components'), walk('src/layouts'))) {
+    const lines = fs.readFileSync(file, 'utf8').split('\n');
+
+    lines.forEach((line, i) => {
+      if (!line.trim().startsWith('{/*')) return;
+
+      let back = i - 1;
+      while (back >= 0 && lines[back].trim() === '') back -= 1;
+      if (back < 0) return;
+
+      const before = lines[back].trim();
+
+      /* Inside a tag: the previous line opened one and has not closed it. */
+      if (/^<[a-zA-Z][^>]*$/.test(before) || /=[^>]*$/.test(before)) {
+        problems.push(`${path.relative('.', file)}:${i + 1}`);
+      }
+    });
+  }
+
+  assert.deepEqual(problems, [], 'move the comment above the element');
 });
 
 console.log(`${passed} ordering assertions passed. ${pages.length} pages read.`);

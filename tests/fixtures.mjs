@@ -10,6 +10,7 @@
 
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import yaml from 'js-yaml';
 import { loadLibrary } from '../scripts/template-library.mjs';
 import { resolveProgram, evaluate } from '../src/lib/template-resolve.ts';
 import * as templateResolve from '../src/lib/template-resolve.ts';
@@ -118,7 +119,11 @@ test('a course carries none of the competition machinery', () => {
 
 /* ── Names that say what they are ────────────────────────────────────────── */
 
-const demo = fs.readFileSync('scripts/seed-demo.mjs', 'utf8');
+/* The map moved. It was in `seed-demo`, and `seed-cases` had a second copy
+   of it that had already drifted a school behind — so it now lives once, in
+   the module all three inventing scripts read. This test follows it there
+   rather than keeping a third copy of where to look. */
+const demo = fs.readFileSync('scripts/fixture-target.mjs', 'utf8');
 
 const prefixes = Object.fromEntries(
   [...demo.matchAll(/^  (\w+): '(\w+)',$/gm)].map(([, slug, prefix]) => [slug, prefix])
@@ -130,12 +135,25 @@ test('every tenant has a name prefix', () => {
      role and which one are all in the name, where before it meant holding a
      cast list of fourteen in your head.
   
-     The list of tenants comes from the seed's own map, so a school added
-     without one fails here rather than at seed time. */
-  assert.ok(
-    Object.keys(prefixes).length >= 3,
-    `found ${Object.keys(prefixes).length} prefixes`
-  );
+     **Counted against the schools, not against itself.** This used to assert
+     that the map had at least three entries in it, and said in its own
+     comment that a school added without a prefix would fail here — which it
+     would not have: three was already true, and a fourth school with no
+     prefix left it true. The failure came at seed time instead, as a name
+     that read `undefined_student1`.
+  
+     The organizations are the list. Anything provisioned needs a prefix,
+     because anything provisioned can hold people. */
+  const dir = 'src/config/orgs';
+  const provisioned = fs
+    .readdirSync(dir)
+    .filter((f) => f.endsWith('.yaml'))
+    .map((f) => yaml.load(fs.readFileSync(`${dir}/${f}`, 'utf8')))
+    .filter((doc) => doc.provisioned !== false);
+
+  const missing = provisioned.filter((doc) => !prefixes[doc.id]).map((doc) => doc.id);
+
+  assert.deepEqual(missing, [], 'add one in scripts/fixture-target.mjs');
 });
 
 test('no two tenants share a prefix', () => {
@@ -169,17 +187,44 @@ test('nothing invents a person', () => {
   assert.deepEqual(offenders, [], 'name it for what it is, like mv_student1');
 });
 
-test('every sponsor carries a tenant prefix too', () => {
+test('no scenario names its sponsor', () => {
   /* Sponsors are teachers named in a scenario rather than accounts, so they
-     never appear in the roster and are easy to forget. A sponsor called
-     something a reader cannot place is the same problem the accounts had. */
-  const sponsors = [...seed.matchAll(/sponsor: \{ name: '([^']+)'/g)].map((m) => m[1]);
-  assert.ok(sponsors.length > 0, 'no sponsors found, so this checks nothing');
+     never appear in the roster and are easy to forget. They used to be
+     written out — `mv_sponsor1`, at an address on a real school's mail
+     domain — and this test checked the prefix was *a* known tenant's rather
+     than the one being seeded, so it passed happily while the demonstration
+     tenant showed six projects supervised by `mv_sponsor1@fuhsd.org`.
+  
+     A name that cannot be wrong is better than a test that says it is not.
+     A scenario states a number; the prefix and the domain come from the
+     school this run is seeding, the same way every other fixture name does. */
+  const named = [...seed.matchAll(/sponsor: \{ name:/g)];
+  assert.deepEqual(named, [], 'a sponsor is a number, resolved against the tenant');
 
-  const known = new Set(Object.values(prefixes));
-  const strays = [...new Set(sponsors)].filter((n) => !known.has(n.split('_')[0]));
+  const numbered = [...seed.matchAll(/sponsor: \{ n: (\d)/g)].map((m) => Number(m[1]));
+  assert.ok(numbered.length > 0, 'no sponsors found, so this checks nothing');
 
-  assert.deepEqual(strays, []);
+  /* Within the letters `sponsorName` can index. A seventh sponsor would
+     otherwise resolve to `undefined` and reach the page as `dm_sponsorNaN`. */
+  assert.deepEqual(
+    numbered.filter((n) => n < 1 || n > 8),
+    [],
+    'sponsors run from 1 to 8'
+  );
+
+  /* And nothing anywhere in the seeds carries a deliverable mail domain. A
+     fixture address that could reach a real inbox is the thing 12.11 asks
+     these not to have. */
+  /* Comments explain the change by quoting the address it removed, the way
+     the roster test above already has to. A test that cannot tell prose from
+     code deletes the prose that explains it. */
+  const code = seed.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\*.*$/gm, '');
+
+  const real = [
+    ...code.matchAll(/@([a-z0-9.-]+\.(?:org|com|net|edu|gov))/g),
+  ].filter((m) => m[1] !== 'demo.invalid');
+
+  assert.deepEqual([...new Set(real.map((m) => m[1]))], [], 'fixtures live on demo.invalid');
 });
 
 /* ── Every program asks for something ────────────────────────────────────── */
@@ -651,6 +696,58 @@ test('the assign queue counts a class as a place', () => {
     /for \(const e of \[\.\.\.\(entries \?\? \[\]\), \.\.\.\(cohortRows \?\? \[\]\)\]\)/,
     'the people offered have to come from the cohort too'
   );
+});
+
+/* ── Where a template came from ──────────────────────────────────────────── */
+
+test('every program template records who read what, and when', () => {
+  /* A template is somebody's reading of a rulebook on a particular day, and
+     a rulebook changes annually. Without this a file written for last
+     season looks exactly like one checked this morning, and the only way to
+     tell is to go and read the fair's site yourself.
+  
+     Process files are exempt: a research process is not read off anybody's
+     rulebook, and demanding a source for one produces a filled-in field that
+     means nothing. */
+  const dir = 'src/config/programs';
+  const missing = [];
+
+  for (const file of fs.readdirSync(dir).filter((f) => f.endsWith('.yaml'))) {
+    const doc = yaml.load(fs.readFileSync(`${dir}/${file}`, 'utf8'));
+    if (!doc || doc.kind === 'process' || doc.role === 'none') continue;
+    if (!doc.name) continue;
+
+    const p = doc.provenance;
+    if (!p?.owner || !p?.source_url || !p?.verified_on) missing.push(file);
+  }
+
+  assert.deepEqual(missing, [], 'add a provenance block naming an owner, a source and a date');
+});
+
+test('a named owner is a person', () => {
+  /* "The club" cannot be asked what it read, and a template whose owner is a
+     committee is a template nobody checks. */
+  const dir = 'src/config/programs';
+
+  for (const file of fs.readdirSync(dir).filter((f) => f.endsWith('.yaml'))) {
+    const doc = yaml.load(fs.readFileSync(`${dir}/${file}`, 'utf8'));
+    const owner = doc?.provenance?.owner;
+    if (!owner) continue;
+
+    assert.match(owner, /\s/, `${file} names "${owner}", which is not a person`);
+  }
+});
+
+test('the stale warning goes to somebody who can act on it', () => {
+  /* A student reading "these dates may be out of date" the night before a
+     deadline has nowhere to go with it. The program's advisor can read the
+     source again and change the file. */
+  const page = fs.readFileSync('src/pages/app/program/[id].astro', 'utf8');
+
+  assert.match(page, /stale && advisesThis/, 'the warning is gated on advising this program');
+  assert.match(page, /me\.runsTheClub && \(me\.scopes \?\? \[\]\)\.includes\(program\.id\)/,
+    'and scoped, so an advisor of the class is warned about the class');
+  assert.match(page, /STALE_AFTER_DAYS = 365/, 'one year from the day it was last verified');
 });
 
 console.log(`${passed} fixture assertions passed. ${scenarios.length} scenarios read.`);

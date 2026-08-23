@@ -390,6 +390,69 @@ refuse "a person enrolled in an opportunity" \
          '00000000-0000-0000-0000-0000000000e1',
          '00000000-0000-0000-0000-0000000000b2');"
 
+# 9. deleting an account is not something a person may call for themselves.
+#
+# `delete_account` is security definer and takes a user id, so an execute
+# grant to `authenticated` would let anybody pass somebody else's id and
+# destroy their work. The interface asks, takes a typed confirmation, collects
+# approvals, and only then does a server holding the secret key make the call.
+#
+# In a transaction, and that is not decoration. `set local role` outside one
+# is a no-op with a warning, so the first version of this probe ran as the
+# owner, bypassed every grant, and deleted the fixture account -- reported
+# as ACCEPTED, which was true and for entirely the wrong reason.
+refuse "a signed-in person calling delete_account directly" \
+"begin;
+ set local role authenticated;
+ select public.delete_account('00000000-0000-0000-0000-0000000000e1');
+ rollback;"
+
+# 10. and not on somebody else's request row either.
+# 11. draining the outbox is not something a signed-in person may do.
+#
+# `claim_notifications` hands back other people's email addresses and marks
+# rows as claimed. An execute grant to `authenticated` would let anybody read
+# the address of everybody with a pending message.
+refuse "a signed-in person claiming from the outbox" \
+"begin;
+ set local role authenticated;
+ select * from public.claim_notifications(10, 60, true);
+ rollback;"
+
+#
+# In a transaction for the same reason as the one above.
+refuse "writing an approval on behalf of somebody else" \
+"begin;
+ set local role authenticated;
+ insert into public.account_deletion_approvals
+   (deletion_id, org_id, approver_id, about_kind, state)
+ values (gen_random_uuid(), '00000000-0000-0000-0000-0000000000aa',
+         '00000000-0000-0000-0000-0000000000e1', 'project', 'approved');
+ rollback;"
+
+# 12-15. a URL somebody else will click cannot carry a scheme that runs.
+#
+# The forms carry `type="url"`, which is a hint to a browser and nothing to a
+# direct RPC call. These are the four that reached the column before
+# `app.safe_url` existed.
+for scheme in "javascript:alert(1)" "data:text/html;base64,PHNjcmlwdD4=" \
+              "vbscript:msgbox(1)" "file:///etc/passwd"; do
+  refuse "storing $scheme as a link" \
+    "select app.safe_url('$scheme', 'link');"
+done
+
+# 16. and a case-different scheme is the same scheme.
+refuse "storing a mixed-case javascript URL" \
+"select app.safe_url('JaVaScRiPt:alert(1)', 'link');"
+
+# 17. whitespace inside an address is how a second one is smuggled in.
+refuse "storing an address with a space in it" \
+"select app.safe_url('https://example.org/ onerror=x', 'link');"
+
+# ...and an ordinary address still passes, or the rule above proves nothing.
+accept "an ordinary https address" \
+"select app.safe_url('https://example.org/a/b?c=d#e', 'link');"
+
 echo
 if [ "$failed" -gt 0 ]; then
   echo "$failed probe(s) were accepted. A rule that cannot refuse is not a rule."

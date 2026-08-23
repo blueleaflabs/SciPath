@@ -32,16 +32,24 @@ insert into auth.users (id) values
  ('a0000000-0000-0000-0000-000000000008'),
  ('a0000000-0000-0000-0000-000000000009');
 
-insert into public.users (id, org_id, display_name) values
- ('a0000000-0000-0000-0000-000000000001','11111111-1111-1111-1111-111111111111','Author one'),
- ('a0000000-0000-0000-0000-000000000002','11111111-1111-1111-1111-111111111111','Fair officer'),
- ('a0000000-0000-0000-0000-000000000003','11111111-1111-1111-1111-111111111111','Elder'),
- ('a0000000-0000-0000-0000-000000000004','11111111-1111-1111-1111-111111111111','Advisor'),
- ('a0000000-0000-0000-0000-000000000005','11111111-1111-1111-1111-111111111111','Graduated officer'),
- ('a0000000-0000-0000-0000-000000000006','11111111-1111-1111-1111-111111111111','Another student'),
- ('a0000000-0000-0000-0000-000000000007','22222222-2222-2222-2222-222222222222','Other school student'),
- ('a0000000-0000-0000-0000-000000000008','11111111-1111-1111-1111-111111111111','Author two'),
- ('a0000000-0000-0000-0000-000000000009','11111111-1111-1111-1111-111111111111','Author three');
+/* `consent_state` stated rather than defaulted.
+ 
+   It defaults to `pending`, so every person in this fixture was a minor
+   waiting on a guardian — which nothing noticed until publication began
+   checking consent, because nothing else read it. A fixture whose people are
+   all in a state no working account stays in is a fixture that tests the
+   wrong system. `not_required` is what an adult is, and it is what these
+   are. The one deliberate exception is added below. */
+insert into public.users (id, org_id, display_name, consent_state) values
+ ('a0000000-0000-0000-0000-000000000001','11111111-1111-1111-1111-111111111111','Author one','not_required'),
+ ('a0000000-0000-0000-0000-000000000002','11111111-1111-1111-1111-111111111111','Fair officer','not_required'),
+ ('a0000000-0000-0000-0000-000000000003','11111111-1111-1111-1111-111111111111','Elder','not_required'),
+ ('a0000000-0000-0000-0000-000000000004','11111111-1111-1111-1111-111111111111','Advisor','not_required'),
+ ('a0000000-0000-0000-0000-000000000005','11111111-1111-1111-1111-111111111111','Graduated officer','not_required'),
+ ('a0000000-0000-0000-0000-000000000006','11111111-1111-1111-1111-111111111111','Another student','not_required'),
+ ('a0000000-0000-0000-0000-000000000007','22222222-2222-2222-2222-222222222222','Other school student','not_required'),
+ ('a0000000-0000-0000-0000-000000000008','11111111-1111-1111-1111-111111111111','Author two','not_required'),
+ ('a0000000-0000-0000-0000-000000000009','11111111-1111-1111-1111-111111111111','Author three','not_required');
 
 -- Two editions of one family, and a course in another.
 insert into public.programs (id, org_id, slug, name, season_year, family, kind, template_id, current, source, status) values

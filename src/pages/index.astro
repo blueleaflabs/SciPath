@@ -91,17 +91,47 @@ cachePublicPage(Astro);
     <section class="hero">
       <p class="t-lbl">{org.isPlatform ? platform.name : org.name}</p>
       <h1 class="t-big">From idea through publication</h1>
-      <p class="lede">Your high school science research companion</p>
+      <p class="lede">
+        {org.isPlatform
+          ? 'Plan the project. Meet the requirements. Keep the record.'
+          : 'Your high school science research companion'}
+      </p>
+      {/* One way in, and one way to look before deciding.
+
+          "See this season" pointed at `/deadlines/`, which is gone, and
+          "Read published work" pointed at `/articles/`, which is a filtered
+          view of the showcase already in the nav. Three buttons of equal
+          weight made the one that starts anything a third of the offer.
+
+          The second button here is not a third of the offer: it is lighter
+          than the first and it answers the question somebody actually has at
+          the front door, which is what this thing looks like with a season
+          in it. A school's own visitors already know. */}
       <div class="row" style="margin-top:24px">
-        {/* One way in.
-        
-            "See this season" pointed at `/deadlines/`, which is gone, and
-            "Read published work" pointed at `/articles/`, which is a filtered
-            view of the showcase already in the nav. Three buttons of equal
-            weight made the one that starts anything a third of the offer. */}
-        <a class="btn" href="/app/">Start a project</a>
+        <a class="btn" href={org.isPlatform ? '/get-started/' : '/app/'}>Start a project</a>
+        {org.isPlatform && <a class="btn btn-2" href="/demo/">See a season in progress</a>}
       </div>
     </section>
+
+    {/* **The problem, before the product.**
+
+        Only at the platform. A student arriving at their own school's site
+        has already been told there is a club and a class; what they need
+        from this page is which ones and when. Somebody arriving at the front
+        door has been told nothing, and a page that opens with five stages of
+        a lifecycle is answering a question they have not asked yet. */}
+    {org.isPlatform && (
+      <section class="sec">
+        <div class="sec-h"><b>The problem</b><span>Which is rarely the research</span></div>
+        <p class="problem">
+          A good project is lost to a form signed a week late, an approval nobody mentioned,
+          a deadline that moved, or work scattered across a folder, an inbox and somebody
+          else's memory. Those failures are procedural rather than intellectual, they fall
+          hardest on the students with the least help, and software can catch every one of
+          them.
+        </p>
+      </section>
+    )}
 
     {/* The lifecycle is the product, so it is the first thing on the page.
     
@@ -242,6 +272,52 @@ cachePublicPage(Astro);
       </section>
     )}
 
+    {/* **Who it is for, as four addresses rather than four paragraphs.**
+
+        Four readers arrive here and the page can only be written for one of
+        them. The previous version chose the student, which is right, and
+        left the other three with nothing: a teacher deciding whether to run
+        this read a page about starting a project and left.
+
+        Not in the masthead. The nav was cut from seven items to three on the
+        argument that a glance should not have to rank sections, and four
+        audience pages would put it straight back. The routing belongs where
+        somebody is already deciding, which is here, and in the footer. */}
+    {org.isPlatform && (
+      <section class="sec">
+        <div class="sec-h"><b>Who it is for</b><span>Four ways to read this</span></div>
+        <div class="grid-2">
+          <a class="card pad who" href="/for-students/">
+            <p class="t-lbl">Students</p>
+            <p class="t-sm">
+              Run your project with confidence, whether or not your school has anything set up,
+              and finish with a record worth linking to.
+            </p>
+          </a>
+          <a class="card pad who" href="/for-educators/">
+            <p class="t-lbl">Educators</p>
+            <p class="t-sm">
+              See where every project in your program stands and what is missing, without
+              chasing each student for it.
+            </p>
+          </a>
+          <a class="card pad who" href="/for-student-leaders/">
+            <p class="t-lbl">Student leaders</p>
+            <p class="t-sm">
+              Keep what your club knows from graduating with the officers who knew it.
+            </p>
+          </a>
+          <a class="card pad who" href="/for-organizations/">
+            <p class="t-lbl">Schools, clubs and groups</p>
+            <p class="t-sm">
+              Run a repeatable research season, hosted by us or on your own infrastructure,
+              without building software.
+            </p>
+          </a>
+        </div>
+      </section>
+    )}
+
     <section class="sec">
       <div class="sec-h">
         <b>{org.name} project showcase</b>
@@ -366,6 +442,23 @@ cachePublicPage(Astro);
   .hero .lede {
     margin-top: 18px;
   }
+
+  .problem {
+    max-width: var(--measure-text);
+    font-size: 1.05rem;
+    line-height: 1.65;
+    color: var(--ink-2);
+  }
+
+  /* A whole card is the link, because half of one is a target somebody
+     misses on a phone. */
+  .who {
+    display: block;
+    text-decoration: none;
+    color: inherit;
+  }
+  .who .t-sm { margin-top: 9px; }
+  .who:hover { border-color: var(--brand); }
   .lc-head .t-sm {
     margin-top: 5px;
     max-width: 60ch;

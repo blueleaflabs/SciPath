@@ -920,6 +920,14 @@ const grouped = () => {
             <input id="fixture-password" name="password" type="password" autocomplete="current-password" required />
             <button class="btn" type="submit">Sign in</button>
           </form>
+
+          {/* Under the form rather than beside the password box. Somebody who
+              knows their password should not be offered a way to change it
+              while typing it; somebody who does not has already failed once
+              and is looking down the page. */}
+          <p class="t-sm" style="margin:10px 0 0">
+            <a href="/auth/reset/">Forgotten your password?</a>
+          </p>
         </div>
       </section>
     )}

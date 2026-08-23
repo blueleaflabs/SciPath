@@ -1,0 +1,131 @@
+---
+/**
+ * THE ADOPTION PAGE, BROUGHT BACK WITH A DIFFERENT SCOPE.
+ *
+ * `/for-schools/` was withdrawn because it was a pitch written before the
+ * product had been shown to a single teacher, and a pitch that has never met
+ * its audience is a guess (23.4). What brings it back is that the offer is
+ * now a real one: a demonstration tenant a teacher can open unaided, and a
+ * pilot that means one program rather than a district.
+ *
+ * It is deliberately written about what an organization *receives* and what
+ * setting one up *involves*, both of which are facts about the software, and
+ * not about what a teacher supposedly wants, which is still the part we do
+ * not know. No counted claims, no named schools, nothing implying anybody has
+ * adopted it.
+ *
+ * Platform only. A school running this does not need to be sold it.
+ */
+export const prerender = false;
+
+import Base from '../../layouts/Base.astro';
+import PageHead from '../../components/PageHead.astro';
+import { activeOrg } from '../../lib/tenant';
+import { platform } from '../../config/site';
+
+const org = activeOrg(Astro);
+if (!org.isPlatform) return Astro.redirect('/', 301);
+
+const receives = [
+  {
+    title: 'Your own space',
+    body:
+      'An address of your own, your name on it, and your students, projects and records held apart from every other organization.',
+  },
+  {
+    title: 'Programs, not one process',
+    body:
+      'A class, a club, a fair, a grant and a journal are separate programs with their own calendars, deliverables, roles and rules. A person may hold a role in more than one.',
+  },
+  {
+    title: 'Roles that match who does what',
+    body:
+      'Students, student leaders, advisors and editors, each seeing what their role needs and nothing else. A student leader operates under a named adult.',
+  },
+  {
+    title: 'A public record',
+    body:
+      'Completed work publishes to a showcase with stable addresses, stated authorship and citations, readable by anybody without an account.',
+  },
+];
+---
+
+<Base
+  title="For organizations"
+  description="Run a research program with its own calendar, roles and public record, hosted or self-hosted."
+>
+  <PageHead
+    eyebrow="For organizations"
+    title="A research program you can actually run"
+    lede="For schools, clubs, homeschool groups and fair associations that want a repeatable season rather than a rebuilt one."
+  />
+
+  <div class="wrap">
+    <section class="sec">
+      <div class="sec-h"><b>What an organization receives</b><span>Four things</span></div>
+      <div class="grid-2">
+        {
+          receives.map((r) => (
+            <div class="card pad">
+              <p class="t-lbl">{r.title}</p>
+              <p class="t-sm" style="margin-top:9px">{r.body}</p>
+            </div>
+          ))
+        }
+      </div>
+    </section>
+
+    <section class="sec">
+      <div class="sec-h"><b>Two ways to run it</b><span>Both supported</span></div>
+      <div class="grid-2">
+        <div class="card pad">
+          <p class="t-lbl">Hosted for you</p>
+          <p class="t-sm" style="margin-top:9px">
+            We operate the software. Your organization manages its own programs, its students
+            and its records. This is what a volunteer-run club or fair association needs,
+            because asking its board to become system administrators is not realistic.
+          </p>
+        </div>
+        <div class="card pad">
+          <p class="t-lbl">Self-hosted</p>
+          <p class="t-sm" style="margin-top:9px">
+            The source is open and licensed from the first commit. An organization with its own
+            infrastructure runs its own copy, holds its own students' data, and keeps operating
+            regardless of what happens to us.
+          </p>
+        </div>
+      </div>
+      <div class="row" style="margin-top:20px">
+        <a class="btn btn-2" href={platform.repoUrl} target="_blank" rel="noopener noreferrer">
+          View the source
+        </a>
+      </div>
+    </section>
+
+    <section class="sec">
+      <div class="sec-h"><b>What setting one up involves</b><span>Deliberate, not self-serve</span></div>
+      <div class="prose">
+        <p>
+          Organizations are provisioned by hand rather than by signup form. Your programs,
+          their dates, the roles people hold and the boundary around your data are settled
+          before a single student is invited, because all four are difficult to correct once
+          students are working inside them.
+        </p>
+        <p>
+          A sensible first step is one program: a single class or a single club season, with
+          your real dates and your real students, while everything else stays where it is. The
+          demonstration is the cheapest way to decide whether that is worth doing.
+        </p>
+      </div>
+    </section>
+
+    <section class="sec cta">
+      <div class="sec-h"><b>Talk to us</b><span>A walkthrough takes half an hour</span></div>
+      <div class="row">
+        <a class="btn" href="/contact/">Request a walkthrough</a>
+        <a class="btn btn-2" href="/demo/">Open the demonstration first</a>
+        <a class="btn btn-q" href="/for-educators/">For educators</a>
+      </div>
+    </section>
+  </div>
+</Base>

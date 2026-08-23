@@ -1,13 +1,15 @@
 ---
 export const prerender = false;
 
+import Authority from '../../../../../components/Authority.astro';
+import { identify } from '../../../../../lib/filetype';
 import Base from '../../../../../layouts/Base.astro';
 import { formatDate, daysFrom } from '../../../../../lib/dates';
 import AppShell from '../../../../../components/AppShell.astro';
 import { activeOrg } from '../../../../../lib/tenant';
 import { resolveProgram, deliverablesFor, stepApplies, shape } from '../../../../../lib/templates';
 import { programTitle, staffWord } from '../../../../../lib/program-names';
-import { serverClient } from '../../../../../lib/supabase';
+import { one, serverClient } from '../../../../../lib/supabase';
 import { checkDateOrder, worstFinding } from '../../../../../lib/dateOrder';
 import { standing, isAuthorOf } from '../../../../../lib/roles';
 import { afterPost, outcomeFrom } from '../../../../../lib/post-redirect';
@@ -264,9 +266,16 @@ if (Astro.request.method === 'POST') {
       const blob = blobStore(Astro.locals);
       if (!blob.available()) error = 'File storage is not configured here.';
       else {
-        const path = projectImagePath(pid, file.name);
+        /* What it is, from the bytes. `file.type` and the name are both
+           whatever the person posting chose to put in the multipart body. */
+        const kind = await identify(file);
+
+        if (!kind || !kind.mime.startsWith('image/')) {
+          error = 'That is not an image we can show. Use a JPEG, PNG, WebP or GIF.';
+        } else {
+        const path = projectImagePath(pid, file.name, kind.ext);
         try {
-          await blob.put(path, await file.arrayBuffer(), file.type || 'image/png');
+          await blob.put(path, await file.arrayBuffer(), kind.mime);
           const { error: e } = await supabase.rpc('add_project_image', {
             p_project_id: pid,
             p_storage_path: path,
@@ -277,6 +286,7 @@ if (Astro.request.method === 'POST') {
           else recordedNote = 'Image added.';
         } catch (e: any) {
           error = e.message;
+        }
         }
       }
     }
@@ -863,7 +873,7 @@ const derived = (m: any) => {
     return {
       met: Boolean(officer),
       says: officer
-        ? officer.users?.display_name
+        ? one(officer.users)?.display_name
         : `No ${staffWord(program).toLowerCase()} assigned`,
       href: me.runsTheClub ? `/app/project/${project?.id}/team/` : null,
       verb: officer ? 'Change' : 'Assign one',
@@ -1233,7 +1243,7 @@ const sectionNo = new Map(sections.map((section, i) => [section.id, String(i + 1
             </span>
             <span>
               <i>{staffWord(program)}</i>
-              <em>{officer ? officer.users?.display_name : 'None assigned'}</em>
+              <em>{officer ? one(officer.users)?.display_name : 'None assigned'}</em>
             </span>
             <span>
               <i>Sponsor</i>
@@ -1352,7 +1362,7 @@ const sectionNo = new Map(sections.map((section, i) => [section.id, String(i + 1
                         <button type="submit" class="linkish">Verify</button>
                       </form>
                     ) : null
-                  ) : stepFor(m.name) && (stepFor(m.name).deliverables ?? []).length > 0 ? (
+                  ) : (stepFor(m.name)?.deliverables ?? []).length > 0 ? (
                     inline ? (
                       /* **Where it is owed.**
                       
@@ -1522,6 +1532,11 @@ const sectionNo = new Map(sections.map((section, i) => [section.id, String(i + 1
             ? 'Everything this program asks for, with the guidance and anything the club has learned about each. Recording happens on the deadline it belongs to.'
             : 'Everything this program asks for, in one place. Several deadlines want the same document here, so it is recorded once and completes all of them.'}
         </p>
+
+        {/* The list above is worked out from a rulebook and a set of answers,
+            which is exactly the surface where somebody could take "nothing
+            further required" as permission. */}
+        <Authority compact />
 
         <ul class="dlist">
           {expected.map((d) => {

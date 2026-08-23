@@ -28,7 +28,77 @@ const SIGNUP = '/app/welcome/';
    are signing in to. */
 const SIGNIN = '/app/';
 
+/**
+ * RESPONSE HEADERS, ON EVERY RESPONSE.
+ *
+ * There were none. No frame restriction, no referrer policy, no content
+ * policy, nothing limiting what a page may load or where it may be embedded.
+ *
+ * **Report-only for the content policy, deliberately.** An enforced policy on
+ * a site that has never had one breaks whatever it happens to be wrong about,
+ * and the wrongness surfaces as a blank page for a student rather than as a
+ * line in a log. Report-only surfaces the same information and breaks
+ * nothing; switching it to enforcing is one word here once the reports are
+ * quiet.
+ *
+ * The others are enforced from the start because each is a refusal rather
+ * than a restriction on our own pages: nothing here is meant to be framed, no
+ * plugin content is meant to load, no page needs to rewrite its own base, and
+ * a full URL has no business travelling to another site in a Referer.
+ *
+ * `unsafe-inline` for styles is Astro's scoped styles, which are emitted
+ * inline per component. For scripts it is the handful of small inline blocks
+ * this app uses — the masthead's name fill, the print button. Both are worth
+ * removing with a nonce later; neither is worth blocking the rollout of
+ * everything else now, and saying so is better than a policy that quietly
+ * permits more than it looks like it does.
+ */
+const POLICY = [
+  "default-src 'self'",
+  "script-src 'self' 'unsafe-inline'",
+  "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+  "font-src 'self' https://fonts.gstatic.com",
+  "img-src 'self' data: blob:",
+  "connect-src 'self' https://*.supabase.co",
+  /* Video embeds are click to load and only ever these two. */
+  'frame-src https://www.youtube-nocookie.com https://player.vimeo.com',
+  "object-src 'none'",
+  "base-uri 'self'",
+  "form-action 'self'",
+  "frame-ancestors 'none'",
+].join('; ');
+
+const HEADERS: Record<string, string> = {
+  'Content-Security-Policy-Report-Only': POLICY,
+  /* Enforced, and not the same rule as `frame-ancestors`: an older browser
+     honors one and not the other. */
+  'X-Frame-Options': 'DENY',
+  'X-Content-Type-Options': 'nosniff',
+  /* The origin, never the path. A student's project id in a Referer header
+     travelling to a fair's website is a leak nobody would predict. */
+  'Referrer-Policy': 'strict-origin-when-cross-origin',
+  /* Nothing here uses any of them. */
+  'Permissions-Policy': 'camera=(), microphone=(), geolocation=(), payment=(), usb=()',
+};
+
+/**
+ * One place where every response gets them.
+ *
+ * Wrapping the handler rather than adding a header at each `return next()`:
+ * there are four of those, and a fifth added later would be a response
+ * without headers that looks exactly like the others.
+ */
 export const onRequest = defineMiddleware(async (context, next) => {
+  const response = await handle(context, next);
+
+  for (const [name, value] of Object.entries(HEADERS)) {
+    if (!response.headers.has(name)) response.headers.set(name, value);
+  }
+
+  return response;
+});
+
+const handle = async (context: any, next: any) => {
   const { url, request, cookies, locals } = context;
 
   /* Tenancy comes from the hostname, and it is resolved on every request
@@ -247,12 +317,32 @@ export const onRequest = defineMiddleware(async (context, next) => {
 
   locals.session = { id: user.id, email: user.email ?? null };
 
-  const { data: account } = await supabase
+  const { data: accountRow } = await supabase
     .from('users')
     .select('id, org_id, display_name, grad_year, population, status, ' +
             'affiliation_state, consent_state, author_slug')
     .eq('id', user.id)
     .maybeSingle();
+
+  /* Cast once, at the boundary.
+  
+     The generated client types a selected row as a union with an error
+     shape, so every property read below is otherwise an error about
+     `GenericStringError` — a type that describes a failure the destructuring
+     above has already discarded. Every other page here does the same, and
+     naming the shape rather than reaching for `any` keeps the fields
+     checked. */
+  const account = accountRow as {
+    id: string;
+    org_id: string;
+    display_name: string;
+    grad_year: number | null;
+    population: string;
+    status: string;
+    affiliation_state: string;
+    consent_state: string;
+    author_slug: string | null;
+  } | null;
 
   locals.account = account ?? null;
 
@@ -292,4 +382,4 @@ export const onRequest = defineMiddleware(async (context, next) => {
   locals.roles = roles ?? [];
 
   return next();
-});
+};

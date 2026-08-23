@@ -83,7 +83,25 @@ const { data: current } = await supabase
   .eq('id', account.id)
   .single();
 
-const person = current ?? account;
+/* The stored row, or what the middleware already had.
+ 
+   `account` carries nine of these fields and not `orcid`, `outbound_url` or
+   `photo_consent` — it is loaded for every request and does not need them —
+   so the union of the two lacked exactly the three the form edits. Naming the
+   shape rather than reaching for `any`: a column renamed in the select above
+   should still fail here. */
+const person = (current ?? account) as {
+  display_name: string;
+  grad_year: number | null;
+  orcid?: string | null;
+  outbound_url?: string | null;
+  photo_consent?: boolean | null;
+  author_slug: string | null;
+  affiliation_state: string;
+  consent_state: string;
+  population: string;
+  status: string;
+};
 
 /* How often the digest arrives, and whether anything urgent arrives on its
    own. Absent means the default, which is weekly with urgent items on: a
@@ -297,10 +315,26 @@ const consentLabel: Record<string, string> = {
         </div>
       </dl>
     </section>
+
+    {/* A link, not the control. Everything on the page above this can be
+        changed back; what it leads to cannot, and putting an irreversible
+        button under a form somebody visits to fix a spelling is how it gets
+        pressed while looking for something else. */}
+    <p class="leaving">
+      <a href="/app/account/">Leaving SciPath, and deleting your account</a>
+    </p>
   </div>
 </Base>
 
 <style>
+  .leaving {
+    margin: 34px 0 0;
+    padding-top: 16px;
+    border-top: 1px solid var(--rule-fine);
+    font-family: var(--face-ui);
+    font-size: 0.92rem;
+  }
+
   .confirm {
     margin: 0;
     border: 1px solid var(--rule);

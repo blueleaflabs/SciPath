@@ -35,6 +35,20 @@
 # ours to predict: the first day, the feedback session, and the showcase.
 
 id: irpd-mvhs-2027
+
+# Who read the source this is built from, what they read, and when. A year
+# after `verified_on` the program's advisor is told: a rulebook and a school
+# calendar both change annually, and a file nobody has looked at since last
+# season looks exactly like one checked this morning.
+provenance:
+  owner: Rohan Agarwal
+  source_url: https://irpdelders.wixsite.com/
+  rules_year: 2027
+  verified_on: 2026-08-22
+  changes:
+    - on: 2026-08-22
+      what: First reading, against the class roadmap and the semester calendar.
+
 family: irpd
 kind: course
 

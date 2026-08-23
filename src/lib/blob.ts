@@ -56,31 +56,40 @@ export function blobStore(locals: any): Blob {
 
 /**
  * Paths are namespaced by project so a listing can never span two of them,
- * and the filename is sanitized because it came from a person's phone.
+ * and the **extension is generated from the detected type**, never taken from
+ * the name.
+ *
+ * The name came from a person's phone and could equally have come from a
+ * script: `report.png` holding HTML was stored under `.png`, served as an
+ * image type, and only a browser's own sniffing stood between that and a
+ * page running from our origin. Sanitizing the name stopped it breaking a
+ * path; it never made the name true.
+ *
+ * `stem` keeps something human in the middle so a listing is readable, and
+ * the extension after it is the one `src/lib/filetype.ts` read from the
+ * bytes.
  */
-export function notePath(projectId: string, noteId: string, filename: string): string {
-  const clean = filename.replace(/[^\w.-]/g, '_').slice(-80);
-  return `projects/${projectId}/notes/${noteId}/${Date.now()}-${clean}`;
+function stem(filename: string): string {
+  return filename.replace(/\.[^.]*$/, '').replace(/[^\w-]/g, '_').slice(-60) || 'file';
+}
+export function notePath(projectId: string, noteId: string, filename: string, ext: string): string {
+  return `projects/${projectId}/notes/${noteId}/${Date.now()}-${stem(filename)}.${ext}`;
 }
 
-export function figurePath(manuscriptId: string, filename: string): string {
-  const clean = filename.replace(/[^\w.-]/g, '_').slice(-80);
-  return `manuscripts/${manuscriptId}/figures/${Date.now()}-${clean}`;
+export function figurePath(manuscriptId: string, filename: string, ext: string): string {
+  return `manuscripts/${manuscriptId}/figures/${Date.now()}-${stem(filename)}.${ext}`;
 }
 
 /** Showcase images live under the project, not the manuscript: they outlast
  *  any paper and belong to the project whether one is ever written. */
-export function projectImagePath(projectId: string, filename: string): string {
-  const ext = (filename.match(/\.([a-z0-9]+)$/i)?.[1] ?? 'png').toLowerCase();
+export function projectImagePath(projectId: string, _filename: string, ext: string): string {
   return `projects/${projectId}/images/${crypto.randomUUID()}.${ext}`;
 }
 
-export function manuscriptPdfPath(manuscriptId: string, filename: string): string {
-  const clean = filename.replace(/[^\w.-]/g, '_').slice(-80);
-  return `manuscripts/${manuscriptId}/paper/${Date.now()}-${clean}`;
+export function manuscriptPdfPath(manuscriptId: string, filename: string, ext: string): string {
+  return `manuscripts/${manuscriptId}/paper/${Date.now()}-${stem(filename)}.${ext}`;
 }
 
-export function deliverablePath(entryId: string, filename: string): string {
-  const clean = filename.replace(/[^\w.-]/g, '_').slice(-80);
-  return `entries/${entryId}/deliverables/${Date.now()}-${clean}`;
+export function deliverablePath(entryId: string, filename: string, ext: string): string {
+  return `entries/${entryId}/deliverables/${Date.now()}-${stem(filename)}.${ext}`;
 }

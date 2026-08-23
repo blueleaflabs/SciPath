@@ -2,6 +2,7 @@
 export const prerender = false;
 
 import Base from '../../../../layouts/Base.astro';
+import { identify } from '../../../../lib/filetype';
 import AppShell from '../../../../components/AppShell.astro';
 import { activeOrg } from '../../../../lib/tenant';
 import { serverClient } from '../../../../lib/supabase';
@@ -105,6 +106,16 @@ if (Astro.request.method === 'POST' && iAuthor) {
   }
 
   if (action === 'glance') {
+    /* Read from the form like every other branch here.
+    
+       This referenced `manuscriptId` with nothing declaring it, so the
+       handler threw on every submission — and the form did not post the
+       field either, so fixing one half alone would have sent `undefined` to
+       the database instead. "At a glance" has never saved anything since it
+       was written, and nothing surfaced it because the throw renders as the
+       page reloading unchanged. */
+    const manuscriptId = String(form.get('manuscript_id') ?? '');
+
     const lines = (field: string) =>
       String(form.get(field) ?? '')
         .split('\n')
@@ -158,9 +169,14 @@ if (Astro.request.method === 'POST' && iAuthor) {
       if (!blob.available()) {
         error = 'File storage is not configured on this deployment.';
       } else {
-        const path = figurePath(manuscriptId, file.name);
+        const kind = await identify(file);
+
+        if (!kind || !kind.mime.startsWith('image/')) {
+          error = 'That is not an image we can show. Use a JPEG, PNG, WebP or GIF.';
+        } else {
+        const path = figurePath(manuscriptId, file.name, kind.ext);
         try {
-          await blob.put(path, await file.arrayBuffer(), file.type || 'image/png');
+          await blob.put(path, await file.arrayBuffer(), kind.mime);
           const { error: e } = await supabase.rpc('add_figure', {
             p_manuscript_id: manuscriptId,
             p_storage_path: path,
@@ -171,6 +187,7 @@ if (Astro.request.method === 'POST' && iAuthor) {
           else didAction = action;
         } catch (e: any) {
           error = `The image did not upload: ${e.message}`;
+        }
         }
       }
     }
@@ -189,9 +206,14 @@ if (Astro.request.method === 'POST' && iAuthor) {
       if (!blob.available()) {
         error = 'File storage is not configured on this deployment.';
       } else {
-        const path = manuscriptPdfPath(manuscriptId, file.name);
+        const kind = await identify(file);
+
+        if (kind?.mime !== 'application/pdf') {
+          error = 'That is not a PDF. Export the paper as one and try again.';
+        } else {
+        const path = manuscriptPdfPath(manuscriptId, file.name, kind.ext);
         try {
-          await blob.put(path, await file.arrayBuffer(), file.type || 'application/pdf');
+          await blob.put(path, await file.arrayBuffer(), kind.mime);
           const { error: e } = await supabase.rpc('set_manuscript_pdf', {
             p_manuscript_id: manuscriptId,
             p_storage_path: path,
@@ -200,6 +222,7 @@ if (Astro.request.method === 'POST' && iAuthor) {
           else didAction = action;
         } catch (e: any) {
           error = `The file did not upload: ${e.message}`;
+        }
         }
       }
     }
@@ -1082,6 +1105,7 @@ function targetFor(key: string): string | null {
 
           <form method="POST" action="#glance" class="mform" style="margin-top:26px">
             <input type="hidden" name="action" value="glance" />
+            <input type="hidden" name="manuscript_id" value={manuscript.id} />
             <div class="row-2">
               <label>
                 <span>Methods</span>
@@ -1227,10 +1251,14 @@ function targetFor(key: string): string | null {
    * than no number at all: somebody would sit at 200 of 200 and be told the
    * section is too short.
    */
-  const countWords = (text) => text.trim().split(/\s+/).filter(Boolean).length;
+  const countWords = (text: string) => text.trim().split(/\s+/).filter(Boolean).length;
 
-  for (const field of document.querySelectorAll('textarea[data-count]')) {
-    const target = document.getElementById(field.dataset.count);
+  /* Typed at the query. `querySelectorAll` hands back `Element`, which has
+     neither `dataset` nor `value` — and the loop below reads both. */
+  const fields = document.querySelectorAll<HTMLTextAreaElement>('textarea[data-count]');
+
+  for (const field of fields) {
+    const target = document.getElementById(field.dataset.count ?? '');
     if (!target) continue;
 
     const min = field.dataset.min ? Number(field.dataset.min) : null;
@@ -1277,9 +1305,14 @@ function targetFor(key: string): string | null {
     if (!hash || hash.length < 2) return;
     const target = document.querySelector(hash);
     if (!target) return;
-    const field = target.matches('input, textarea, select')
-      ? target
-      : target.querySelector('input:not([type=hidden]), textarea, select');
+    /* The element that can actually take focus. `Element` has neither
+       `disabled` nor `focus`, and the three tags this matches all do. */
+    const field = (
+      target.matches('input, textarea, select')
+        ? target
+        : target.querySelector('input:not([type=hidden]), textarea, select')
+    ) as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement | null;
+
     if (field && !field.disabled) field.focus({ preventScroll: true });
   };
 
@@ -1302,12 +1335,12 @@ function targetFor(key: string): string | null {
     });
   }
 
-  const grow = (field) => {
+  const grow = (field: HTMLTextAreaElement) => {
     field.style.height = 'auto';
     field.style.height = `${field.scrollHeight + 2}px`;
   };
 
-  for (const field of document.querySelectorAll('textarea.grow')) {
+  for (const field of document.querySelectorAll<HTMLTextAreaElement>('textarea.grow')) {
     field.style.overflowY = 'hidden';
     grow(field);
     field.addEventListener('input', () => grow(field));

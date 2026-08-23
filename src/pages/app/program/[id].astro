@@ -20,8 +20,11 @@ export const prerender = false;
  * them rather than growing a second copy that could disagree.
  */
 
+import Authority from '../../../components/Authority.astro';
 import Base from '../../../layouts/Base.astro';
 import AppShell from '../../../components/AppShell.astro';
+import { resolveProgram } from '../../../lib/templates';
+import { standing } from '../../../lib/roles';
 import { activeOrg } from '../../../lib/tenant';
 import { serverClient } from '../../../lib/supabase';
 import { formatDate } from '../../../lib/dates';
@@ -92,6 +95,37 @@ const { data: membership } = await supabase
   .maybeSingle();
 
 const isCohort = program.program_role === 'cohort';
+
+/**
+ * WHERE THIS PROGRAM'S DEADLINES CAME FROM, AND WHETHER THEY ARE STILL TRUE.
+ *
+ * A template is somebody's reading of a rulebook on a particular day, and a
+ * rulebook changes annually. This page prints twenty-nine dates as fact; the
+ * least it owes a reader is who read what, and when.
+ *
+ * The staleness is told to the program's advisor and to nobody else.
+ * "These dates may be out of date" is a professional problem for the person
+ * who can fix it and an unactionable worry for a student, who would read it
+ * the night before a deadline and have nowhere to go with it.
+ */
+const template = program.template_id ? resolveProgram(program.template_id) : null;
+const provenance = template?.provenance ?? null;
+const behind = (template?.provenance_chain ?? []).slice(1);
+
+const me = standing(roles ?? [], account?.id ?? null);
+
+/* Scoped, so an advisor of the class is warned about the class. `runsTheClub`
+   is true for a scoped advisor, and `scopes` names which. 22.27. */
+const advisesThis =
+  me.anywhere || (me.runsTheClub && (me.scopes ?? []).includes(program.id));
+
+const STALE_AFTER_DAYS = 365;
+
+const daysSinceVerified = provenance?.verified_on
+  ? Math.floor((Date.now() - Date.parse(provenance.verified_on)) / 86400000)
+  : null;
+
+const stale = daysSinceVerified !== null && daysSinceVerified > STALE_AFTER_DAYS;
 const state = (membership as any)?.state ?? null;
 ---
 
@@ -127,6 +161,69 @@ const state = (membership as any)?.state ?? null;
         The site stays, because it is not a term. A student going to the
         program's own site is going for rules and forms this does not copy,
         and nothing else on the page offers a way to them. */}
+    {/* WHO READ WHAT, AND WHEN.
+    
+        Under the title rather than at the foot of the page: it qualifies
+        every date below it, and a provenance line somebody scrolls to after
+        reading the dates has already failed. */}
+    {provenance && (
+      <div class="prov">
+        <p>
+          Read from{' '}
+          {provenance.source_url ? (
+            <a href={provenance.source_url} target="_blank" rel="noopener noreferrer">
+              {new URL(provenance.source_url).hostname.replace(/^www\./, '')}
+            </a>
+          ) : (
+            'its own source'
+          )}
+          {provenance.rules_year && ` for the ${provenance.rules_year} rules`}
+          {provenance.verified_on && `, checked ${formatDate(provenance.verified_on, 'long')}`}
+          {provenance.owner && ` by ${provenance.owner}`}.
+          {' '}
+          <a href={`mailto:hello@blueleaflabs.org?subject=${
+            encodeURIComponent(`Error in ${programTitle(program)}`)
+          }&body=${
+            encodeURIComponent(
+              `Program: ${program.id}\nTemplate: ${program.template_id ?? '(none)'}\n\nWhat is wrong:\n`
+            )
+          }`}>Report an error</a>
+        </p>
+
+        {/* What stands behind it. A regional fair inherits ISEF's forms and
+            ISEF's rulebook, and a sponsor checking a form needs both. */}
+        {behind.length > 0 && (
+          <p class="behind">
+            Built on{' '}
+            {behind.map((layer: any, i: number) => (
+              <>
+                {i > 0 && ', '}
+                {layer.name}
+                {layer.verified_on && ` (${formatDate(layer.verified_on, 'short')})`}
+              </>
+            ))}.
+          </p>
+        )}
+
+        {/* Only to somebody who can do something about it. */}
+        {stale && advisesThis && (
+          <p class="stale" role="status">
+            <b>This has not been checked in {Math.floor(daysSinceVerified! / 30)} months.</b>{' '}
+            Rules and calendars change every season. Read the source again and
+            update <code>{program.template_id}</code>.
+          </p>
+        )}
+
+        {/* A recent change is worth one line, because a returning student
+            works from last year's memory. */}
+        {provenance.changes?.[0] && (
+          <p class="changed">
+            Last change {formatDate(provenance.changes[0].on, 'long')}: {provenance.changes[0].what}
+          </p>
+        )}
+      </div>
+    )}
+
     {program.website_url && (
       <dl class="facts">
         <dt>Official site</dt>
@@ -146,6 +243,10 @@ const state = (membership as any)?.state ?? null;
             dates could actually differ from these, which is their own entry
             page, and above a list of dates it read as filler. */}
         <div class="sec-h"><b>Published dates</b></div>
+
+        {/* These are the program's own deadlines, read from a template, and
+            a template is somebody's reading of a rulebook. */}
+        <Authority compact />
 
         <ul class="dates">
           {dated.map((m: any) => (
@@ -185,6 +286,29 @@ const state = (membership as any)?.state ?? null;
 </Base>
 
 <style>
+  /* Quiet, and above the dates it qualifies. */
+  .prov {
+    max-width: var(--measure-text);
+    margin: 0 0 26px;
+    font-family: var(--face-ui);
+    font-size: 0.88rem;
+    line-height: 1.55;
+    color: var(--ink-3);
+  }
+  .prov p { margin: 0 0 4px; }
+  .prov .behind,
+  .prov .changed { font-size: 0.84rem; }
+  .prov code { font-family: var(--face-num); font-size: 0.86rem; }
+
+  /* The one line here that is addressed to somebody who can act. */
+  .prov .stale {
+    margin: 10px 0 6px;
+    padding: 10px 12px;
+    background: var(--ready-bg);
+    border-left: var(--edge) solid var(--brand-mark);
+    color: var(--ink-2);
+  }
+
   .crumb { margin: 0 0 18px; }
   .season {
     font-family: var(--face-num);

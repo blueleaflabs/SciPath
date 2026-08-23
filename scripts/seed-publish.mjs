@@ -24,6 +24,7 @@ import { createClient } from '@supabase/supabase-js';
 import { loadDevVars } from './dev-vars.mjs';
 import { actingAs, signOutAll } from './act-as.mjs';
 import { loadOrgs } from './orgs-library.mjs';
+import { openBucket } from './notebook-bucket.mjs';
 import { assembleRecord } from '../src/lib/record-files.ts';
 import { readManifest, writeManifest, upsert } from '../src/lib/records-store.ts';
 
@@ -45,23 +46,29 @@ const db = createClient(URL, KEY, { auth: { persistSession: false } });
    registry the application uses is bundled by Vite. */
 const imrad = yaml.load(fs.readFileSync('src/config/shapes/imrad.yaml', 'utf8'));
 
-/* The local bucket. Without one nothing can be published, and saying so is
-   better than writing rows that point at files which do not exist. */
-let proxy = null;
+/* Whichever bucket the rows are going to. Without one nothing can be
+   published, and saying so is better than writing rows that point at files
+   which do not exist.
+   
+   This reached for wrangler's local state unconditionally, which meant a
+   cloud run either published nothing or — worse, had the local state
+   existed — wrote two records into a bucket on the machine that ran it and
+   rows pointing at them into the deployed project. */
+let store = null;
 let bucket = null;
 
 try {
-  const { getPlatformProxy } = await import('wrangler');
-  proxy = await getPlatformProxy();
-  bucket = proxy.env.NOTEBOOK ?? null;
-} catch {
-  /* Reported below. */
+  store = await openBucket({ url: URL });
+  bucket = store?.bucket ?? null;
+} catch (error) {
+  console.error(`\n${error.message}\n`);
+  process.exit(1);
 }
 
 async function release() {
   await signOutAll();
-  if (proxy) await proxy.dispose();
-  proxy = null;
+  if (store) await store.dispose();
+  store = null;
 }
 
 /** The blob interface `assembleRecord` expects. */
@@ -80,7 +87,7 @@ const blob = {
 
 async function main() {
   if (!bucket) {
-    console.log('\nNo local file storage, so nothing can be published.\n');
+    console.log('\nNo file storage, so nothing can be published.\n');
     return;
   }
 

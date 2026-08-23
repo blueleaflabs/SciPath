@@ -56,7 +56,10 @@ export const GET: APIRoute = async (context) => {
     },
   ]);
 
-  return new Response(zipped, {
+  /* The buffer, not the view. See the note in `src/lib/pdf-text.ts`: since
+     TypeScript 5.7 a `Uint8Array` carries its buffer type, and `BodyInit`
+     wants an `ArrayBuffer`. */
+  return new Response(zipped.buffer as ArrayBuffer, {
     headers: {
       'Content-Type': 'application/zip',
       'Content-Disposition': `attachment; filename="${record.id}.zip"`,

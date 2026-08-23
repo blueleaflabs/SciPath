@@ -1,6 +1,7 @@
 ---
-import { marked } from 'marked';
-import { disciplineLabel, siteUrl } from '../config/site';
+import { renderMarkdown } from '../lib/notes';
+import { disciplineLabel } from '../config/site';
+import { originForOrg } from '../lib/deployment';
 import type { RecordEntry } from '../lib/records-store';
 import type { Org } from '../config/orgs';
 import { parseVideo } from '../lib/video';
@@ -24,7 +25,9 @@ interface Props {
 const { record: d, body, org, companion } = Astro.props;
 
 const space = d.recordKind === 'project' ? 'projects' : 'articles';
-const url = new URL(`/${space}/${d.year}/${d.slug}/`, siteUrl).href;
+/* The citation URL is the one a reader will paste into a bibliography years
+   from now, so it names the school that published the record. */
+const url = new URL(`/${space}/${d.year}/${d.slug}/`, originForOrg(org)).href;
 
 const video = parseVideo(d.video);
 
@@ -65,7 +68,15 @@ const published =
         month: 'long', year: 'numeric',
       });
 
-const html = body ? marked.parse(body) : '';
+/* Through the same rendering as a notebook entry, which escapes every angle
+   bracket before the parser sees one and then refuses any URL scheme but
+   http, https and mailto.
+   
+   This called `marked.parse` directly, so a manuscript containing a literal
+   `<script>` was published as a script tag on a public page — the one surface
+   where the author and the reader are different people and the reader has no
+   reason to distrust it. */
+const html = body ? renderMarkdown(body) : '';
 ---
 
 <article class="wrap">

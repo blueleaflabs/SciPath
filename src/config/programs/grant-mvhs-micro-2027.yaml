@@ -12,6 +12,20 @@
 # adding later and are worth transcribing rather than guessing.
 
 id: grant-mvhs-micro-2027
+
+# Who read the source this is built from, what they read, and when. A year
+# after `verified_on` the program's advisor is told: a rulebook and a school
+# calendar both change annually, and a file nobody has looked at since last
+# season looks exactly like one checked this morning.
+provenance:
+  owner: Rohan Agarwal
+  source_url: https://blueleaflabs.org/
+  rules_year: 2027
+  verified_on: 2026-08-22
+  changes:
+    - on: 2026-08-22
+      what: First reading. The program is the school's own, so the source is the sheet it is run from.
+
 family: mvhs-micro
 kind: grant
 

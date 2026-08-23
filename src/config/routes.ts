@@ -34,6 +34,19 @@ export const NON_TENANT_TREES = [
   'topics',
   'records',
   'records-index',
+  /* The three front door pages. They belong to the platform rather than to a
+     school: a student at Monta Vista is not offered an independent account,
+     a demonstration of their own school, or a pitch to adopt software they
+     are already using. Each resolves the hostname and sends a school's
+     visitor to that school's home page instead.
+
+     Trees rather than files at the root, so one name serves both readers of
+     this list: the middleware compares the first path segment, and
+     `tests/tenant-routes.mjs` compares directory entries. A file called
+     `demo.astro` would satisfy one of them and not the other. */
+  'get-started',
+  'demo',
+  'for-organizations',
 ] as const;
 
 export type NonTenantTree = (typeof NON_TENANT_TREES)[number];

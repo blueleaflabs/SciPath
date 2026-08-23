@@ -60,7 +60,10 @@ export const publicLabel: Record<State, string> = {
 };
 
 /** What the queue calls it. Shorter, and for people who know the process. */
-export const editorLabel: Record<State, string> = {
+/* Complete for the states that exist, and read with whatever a database row
+   carried — which is a `string`. Both are true at once, so the key is widened
+   and the values stay checked. Same reasoning as `roleLabel`. */
+export const editorLabel: Partial<Record<string, string>> & Record<State, string> = {
   draft: 'Draft',
   submitted: 'New',
   screening: 'Screening',

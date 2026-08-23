@@ -2,19 +2,23 @@
 export const prerender = false;
 
 /**
- * HIDDEN, PENDING A DECISION ABOUT WHO IT IS FOR.
+ * SUPERSEDED BY `/for-organizations/`.
  *
  * The pitch to somebody running a club, a research class or a fair season:
  * what the platform looks like from the side of the adult who would adopt it
  * rather than the student who would use it.
  *
- * It is hidden rather than removed. The argument for it stands — two readers
- * arrive at the home page and only one of them is addressed — but the page
- * was written before the product had been shown to a single teacher, and a
- * pitch that has never met its audience is a guess. It should come back when
- * there is something to say that a teacher has already agreed with.
+ * It was hidden because the argument for it stood and the page itself was a
+ * guess: written before the product had been shown to a single teacher. What
+ * brought it back is that the offer is now real rather than imagined, and it
+ * came back at a wider name, because a homeschool group and a fair
+ * association are not schools and both need the same thing.
  *
- * Recorded in the brief. The prose is intact in the history.
+ * The address survives as a redirect. Four versions of the site linked it.
  */
-return Astro.redirect('/', 301);
+import { activeOrg } from '../../lib/tenant';
+
+const org = activeOrg(Astro);
+
+return Astro.redirect(org.isPlatform ? '/for-organizations/' : '/', 301);
 ---

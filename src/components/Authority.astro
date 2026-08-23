@@ -1,0 +1,60 @@
+---
+/**
+ * WHO IS ACTUALLY IN CHARGE OF A RULE.
+ *
+ * This platform reads a rulebook and works out which forms a project needs,
+ * which is useful and is not authority. The Adult Sponsor signs, the SRC or
+ * IRB approves, and the destination fair decides what it will accept — and
+ * every one of them can be stricter than what is shown here, can change
+ * between the day a template was written and the day a project is checked in,
+ * and is the one somebody has to satisfy.
+ *
+ * **The failure this prevents is specific.** A student reads "no further
+ * forms required", does not ask their sponsor, and finds out at check-in.
+ * That is a season, and the sentence that would have stopped it costs two
+ * lines.
+ *
+ * One component rather than a paragraph written on each page, because the
+ * wording is the point: it names three authorities and it has to name the
+ * same three everywhere. A copy that drifts is a copy that says something
+ * slightly weaker than the one beside it.
+ *
+ * Where it goes is decided in `tests/ordering.mjs`: the surfaces that tell
+ * somebody what a rulebook requires of them. Not the notebook's own entries,
+ * which are a record of what a student did rather than a claim about what is
+ * required, and not the showcase, which is finished work.
+ */
+
+interface Props {
+  /** Tighter, for a panel that already carries a heading of its own. */
+  compact?: boolean;
+}
+
+const { compact = false } = Astro.props;
+---
+
+<p class:list={['authority', compact && 'compact']}>
+  SciPath is a planning and recordkeeping aid. Your Adult Sponsor, SRC/IRB and
+  destination fair remain authoritative.
+</p>
+
+<style>
+  /* Quiet, and always present. Loud enough to be read once and quiet enough
+     that somebody who has read it fifty times is not fighting it. */
+  .authority {
+    margin: 18px 0 0;
+    padding-top: 12px;
+    border-top: 1px solid var(--rule-fine);
+    font-family: var(--face-ui);
+    font-size: 0.86rem;
+    line-height: 1.5;
+    color: var(--ink-3);
+    max-width: var(--measure-text);
+  }
+
+  .authority.compact {
+    margin-top: 12px;
+    padding-top: 10px;
+    font-size: 0.82rem;
+  }
+</style>

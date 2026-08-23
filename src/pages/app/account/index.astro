@@ -1,0 +1,277 @@
+---
+export const prerender = false;
+
+/**
+ * LEAVING.
+ *
+ * A page of its own rather than a section of the profile, because everything
+ * on it is irreversible and a page that mixes "change your display name" with
+ * "destroy your work" invites one to be done while looking for the other.
+ *
+ * **It shows the cost before it asks.** `deletion_impact()` reads what would
+ * go without changing a row, so the projects that disappear are named, the
+ * ones that need somebody else's yes are named separately, and the counts of
+ * notebook entries and published records are stated. A confirmation dialog
+ * that says "are you sure?" is asking somebody to guess.
+ *
+ * The typed confirmation is their own email address, as GitHub asks for a
+ * repository's name: specific to the thing being destroyed, so muscle memory
+ * cannot supply it. It is checked again on the server, because a screen is
+ * not a guard.
+ */
+
+import Base from '../../../layouts/Base.astro';
+import AppShell from '../../../components/AppShell.astro';
+import { activeOrg } from '../../../lib/tenant';
+import { serverClient } from '../../../lib/supabase';
+import { signInWith } from '../../../lib/next-path';
+import { afterPost, outcomeFrom } from '../../../lib/post-redirect';
+
+const { session, account, roles } = Astro.locals;
+const org = activeOrg(Astro);
+
+if (!session) return Astro.redirect(signInWith(Astro.url));
+if (!account) return Astro.redirect('/app/welcome/');
+
+const { error, note } = outcomeFrom(Astro.url);
+
+const supabase = serverClient(
+  Astro.request,
+  Astro.cookies,
+  (Astro.locals as any).runtime?.env
+);
+
+const { data: impactRow } = await supabase.rpc('deletion_impact');
+const impact = (impactRow as any) ?? {};
+
+const alone = impact.projects_alone ?? [];
+const shared = impact.projects_shared ?? [];
+const notes = impact.notes ?? 0;
+const published = impact.published ?? 0;
+const warnings = impact.warnings ?? 0;
+const reviews = impact.reviews ?? 0;
+
+/* Anything that belongs to somebody else as well. Until these are settled the
+   form does not appear at all — an enabled button that refuses on submit is a
+   worse way to say the same thing. */
+const needsAsking = shared.length > 0 || warnings > 0 || reviews > 0;
+
+/* What this person's own request is waiting on.
+ 
+   Asked of the database. Selecting from `account_deletion_approvals` here
+   returns rows where *they* are the approver, which is a different question
+   with a plausible-looking answer. */
+const { data: readyRow } = await supabase.rpc('deletion_ready');
+const ready = (readyRow as any) ?? { state: 'none', waiting: 0, declined: 0 };
+
+const waiting = Number(ready.waiting ?? 0);
+const asked = ready.state !== 'none';
+
+/* And what they have been asked to answer for other people. This one *is*
+   that table, read the way its policy intends. */
+const { data: toAnswer } = await supabase
+  .from('account_deletion_approvals')
+  .select('id, about_kind, about_id, deletion_id')
+  .eq('state', 'pending');
+
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData();
+  const act = String(form.get('act') ?? '');
+
+  if (act === 'ask' || act === 'leave') {
+    const { error: e } = await supabase.rpc('request_account_deletion', { p_intent: act });
+    return afterPost(Astro.url, e ? { error: e.message } : {
+      note: act === 'ask'
+        ? 'Asked. Nothing happens until everyone answers.'
+        : 'Noted. Your shared work stays with the other authors.',
+    });
+  }
+
+  if (act === 'approve' || act === 'decline') {
+    const { error: e } = await supabase.rpc('answer_deletion_approval', {
+      p_approval_id: String(form.get('approval_id') ?? ''),
+      p_approve: act === 'approve',
+    });
+    return afterPost(Astro.url, e ? { error: e.message } : { note: 'Answered.' });
+  }
+}
+---
+
+<Base title="Your account" noindex={true}>
+  <AppShell org={org} account={account} roles={roles} here="/app/account/" />
+
+  <div class="wrap">
+    <section class="stack">
+      <p class="t-lbl">Account</p>
+      <h1>Leaving SciPath</h1>
+
+      <div id="outcome" tabindex="-1">
+        {error && <p class="note" role="alert">{error}</p>}
+        {note && <p class="note" role="status">{note}</p>}
+      </div>
+
+      {/* What goes. Named, not counted, wherever naming is possible: a
+          student with four projects should read the four titles and recognize
+          the one they had forgotten about. */}
+      <section class="sec">
+        <div class="sec-h"><b>What deleting your account removes</b></div>
+
+        <ul class="what">
+          {alone.length > 0 ? (
+            alone.map((p: any) => <li><b>{p.title}</b> — the project, its notebook, its deliverables and its files</li>)
+          ) : (
+            <li>No projects of your own.</li>
+          )}
+
+          {notes > 0 && (
+            <li>
+              {notes} notebook {notes === 1 ? 'entry' : 'entries'} you wrote, including any
+              left on other people's projects
+            </li>
+          )}
+
+          {published > 0 && (
+            <li>
+              {published} published {published === 1 ? 'record' : 'records'}, and the public
+              page{published === 1 ? '' : 's'} at{' '}
+              {published === 1 ? 'its address' : 'their addresses'}
+            </li>
+          )}
+
+          <li>Your account, your sign-in, and anything a guardian confirmed</li>
+        </ul>
+
+        <p class="grave">
+          This cannot be undone. There is no archive, no restore and no copy kept.
+          Export anything you want to keep before you do this.
+        </p>
+      </section>
+
+      {needsAsking && (
+        <section class="sec">
+          <div class="sec-h">
+            <b>What needs somebody else's permission</b>
+            <span>{waiting > 0 ? `${waiting} waiting` : 'Not asked yet'}</span>
+          </div>
+
+          <p class="prose">
+            These belong to other people as well as to you, so deleting them is not
+            yours alone to do. Ask, and if everyone agrees they go with you. If anyone
+            declines, you still leave — your name comes off and the work stays with them.
+          </p>
+
+          <ul class="what">
+            {shared.map((p: any) => (
+              <li>
+                <b>{p.title}</b> — shared with {p.others} other{' '}
+                {p.others === 1 ? 'author' : 'authors'}
+              </li>
+            ))}
+            {warnings > 0 && (
+              <li>{warnings} {warnings === 1 ? 'note' : 'notes'} you wrote as guidance for a whole program</li>
+            )}
+            {reviews > 0 && (
+              <li>{reviews} {reviews === 1 ? 'review' : 'reviews'} of other people's manuscripts</li>
+            )}
+          </ul>
+
+          {asked ? (
+            <p class="fine">
+              {waiting > 0
+                ? `Asked. ${waiting} ${waiting === 1 ? 'person has' : 'people have'} still to answer, and nothing happens until they do.`
+                : ready.state === 'refused'
+                  ? 'Somebody declined. You can still delete your account; your name comes off the shared work and it stays with them.'
+                  : 'Everyone has answered. You can delete your account below.'}
+            </p>
+          ) : (
+            <>
+              {/* Two ways forward, and neither is a default. Asking is the
+                  slower one and the one that can be refused; leaving is
+                  immediate and takes nothing from anybody. */}
+              <form method="POST" action="#outcome" class="choose">
+                <button class="btn" name="act" value="ask" type="submit">
+                  Ask them to delete it with me
+                </button>
+                <button class="btn ghost" name="act" value="leave" type="submit">
+                  Just take my name off it
+                </button>
+              </form>
+              <p class="fine">
+                Asking sends them an email. If anyone declines, you still leave.
+              </p>
+            </>
+          )}
+        </section>
+      )}
+
+      {(toAnswer ?? []).length > 0 && (
+        /* The other side of the same conversation. On this page rather than
+           on the overview, because it is about somebody leaving and this is
+           where leaving lives. */
+        <section class="sec">
+          <div class="sec-h">
+            <b>Somebody is asking to delete work you share</b>
+            <span>{(toAnswer ?? []).length} waiting</span>
+          </div>
+
+          <p class="prose">
+            If you agree, it is deleted permanently and cannot be recovered. If you
+            do not, they still leave and the work stays with you.
+          </p>
+
+          {(toAnswer ?? []).map((a: any) => (
+            <form method="POST" action="#outcome" class="choose">
+              <input type="hidden" name="approval_id" value={a.id} />
+              <span class="about">
+                {a.about_kind === 'project' ? 'A project you co-author' : 'Guidance and reviews'}
+              </span>
+              <button class="btn ghost" name="act" value="approve" type="submit">Agree</button>
+              <button class="btn" name="act" value="decline" type="submit">Keep it</button>
+            </form>
+          ))}
+        </section>
+      )}
+
+      {!needsAsking && (
+        <section class="sec">
+          <div class="sec-h"><b>Delete your account</b><span>Permanent</span></div>
+
+          <form method="POST" action="/app/account/delete/" class="gone">
+            <label>
+              <span>Type <b>{session.email}</b> to confirm</span>
+              <input name="confirm" autocomplete="off" autocapitalize="off" spellcheck="false" required />
+            </label>
+            <button class="btn danger" type="submit">Delete my account permanently</button>
+          </form>
+        </section>
+      )}
+    </section>
+  </div>
+</Base>
+
+<style>
+  .what { max-width: var(--measure-text); margin: 0 0 18px; padding-left: 1.1rem; }
+  .what li { margin-bottom: 8px; line-height: 1.5; }
+
+  /* The one paragraph on the page that should stop somebody. */
+  .grave {
+    max-width: var(--measure-text);
+    margin: 0;
+    padding: 12px 14px;
+    background: var(--alert-bg);
+    border-left: var(--edge) solid var(--alert);
+    font-weight: 600;
+  }
+
+  .choose { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin: 0 0 12px; }
+  .choose .about { font-family: var(--face-ui); font-size: 0.94rem; margin-right: auto; }
+  .btn.ghost { background: var(--card); color: var(--ink); border-color: var(--rule); }
+
+  .gone { max-width: 42ch; }
+  .gone label { display: block; margin-bottom: 14px; }
+  .gone label > span { display: block; margin-bottom: 6px; font-family: var(--face-ui); font-size: 0.92rem; }
+  .gone input { width: 100%; padding: 9px 11px; border: 1px solid var(--rule); background: var(--card); color: var(--ink); font: inherit; }
+
+  .btn.danger { background: var(--alert); border-color: var(--alert); color: var(--paper); }
+  .fine { color: var(--ink-3); font-size: 0.9rem; max-width: var(--measure-text); }
+</style>

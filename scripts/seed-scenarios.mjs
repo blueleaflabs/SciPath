@@ -20,8 +20,10 @@
 
 import { createClient } from '@supabase/supabase-js';
 import { loadDevVars } from './dev-vars.mjs';
+import { fixtureTarget, fixtureName } from './fixture-target.mjs';
+import { openBucket } from './notebook-bucket.mjs';
 import { actingAs, signOutAll } from './act-as.mjs';
-import { placeholderSvg, PLACEHOLDER_CAPTIONS } from './placeholder-image.mjs';
+import { placeholderPng, PLACEHOLDER_CAPTIONS } from './placeholder-image.mjs';
 
 loadDevVars();
 
@@ -29,7 +31,6 @@ const URL = process.env.PUBLIC_SUPABASE_URL ?? '';
 const KEY = process.env.SUPABASE_SECRET_KEY ?? '';
 const ORG_SLUG = process.env.DEMO_ORG ?? 'montavista';
 const FIXTURE_DOMAIN = 'demo.invalid';
-const PRODUCTION_REF = 'uctbxilvfzaoroffzgen';
 
 function fail(message) {
   console.error(`\n${message}\n`);
@@ -62,9 +63,39 @@ if (!URL || !KEY) {
   );
 }
 
-if (!/^https?:\/\/(127\.0\.0\.1|localhost)(:|\/|$)/.test(URL) || URL.includes(PRODUCTION_REF)) {
-  fail('Scenario fixtures are for the local stack only.');
-}
+/* Was a flat refusal of anything but loopback, which was right while the
+   only place to demonstrate from was a laptop. The demonstration tenant is a
+   school in the deployed project now, so the rule is the same one `seed-demo`
+   uses: a host that is not loopback needs `--allow-remote`, and takes only
+   organizations whose own file says they hold nothing real. */
+const allowRemote = process.argv
+  .find((a) => a.startsWith('--allow-remote='))
+  ?.split('=')[1];
+
+const target = fixtureTarget({ url: URL, slugs: [ORG_SLUG], allowRemote });
+
+if (target.refuse) fail(target.refuse);
+if (target.note) console.log(target.note);
+
+/**
+ * SPONSORS BELONG TO THE SCHOOL BEING SEEDED.
+ *
+ * They were written out — `mv_sponsor1`, at `mv_sponsor1@fuhsd.org` — which
+ * was invisible while the scenarios only ever went into Monta Vista and wrong
+ * the moment they went anywhere else: the demonstration tenant showed six
+ * projects supervised by somebody carrying another school's prefix.
+ *
+ * The address was the worse half. `fuhsd.org` is a real mail domain, and a
+ * fixture that carries one is the thing 12.11 asks these not to have. Every
+ * fixture person is already on `demo.invalid`, which resolves nowhere by
+ * standard, and a sponsor is a fixture person who happens not to have an
+ * account.
+ *
+ * A scenario names a number. The prefix comes from the school this run is
+ * seeding, the same way every other fixture name is built.
+ */
+const sponsorName = (sponsor) => fixtureName(ORG_SLUG, `sponsor.${'abcdefgh'[sponsor.n - 1]}`);
+const sponsorEmail = (sponsor) => `${ORG_SLUG}.sponsor.${'abcdefgh'[sponsor.n - 1]}@${FIXTURE_DOMAIN}`;
 
 const db = createClient(URL, KEY, {
   auth: { persistSession: false, autoRefreshToken: false },
@@ -82,14 +113,19 @@ const db = createClient(URL, KEY, {
  * ─────────────────────────────────────────────────────────────────────── */
 
 let bucket = null;
-let proxy = null;
+let store = null;
 
+/* Whichever bucket the rows are going to. This used to reach for wrangler's
+   local state unconditionally, which on a cloud seed wrote the showcase
+   images into `.wrangler` on the machine that ran it and reported success:
+   the demonstration got a showcase with no pictures and nothing failed. */
 try {
-  const { getPlatformProxy } = await import('wrangler');
-  proxy = await getPlatformProxy();
-  bucket = proxy.env.NOTEBOOK ?? null;
-} catch {
-  /* No local bucket. Said once, below, rather than per image. */
+  store = await openBucket({ url: URL });
+  bucket = store?.bucket ?? null;
+} catch (error) {
+  /* A remote run raises rather than degrading — reaching a deployed project
+     without the credentials to write its files is a mistake, not a mode. */
+  fail(error.message);
 }
 
 /**
@@ -102,22 +138,28 @@ try {
  * ends and this did not.
  */
 async function releaseBucket() {
-  if (proxy) await proxy.dispose();
-  proxy = null;
+  if (store) await store.dispose();
+  store = null;
 }
 
 async function seedImages(orgId, projectId, authorId, seedKey, howMany) {
   if (!bucket) return 0;
 
   for (let i = 0; i < howMany; i += 1) {
-    const svg = placeholderSvg(`${seedKey}-${i}`);
-    const path = `projects/${projectId}/images/placeholder-${i + 1}.svg`;
+    /* A PNG, because an SVG is a document.
+    
+       These were SVG, which uploads now refuse and the record store has no
+       media type for — so the seeded showcase images were the one kind of
+       file the platform will not serve, and a fixture nobody could have
+       produced through the interface tests a path nobody takes. */
+    const png = placeholderPng(`${seedKey}-${i}`);
+    const path = `projects/${projectId}/images/placeholder-${i + 1}.png`;
 
     /* A fresh ArrayBuffer: miniflare's proxy asserts on a typed array whose
        byte offset is not zero, and a Node Buffer almost never starts at
        zero. */
-    await bucket.put(path, new Uint8Array(new TextEncoder().encode(svg)).buffer, {
-      httpMetadata: { contentType: 'image/svg+xml' },
+    await bucket.put(path, new Uint8Array(png).buffer, {
+      httpMetadata: { contentType: 'image/png' },
     });
 
     const { caption, alt } = PLACEHOLDER_CAPTIONS[i % PLACEHOLDER_CAPTIONS.length];
@@ -160,7 +202,7 @@ const SCENARIOS = [
     question: 'Does prior heat exposure change the upper thermal limit of Nucella?',
     authors: ['student.a'],
     officer: 'officer.a',
-    sponsor: { name: 'mv_sponsor1', email: 'mv_sponsor1@fuhsd.org', signedDaysAgo: 30 },
+    sponsor: { n: 1, signedDaysAgo: 30 },
     startedDaysAgo: 20,
     complete: 4,
     notes: 5,
@@ -217,7 +259,7 @@ const SCENARIOS = [
     question: 'Do polystyrene beads reduce Daphnia reproduction rate?',
     authors: ['student.b'],
     officer: 'officer.a',
-    sponsor: { name: 'mv_sponsor2', email: 'mv_sponsor2@fuhsd.org', signedDaysAgo: 5 },
+    sponsor: { n: 2, signedDaysAgo: 5 },
     /* Work began well before the sponsor signed. Already true, cannot be
        undone, and the reason the ordering check exists. */
     startedDaysAgo: 60,
@@ -234,7 +276,7 @@ const SCENARIOS = [
     question: 'How fast does efficiency fall with repeated humidity cycles?',
     authors: ['student.c'],
     officer: 'officer.b',
-    sponsor: { name: 'mv_sponsor2', email: 'mv_sponsor2@fuhsd.org', signedDaysAgo: -20 },
+    sponsor: { n: 2, signedDaysAgo: -20 },
     /* Plans to start before the signature is due. Not yet a problem, and
        fixable by moving one date, which is the whole point of saying so. */
     startedDaysAgo: -10,
@@ -250,7 +292,7 @@ const SCENARIOS = [
     question: 'Does nitrate concentration track distance from the freeway?',
     authors: ['student.d'],
     officer: 'officer.b',
-    sponsor: { name: 'mv_sponsor3', email: 'mv_sponsor3@fuhsd.org', signedDaysAgo: 40 },
+    sponsor: { n: 3, signedDaysAgo: 40 },
     startedDaysAgo: 25,
     complete: 1,
     /* Part written, so the editor shows a real 'four of thirteen'. */
@@ -303,7 +345,7 @@ const SCENARIOS = [
         'Rolling element bearings emit a characteristic acoustic signature as they wear, well before failure. This work tests whether a phone microphone and a small convolutional model can detect that signature early enough to be useful, using recordings from a test rig run to destruction.',
     },
     officer: null,
-    sponsor: { name: 'mv_sponsor1', email: 'mv_sponsor1@fuhsd.org', signedDaysAgo: 12 },
+    sponsor: { n: 1, signedDaysAgo: 12 },
     startedDaysAgo: 8,
     complete: 2,
     notes: 2,
@@ -319,7 +361,7 @@ const SCENARIOS = [
     /* An officer running a project of her own, and looking after it herself. */
     authors: ['officer.c'],
     officer: 'officer.c',
-    sponsor: { name: 'mv_sponsor3', email: 'mv_sponsor3@fuhsd.org', signedDaysAgo: 15 },
+    sponsor: { n: 3, signedDaysAgo: 15 },
     startedDaysAgo: 10,
     complete: 3,
     notes: 3,
@@ -353,8 +395,14 @@ const SCENARIOS = [
         'A biomass to availability comparison',
         'A planting date recommendation that inverts the usual advice',
       ],
-      contributions:
-        'mv_officer3 designed the trial, built and planted the beds, ran every extraction and measurement, analyzed the data, and wrote the paper. mv_sponsor3 reviewed the protocol and supervised use of the spectrophotometer.',
+      /* Named by handle rather than written out, so that a scenario seeded
+         into another school does not credit a person who is not there. The
+         seed resolves both against the tenant it is seeding, the same way
+         every other fixture name in this file is built. */
+      contributions: (name) =>
+        `${name('officer.c')} designed the trial, built and planted the beds, ran every ` +
+        'extraction and measurement, analyzed the data, and wrote the paper. ' +
+        `${name('sponsor.c')} reviewed the protocol and supervised use of the spectrophotometer.`,
     },
     note: 'Self managed, and a second paper ready to submit.',
   },
@@ -374,11 +422,12 @@ const SCENARIOS = [
       discipline: 'engineering-robotics',
       abstract:
         'Commercial turbidity meters cost more than a school science budget allows, which puts continuous creek monitoring out of reach for most student projects. This work tests whether an LED and photodiode pair, calibrated against formazin standards, can match a commercial nephelometer across the range encountered in a local creek. Paired measurements were taken at six sites over eight weeks, spanning two storm events, and the agreement between instruments was assessed by Bland-Altman analysis rather than by correlation alone.',
-      contributions:
-        'mv_student7 designed the optical path, built and calibrated the sensor, ran the field comparison, and wrote the paper.',
+      contributions: (name) =>
+        `${name('student.g')} designed the optical path, built and calibrated the sensor, ` +
+        'ran the field comparison, and wrote the paper.',
     },
     officer: 'officer.a',
-    sponsor: { name: 'mv_sponsor1', email: 'mv_sponsor1@fuhsd.org', signedDaysAgo: 22 },
+    sponsor: { n: 1, signedDaysAgo: 22 },
     startedDaysAgo: 14,
     complete: 5,
     notes: 6,
@@ -398,7 +447,7 @@ const SCENARIOS = [
        officer. The common case, and different from the self-managed one. */
     authors: ['officer.a'],
     officer: 'officer.b',
-    sponsor: { name: 'mv_sponsor2', email: 'mv_sponsor2@fuhsd.org', signedDaysAgo: 35 },
+    sponsor: { n: 2, signedDaysAgo: 35 },
     startedDaysAgo: 28,
     complete: 6,
     notes: 4,
@@ -692,8 +741,8 @@ async function main() {
   console.log(`  Programs available: ${kinds || 'none'}`);
   console.log(
     bucket
-      ? '  Showcase images are drawn and written to local file storage.\n'
-      : '  No local file storage, so the showcase images are skipped.\n'
+      ? `  Showcase images are drawn and written to ${store?.remote ? 'the real bucket' : 'local file storage'}.\n`
+      : '  No file storage, so the showcase images are skipped.\n'
   );
 
   for (const scene of SCENARIOS) {
@@ -920,8 +969,8 @@ async function main() {
         db.from('project_sponsors').insert({
           org_id: org.id,
           participation_id: entry.id,
-          teacher_name: scene.sponsor.name,
-          teacher_email: scene.sponsor.email,
+          teacher_name: sponsorName(scene.sponsor),
+          teacher_email: sponsorEmail(scene.sponsor),
           signed_on: shift(-scene.sponsor.signedDaysAgo),
           recorded_by: authors[0].id,
         }),
@@ -1101,10 +1150,16 @@ async function main() {
           abstract: spec.abstract ?? null,
           keywords: spec.keywords ?? [],
           discipline: spec.discipline ?? null,
+          /* A function where a scenario names somebody, so the handle is
+             resolved against the school being seeded rather than written
+             out. A string where it does not, and null where the scenario
+             says there is none. */
           contributions:
             spec.contributions === undefined
-              ? `${names.join(' and ')} designed the study, collected and analyzed the data, and wrote the paper. ${scene.sponsor ? `${scene.sponsor.name} reviewed the protocol and supervised laboratory safety.` : ''}`.trim()
-              : spec.contributions,
+              ? `${names.join(' and ')} designed the study, collected and analyzed the data, and wrote the paper. ${scene.sponsor ? `${sponsorName(scene.sponsor)} reviewed the protocol and supervised laboratory safety.` : ''}`.trim()
+              : typeof spec.contributions === 'function'
+                ? spec.contributions((handle) => fixtureName(ORG_SLUG, handle))
+                : spec.contributions,
           completed_on: shift(-2),
           date_precision: 'month',
           created_by: authors[0].id,
@@ -1184,21 +1239,28 @@ async function main() {
       `  ${scene.title}\n` +
         `    ${authors.map((a) => a.display_name).join(', ')}` +
         `${scene.officer ? ` · officer ${byHandle.get(scene.officer)?.display_name ?? '?'}` : ' · no officer'}` +
-        `${scene.sponsor ? ` · ${scene.sponsor.name}` : ' · no sponsor'}` +
+        `${scene.sponsor ? ` · ${sponsorName(scene.sponsor)}` : ' · no sponsor'}` +
         `\n    ${scenePrograms.name}` +
         `${declared.length ? ` · declares ${declared.join(', ')}` : ' · nothing regulated'}` +
         `${scene.note ? `\n    ${scene.note}` : ''}`
     );
   }
 
+  /* Built from the school this run seeded, not written out. These read
+     `montavista.` whichever school the run was pointed at, so a run against
+     the demonstration tenant printed six addresses that do not exist there
+     and every one of them was the first thing somebody tried. */
+  const shownFor = (handle, says) => `\n  ${ORG_SLUG}.${handle}@${FIXTURE_DOMAIN}`.padEnd(40) + says;
+
   console.log(
-    '\nSign in with any fixture address and the password: scipath' +
-      '\n\n  montavista.advisor@demo.invalid     everything, plus selection' +
-      '\n  montavista.officer.a@demo.invalid   three projects, one queue' +
-      '\n  montavista.officer.c@demo.invalid   runs one of her own' +
-      '\n  montavista.student.a@demo.invalid   one project, in good order' +
-      '\n  montavista.student.b@demo.invalid   one disqualified' +
-      '\n  montavista.student.g@demo.invalid   co-authored with mv_student8\n'
+    '\nSign in with any fixture address and the password: scipath\n' +
+      shownFor('advisor', 'everything, plus selection') +
+      shownFor('officer.a', 'three projects, one queue') +
+      shownFor('officer.c', 'runs one of her own') +
+      shownFor('student.a', 'one project, in good order') +
+      shownFor('student.b', 'one disqualified') +
+      shownFor('student.g', 'co-authored with the next one along') +
+      '\n'
   );
 }
 

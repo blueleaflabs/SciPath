@@ -231,8 +231,11 @@ test('the demo flag is declared where a school is described', () => {
 test('the fixture seed reads the flag rather than naming a school', () => {
   /* A list of permitted slugs inside the script is a list somebody edits
      while pointed at production. The permission is a fact about the school,
-     so the script asks the school. */
-  const seed = fs.readFileSync('scripts/seed-demo.mjs', 'utf8');
+     so the script asks the school.
+  
+     The rule moved into `fixture-target.mjs` when the other two inventing
+     scripts needed it. Three copies of one rule is how the copies drift. */
+  const seed = fs.readFileSync('scripts/fixture-target.mjs', 'utf8');
 
   assert.match(seed, /loadOrgs/, 'the guard has to read the organization records');
   assert.match(seed, /org\.demo === true/, 'and decide on the flag');
@@ -242,7 +245,7 @@ test('the fixture seed reads the flag rather than naming a school', () => {
      failure this suite exists to make impossible. */
   assert.match(
     seed,
-    /const notDemo = ORG_SLUGS\.filter\(\(slug\) => !demoOnly\.has\(slug\)\)/,
+    /const notDemo = slugs\.filter\(\(slug\) => !demoOnly\.has\(slug\)\)/,
     'the refused set has to be every slug the flag does not cover'
   );
   assert.match(

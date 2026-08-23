@@ -1354,3 +1354,17 @@ mark {
     margin-top: 8px;
   }
 }
+
+/* THE WAY IN, AT THE FOOT OF A PAGE.
+ *
+ * `tests/ordering.mjs` requires a public page to end with one: a page that
+ * explains the work and then stops sends somebody back to a search engine.
+ * It was a scoped rule inside one page, which meant the next page to need it
+ * either copied the rule or used the class and got nothing. Shared, because
+ * the requirement is shared. */
+.cta {
+  border-top: 2px solid var(--ink);
+  padding-top: 24px;
+  margin-top: 32px;
+}
+.cta .row { margin-top: 18px; }

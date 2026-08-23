@@ -29,9 +29,28 @@ const columns = [
   {
     label: 'Use it',
     links: [
+      { href: '/how-it-works/', label: 'How it works' },
       { href: '/guides/', label: 'Guides' },
       { href: '/mistakes/', label: 'Common mistakes' },
       { href: '/submit/', label: 'Publish your work' },
+    ],
+  },
+  /* **The four readers, addressed by name.** The masthead deliberately does
+     not rank sections and cannot hold four audience pages without becoming
+     the seven-item bar it was cut down from. A footer is a directory, which
+     is exactly the shape a list of "which of these am I" wants.
+
+     `/for-organizations/` belongs to the platform and redirects at a school,
+     so it is offered where it leads somewhere. */
+  {
+    label: 'Who it is for',
+    links: [
+      { href: '/for-students/', label: 'Students' },
+      { href: '/for-educators/', label: 'Educators' },
+      { href: '/for-student-leaders/', label: 'Student leaders' },
+      ...(org.isPlatform
+        ? [{ href: '/for-organizations/', label: 'Schools and clubs' }]
+        : []),
     ],
   },
   {

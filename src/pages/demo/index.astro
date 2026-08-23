@@ -1,0 +1,114 @@
+---
+/**
+ * THE DEMONSTRATION, EXPLAINED AND OPENED.
+ *
+ * Platform only, for the same reason as `/get-started/`: a school's visitor
+ * has no use for a demonstration of a school.
+ *
+ * The addresses below are read from `src/config/demo-accounts.mjs`, which is
+ * the file `scripts/seed-demo.mjs` reads when it creates them. Typing them
+ * here would make this page a second copy of a fact the seed owns, and a
+ * published credential that has drifted from the one that exists is the
+ * worst possible first impression.
+ */
+export const prerender = false;
+
+import Base from '../../layouts/Base.astro';
+import PageHead from '../../components/PageHead.astro';
+import { activeOrg } from '../../lib/tenant';
+import { originFor } from '../../lib/deployment';
+import { demoSignIns, DEFAULT_PASSWORD, DEMO_SLUG } from '../../config/demo-accounts.mjs';
+
+const org = activeOrg(Astro);
+if (!org.isPlatform) return Astro.redirect('/', 301);
+
+/* Built from the deployment rather than written down, so this is right on a
+   laptop, on a preview and in production without an edit. */
+const demoOrigin = originFor(DEMO_SLUG);
+const people = demoSignIns();
+---
+
+<Base
+  title="Demo"
+  description="A full research season already in progress, with invented students and invented projects."
+>
+  <PageHead
+    eyebrow="Demo"
+    title="A whole season, already in progress"
+    lede="Sign in as a student, a program leader or a teacher. Everything in it is invented, and the workflows are the real ones."
+  />
+
+  <div class="wrap">
+    <section class="sec">
+      <div class="sec-h"><b>Three viewpoints</b><span>Same season, three doors</span></div>
+      <div class="grid-3">
+        {
+          people.map((p) => (
+            <div class="card pad">
+              <p class="t-lbl">{p.label}</p>
+              <p class="t-sm" style="margin-top:9px">{p.blurb}</p>
+              <p class="cred"><code>{p.email}</code></p>
+            </div>
+          ))
+        }
+      </div>
+      <p class="pass">
+        Password for all three: <code>{DEFAULT_PASSWORD}</code>
+      </p>
+      <div class="row" style="margin-top:20px">
+        <a class="btn" href={demoOrigin}>Open the demonstration</a>
+      </div>
+    </section>
+
+    <section class="sec">
+      <div class="sec-h"><b>What is in there</b><span>A season, not a sample</span></div>
+      <div class="prose">
+        <p>
+          The demonstration runs the same programs a real school runs: a research class, a
+          club, a regional fair, a state fair, a micro grant, and a journal. Projects sit at
+          different stages, some are late, some are missing an approval, and some have already
+          been published. That is what makes it worth opening rather than a screenshot.
+        </p>
+        <p>
+          It is a tenant like any other. Its rows are separated from every school's by the
+          same mechanism two real schools rely on. What is different about it is that its
+          people are invented and its credentials are printed on this page.
+        </p>
+      </div>
+    </section>
+
+    <section class="sec">
+      <div class="note">
+        <p class="t-lbl">Please do not enter anything real</p>
+        <p class="t-sm" style="margin-top:8px">
+          Everything in the demonstration is fictional. Do not enter personal information or
+          real student work. Demonstration data is reset without notice, and anything added
+          there goes with it.
+        </p>
+      </div>
+    </section>
+
+    <section class="sec cta">
+      <div class="sec-h"><b>When you have seen it</b><span>Two ways on</span></div>
+      <div class="row">
+        <a class="btn" href="/get-started/">Start a real project</a>
+        <a class="btn btn-2" href="/for-organizations/">Run it for your students</a>
+      </div>
+    </section>
+  </div>
+</Base>
+
+<style>
+  .cred {
+    margin-top: 12px;
+    padding-top: 10px;
+    border-top: 1px solid var(--rule-fine);
+    font-size: 0.86rem;
+    word-break: break-all;
+  }
+  .pass {
+    margin-top: 16px;
+    font-size: 0.92rem;
+    color: var(--ink-2);
+  }
+</style>

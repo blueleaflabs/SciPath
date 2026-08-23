@@ -1213,5 +1213,413 @@ exception when others then
   raise;
 end $body$;
 
+
+\echo ''
+\echo '── Deleting an account'
+
+do $body$
+declare
+  v_org    uuid;
+  v_solo   uuid := '9f000000-0000-4000-8000-0000000d0001';
+  v_a      uuid := '9f000000-0000-4000-8000-0000000d0002';
+  v_b      uuid := '9f000000-0000-4000-8000-0000000d0003';
+  v_alone  uuid;
+  v_shared uuid;
+  v_note   uuid;
+  v_out    jsonb;
+begin
+  select id into v_org from public.organizations limit 1;
+
+  insert into auth.users (id, email) values
+    (v_solo, 'leaver@demo.invalid'), (v_a, 'stays@demo.invalid'), (v_b, 'partner@demo.invalid');
+
+  insert into public.users (id, org_id, display_name, population, status,
+    affiliation_state, consent_state, age_band)
+  values
+    (v_solo, v_org, 'Leaver', 'student', 'active', 'domain_verified', 'not_required', '18_plus'),
+    (v_a,    v_org, 'Stays',  'student', 'active', 'domain_verified', 'not_required', '18_plus'),
+    (v_b,    v_org, 'Partner','student', 'active', 'domain_verified', 'not_required', '18_plus');
+
+  /* One project of their own, and one shared with somebody who is staying. */
+  insert into public.projects (id, org_id, title, created_by)
+  values (gen_random_uuid(), v_org, 'Alone', v_solo) returning id into v_alone;
+
+  insert into public.projects (id, org_id, title, created_by)
+  values (gen_random_uuid(), v_org, 'Shared', v_solo) returning id into v_shared;
+
+  insert into public.project_authors (org_id, project_id, user_id, role, accepted_at)
+  values (v_org, v_alone,  v_solo, 'author', now()),
+         (v_org, v_shared, v_solo, 'author', now()),
+         (v_org, v_shared, v_b,    'author', now() + interval '1 day');
+
+  /* A note of their own on each, and one left on somebody else's project. */
+  insert into public.field_notes (org_id, project_id, author_id, seq, occurred_on, body_md)
+  values (v_org, v_alone,  v_solo, 1, current_date, 'mine'),
+         (v_org, v_shared, v_solo, 2, current_date, 'ours');
+
+  insert into public.project_links (org_id, project_id, added_by, url, label)
+  values (v_org, v_shared, v_solo, 'https://example.org/x', 'A link');
+
+  /* A photograph on a note. `note_media` points at `field_notes` with
+     `restrict`, so this is what proves the notes can actually be deleted —
+     the first version of the function omitted the table and the test passed
+     because there were no photographs in it. */
+  select id into v_note from public.field_notes
+   where author_id = v_solo and project_id = v_alone;
+
+  insert into public.note_media (org_id, note_id, storage_path, caption)
+  values (v_org, v_note, 'notes/one.jpg', 'A gel');
+
+  v_out := public.delete_account(v_solo);
+
+  -- ── The person is gone ──────────────────────────────────────────────────
+  if exists (select 1 from public.users where id = v_solo) then
+    raise exception 'FAIL the account still exists';
+  end if;
+  raise notice '  ok   the account is gone';
+
+  if exists (select 1 from public.field_notes where author_id = v_solo) then
+    raise exception 'FAIL their notebook entries survived';
+  end if;
+  raise notice '  ok   and every entry they wrote, on any project';
+
+  -- ── A project only theirs goes entirely ─────────────────────────────────
+  if exists (select 1 from public.projects where id = v_alone) then
+    raise exception 'FAIL a project with no other author survived';
+  end if;
+  raise notice '  ok   a project that was only theirs is deleted';
+
+  -- ── A shared project survives, and belongs to whoever is left ───────────
+  if not exists (select 1 from public.projects where id = v_shared) then
+    raise exception 'FAIL a co-authored project was deleted with one author';
+  end if;
+  raise notice '  ok   a co-authored project survives';
+
+  if (select created_by from public.projects where id = v_shared) <> v_b then
+    raise exception 'FAIL the surviving project is still attributed to the leaver';
+  end if;
+  raise notice '  ok   and is attributed to the author who remains';
+
+  if (select added_by from public.project_links where project_id = v_shared) <> v_b then
+    raise exception 'FAIL a not-null attribution still points at a deleted user';
+  end if;
+  raise notice '  ok   as is everything not-null they left on it';
+
+  if exists (
+    select 1 from public.project_authors
+     where project_id = v_shared and user_id = v_solo
+  ) then
+    raise exception 'FAIL they are still listed as an author';
+  end if;
+  raise notice '  ok   and their name is off it';
+
+  if (v_out->>'projects')::int <> 1 or (v_out->>'left')::int <> 1 then
+    raise exception 'FAIL the receipt is wrong: %', v_out;
+  end if;
+  raise notice '  ok   the receipt counts the work';
+
+  /* The bucket is not reachable from SQL. If these paths are not handed back
+     the files stay in R2 with nothing pointing at them, which is the failure
+     the legal review names and which no amount of passing SQL would show. */
+  if not (v_out->'files' @> '["notes/one.jpg"]'::jsonb) then
+    raise exception 'FAIL the orphaned files were not handed back: %', v_out->'files';
+  end if;
+  raise notice '  ok   and hands back every file left with nothing pointing at it';
+exception when others then
+  perform set_config('role', 'postgres', true);
+  raise;
+end $body$;
+
+
+\echo ''
+\echo '── Draining the outbox'
+
+do $body$
+declare
+  v_org   uuid;
+  v_user  uuid := '9f000000-0000-4000-8000-0000000e0001';
+  v_fresh uuid;
+  v_old   uuid;
+  v_n     int;
+  v_addr  text;
+  v_token uuid;
+  v_row   record;
+begin
+  select id into v_org from public.organizations limit 1;
+
+  insert into auth.users (id, email) values (v_user, 'hears@demo.invalid');
+  insert into public.users (id, org_id, display_name, population, status,
+    affiliation_state, consent_state, age_band)
+  values (v_user, v_org, 'Hears Things', 'student', 'active',
+    'domain_verified', 'not_required', '18_plus');
+
+  insert into public.identities (org_id, user_id, auth_identity_id, provider,
+    subject, email, is_primary)
+  values (v_org, v_user, gen_random_uuid(), 'email', 'sub-e1',
+    'hears@demo.invalid', true);
+
+  insert into public.notifications (org_id, kind, recipient_id, payload, dedupe_key)
+  values (v_org, 'record_published', v_user, '{"title":"A paper"}', 'k:fresh')
+  returning id into v_fresh;
+
+  insert into public.notifications (org_id, kind, recipient_id, payload, dedupe_key, created_at)
+  values (v_org, 'record_published', v_user, '{}', 'k:old', now() - interval '3 days')
+  returning id into v_old;
+
+  /* Scoped to this recipient. Earlier assertions in this file enqueue their
+     own messages, and counting every pending row here would make this test
+     depend on how many of those there happen to be. */
+  select count(*) into v_n from public.claim_notifications(50, 60, false) c
+   where c.to_email = 'hears@demo.invalid';
+  if v_n <> 2 then raise exception 'FAIL claimed % of theirs, expected 2', v_n; end if;
+  raise notice '  ok   both of theirs are claimed in one pass';
+
+
+  -- ── The window ───────────────────────────────────────────────────────────
+  if (select state from public.notifications where id = v_old) <> 'skipped' then
+    raise exception 'FAIL a message from three days ago was not skipped';
+  end if;
+  raise notice '  ok   anything older than the window is skipped, not sent';
+
+  if (select state from public.notifications where id = v_fresh) <> 'processing' then
+    raise exception 'FAIL a claimed message was left pending: %',
+      (select state from public.notifications where id = v_fresh);
+  end if;
+  raise notice '  ok   and a fresh one is held as processing, not left pending';
+
+  /* The whole point. `for update skip locked` ends with the claiming
+     transaction, so a row handed back still `pending` is a row the next
+     drain will take and send again. */
+  if exists (
+    select 1 from public.claim_notifications(50, 60, false) c
+     where c.to_email = 'hears@demo.invalid'
+  ) then
+    raise exception 'FAIL a second drain claimed a message the first is still sending';
+  end if;
+  raise notice '  ok   and a second drain cannot claim it';
+
+  -- ── A lease that has run out is recovered ────────────────────────────────
+  update public.notifications
+     set claimed_until = now() - interval '1 minute'
+   where id = v_fresh;
+
+  if not exists (
+    select 1 from public.claim_notifications(50, 60, false) c
+     where c.to_email = 'hears@demo.invalid'
+  ) then
+    raise exception 'FAIL an expired lease was never recovered';
+  end if;
+  raise notice '  ok   an expired lease is recovered rather than stranded';
+
+  -- ── Claiming does not hand the same row out twice ────────────────────────
+  /* Settling requires the token the claim handed out. A stale drain coming
+     back after its lease was recovered must not be able to mark as sent a
+     message somebody else is sending. */
+  if public.settle_notification(v_fresh, gen_random_uuid(), 'sent', null) then
+    raise exception 'FAIL a message was settled with the wrong claim token';
+  end if;
+  raise notice '  ok   settling with the wrong token changes nothing';
+
+  select claim_token into v_token from public.notifications where id = v_fresh;
+  if not public.settle_notification(v_fresh, v_token, 'sent', null) then
+    raise exception 'FAIL settling with the right token did nothing';
+  end if;
+
+  select count(*) into v_n from public.claim_notifications(50, 60, false) c
+   where c.to_email = 'hears@demo.invalid';
+  if v_n <> 0 then
+    raise exception 'FAIL a settled message was claimed again (%)', v_n;
+  end if;
+  raise notice '  ok   a settled message is never claimed again';
+
+  -- ── The address comes from the identity, not from the row ────────────────
+  insert into public.notifications (org_id, kind, recipient_id, payload, dedupe_key)
+  values (v_org, 'place_granted', v_user, '{}', 'k:addr');
+
+  /* Filtered by recipient as well as kind. The first version matched only
+     on kind and picked up another assertion's message, which has no identity
+     and therefore no address — and reported that as this test failing. */
+  select c.to_email into v_addr from public.claim_notifications(50, 60, true) c
+   where c.kind = 'place_granted' and c.to_email = 'hears@demo.invalid' limit 1;
+  if v_addr is distinct from 'hears@demo.invalid' then
+    raise exception 'FAIL the address was % rather than the identity', coalesce(v_addr, 'nothing');
+  end if;
+  raise notice '  ok   the address is read from the identity at send time';
+
+  /* And a recipient with no identity at all comes back with none, which the
+     sender has to treat as a reason not to send rather than as an address.
+     There are such rows in this database already. */
+  if not exists (
+    select 1 from public.claim_notifications(50, 60, true) c where c.to_email is null
+  ) then
+    raise notice '  ok   (no addressless recipients to check)';
+  else
+    raise notice '  ok   a recipient with no identity comes back with no address';
+  end if;
+exception when others then
+  perform set_config('role', 'postgres', true);
+  raise;
+end $body$;
+
+
+\echo ''
+\echo '── Consent on every publication path'
+
+do $body$
+declare
+  v_org     uuid := '11111111-1111-1111-1111-111111111111';
+  v_minor   uuid := '9f000000-0000-4000-8000-0000000c0001';
+  v_project uuid;
+  v_record  text;
+  v_ok      boolean := false;
+begin
+  /* An author on an existing project whose guardian has not confirmed.
+     Added to a project that already publishes, so the only thing that
+     changes between passing and failing is the consent. */
+  /* As the advisor, who is an editor. `generate_project_record` calls
+     `require_editor` before anything else, so running this as nobody would
+     refuse with "not authenticated" and prove nothing about consent — which
+     is exactly what the first version of this test did. */
+  perform set_config('request.jwt.claim.sub',
+    'a0000000-0000-0000-0000-000000000004', true);
+
+  select r.project_id into v_project from public.records r where r.id = 'TEST-2027-0001';
+
+  insert into auth.users (id, email) values (v_minor, 'minor@demo.invalid');
+  insert into public.users (id, org_id, display_name, consent_state, age_band)
+  values (v_minor, v_org, 'A minor', 'pending', '13_17');
+
+  insert into public.project_authors (org_id, project_id, user_id, role, accepted_at)
+  values (v_org, v_project, v_minor, 'author', now());
+
+  -- ── Minting an identifier ────────────────────────────────────────────────
+  begin
+    perform public.generate_project_record(v_project, 'x', 'TEST', null, null);
+    raise exception 'FAIL a record was minted for a project with an unconfirmed author';
+  exception when others then
+    if sqlerrm like 'FAIL%' then raise; end if;
+    if sqlerrm not like '%Guardian permission%' then
+      raise exception 'FAIL refused for the wrong reason: %', sqlerrm;
+    end if;
+    v_ok := true;
+  end;
+
+  if not v_ok then raise exception 'FAIL no refusal at all'; end if;
+  raise notice '  ok   an identifier is refused while a guardian has not confirmed';
+
+  -- ── And again at the moment it goes public ───────────────────────────────
+  --
+  -- The record already exists, minted before the minor was added. Generation
+  -- and going live are separate acts and a consent can be withdrawn between
+  -- them, so a check only at the start is a check on the wrong moment.
+  v_ok := false;
+  begin
+    perform public.mark_record_live('TEST-2027-0001');
+    raise exception 'FAIL an existing record was made public with an unconfirmed author';
+  exception when others then
+    if sqlerrm like 'FAIL%' then raise; end if;
+    if sqlerrm not like '%Guardian permission%' then
+      raise exception 'FAIL live refused for the wrong reason: %', sqlerrm;
+    end if;
+    v_ok := true;
+  end;
+
+  if not v_ok then raise exception 'FAIL going live was not refused'; end if;
+  raise notice '  ok   and going live is refused separately, not only generation';
+
+  -- ── An invited author who has not accepted does not block anybody ────────
+  update public.project_authors set accepted_at = null
+   where project_id = v_project and user_id = v_minor;
+
+  perform public.mark_record_live('TEST-2027-0001');
+  raise notice '  ok   somebody invited and not yet accepted holds nothing up';
+
+exception when others then
+  perform set_config('role', 'postgres', true);
+  raise;
+end $body$;
+
+
+\echo ''
+\echo '── Asking co-authors before taking shared work'
+
+do $body$
+declare
+  v_org  uuid := '11111111-1111-1111-1111-111111111111';
+  v_a    uuid := '9f000000-0000-4000-8000-0000000e1001';
+  v_b    uuid := '9f000000-0000-4000-8000-0000000e1002';
+  v_proj uuid;
+  v_del  uuid;
+  v_ap   uuid;
+  v_r    jsonb;
+begin
+  insert into auth.users (id, email) values
+    (v_a, 'leaves@demo.invalid'), (v_b, 'stays2@demo.invalid');
+  insert into public.users (id, org_id, display_name, consent_state) values
+    (v_a, v_org, 'Leaves', 'not_required'),
+    (v_b, v_org, 'Stays',  'not_required');
+
+  insert into public.projects (org_id, title, created_by)
+  values (v_org, 'Ours', v_a) returning id into v_proj;
+
+  insert into public.project_authors (org_id, project_id, user_id, role, accepted_at)
+  values (v_org, v_proj, v_a, 'author', now()),
+         (v_org, v_proj, v_b, 'author', now());
+
+  perform set_config('request.jwt.claim.sub', v_a::text, true);
+  v_del := public.request_account_deletion('ask');
+
+  select id into v_ap from public.account_deletion_approvals
+   where deletion_id = v_del and approver_id = v_b;
+
+  if v_ap is null then raise exception 'FAIL the co-author was never asked'; end if;
+  raise notice '  ok   every co-author of shared work is asked';
+
+  v_r := public.deletion_ready();
+  if (v_r->>'state') <> 'pending' or (v_r->>'waiting')::int <> 1 then
+    raise exception 'FAIL readiness said % while somebody had not answered', v_r;
+  end if;
+  raise notice '  ok   and the request is not ready while one is outstanding';
+
+  -- ── Not yours to answer ─────────────────────────────────────────────────
+  begin
+    perform public.answer_deletion_approval(v_ap, true);
+    raise exception 'FAIL the person leaving approved their own request';
+  exception when others then
+    if sqlerrm like 'FAIL%' then raise; end if;
+  end;
+  raise notice '  ok   the person leaving cannot answer on the co-author''s behalf';
+
+  -- ── A decline does not trap them ────────────────────────────────────────
+  perform set_config('request.jwt.claim.sub', v_b::text, true);
+  perform public.answer_deletion_approval(v_ap, false);
+
+  perform set_config('request.jwt.claim.sub', v_a::text, true);
+  v_r := public.deletion_ready();
+
+  if (v_r->>'state') <> 'refused' then
+    raise exception 'FAIL a decline left the request at %', v_r->>'state';
+  end if;
+  if (v_r->>'intent') <> 'leave' then
+    raise exception 'FAIL a decline did not fall back to leaving';
+  end if;
+  raise notice '  ok   a decline means they leave and the work stays, not that they are stuck';
+
+  -- ── Nobody to ask ───────────────────────────────────────────────────────
+  delete from public.project_authors where project_id = v_proj and user_id = v_b;
+  delete from public.account_deletions where user_id = v_a;
+
+  v_del := public.request_account_deletion('ask');
+  v_r := public.deletion_ready();
+
+  if (v_r->>'state') <> 'ready' then
+    raise exception 'FAIL somebody with nothing shared was made to wait: %', v_r;
+  end if;
+  raise notice '  ok   somebody with nothing shared waits for nobody';
+exception when others then
+  perform set_config('role', 'postgres', true);
+  raise;
+end $body$;
+
 \echo ''
 \echo '  All function assertions passed.'

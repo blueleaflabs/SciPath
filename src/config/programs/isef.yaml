@@ -37,6 +37,23 @@ uses:
   deliverables: [deliverables-isef, deliverables-common]
   shapes: [imrad, abstract]
 
+# Who read this, what they read, and when. A year after `verified_on` the
+# program's advisor is told, because a rulebook changes annually and a file
+# that has not been looked at since last season looks exactly like one checked
+# this morning.
+provenance:
+  owner: Rohan Agarwal
+  source_url: https://www.societyforscience.org/isef/international-rules/
+  rules_year: 2027
+  verified_on: 2026-08-22
+  changes:
+    - on: 2026-08-22
+      what: >-
+        Recorded the twelve month research window for the 2027 season, and
+        linked the final rule modifications for 2026-2027.
+    - on: 2026-08-06
+      what: First reading, against the 2027 rules.
+
 rules_year: 2027
 rules_url: https://www.societyforscience.org/isef/international-rules/
 rules_pdf: https://sspcdn.blob.core.windows.net/files/Documents/SEP/ISEF/2027/Rules/Book.pdf
@@ -47,12 +64,22 @@ guidance:
     url: https://ruleswizard.societyforscience.org/
   - name: Companion Guide to the International Rules
     url: https://sspcdn.blob.core.windows.net/files/Documents/SEP/ISEF/2027/Rules/Rules-Companion-Guide.pdf
+  - name: Final rule modifications for 2026-2027
+    url: https://www.societyforscience.org/isef/international-rules/
+    note: >-
+      What changed between seasons, which is the first thing a returning
+      student should read and the last thing they think to look for. Linked
+      through the rules index rather than direct: the index lists it by name
+      and the file path is [VERIFY].
+
   - name: Generative AI use table
     url: https://sspcdn.blob.core.windows.net/files/Documents/SEP/ISEF/2026/Rules/Generative-AI-Use-Table.pdf
     note: >-
       When AI may be used and how to cite it. New enough that most students
       and many sponsors do not know it exists, and getting it wrong is a
-      disciplinary matter rather than a lost point.
+      disciplinary matter rather than a lost point. **[VERIFY]** this is the
+      2026 path while every other link here is 2027, so either a 2027 edition
+      exists and this is stale or the 2026 table still stands.
 
 # ---------------------------------------------------------------------------
 # The facts a project declares about itself.
@@ -150,3 +177,14 @@ limits:
   abstract_words: 250
   team_max: 3
   board: { width_cm: 122, depth_cm: 76, height_cm: 274 }
+
+  # The twelve continuous months a project's data collection has to fall in.
+  #
+  # The rule that ends a season quietly. A student who started collecting in
+  # November of the year before is ineligible, nothing on a form asks them,
+  # and they find out at check-in. We hold `started_on` for every project, so
+  # this is a rule we can actually check rather than one we can only print.
+  #
+  # Stated as the window rather than as "twelve months before the fair",
+  # because the fair's own date moves and the rulebook states the two ends.
+  research_window: { from: 2026-01-01, to: 2027-05-31 }

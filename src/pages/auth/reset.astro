@@ -1,0 +1,174 @@
+---
+export const prerender = false;
+
+/**
+ * SET A NEW PASSWORD.
+ *
+ * One page doing two things, deliberately. Before the link is followed it
+ * says a message has been sent if there was anywhere to send one; after it,
+ * the recovery code has been exchanged for a session and the form appears.
+ * Two pages would mean two addresses to register with Supabase and one more
+ * place for the wording to drift.
+ *
+ * **A recovery session is a session.** Following the link signs somebody in,
+ * which is what makes setting a password possible without knowing the old
+ * one — and what makes the link worth protecting. It is single use and
+ * short lived on Supabase's side; nothing here extends either.
+ *
+ * The old password is not asked for. Somebody arriving here does not have
+ * it, which is the entire reason they are here.
+ */
+
+import Base from '../../layouts/Base.astro';
+import { serverClient } from '../../lib/supabase';
+import { activeOrg } from '../../lib/tenant';
+import { afterPost, outcomeFrom } from '../../lib/post-redirect';
+
+const org = activeOrg(Astro);
+const asked = Astro.url.searchParams.get('asked') === '1';
+
+let { error, note } = outcomeFrom(Astro.url);
+
+const supabase = serverClient(
+  Astro.request,
+  Astro.cookies,
+  (Astro.locals as any).runtime?.env
+);
+
+/* Supabase puts the recovery code in the query string. Exchanging it here
+   rather than at `/auth/callback/` keeps the person on the page that asks
+   for the new password: a round trip through the callback would land them
+   on the overview, signed in, with no idea they were meant to set one. */
+const code = Astro.url.searchParams.get('code');
+
+/**
+ * PROOF THAT A RECOVERY LINK WAS FOLLOWED, NOT MERELY THAT SOMEBODY IS HERE.
+ *
+ * This page used to render its form whenever `getSession()` returned
+ * anything, and `updateUser({ password })` succeeds for any signed-in
+ * session. So somebody who had signed in with Google, and never had a
+ * password, could open this address and set one — turning one way in into
+ * two without following any link, and without the account's owner being
+ * asked. An ordinary session is not authorization to change credentials.
+ *
+ * The exchange sets a short-lived cookie; the form and the POST both require
+ * it. `httpOnly` so no script can mint it, `sameSite: 'lax'` so it does not
+ * travel with a cross-site form post, and ten minutes because that is longer
+ * than choosing a password takes and shorter than walking away from a
+ * shared machine.
+ *
+ * It is cleared the moment a password is set, so the window does not outlive
+ * the thing it was opened for.
+ */
+const RECOVERY = 'scipath_recovery';
+
+if (code) {
+  const { error: exchangeError } = await supabase.auth.exchangeCodeForSession(code);
+
+  if (exchangeError) {
+    error = 'That link has expired or has already been used.';
+  } else {
+    Astro.cookies.set(RECOVERY, '1', {
+      path: '/auth/reset/',
+      httpOnly: true,
+      sameSite: 'lax',
+      secure: Astro.url.protocol === 'https:',
+      maxAge: 600,
+    });
+
+    return Astro.redirect('/auth/reset/#outcome');
+  }
+}
+
+const { data: { session } } = await supabase.auth.getSession();
+
+/* A session *and* the proof. Either alone is not enough: the cookie without
+   a session cannot call `updateUser`, and a session without the cookie is
+   somebody who simply happens to be signed in. */
+const recovering = Boolean(session) && Astro.cookies.get(RECOVERY)?.value === '1';
+
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData();
+  const password = String(form.get('password') ?? '');
+  const again = String(form.get('again') ?? '');
+
+  if (!recovering) {
+    error = 'Follow the link in your email first.';
+  } else if (password.length < 8) {
+    error = 'A password needs at least 8 characters.';
+  } else if (password !== again) {
+    error = 'Those two do not match.';
+  } else {
+    const { error: updateError } = await supabase.auth.updateUser({ password });
+
+    if (updateError) {
+      error = updateError.message;
+    } else {
+      /* Spent. The window closes with the thing it was opened for, so a
+         second visit to this address is an ordinary signed-in visit. */
+      Astro.cookies.delete(RECOVERY, { path: '/auth/reset/' });
+      note = 'Your password is set. You are signed in.';
+    }
+  }
+
+  return afterPost(Astro.url, { error, note });
+}
+---
+
+<Base title="Set a new password" noindex={true}>
+  <div class="wrap">
+    <section class="stack">
+      <p class="eyebrow">{org?.name}</p>
+      <h1>Set a new password</h1>
+
+      <div id="outcome" tabindex="-1">
+        {error && <p class="note" role="alert">{error}</p>}
+        {note && <p class="note" role="status">{note}</p>}
+      </div>
+
+      {note ? (
+        <p><a class="btn" href="/app/">Go to your work</a></p>
+      ) : recovering ? (
+        <form method="POST" action="#outcome" class="stack">
+          <label>
+            <span>New password</span>
+            <input name="password" type="password" required minlength="8" autocomplete="new-password" />
+          </label>
+          <label>
+            <span>Again</span>
+            <input name="again" type="password" required minlength="8" autocomplete="new-password" />
+          </label>
+          <p><button class="btn" type="submit">Set it</button></p>
+        </form>
+      ) : asked ? (
+        /* Said the same way whether or not anything was sent. The difference
+           between the two is the answer to *does this person have an
+           account*, and a stranger should not learn it from a page. */
+        <p class="lede">
+          If that address has a SciPath account with a password, a link is on
+          its way. It works once and expires shortly.
+        </p>
+      ) : (
+        <form method="POST" action="/auth/forgot/" class="stack">
+          <p class="lede">
+            Signed in with Google? You have no password to reset — use the
+            Google button on the sign-in page.
+          </p>
+          <label>
+            <span>Your email address</span>
+            <input name="email" type="email" required autocomplete="email" />
+          </label>
+          <p><button class="btn" type="submit">Email me a link</button></p>
+        </form>
+      )}
+    </section>
+  </div>
+</Base>
+
+<style>
+  form.stack { max-width: 42ch; }
+  form label { display: block; margin-bottom: 16px; }
+  form label > span { display: block; margin-bottom: 6px; font-family: var(--face-ui); font-size: 0.92rem; }
+  form input { width: 100%; padding: 9px 11px; border: 1px solid var(--rule); background: var(--card); color: var(--ink); font: inherit; }
+  .lede { max-width: var(--measure-text); }
+</style>

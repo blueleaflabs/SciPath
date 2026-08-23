@@ -143,6 +143,41 @@ if (!verifyOnly) {
 }
 
 /**
+ * THE DOMAIN THIS DEPLOYMENT ANSWERS ON.
+ *
+ * `src/lib/deployment.ts` builds every address from `PUBLIC_ROOT_DOMAIN` and
+ * defaults it to `localhost:4321`, deliberately: a fresh clone with nothing
+ * set behaves like a laptop rather than like production, which is the safer
+ * way to be wrong while rendering a page.
+ *
+ * It is the wrong way to be wrong here. This script prints the redirect URLs
+ * somebody is about to register in a production dashboard, and with the
+ * variable absent it printed `http://demo.localhost:4321/auth/callback/` and
+ * printed it with a straight face — a list that is confidently wrong, which
+ * is worse than no list, because a list gets acted on.
+ *
+ * Checked before anything is dropped rather than discovered in the last line
+ * of output, and stated as a refusal: a deployed project reached from a
+ * checkout that thinks it is a laptop is a checkout that is missing a line,
+ * every time.
+ */
+if (!/^https?:\/\/(127\.0\.0\.1|localhost)(:|\/|$)/.test(URL ?? '')) {
+  const domain = process.env.PUBLIC_ROOT_DOMAIN;
+
+  if (!domain || domain.startsWith('localhost') || domain.endsWith('.localhost')) {
+    fail(
+      `PUBLIC_ROOT_DOMAIN is ${domain ? `"${domain}"` : 'not set'}, and this is a deployed project.\n\n` +
+        'Every address this prints — the tenants, and the redirect URLs Supabase\n' +
+        'has to be told about — is built from it, so without it they all come out\n' +
+        'as localhost and read as though they were right.\n\n' +
+        'Add it to .cloud.vars:\n\n' +
+        '  PUBLIC_ROOT_DOMAIN=scipath.org\n\n' +
+        'Nothing has been changed.'
+    );
+  }
+}
+
+/**
  * The whole environment, then one question.
  *
  * This asked for the project ref typed out, which is a good check and answers
@@ -166,6 +201,7 @@ if (!verifyOnly) {
   Project       ${ref}
   URL           ${URL}
   From          ${whereFrom('PUBLIC_SUPABASE_URL')}
+  Addresses     ${apexOrigin()}
   CLI linked to ${linkedRef}
   File storage  ${
     r2Ready && bucketNamed ? bucketNamed : 'skipped — R2 credentials not set'
@@ -233,6 +269,8 @@ const TABLES = [
   'project_images',
   'projects',
   'memberships',
+  'account_deletion_approvals',
+  'account_deletions',
   'role_reservations',
   'users',
   'confirmation_tokens',
@@ -506,13 +544,18 @@ if (!report(await census())) {
  * resolve one that has not been written yet — so the script that knows the
  * order should be the thing enforcing it.
  *
- * **The demonstration fixtures are here, and only for the demonstration
- * tenant.** They used to be left out because they refused a non-loopback
- * target outright. That refusal is now narrower — `seed-demo` writes into a
- * project that is not loopback when every organization it was pointed at
- * carries `demo: true` — and until this software runs somewhere other than
- * here, the cloud project *is* where demonstrations are given from. A fixture
- * cast that exists only on one laptop is a cast nobody can show.
+ * **Everything the laptop gets, the demonstration tenant gets.** The fixtures
+ * used to be left out because they refused a non-loopback target outright.
+ * That refusal is now narrower — invented people go into a project that is
+ * not loopback when every organization named carries `demo: true` — and until
+ * this software runs somewhere other than here, the cloud project *is* where
+ * demonstrations are given from. A cast that exists only on one laptop is a
+ * cast nobody can show, and a cast with no projects, no notebooks and nothing
+ * published is a table with nothing in it.
+ *
+ * So the chain is the local one: the cast, then the thirteen scenarios, then
+ * the cases, then the two published records and the index over them. All of
+ * it into `demo`, and only into `demo`.
  *
  * `DEMO_ORGS` is set here rather than left to the script's default, which
  * names the real schools because that is the right answer locally. The two
@@ -538,7 +581,23 @@ const SEEDS = [
     { DEMO_ORGS: 'demo' },
   ],
   ['Programs', ['--experimental-strip-types', 'scripts/seed-programs.mjs'], {}],
+  [
+    'Scenarios',
+    ['scripts/seed-scenarios.mjs', `--allow-remote=${ref}`],
+    { DEMO_ORG: 'demo' },
+  ],
+  [
+    'Cases',
+    ['scripts/seed-cases.mjs', `--allow-remote=${ref}`],
+    { DEMO_ORGS: 'demo' },
+  ],
   ['People', ['scripts/seed-people.mjs', '--optional'], {}],
+  [
+    'Publishing',
+    ['--experimental-strip-types', 'scripts/seed-publish.mjs'],
+    { DEMO_ORG: 'demo' },
+  ],
+  ['Search index', ['scripts/index-records.mjs', '--remote'], {}],
 ];
 
 for (const [what, argv, extraEnv] of SEEDS) {

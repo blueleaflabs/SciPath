@@ -26,24 +26,51 @@
 
 import { createClient } from '@supabase/supabase-js';
 import { loadDevVars } from './dev-vars.mjs';
+import { fixtureTarget, fixtureName } from './fixture-target.mjs';
+import { loadOrgs } from './orgs-library.mjs';
+import { originFor } from '../src/lib/deployment.ts';
 
 loadDevVars();
 
+const orgs = loadOrgs();
+
 const URL_ = process.env.PUBLIC_SUPABASE_URL ?? '';
 const KEY = process.env.SUPABASE_SECRET_KEY ?? '';
-const PRODUCTION_REF = 'uctbxilvfzaoroffzgen';
+
+/**
+ * WHICH SCHOOLS GET CASES.
+ *
+ * Both used to be written out as literal arguments to `seedSchool`, which was
+ * fine while the only target was a laptop with every school on it. The demonstration tenant is a school in the
+ * deployed project now, and it is the only one that may receive invented
+ * people there, so the list has to be something a run can state.
+ *
+ * The first is the school the cases belong to. Any after it exist so that a
+ * case needing somebody from *another* school has one; where they are absent,
+ * those cases are skipped and say so.
+ */
+const ORG_SLUGS = (process.env.DEMO_ORGS ?? 'montavista,svslc')
+  .split(',')
+  .map((slug) => slug.trim())
+  .filter(Boolean);
 
 if (!URL_ || !KEY) {
   console.error('PUBLIC_SUPABASE_URL and SUPABASE_SECRET_KEY are needed. They live in .dev.vars.');
   process.exit(1);
 }
 
-/* The same guard every seed here carries: a shape check rather than a flag,
-   because a flag is what somebody forgets on the one occasion it mattered. */
-if (!/^https?:\/\/(127\.0\.0\.1|localhost)(:|\/|$)/.test(URL_) || URL_.includes(PRODUCTION_REF)) {
-  console.error('This writes fixtures and only runs against the local stack.');
+const allowRemote = process.argv
+  .find((a) => a.startsWith('--allow-remote='))
+  ?.split('=')[1];
+
+const target = fixtureTarget({ url: URL_, slugs: ORG_SLUGS, allowRemote });
+
+if (target.refuse) {
+  console.error(`\n${target.refuse}\n`);
   process.exit(1);
 }
+
+if (target.note) console.log(target.note);
 
 const db = createClient(URL_, KEY, { auth: { persistSession: false } });
 
@@ -182,12 +209,11 @@ async function seedSchool(slug) {
      assuming an order. */
   const byName = new Map((people ?? []).map((u) => [u.display_name, u.id]));
 
-  const prefix = { montavista: 'mv', svslc: 'svs', scipath: 'sp' }[slug];
-  const handleTo = (handle) => {
-    const [kind, letter] = handle.split('.');
-    const n = letter ? letter.charCodeAt(0) - 96 : 1;
-    return byName.get(`${prefix}_${kind}${n}`);
-  };
+  /* `fixtureName` is `seed-demo`'s own naming, imported rather than restated.
+     This file carried a copy with three schools in it while `seed-demo` had
+     four, so a case seeded against the fourth looked up `undefined_student9`
+     and got nobody — no error, just a project with no author. */
+  const handleTo = (handle) => byName.get(fixtureName(slug, handle));
 
   const { data: programs } = await db
     .from('programs')
@@ -215,8 +241,16 @@ async function seedSchool(slug) {
 }
 
 async function main() {
-  const mv = await seedSchool('montavista');
-  const svs = await seedSchool('svslc');
+  /* The first is whose cases these are. The rest are only ever the other end
+     of a cross-school case. */
+  const [home, ...others] = ORG_SLUGS;
+
+  const mv = await seedSchool(home);
+  const elsewhere = new Map();
+
+  for (const slug of others) elsewhere.set(slug, await seedSchool(slug));
+
+  let skipped = 0;
 
   let projects = 0;
   let memberships = 0;
@@ -244,6 +278,20 @@ async function main() {
   }
 
   for (const c of CASES) {
+    /* A case whose second author is at a school this run did not seed.
+    
+       Seeding it anyway would produce a project with one author and the
+       words "two authors, one at each school" beside it in the summary — a
+       case that describes something it is not, which is worse than an
+       absent case because somebody would test against it and believe the
+       result. Counted and named at the end rather than passed over in
+       silence. */
+    if (c.with && !elsewhere.has(c.with.school)) {
+      console.log(`  case ${c.n} skipped: needs a fixture at ${c.with.school}`);
+      skipped += 1;
+      continue;
+    }
+
     const author = mv.handleTo(c.who);
     if (!author) fail(`No fixture for ${c.who}`);
 
@@ -281,7 +329,7 @@ async function main() {
     /* A co-author from another school, who is in no cohort here and whose
        school this project does not belong to. */
     if (c.with) {
-      const partner = (c.with.school === 'svslc' ? svs : mv).handleTo(c.with.handle);
+      const partner = elsewhere.get(c.with.school).handleTo(c.with.handle);
 
       if (partner) {
         await must(
@@ -369,22 +417,42 @@ async function main() {
     }
   }
 
-  console.log(`\n${projects} cases, ${memberships} memberships, ${entries} entries.`);
+  console.log(
+    `\n${projects} cases, ${memberships} memberships, ${entries} entries` +
+      `${skipped ? `, ${skipped} skipped for want of a second school` : ''}.`
+  );
 
   /* Printed at the end of every reset, because a seeded database nobody can
      navigate is a seeded database nobody uses. Each line is a thing to try
      and the thing it is meant to show. */
+  /* The names and the addresses of whichever school this run seeded.
+  
+     This block was written out — `mv_student9`, `montavista.localhost:4321` —
+     which was true of every run until there was more than one school to seed
+     into, and then it told somebody to sign in as an account that does not
+     exist, at a host that is not the one they are testing. The same fault
+     `seed-scenarios` had, in the file next to it, fixed there and not here.
+  
+     `originFor` rather than a literal host, so a run against the deployed
+     project names the deployed addresses. */
+  const who = (kind, n) => fixtureName(home, `${kind}.${'abcdefghijklmnop'[n - 1]}`);
+  const elseWho = (kind, n) =>
+    others.length ? fixtureName(others[0], `${kind}.${'abcdefghijklmnop'[n - 1]}`) : '(not seeded)';
+
+  const home_ = originFor(orgs[home]?.subdomain ?? home);
+  const away_ = others.length ? originFor(orgs[others[0]]?.subdomain ?? others[0]) : '(not seeded)';
+
   console.log(`
 ════════════════════════════════════════════════════════════════════════
  WHAT TO TEST                             password for everybody: scipath
 ════════════════════════════════════════════════════════════════════════
 
  Every project below is titled "… [case N]". Sign in at
- montavista.localhost:4321/app/ unless a case says otherwise.
+ ${home_}/app/ unless a case says otherwise.
 
 ────────────────────────────────────────────────────────────────────────
  CASE 1 · the ordinary class path
-   sign in as   mv_student9
+   sign in as   ${who('student', 9)}
    what it is   IRPD, following the class's own framework, presenting at
                 the class showcase, entered in no competition at all.
    try this     Open the project. The deadlines are the class's seven
@@ -392,29 +460,29 @@ async function main() {
                 calendar comes from the work, and IRPD teaches its own.
 
  CASE 2 · a partner from another school
-   sign in as   mv_student10, then svs_student10 at svslc.localhost:4321
+   sign in as   ${who('student', 10)}, then ${elseWho('student', 10)} at ${away_}
    what it is   Two authors, one at each school. The project is Monta
                 Vista's and belongs to IRPD; the partner is in no cohort
                 here at all.
-   try this     Both see the project. Only mv_student10 sees IRPD's
+   try this     Both see the project. Only ${who('student', 10)} sees IRPD's
                 deadlines on it. **This is the case that proved a
                 project's cohort cannot be read off its authors.**
 
  CASE 3 · a grant alongside the class
-   sign in as   mv_student11
+   sign in as   ${who('student', 11)}
    what it is   An IRPD project that also applied for money.
    try this     The grant entry has its own deadlines and its outcome is
                 an amount rather than a placement.
 
  CASE 4 · a competition the class does not run
-   sign in as   mv_student12
+   sign in as   ${who('student', 12)}
    what it is   IRPD, plus an entry at the fair.
    try this     Two calendars on one project: the class's milestones and
                 the fair's forms, merged and in date order.
 
 ────────────────────────────────────────────────────────────────────────
  CASE 8 · worked all year, never selected
-   sign in as   mv_student13
+   sign in as   ${who('student', 13)}
    what it is   A club member with a project and **no entry anywhere**.
    try this     Open it and confirm the club's deadlines are all there.
                 Resolving a cohort's dates through an entry would have
@@ -422,11 +490,11 @@ async function main() {
                 they most needed one.
 
  CASE 9 · the ordinary club path
-   sign in as   mv_student14
+   sign in as   ${who('student', 14)}
    what it is   Club member, project, entered at the fair, competed.
 
  CASE 10 · advanced
-   sign in as   mv_student15
+   sign in as   ${who('student', 15)}
    what it is   **Two entries for one piece of work**: the regional, with
                 a placement and somewhere it advanced to, and the state
                 fair it advanced to.
@@ -437,7 +505,7 @@ async function main() {
 
 ────────────────────────────────────────────────────────────────────────
  CASE 11 · one project, two cohorts
-   sign in as   mv_student16
+   sign in as   ${who('student', 16)}
    what it is   OsmoFlux, in **both IRPD and the research club**.
    try this     Open the project. "Where this belongs" lists both, and
                 the supervisor is an **Elder** in one row and an
@@ -446,7 +514,7 @@ async function main() {
                 person.
 
  CASE 12 · nobody is looking after it
-   sign in as   mv_student9  (their second project)
+   sign in as   ${who('student', 9)}  (their second project)
    what it is   A project in no cohort, entered at the fair.
    try this     The hub says plainly that nobody at the school is
                 looking after it. That absence used to be hidden behind
@@ -454,7 +522,7 @@ async function main() {
 
 ────────────────────────────────────────────────────────────────────────
  MEMBERS WITH NO PROJECT
-   sign in as   mv_student10 or mv_student11
+   sign in as   ${who('student', 10)} or ${who('student', 11)}
    what it is   In the club, nothing started.
    try this     The old model could not express this: joining required
                 inventing a project to hang the membership on.
@@ -462,10 +530,10 @@ async function main() {
 ────────────────────────────────────────────────────────────────────────
  WHO DECIDES WHAT                          /app/assign/
 
-   mv_advisor1   every queue     unscoped, which a real school would not
+   ${who('advisor', 1)}   every queue     unscoped, which a real school would not
                                  have
-   mv_advisor2   IRPD only       scoped to the class
-   mv_advisor3   the club only   scoped to the club
+   ${who('advisor', 2)}   IRPD only       scoped to the class
+   ${who('advisor', 3)}   the club only   scoped to the club
 
    try this      As a student, ask to join both IRPD and the club. Then
                  look at all three advisors: each should see only what

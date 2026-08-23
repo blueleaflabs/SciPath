@@ -1,0 +1,101 @@
+---
+import { orgPaths } from '../../lib/tenant-paths';
+export const getStaticPaths = orgPaths;
+
+import Base from '../../layouts/Base.astro';
+import PageHead from '../../components/PageHead.astro';
+import { activeOrg } from '../../lib/tenant';
+
+const org = activeOrg(Astro);
+const start = org.isPlatform ? '/get-started/' : '/app/';
+
+/**
+ * THE PAGE ABOUT INSTITUTIONAL MEMORY.
+ *
+ * A club's real asset is folklore: that a survey counts as human participants
+ * research, that judges read the abstract before they see the board, that a
+ * teacher who has not replied in a week is busy rather than refusing. None of
+ * it is secret and all of it is unevenly distributed, and today most of it
+ * leaves with the officers who knew it. That is the argument this page makes.
+ */
+const points = [
+  'Watch the projects assigned to you, with what is outstanding on each one visible without asking.',
+  'Put the club\u2019s guidance where the student is working, at the stage it applies to, instead of repeating it in twenty conversations.',
+  'Hold the deadlines and requirements as a program, so next year starts from them rather than from a folder of old files.',
+  'Help somebody prepare without taking their project over. What you write is guidance, and their notebook stays theirs.',
+  'Operate under a teacher who can see what you are doing, with permissions that say what you may decide.',
+  'Hand the next officers a working system rather than a handover document nobody reads.',
+];
+---
+
+<Base
+  title="For student leaders"
+  description="Turn what a club knows into a process the next class inherits."
+>
+  <PageHead
+    eyebrow="For student leaders"
+    title="Run the program you wish you had joined"
+    lede="A club knows which forms cause trouble, what judges notice, and which deadlines are less flexible than they look. That knowledge should not graduate."
+  />
+
+  <div class="wrap">
+    <section class="sec">
+      <div class="sec-h"><b>What an officer does here</b><span>Six things</span></div>
+      <ul class="points">
+        {points.map((line) => <li>{line}</li>)}
+      </ul>
+    </section>
+
+    <section class="sec">
+      <div class="sec-h"><b>Two roles, kept apart</b><span>Because most officers have both</span></div>
+      <div class="prose">
+        <p>
+          An officer is usually also a student with a project of their own. Those are separate
+          things and stay separate: looking after somebody else's project gives you what you
+          need to help with it and nothing more, and your own project is yours the way theirs
+          is theirs.
+        </p>
+        <p>
+          Every decision an officer makes is visible to the program's advisor, and a decision
+          made in error can be found again and reversed.
+        </p>
+      </div>
+    </section>
+
+    <section class="sec cta">
+      <div class="sec-h"><b>Start</b><span>An officer role is granted by a program</span></div>
+      <div class="row">
+        <a class="btn" href={start}>Open the workbench</a>
+        {org.isPlatform && <a class="btn btn-2" href="/demo/">See a program leader's view</a>}
+        <a class="btn btn-q" href="/for-educators/">For your advisor</a>
+      </div>
+    </section>
+  </div>
+</Base>
+
+<style>
+  .points {
+    margin: 4px 0 0;
+    padding: 0;
+    list-style: none;
+    max-width: var(--measure-text);
+  }
+  .points li {
+    padding: 12px 0 12px 26px;
+    border-top: 1px solid var(--rule-fine);
+    font-size: 0.98rem;
+    line-height: 1.6;
+    color: var(--ink-2);
+    position: relative;
+  }
+  .points li::before {
+    content: '';
+    position: absolute;
+    left: 4px;
+    top: 1.32em;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--brand);
+  }
+</style>

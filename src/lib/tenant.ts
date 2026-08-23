@@ -68,11 +68,15 @@ export function resolveOrg(hostname?: string): { slug: string; org: Org } {
  * can be many tenants from one deployment.
  */
 export function activeOrg(ctx?: {
-  params?: Record<string, string | undefined>;
+  /* Astro's own params are `string | number | undefined`, because a route
+     parameter can be numeric. Naming only `string` here meant every page
+     passing `Astro` directly failed to typecheck while working perfectly —
+     the value is read as a key either way. */
+  params?: Record<string, string | number | undefined>;
   locals?: { org?: unknown };
 }): Org {
   /* Prerendered: the [org] route parameter is the truth at build time. */
-  const fromParams = ctx?.params?.org;
+  const fromParams = ctx?.params?.org ? String(ctx.params.org) : undefined;
   if (fromParams && orgs[fromParams]) return orgs[fromParams];
 
   /* On demand: the middleware already resolved the hostname. */

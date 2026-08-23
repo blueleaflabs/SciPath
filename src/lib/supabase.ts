@@ -69,3 +69,23 @@ export function browserClient() {
     env('PUBLIC_SUPABASE_PUBLISHABLE_KEY')
   );
 }
+
+/**
+ * A TO-ONE EMBED.
+ *
+ * PostgREST returns an object for an embed that can only match one row, and
+ * the generated types describe every embed as an array. So
+ * `submission.users?.display_name` is correct at run time and an error at
+ * check time — twenty-seven of these read fine because they sit on values
+ * already cast to `any`, and the three that did not were reported as the
+ * property missing from `{ display_name: any }[]`.
+ *
+ * A function rather than a cast, because it is also true the other way: a
+ * query written with a different foreign key can start returning an array,
+ * and a cast would keep compiling while reading `.display_name` off it
+ * returns undefined for ever.
+ */
+export function one<T>(embed: T | T[] | null | undefined): T | undefined {
+  if (!embed) return undefined;
+  return Array.isArray(embed) ? embed[0] : embed;
+}

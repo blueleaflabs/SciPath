@@ -26,6 +26,13 @@ export default defineConfig({
   site: siteUrl(),
   output: 'static',
   adapter: cloudflare({
+    /* The Worker entry, so a cron trigger has somewhere to arrive.
+    
+       The adapter's default entry exports `fetch` and nothing else, so there
+       was no `scheduled` handler for Cloudflare to call. `src/worker.js`
+       wraps that entry rather than replacing it: request handling stays the
+       adapter's, and one export is added beside it. */
+    workerEntryPoint: { path: 'src/worker.js' },
     imageService: 'compile',
     // Gives dev the real bindings from wrangler.jsonc, backed by a local
     // R2 on disk. Same code path as production, deliberately.
