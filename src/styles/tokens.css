@@ -20,8 +20,33 @@
 :root {
   /* Spacing module. Shared by every theme. */
   --u: 8px;
-  --measure-text: 66ch;
-  --measure-lede: 74ch;
+  /* THE READING MEASURE.
+   *
+   * It was 66ch against a 1080px shell, so a paragraph stopped about seventy
+   * percent of the way across while the section rule above it ran the full
+   * width. On every page with running prose the result read as a layout
+   * fault rather than as a measure, because a rule and the text under it
+   * disagreeing about where the column ends is the one thing an eye checks
+   * without being asked.
+   *
+   * Raised until the two agree at the shell width. This is a long line by
+   * the usual advice, which assumes body text at 16px with no other help;
+   * `.prose` sets 1.62 line height, which is what makes the return sweep
+   * findable at this width. If it ever needs to come back down, the section
+   * rules have to come down with it. */
+  --measure-text: 92ch;
+  --measure-lede: 84ch;
+
+  /* THE OTHER MEASURE, FOR SOMETHING BEING READ RATHER THAN SCANNED.
+   *
+   * A published record is a paper. Somebody reads it start to finish, and the
+   * width above is wrong for that however right it is for a page that
+   * explains a product. Raising one measure for marketing pages would have
+   * quietly widened every abstract and body in the showcase, which is the
+   * kind of change that is only noticed after somebody has cited the page.
+   *
+   * Two jobs, two numbers. */
+  --measure-read: 68ch;
 
   /* ── DEPTH ──────────────────────────────────────────────────────────────
    

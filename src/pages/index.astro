@@ -2,9 +2,10 @@
 /**
  * THE HOME PAGE.
  *
- * Outside `[org]/` deliberately. It shows the three most recent published
- * records, which live in the store rather than the repository, so it renders
- * on demand and takes its organization from the hostname.
+ * Outside `[org]/` deliberately, and on demand, because it takes its
+ * organization from the hostname. It also showed the three most recent
+ * published records until 1.70; that section is gone and the note where it
+ * stood says why, but the reason this page is on demand has not changed.
  *
  * It cannot live under `[org]/` while doing that. An on-demand `[org]/index`
  * is a catch-all: a request for /guides/ matches it with org set to "guides",
@@ -16,8 +17,6 @@ export const prerender = false;
 
 import Base from '../layouts/Base.astro';
 import { cachePublicPage } from '../lib/caching';
-import Empty from '../components/Empty.astro';
-import RecordCard from '../components/RecordCard.astro';
 import { activeOrg } from '../lib/tenant';
 import { platform } from '../config/site';
 import { resolveProgram } from '../lib/templates';
@@ -25,11 +24,11 @@ import { formatDate } from '../lib/dates';
 
 import { openArchive } from '../lib/archive';
 
+/* The archive is still read, for the organization it resolves and nothing
+   else. The three most recent records used to be shown at the foot of this
+   page; see the note where that section stood. */
 const archive = await openArchive(Astro);
 const org = archive.org;
-const published = archive.all;
-
-const latest = published.slice(0, 3);
 
 /**
  * What this school takes part in, this season.
@@ -74,11 +73,6 @@ const season = (org.programs ?? [])
    the first before you enter most of the second. */
 const cohorts = season.filter((p) => p.role === 'cohort');
 const venues = season.filter((p) => p.role !== 'cohort');
-const authorCount = new Set(
-  published.flatMap((r) => r.authors.map((x) => x.displayName))
-).size;
-const years = published.map((r) => r.year);
-const span = years.length ? `${Math.min(...years)} to ${Math.max(...years)}` : null;
 
 cachePublicPage(Astro);
 ---
@@ -113,25 +107,110 @@ cachePublicPage(Astro);
       </div>
     </section>
 
-    {/* **The problem, before the product.**
+    {/* **The problem statement used to sit here, immediately under the
+        hero, and it opened the site on what goes wrong.** It is accurate and
+        it is the argument for building this, but a reader who has been on
+        the page four seconds has not yet been given anything to weigh it
+        against, and a product whose first paragraph is about failure reads
+        as a product that expects it. It is now the opening of "What this
+        does", where the sentence after it is the answer.
 
-        Only at the platform. A student arriving at their own school's site
-        has already been told there is a club and a class; what they need
-        from this page is which ones and when. Somebody arriving at the front
-        door has been told nothing, and a page that opens with five stages of
-        a lifecycle is answering a question they have not asked yet. */}
+        What stands here instead is who this is for, which is the question
+        somebody at the front door is actually asking. */}
+    {/* **Three readers, addressed by name, at the top of the page.**
+
+        It was four, and one of them was wrong. "Student leaders" described a
+        role rather than a person deciding whether to be here: an officer is
+        a student who has been given a job by an adult, and the adult is the
+        one reading this page. That copy now sits in the educators card,
+        where the person who grants the role will see it. `/for-student-leaders/`
+        stays, reached from the footer and from the educator page, because it
+        is the right page once somebody holds the role.
+
+        Not in the masthead. 7.11 cut the bar from seven items to three on the
+        argument that a glance should not have to rank sections, and three
+        descriptions of a reader would start it growing again. */}
     {org.isPlatform && (
       <section class="sec">
-        <div class="sec-h"><b>The problem</b><span>Which is rarely the research</span></div>
-        <p class="problem">
-          A good project is lost to a form signed a week late, an approval nobody mentioned,
-          a deadline that moved, or work scattered across a folder, an inbox and somebody
-          else's memory. Those failures are procedural rather than intellectual, they fall
-          hardest on the students with the least help, and software can catch every one of
-          them.
-        </p>
+        <div class="sec-h"><b>SciPath is for</b><span>Three ways to read this</span></div>
+        <div class="who-grid">
+          <a class="who" href="/for-students/">
+            <span class="who-rule" aria-hidden="true"></span>
+            <p class="who-t">Solo students</p>
+            <p class="who-d">
+              No club, no lab, and no teacher with time is the normal case rather than the
+              hard one. Run your project, meet what the fair actually asks for, and finish
+              with a record worth linking to.
+            </p>
+            <span class="who-go" aria-hidden="true">Start on your own</span>
+          </a>
+
+          <a class="who" href="/for-educators/">
+            <span class="who-rule" aria-hidden="true"></span>
+            <p class="who-t">Educators</p>
+            <p class="who-d">
+              See where every project in your program stands and what is missing, without
+              chasing each student for it. Keep what your club knows from graduating with
+              the officers who knew it, and give them a defined role under your oversight.
+            </p>
+            <span class="who-go" aria-hidden="true">See the program view</span>
+          </a>
+
+          <a class="who" href="/for-organizations/">
+            <span class="who-rule" aria-hidden="true"></span>
+            <p class="who-t">Schools, clubs and groups</p>
+            <p class="who-d">
+              Run a repeatable research season with your own calendar, roles and public
+              record. Free to adopt and free to keep running, hosted by us or on your own
+              infrastructure.
+            </p>
+            <span class="who-go" aria-hidden="true">Bring it to your students</span>
+          </a>
+        </div>
       </section>
     )}
+
+    <section class="sec">
+      <div class="sec-h"><b>What this does</b><span>The problem, and the answer to it</span></div>
+      {/* **The problem statement, moved here from the top of the page.**
+          Same sentences, different place. Under the hero it was the first
+          thing anybody read; here the three cards under it are the reply,
+          and a difficulty stated next to its answer reads as competence
+          rather than as complaint. */}
+      <p class="problem">
+        A good project is lost to a form signed a week late, an approval nobody mentioned,
+        a deadline that moved, or work scattered across a folder, an inbox and somebody
+        else's memory. Those failures are procedural rather than intellectual, they fall
+        hardest on the students whose schools have the least to spare, and software can
+        catch every one of them.
+      </p>
+      <div class="grid-3">
+        <div class="card pad">
+          <p class="t-lbl">Dates, checked</p>
+          <p class="t-sm" style="margin-top:9px">
+            The forms that must be signed before experimentation begins are checked against
+            the date the work actually started. Getting that order wrong disqualifies
+            students every year, and it is the single failure that no reminder email
+            reliably catches.
+          </p>
+        </div>
+        <div class="card pad">
+          <p class="t-lbl">Work, recorded</p>
+          <p class="t-sm" style="margin-top:9px">
+            Field notes are appended and timestamped, never edited. A wet lab student
+            photographs a notebook page; a software student pastes a commit summary. Both
+            satisfy the same requirement.
+          </p>
+        </div>
+        <div class="card pad">
+          <p class="t-lbl">Work, published</p>
+          <p class="t-sm" style="margin-top:9px">
+            A permanent, indexed, citable record with its own URL, so a student can link it
+            from an application years later and it still resolves.
+          </p>
+        </div>
+      </div>
+    </section>
 
     {/* The lifecycle is the product, so it is the first thing on the page.
     
@@ -174,36 +253,6 @@ cachePublicPage(Astro);
           ))
         }
       </ol>
-    </section>
-
-    <section class="sec">
-      <div class="sec-h"><b>What it does</b><span>Three things, plainly</span></div>
-      <div class="grid-3">
-        <div class="card pad">
-          <p class="t-lbl">Dates, checked</p>
-          <p class="t-sm" style="margin-top:9px">
-            The forms that must be signed before experimentation begins are checked against
-            the date the work actually started. Getting that order wrong disqualifies
-            students every year, and it is the single failure that no reminder email
-            reliably catches.
-          </p>
-        </div>
-        <div class="card pad">
-          <p class="t-lbl">Work, recorded</p>
-          <p class="t-sm" style="margin-top:9px">
-            Field notes are appended and timestamped, never edited. A wet lab student
-            photographs a notebook page; a software student pastes a commit summary. Both
-            satisfy the same requirement.
-          </p>
-        </div>
-        <div class="card pad">
-          <p class="t-lbl">Work, published</p>
-          <p class="t-sm" style="margin-top:9px">
-            A permanent, indexed, citable record with its own URL, so a student can link it
-            from an application years later and it still resolves.
-          </p>
-        </div>
-      </div>
     </section>
 
     {/* The "Two halves" section stood here: a heading, a paragraph and a
@@ -272,83 +321,18 @@ cachePublicPage(Astro);
       </section>
     )}
 
-    {/* **Who it is for, as four addresses rather than four paragraphs.**
+    {/* **The showcase came off this page at 1.70.**
 
-        Four readers arrive here and the page can only be written for one of
-        them. The previous version chose the student, which is right, and
-        left the other three with nothing: a teacher deciding whether to run
-        this read a page about starting a project and left.
+        It was a section header, a count, and an empty state explaining that
+        records appear once somebody publishes one. Nothing is published yet
+        at any tenant, so what a reader met at the foot of the front page was
+        a well designed statement that there is nothing here. An empty shelf
+        is worth showing inside a product, where it tells somebody what will
+        fill it; on the page that has to earn the first account it reads as an
+        answer to "has anyone used this".
 
-        Not in the masthead. The nav was cut from seven items to three on the
-        argument that a glance should not have to rank sections, and four
-        audience pages would put it straight back. The routing belongs where
-        somebody is already deciding, which is here, and in the footer. */}
-    {org.isPlatform && (
-      <section class="sec">
-        <div class="sec-h"><b>Who it is for</b><span>Four ways to read this</span></div>
-        <div class="grid-2">
-          <a class="card pad who" href="/for-students/">
-            <p class="t-lbl">Students</p>
-            <p class="t-sm">
-              Run your project with confidence, whether or not your school has anything set up,
-              and finish with a record worth linking to.
-            </p>
-          </a>
-          <a class="card pad who" href="/for-educators/">
-            <p class="t-lbl">Educators</p>
-            <p class="t-sm">
-              See where every project in your program stands and what is missing, without
-              chasing each student for it.
-            </p>
-          </a>
-          <a class="card pad who" href="/for-student-leaders/">
-            <p class="t-lbl">Student leaders</p>
-            <p class="t-sm">
-              Keep what your club knows from graduating with the officers who knew it.
-            </p>
-          </a>
-          <a class="card pad who" href="/for-organizations/">
-            <p class="t-lbl">Schools, clubs and groups</p>
-            <p class="t-sm">
-              Run a repeatable research season, hosted by us or on your own infrastructure,
-              without building software.
-            </p>
-          </a>
-        </div>
-      </section>
-    )}
-
-    <section class="sec">
-      <div class="sec-h">
-        <b>{org.name} project showcase</b>
-        <span>{published.length ? `${published.length} published${span ? `, ${span}` : ''}` : 'nothing published yet'}</span>
-      </div>
-      {
-        latest.length ? (
-          <div class="stack">
-            {latest.map((a) => (
-              <RecordCard record={a} />
-            ))}
-            <div class="row">
-              <a class="btn btn-2" href="/articles/">
-                Browse everything
-              </a>
-            </div>
-          </div>
-        ) : (
-          <Empty
-            title="Nothing is published here yet"
-            body="Published records appear as soon as the first project reaches the publication stage. The guides are already open."
-          >
-            <div class="row" style="justify-content:center">
-              <a class="btn btn-2" href="/guides/">Research guide</a>
-              <a class="btn btn-q" href="/submit/">Publish with us</a>
-            </div>
-          </Empty>
-        )
-      }
-      {authorCount > 0 && <p class="t-sm" style="margin-top:14px">{authorCount} authors</p>}
-    </section>
+        It comes back when there is something in it. The showcase itself is
+        in the masthead throughout and was never the thing being hidden. */}
 
     {/* "Start here" offered the guides and the mistakes page as two more
         buttons at the foot of the page. Both are in the nav, and the page
@@ -450,15 +434,101 @@ cachePublicPage(Astro);
     color: var(--ink-2);
   }
 
-  /* A whole card is the link, because half of one is a target somebody
-     misses on a phone. */
+  /* THE THREE CARDS, WHICH CARRY THE PAGE.
+  
+     They are the first thing under the hero and the only routing on the
+     page, so they are built rather than borrowed: `.card pad` is the neutral
+     container used for twenty other things here and reads as a list item.
+  
+     A whole card is the link, because half of one is a target somebody
+     misses on a phone. The brand rule across the top is the only color on
+     the page above the fold, and it fills on hover, which is a cheaper
+     signal than moving the card and does not reflow anything. */
+  .who-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 18px;
+  }
+  @media (max-width: 62rem) {
+    .who-grid { grid-template-columns: 1fr; }
+  }
+
   .who {
-    display: block;
+    display: flex;
+    flex-direction: column;
+    position: relative;
+    padding: 26px 24px 22px;
+    background: var(--card);
+    border: 1px solid var(--rule);
+    border-radius: var(--radius);
+    box-shadow: var(--lift);
     text-decoration: none;
     color: inherit;
+    overflow: hidden;
+    transition:
+      box-shadow 0.16s ease,
+      border-color 0.16s ease,
+      transform 0.16s ease;
   }
-  .who .t-sm { margin-top: 9px; }
-  .who:hover { border-color: var(--brand); }
+
+  .who-rule {
+    position: absolute;
+    inset: 0 auto auto 0;
+    width: 100%;
+    height: 3px;
+    background: var(--rule);
+    transition: background 0.16s ease;
+  }
+
+  .who-t {
+    font-family: var(--face-ui);
+    font-weight: 700;
+    font-size: 1.18rem;
+    line-height: 1.2;
+    color: var(--ink);
+    margin: 0;
+  }
+
+  .who-d {
+    margin: 12px 0 0;
+    flex: 1;
+    font-size: 0.95rem;
+    line-height: 1.6;
+    color: var(--ink-2);
+  }
+
+  /* The affordance says where the card goes rather than saying "learn more",
+     which says nothing. Not a link of its own: the card is the link, and a
+     link inside a link is a second target for the same destination. */
+  .who-go {
+    margin-top: 18px;
+    font-family: var(--face-ui);
+    font-weight: 650;
+    font-size: 0.86rem;
+    letter-spacing: 0.01em;
+    color: var(--brand);
+  }
+  .who-go::after {
+    content: ' \2192';
+  }
+
+  .who:hover,
+  .who:focus-visible {
+    border-color: var(--brand);
+    box-shadow: var(--lift-2);
+    transform: translateY(-2px);
+  }
+  .who:hover .who-rule,
+  .who:focus-visible .who-rule {
+    background: var(--brand);
+  }
+
+  /* Somebody who has asked not to be moved is not moved. */
+  @media (prefers-reduced-motion: reduce) {
+    .who { transition: border-color 0.16s ease; }
+    .who:hover,
+    .who:focus-visible { transform: none; }
+  }
   .lc-head .t-sm {
     margin-top: 5px;
     max-width: 60ch;

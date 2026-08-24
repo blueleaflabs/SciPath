@@ -347,7 +347,11 @@
 
 .record .abs {
   margin: 0;
-  max-width: var(--measure-text);
+  /* Not the reading measure. An abstract sits inside a card among other
+     cards, and a card that runs the width of the shell stops looking like
+     one. `--measure-text` was raised at 1.70 for running prose on a full
+     width page, which this is not. */
+  max-width: 66ch;
   font-size: 1rem;
   line-height: 1.58;
 }
@@ -830,10 +834,10 @@ select {
  * approval." wrapped inside a tall narrow box, so the answer to what just
  * happened took more vertical space than the thing it was answering about.
  *
- * The cap is removed rather than raised. Both measures are narrower than this
- * needs -- `--measure-text` is 66ch and `--measure-form` 72ch, so either one
- * would have made it narrower, which is how the first attempt at this got it
- * backwards. A flash spans the column it sits in, like the section rules
+ * The cap is removed rather than raised. Either measure would have made it
+ * narrower rather than wider, which is how the first attempt at this got it
+ * backwards -- and quoting their values here would have made this comment
+ * wrong the day one of them moved, which is exactly what happened at 1.70. A flash spans the column it sits in, like the section rules
  * above and below it, and takes one line of padding instead of a panel's. */
 .note.flash {
   max-width: none;
@@ -1041,7 +1045,9 @@ mark {
   font-size: 0.9rem;
   color: var(--ink-2);
   line-height: 1.5;
-  max-width: var(--measure-text);
+  /* A one line description under a link, not a paragraph. Held at the older
+     narrower measure for the reason in `.record .abs`. */
+  max-width: 66ch;
 }
 
 /* ── PROFILE ───────────────────────────────────────────────── */

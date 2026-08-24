@@ -417,10 +417,10 @@ const html = body ? renderMarkdown(body) : '';
   @media (max-width: 640px) {
     .glance { grid-template-columns: 1fr; }
   }
-  .lede-abs { max-width: var(--measure-text); font-size: 1.05rem; }
-  .body { max-width: var(--measure-text); }
+  .lede-abs { max-width: var(--measure-read); font-size: 1.05rem; }
+  .body { max-width: var(--measure-read); }
   .body :global(h2) { margin: 30px 0 10px; font-size: 1.2rem; }
-  .facts { list-style: none; margin: 0; padding: 0; max-width: var(--measure-text); }
+  .facts { list-style: none; margin: 0; padding: 0; max-width: var(--measure-read); }
   .facts li {
     display: grid;
     gap: 3px;
@@ -516,9 +516,9 @@ const html = body ? renderMarkdown(body) : '';
   .figs { list-style: none; margin: 0; padding: 0; display: grid; gap: 24px; }
   .figs img { max-width: 100%; border: 1px solid var(--rule-fine); }
   .figs p { margin: 8px 0 0; color: var(--ink-2); font-size: 0.94rem; }
-  .refs { margin: 0; padding-left: 1.4rem; max-width: var(--measure-text); }
+  .refs { margin: 0; padding-left: 1.4rem; max-width: var(--measure-read); }
   .refs li { margin-bottom: 8px; line-height: 1.5; }
   .cite-text { margin: 0; line-height: 1.6; }
   .doi { margin: 10px 0 0; font-family: var(--face-num); font-size: 0.9rem; }
-  .fine { margin-top: 16px; color: var(--ink-3); font-size: 0.88rem; max-width: var(--measure-text); }
+  .fine { margin-top: 16px; color: var(--ink-3); font-size: 0.88rem; max-width: var(--measure-read); }
 </style>

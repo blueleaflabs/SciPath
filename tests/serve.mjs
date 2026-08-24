@@ -30,8 +30,21 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { spawn } from 'node:child_process';
 
-const PORT = 8791;
+/**
+ * A PORT NOBODY ELSE IS ON, AND A CLOCK ON EVERY REQUEST.
+ *
+ * The first version fixed the port and waited for the server without a
+ * deadline. A `workerd` orphaned by an earlier interrupted run was still
+ * bound to it and no longer answering, so the new server could not take the
+ * port, every request went to the corpse, and the suite hung indefinitely
+ * with no output. **A suite that hangs is worse than one that fails**: a
+ * failure names something, and a hang looks exactly like slow.
+ *
+ * The port is chosen from a range and the run gives up on a clock.
+ */
+const PORT = 8700 + Math.floor(Math.random() * 200);
 const BASE = `http://127.0.0.1:${PORT}`;
+const REQUEST_TIMEOUT = 15_000;
 
 let passed = 0;
 const failures = [];
@@ -95,10 +108,21 @@ const server = spawn(
   { stdio: ['ignore', 'pipe', 'pipe'] }
 );
 
+/** Every request carries a deadline, including the ones that establish the
+    server is up. Without one, an unresponsive listener is indistinguishable
+    from a server still starting. */
+function get(path, host) {
+  return fetch(`${BASE}${path}`, {
+    headers: { Host: host },
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT),
+  });
+}
+
 async function waitForServer() {
-  for (let i = 0; i < 60; i += 1) {
+  for (let i = 0; i < 45; i += 1) {
+    if (server.exitCode !== null) return false;
     try {
-      await fetch(`${BASE}/`, { headers: { Host: `${tenants[0]}.scipath.org` } });
+      await get('/', `${tenants[0]}.scipath.org`);
       return true;
     } catch {
       await new Promise((r) => setTimeout(r, 1000));
@@ -111,7 +135,8 @@ const results = [];
 
 try {
   if (!(await waitForServer())) {
-    console.error('wrangler pages dev did not come up.');
+    console.error(`wrangler pages dev did not answer on ${BASE} within 45s.`);
+    server.kill('SIGKILL');
     process.exit(1);
   }
 
@@ -122,7 +147,7 @@ try {
        working while everything else was broken. Both, because a check that
        only reads the working one is how this went unnoticed. */
     for (const path of ['/', ...pagesOf(tenant)]) {
-      const res = await fetch(`${BASE}${path}`, { headers: { Host: host } });
+      const res = await get(path, host);
       results.push({
         host,
         path,
@@ -134,7 +159,9 @@ try {
     }
   }
 } finally {
-  server.kill();
+  /* SIGKILL rather than SIGTERM. The runtime this spawns has been seen to
+     survive the polite signal and keep a port, which is the fault above. */
+  server.kill('SIGKILL');
 }
 
 test('every public page answers', () => {
