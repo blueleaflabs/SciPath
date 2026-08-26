@@ -79,8 +79,19 @@ test('no immediately-invoked block reads a const declared below it', () => {
 
       /* Object keys are not reads. `{ done: rows.filter(...) }` names a
          property, and treating it as a reference to a `done` further down
-         reports a page that is perfectly correct. */
-      const readable = body.replace(/(^|[{,\s])(\w+)\s*:/g, '$1');
+         reports a page that is perfectly correct.
+
+         **Neither are comments.** This read them, so an English sentence
+         inside a block became a reference: a note ending "a teacher can find
+         a row where she last saw it" was reported as the block reading a
+         const named `where` declared two hundred lines below. The rule was
+         right about the class and wrong about prose, and the failure mode is
+         the worst kind — it points at correct code and names a real const,
+         so the obvious response is to move working code around. */
+      const readable = body
+        .replace(/\/\*[\s\S]*?\*\//g, ' ')
+        .replace(/^\s*\/\/.*$/gm, ' ')
+        .replace(/(^|[{,\s])(\w+)\s*:/g, '$1');
 
       for (const other of declared) {
         if (other.at <= m.index) continue;

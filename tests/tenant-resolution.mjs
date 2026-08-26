@@ -63,4 +63,117 @@ if (offenders.length > 0) {
   process.exit(1);
 }
 
+/**
+ * A SESSION IS GLOBAL. MEMBERSHIP IS NOT.
+ *
+ * There is one `auth.users` across every tenant, because a person has one set
+ * of credentials. `public.users.org_id` says which school the account is at,
+ * and the middleware attached the account to the request on `auth.uid()`
+ * alone — so a teacher created for Monta Vista signed in at the platform's
+ * own address and was admitted, with their roles.
+ *
+ * Row level security was not holding the line. `app.org_id()` reads
+ * `users.org_id` for the caller, so the *data* was Monta Vista's: one
+ * school's roster rendered under another school's name, at an address that
+ * school's students use. The tenant boundary in the interface was a lie in
+ * the other direction from the one it looks like.
+ *
+ * Two things have to stay true, and the second is the trap. The comparison
+ * has to happen, and it has to be against the slug — `users.org_id` is a uuid
+ * the database generated and `org.id` in `src/config` is a slug, so comparing
+ * those two is never equal and would lock every account out of every tenant.
+ * That version looks correct in a diff and fails closed on the first request.
+ */
+{
+  const middleware = fs.readFileSync('src/middleware.ts', 'utf8');
+  const code = middleware
+    .replace(/\/\*[\s\S]*?\*\//g, ' ')
+    .replace(/^\s*\/\/.*$/gm, ' ');
+
+  const problems = [];
+
+  if (!/organizations\(slug\)/.test(code)) {
+    problems.push('the account query must join organizations(slug), or there is nothing to compare');
+  }
+
+  if (!/accountSlug\s*!==\s*slug/.test(code)) {
+    problems.push('the middleware must compare the account slug against the resolved tenant');
+  }
+
+  /* `org_id` is a uuid the database generated; the tenant's name on this side
+     is a slug. Comparing them is never equal, so every account is locked out
+     of every tenant — a fix worse than the bug and one that looks right in a
+     diff.
+
+     Refused wherever it appears rather than against a named right-hand side.
+     The first version listed `org.id` and `slug`, and swapping in
+     `account.org_id !== slug` walked straight past it. */
+  if (/account\.org_id\s*!==/.test(code)) {
+    problems.push('org_id is a uuid and the tenant name is a slug: never equal');
+  }
+
+  /* **It has to fail closed.**
+
+     The first version read `account && accountSlug && accountSlug !== slug`,
+     and that middle term admits the account whenever the slug is missing —
+     a policy that refuses the join, a rename, a query edited elsewhere. A
+     tenancy guard whose unknown case is "let them in" reports success in
+     exactly the situation nobody is watching.
+
+     Matched on the condition itself rather than on behaviour, because there
+     is no way to observe the null case from a file read. */
+  if (/account\s*&&\s*accountSlug\s*&&/.test(code)) {
+    problems.push('an account with no readable school must be refused, not admitted');
+  }
+
+  /* And the account must not survive the mismatch. Merely redirecting would
+     leave every page outside `/app/` rendering as that person.
+
+     **Matched inside the block, not anywhere in the file.** The loose version
+     of this checked for `locals.account = null` in `code` at all — and the
+     signed-out branch two hundred lines above sets exactly that, so deleting
+     the assignment from the mismatch branch left the suite green. A guard
+     that is satisfied by an unrelated line elsewhere in the same file is a
+     guard that passes for the wrong reason, which is the failure this whole
+     block exists to catch one level down. */
+  /* **A missing anchor is a failure, not an empty slice.**
+
+     Two attempts at this were wrong in the same way. The first sliced from
+     `accountSlug !== org.id` and went inert the moment the comparison was
+     rewritten to use `slug`. The second anchored on `locals.roles = []`,
+     which also appears in the initialisation two hundred lines above, so the
+     slice began at the wrong one.
+
+     Both failed quietly because `indexOf` returns -1 and `slice(-1)` is a
+     perfectly good string. So the anchor is now required to be found, and
+     required to be unique — a check that cannot locate what it is checking
+     has to say so rather than measure the wrong region. */
+  const anchor = 'accountSlug !== slug';
+  const at = code.indexOf(anchor);
+  const occurrences = code.split(anchor).length - 1;
+
+  if (occurrences !== 1) {
+    problems.push(
+      `cannot locate the membership branch: "${anchor}" appears ${occurrences} times`
+    );
+  } else {
+    const branch = code.slice(at);
+    const blockEnd = branch.indexOf('return next();');
+
+    if (blockEnd === -1) {
+      problems.push('the membership branch does not close with a return');
+    } else if (!/locals\.account\s*=\s*null/.test(branch.slice(0, blockEnd))) {
+      problems.push('a mismatched account must be dropped, not merely redirected');
+    }
+  }
+
+  if (problems.length > 0) {
+    console.error('\nAn account is scoped to one school:\n');
+    for (const p of problems) console.error(`  ${p}`);
+    console.error('');
+    process.exit(1);
+  }
+}
+
 console.log('No component reads the org singleton directly.');
+console.log('An account is admitted only to the school it belongs to.');

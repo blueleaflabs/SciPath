@@ -14,6 +14,8 @@
 import { defineMiddleware } from 'astro:middleware';
 import { serverClient, isConfigured } from './lib/supabase';
 import { resolveOrg } from './lib/tenant';
+import { orgs } from './config/orgs';
+import { originForOrg } from './lib/deployment';
 import { tenantSlugs } from './lib/tenant-paths';
 
 import { isNonTenantPath } from './config/routes';
@@ -386,10 +388,18 @@ const handle = async (context: any, next: any) => {
 
   locals.session = { id: user.id, email: user.email ?? null };
 
+  /* `organizations(slug)` joined, not `org_id` compared.
+  
+     `users.org_id` is a uuid the database generated; `org.id` in `src/config`
+     is the tenant's slug. Comparing the two is always unequal, which would
+     have locked every account out of every tenant — a fix worse than the bug
+     it was written for, and one that looks correct in a diff. Nothing in
+     `src/` reads `organizations` anywhere else, so there is no uuid on this
+     side to compare against. The slug is the name both sides know. */
   const { data: accountRow } = await supabase
     .from('users')
     .select('id, org_id, display_name, grad_year, population, status, ' +
-            'affiliation_state, consent_state, author_slug')
+            'affiliation_state, consent_state, author_slug, organizations(slug)')
     .eq('id', user.id)
     .maybeSingle();
 
@@ -411,7 +421,81 @@ const handle = async (context: any, next: any) => {
     affiliation_state: string;
     consent_state: string;
     author_slug: string | null;
+    organizations: { slug: string } | null;
   } | null;
+
+  /**
+   * **AN ACCOUNT BELONGS TO ONE SCHOOL. A SESSION DID NOT.**
+   *
+   * Authentication is global: there is one `auth.users` across every tenant,
+   * because a person has one set of credentials. Membership is not global —
+   * `public.users.org_id` says which school an account is at.
+   *
+   * This attached the account to the request on `auth.uid()` alone and never
+   * compared the two. So a teacher created for Monta Vista signed in at the
+   * platform's own address and was admitted: `/app/` rendered, the masthead
+   * said SciPath, and the roles from another school came with them. Reported
+   * against `www.scipath.org`, which resolves to the platform tenant through
+   * the `PUBLIC_ORG` fallback because `www` matches no label — so it was the
+   * platform's tenant, correctly resolved, admitting somebody who is not in
+   * it.
+   *
+   * **Row level security was not the thing holding the line.** `app.org_id()`
+   * reads `users.org_id` for the caller, so the data returned was Monta
+   * Vista's. The tenant boundary in the interface was a lie in the other
+   * direction: one school's roster, rendered under another school's name, at
+   * an address that school's students use.
+   *
+   * The session stays valid — it is a real session, and signing somebody out
+   * of everywhere because they opened the wrong hostname is a punishment for
+   * a typo. What they do not get is an account *here*. Guarded routes send
+   * them to their own school rather than to a refusal, because the fix is a
+   * different address and the software knows which one.
+   */
+  /**
+   * **AND IT FAILS CLOSED.**
+   *
+   * The first version read `account && accountSlug && accountSlug !== slug`.
+   * The middle term is the bug: when the embed comes back without a slug —
+   * a policy that refuses the join, a rename, a query edited elsewhere — the
+   * condition is false and the account is admitted. A tenancy guard whose
+   * unknown case is *let them in* is a guard that reports success in exactly
+   * the situation nobody is watching.
+   *
+   * Now an account with no readable school is admitted to no school. That is
+   * the safe direction, and it is loud: somebody locked out of their own
+   * tenant reports it within a minute, where somebody admitted to a tenant
+   * that is not theirs reports it never.
+   *
+   * Compared against `slug`, which is what `resolveOrg` returns as the
+   * tenant's name, rather than `org.id`. The two agree today because every
+   * org file names an `id` equal to its key, and depending on that agreement
+   * is depending on a convention no test enforces.
+   */
+  const accountSlug = account?.organizations?.slug ?? null;
+
+  if (account && accountSlug !== slug) {
+    locals.account = null;
+    locals.roles = [];
+
+    /* The hint is a greeting on prerendered pages and it is drawn from the
+       account. Cleared, or the archive greets somebody by name at a school
+       they do not belong to. */
+    clearSessionHint(context.cookies);
+
+    if (url.pathname.startsWith(GUARDED)) {
+      /* Their own school, at the same path. A refusal would be correct and
+         useless: the software knows which address works, so sending them
+         there is cheaper than explaining. */
+      const home = accountSlug ? orgs[accountSlug] : null;
+      if (home) {
+        return context.redirect(`${originForOrg(home)}${url.pathname}${url.search}`);
+      }
+      return context.redirect('/');
+    }
+
+    return next();
+  }
 
   locals.account = account ?? null;
 

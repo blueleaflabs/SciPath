@@ -9,7 +9,7 @@ import { programTitle, programKind, participationVerb, staffWord } from '../../l
 import { serverClient } from '../../lib/supabase';
 import { standing, roleLabel } from '../../lib/roles';
 import { checkDateOrder, worstFinding } from '../../lib/dateOrder';
-import { assess, tally } from '../../lib/attention';
+import { assess, tally, queueRank, daysUntil } from '../../lib/attention';
 import { afterPost, outcomeFrom, leaveTo } from '../../lib/post-redirect';
 import { safeNext, HOME } from '../../lib/next-path';
 
@@ -180,6 +180,34 @@ if (Astro.request.method === 'POST' && supabase) {
         p_note: String(form.get('note') ?? '') || null,
       });
       if (e) error2 = e.message;
+    }
+  } else if (action === 'nudge') {
+    /* **The function decides who may be reached, not this handler.**
+    
+       `public.nudge` checks that the recipient is on the project and that
+       the caller runs the program or was attached to the participation. A
+       second copy of that reasoning here is a second thing to get wrong, and
+       the one in the database is the one that holds when somebody posts to
+       this address without the screen. */
+    const { data, error: e } = await supabase.rpc('nudge', {
+      p_milestone_id: String(form.get('milestone_id') ?? ''),
+      p_recipient_id: String(form.get('recipient_id') ?? ''),
+    });
+
+    if (e) {
+      error2 = e.message;
+    } else {
+      /* Four outcomes, and three of them are not errors: pressing the button
+         twice, or pressing it on a row somebody met a minute ago, is
+         ordinary. A red message would teach somebody the button is broken. */
+      attached =
+        data === 'sent'
+          ? 'Sent.'
+          : data === 'already'
+            ? 'Already nudged about this one this week.'
+            : data === 'done'
+              ? 'That one has been met.'
+              : 'Nothing to send.';
     }
   } else if (action === 'attach') {
     const { data, error: e } = await supabase.rpc('attach_to_project', {
@@ -623,6 +651,7 @@ if (supabase && account) {
       });
 
       const officers = (p.project_authors ?? []).filter((a: any) => a.role === 'officer');
+      const projectAuthors = (p.project_authors ?? []).filter((a: any) => a.role === 'author');
       const selfManaged = (p.project_authors ?? []).filter(
         (a: any) => a.role === 'officer' && a.self_managed_at
       );
@@ -632,7 +661,7 @@ if (supabase && account) {
       return {
         ...p,
         entry,
-        authors: (p.project_authors ?? []).filter((a: any) => a.role === 'author'),
+        authors: projectAuthors,
         officers,
         selfManaged,
         sponsor,
@@ -657,6 +686,57 @@ if (supabase && account) {
             .sort((a: any, b: any) => (a.due_on ?? '9999').localeCompare(b.due_on ?? '9999'))[0] ??
           null,
         worst,
+
+        /* **Who the nudge goes to, decided rather than asked.**
+        
+           The Elder where one is assigned, the student where none is. That
+           preserves the hierarchy without a dropdown: a teacher chasing a
+           project that has somebody looking after it should be chasing that
+           person, and a project with nobody is exactly the case `assess()`
+           already reports as "No club officer". So the verdict that flags an
+           unattended project is also the routing rule, and neither had to be
+           written twice.
+        
+           A self-managed author holds the oversight row for their own work,
+           which would address the nudge to the person it is about. The
+           function returns `self` rather than sending, and this skips them so
+           the button does not appear in the first place.
+        
+           First name only. The full name is already in the Students column
+           two cells to the left, and a button reading "Nudge Priya
+           Raghunathan" is a button that sets the width of the table. */
+        nudgeTo: (() => {
+          /* An officer who is not self managing, then an author. A
+             self-managed row is the author wearing the oversight hat, so
+             preferring it would address the nudge to the person it is
+             about. */
+          const who =
+            officers.find(
+              (o: any) => !o.self_managed_at && o.users?.id && o.users.id !== account?.id
+            ) ??
+            projectAuthors.find((a: any) => a.users?.id && a.users.id !== account?.id) ??
+            null;
+
+          if (!who?.users?.id) return null;
+
+          return {
+            id: who.users.id,
+            first: String(who.users.display_name ?? '').split(' ')[0] || 'them',
+          };
+        })(),
+
+        /* **The one fact the table never showed.**
+        
+           `next` names the obligation and said nothing about when it is due,
+           so "Form 1" read identically sixty days out and six days late. This
+           is what `queueRank` sorts on and what the row now says. */
+        daysToNext: daysUntil(
+          mine
+            .filter((m: any) => !m.completed_on && m.kind !== 'event' && m.due_on)
+            .sort((a: any, b: any) => a.due_on.localeCompare(b.due_on))[0]?.due_on ?? null,
+          new Date().toISOString().slice(0, 10)
+        ),
+
         verdict: assess({
           worst,
           hasOfficer: officers.length > 0 || selfManaged.length > 0,
@@ -667,6 +747,32 @@ if (supabase && account) {
         }),
       };
     });
+
+    /* **What has already been asked for, and whether it worked.**
+    
+       One call per participation rather than one per row, and only for the
+       rows that have an entry: a project in no program has no participation
+       to read against. Without this the button is a message into the dark —
+       a teacher sees no evidence that she nudged yesterday, sends the same
+       one again, and learns nothing about whether nudging does anything.
+    
+       Failures are ignored on purpose. A screen that will not render because
+       the nudge history could not be read is a screen that loses the
+       disqualification counter over a decoration. */
+    const nudgeByMilestone = new Map<string, any>();
+
+    await Promise.all(
+      [...new Set(watched.map((w: any) => w.entry?.id).filter(Boolean))].map(
+        async (participationId) => {
+          const { data } = await supabase.rpc('nudge_state', {
+            p_participation_id: participationId,
+          });
+          for (const row of data ?? []) nudgeByMilestone.set(row.milestone_id, row);
+        }
+      )
+    );
+
+    for (const w of watched) w.nudge = w.next ? nudgeByMilestone.get(w.next.id) ?? null : null;
 
     const { data: rows } = await supabase
       .from('user_roles')
@@ -760,6 +866,23 @@ const groups = (() => {
     const held = by.get(key) ?? { program, rows: [] };
     held.rows.push(row);
     by.set(key, held);
+  }
+
+  /* **Rows in the order somebody should act on them.**
+
+     They arrived in whatever order the query returned, which is neither
+     alphabetical nor useful, and the verdict that says which ones matter was
+     rendered as the eighth column. `queueRank` turns that verdict into the
+     sort: lost first, then by how little time is left, then the ones in
+     order. Title breaks a tie so the sequence is stable between renders and
+     a teacher can find a row where she last saw it. */
+  for (const held of by.values()) {
+    held.rows.sort(
+      (a: any, b: any) =>
+        queueRank({ verdict: a.verdict, daysToNext: a.daysToNext }) -
+          queueRank({ verdict: b.verdict, daysToNext: b.daysToNext }) ||
+        (a.title ?? '').localeCompare(b.title ?? '')
+    );
   }
 
   return [...by.values()].sort((a, b) => {
@@ -1042,6 +1165,7 @@ const grouped = () => {
                             most often looked for first. */}
                         <th scope="col">Notebook</th>
                         <th scope="col">Obligations</th>
+                        <th scope="col">Nudge</th>
                         <th scope="col">Standing</th>
                         {/* Only where there is somewhere to go forward to. A
                             class does not select, so the column is absent
@@ -1084,9 +1208,39 @@ const grouped = () => {
                               : <span class="miss">none named</span>}
                           </td>
                           <td>
-                            {w.next
-                              ? <span class="next">{w.next.name}</span>
-                              : <span class="none">Nothing outstanding</span>}
+                            {w.next ? (
+                              <>
+                                <span class="next">{w.next.name}</span>
+                                {/* **When, beside what.**
+                                
+                                    The obligation's name was the whole cell,
+                                    so a column of forty projects read the
+                                    same whether a form was due in June or
+                                    was a week late. This is the fact the
+                                    sort is built on, said out loud — a sort
+                                    the reader cannot see is a sort they
+                                    assume is alphabetical. */}
+                                <span class={
+                                  w.daysToNext === null
+                                    ? 'sub'
+                                    : w.daysToNext < 0
+                                      ? 'sub late'
+                                      : w.daysToNext <= 14
+                                        ? 'sub soon'
+                                        : 'sub'
+                                }>
+                                  {w.daysToNext === null
+                                    ? 'no date set'
+                                    : w.daysToNext < 0
+                                      ? `${Math.abs(w.daysToNext)} ${Math.abs(w.daysToNext) === 1 ? 'day' : 'days'} late`
+                                      : w.daysToNext === 0
+                                        ? 'due today'
+                                        : `${w.daysToNext} ${w.daysToNext === 1 ? 'day' : 'days'} left`}
+                                </span>
+                              </>
+                            ) : (
+                              <span class="none">Nothing outstanding</span>
+                            )}
                           </td>
                           {/* The cell is the link, so the reason to open a
                               notebook and the way in are the same thing. The
@@ -1104,6 +1258,58 @@ const grouped = () => {
                             )}
                           </td>
                           <td>{w.total ? `${w.done} of ${w.total}` : '—'}</td>
+
+                          {/* **THE VERB.**
+                          
+                              Every other cell on this row is a fact. This is
+                              the one place the screen lets somebody act on
+                              what it just told them, and without it a teacher
+                              learns a project is stuck and her only move is
+                              to close the laptop and find the student on
+                              Monday.
+                          
+                              Addressed to the Elder where one is assigned and
+                              to the student where none is — which is the same
+                              fact `assess()` already reports as "No club
+                              officer", so the verdict that flags an
+                              unattended project is the routing rule. No
+                              dropdown, because a choice with an obvious right
+                              answer is a choice nobody should have to make.
+                          
+                              Only where there is a dated obligation to name.
+                              A nudge about nothing in particular is the
+                              message people learn to filter. */}
+                          <td class="nudge-cell">
+                            {w.next && w.nudgeTo ? (
+                              <form method="POST" action="#outcome" class="inline">
+                                <input type="hidden" name="action" value="nudge" />
+                                <input type="hidden" name="milestone_id" value={w.next.id} />
+                                <input type="hidden" name="recipient_id" value={w.nudgeTo.id} />
+                                <button class="btn btn-sm" type="submit">
+                                  Nudge {w.nudgeTo.first}
+                                </button>
+                                {/* **The count, which is the point.**
+                                
+                                    "Nudged" tells a teacher nothing she did
+                                    not already know. "Nudged twice, still
+                                    open" tells her to stop typing and walk
+                                    over, which is the right outcome and the
+                                    software should say so rather than imply
+                                    it. And a row that met its obligation
+                                    after a nudge is the reason she uses the
+                                    button again. */}
+                                {w.nudge && (
+                                  <span class={w.nudge.met_after ? 'sub' : 'sub late'}>
+                                    {w.nudge.met_after
+                                      ? `nudged ${w.nudge.nudges}× · met`
+                                      : `nudged ${w.nudge.nudges}× · still open`}
+                                  </span>
+                                )}
+                              </form>
+                            ) : (
+                              <span class="none">—</span>
+                            )}
+                          </td>
                           <td>
                             {w.verdict.reasons.length > 0
                               ? w.verdict.reasons.map((r: string) => (
@@ -2074,5 +2280,30 @@ const grouped = () => {
   }
 
   .next { font-size: 0.94rem; }
+
+  /* Narrow, so the verb does not take the width the facts need. */
+  .nudge-cell { white-space: nowrap; }
+  .nudge-cell .btn { font-size: 0.86rem; padding: 5px 10px; }
+
+  /* Two states worth colour, and no more.
+  
+     Late and close-at-hand are the rows a teacher acts on this week. Adding a
+     third tone for "plenty of time" would put colour on every row, and colour
+     on every row is colour on none — the screen already carries a
+     disqualifying tone and a warning tone, and a fourth competes with both.
+     Everything not late and not close keeps `.sub`, which is quiet on
+     purpose. */
+  /* `--alert` and `--ink`, which exist. The first draft reached for a
+     `--bad` and a `--warn` that are not in `tokens.css`, with hex literals
+     as fallbacks — two invented colours dressed as tokens.
+     `tests/tokens-only.mjs` refuses a hex anywhere outside the token file
+     and caught it, including the one still sitting in this comment
+     explaining the mistake, which is the rule working exactly as written.
+   
+     There is no warning foreground token, only `--ready-bg`, so "close at
+     hand" is weight on the ordinary ink rather than a colour nobody chose.
+     A tone invented here would be a fifth thing to keep consistent. */
+  .sub.late { color: var(--alert); font-weight: 600; }
+  .sub.soon { color: var(--ink); font-weight: 600; }
   .none { color: var(--ink-3); font-size: 0.92rem; }
 </style>
