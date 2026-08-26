@@ -74,6 +74,35 @@ CI does not deploy. Cloudflare does that, in step 5.
 
 ---
 
+## 1a. Mail for the fixture domain
+
+**Before demonstrating notifications.**
+
+Fixture accounts are addressed on `scipath.org`. They used to be on
+`demo.invalid`, which RFC 2606 reserves and nobody can register, so a fixture
+address could never become a real mailbox and no message could ever leave.
+
+That is given up on purpose. The thing worth demonstrating is a guardian
+consent request landing in an inbox and being answered, and a domain that
+cannot receive mail cannot show it. So `scipath.org` wants a **catch-all**
+pointed somewhere you can read.
+
+Two things stand in for what `.invalid` was doing, and both are already in the
+code:
+
+- Every fixture address is `{tenant}.{handle}@scipath.org`. Nobody is issued a
+  real mailbox in that shape, so a fixture cannot collide with a person.
+- The transport refuses the fixture domain **by default**. `MAIL_FIXTURES=send`
+  is the deliberate act that permits it, compared exactly — `no` and an empty
+  value both still refuse. Addresses on `.invalid` are refused whatever it
+  says.
+
+So the ordinary state is that fixture mail cannot leave, and demonstrating the
+flow is one variable rather than an edit. Set it for the demonstration; leave
+it unset the rest of the time.
+
+---
+
 ## 2. Supabase
 
 **2.1 Create the project.** A new project in the Blue Leaf Labs org. Region

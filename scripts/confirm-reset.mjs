@@ -39,9 +39,13 @@ console.log(`
   From        ${source}
 
   This drops every table and recreates it from the migration, empties file
-  storage, and removes every account. Then it seeds the organizations, the
-  programs, 69 fixture accounts on demo.invalid, the scenarios, the published
-  records, and any advisor accounts in local-data/people.yaml.
+  storage, and removes every account. Then it seeds the organizations and
+  their programs, the fixture people and every demonstration situation into
+  the demo tenant alone, the published records, and any advisor accounts in
+  local-data/people.yaml.
+
+  Monta Vista, SVSLC and the platform come back with their programs and
+  nobody in them. That is deliberate: they are about to hold real students.
 `);
 
 if (!loopback) {

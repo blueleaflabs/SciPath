@@ -1,0 +1,213 @@
+---
+export const prerender = false;
+
+/**
+ * THE ONE PAGE FOR SOMEBODY WHO WILL NEVER HAVE AN ACCOUNT.
+ *
+ * A parent receives an email, follows a link, and answers. There is no sign
+ * in, and that is the design rather than a shortcut: requiring a parent to
+ * create an account at a service they have never heard of, in order to say
+ * no to their child using it, is a way of not asking.
+ *
+ * **The token is the authorisation and it is the only one.** It is 32 random
+ * bytes, only its hash is stored, `confirmation_tokens` carries no row level
+ * security policies at all so no session can read it, and it is consumed on
+ * answer so a link cannot be replayed to reverse a decision.
+ *
+ * ── What this page does not do ──────────────────────────────────────────
+ *
+ * It names the student and the school and nothing else. Not the project, not
+ * the question, not the notebook, not who else is on the team. A guardian is
+ * being asked to permit publication, and the contents of a child's work are
+ * not the school's to disclose to an address that has typed no password —
+ * an address which, on a request nobody made, belongs to a stranger.
+ *
+ * It does not distinguish an unknown token from an expired or spent one.
+ * Telling them apart tells somebody guessing which guesses are warmer, and
+ * no parent's next action differs between the three.
+ *
+ * It does not offer to resend, and it does not suggest asking again after a
+ * refusal. The next move after a no belongs to the family and the school.
+ */
+
+import Base from '../../layouts/Base.astro';
+import { serverClient } from '../../lib/supabase';
+import { activeOrg } from '../../lib/tenant';
+import { afterPost, outcomeFrom } from '../../lib/post-redirect';
+import { formatDate } from '../../lib/dates';
+
+const org = activeOrg(Astro) as any;
+const token = String(Astro.params.token ?? '');
+
+/* **A parent must never meet a stack trace.**
+
+   Every other page in `/app/` may fail loudly at somebody who works here and
+   can go and look at a log. This one is read by a stranger, once, from a
+   phone, and its whole job is to be answerable — so a deployment with no
+   database configured renders the closed state rather than a 500. It is even
+   true: with no database there is no open request behind this link. */
+const configured = Boolean((Astro.locals as any).configured ?? true);
+
+const supabase = configured
+  ? serverClient(Astro.request, Astro.cookies, (Astro.locals as any).runtime?.env)
+  : null;
+
+/* Seeded from the redirect a POST answers with, so a refresh re-reads the
+   page rather than answering twice. */
+let { note: answered } = outcomeFrom(Astro.url);
+
+if (Astro.request.method === 'POST' && supabase) {
+  const form = await Astro.request.formData();
+  const decision = String(form.get('decision') ?? '');
+
+  /* Read as an explicit pair rather than a truthiness check on one field.
+     A form that loses its value must not be read as a refusal, and
+     `Boolean(form.get('approve'))` is exactly that shape. */
+  if (decision === 'approve' || decision === 'decline') {
+    const { data, error } = await supabase.rpc('answer_guardian_consent', {
+      p_token: token,
+      p_approve: decision === 'approve',
+    });
+
+    return afterPost(Astro, { note: error ? 'unavailable' : String(data) });
+  }
+}
+
+/* Null where the token is unknown, expired, or the request is gone. */
+const rows = supabase
+  ? (
+      await supabase.rpc('guardian_consent_request', { p_token: token })
+    ).data
+  : null;
+
+const request = Array.isArray(rows) ? (rows[0] ?? null) : null;
+
+/* An answer given a moment ago, or one given last week. The page reads the
+   same either way, which is what makes a second visit unremarkable. */
+const outcome = answered ?? request?.answered ?? null;
+const openForAnswer = Boolean(request) && !outcome;
+---
+
+<Base title="Permission for a student account" description="">
+  <div class="wrap">
+    <section class="pane">
+      {!request && (
+        <>
+          <h1 class="t-big">This link is no longer open</h1>
+          <p class="lede">
+            It may have been used already, or it may have expired. Nothing has
+            been published and nothing has changed.
+          </p>
+          <p class="fine">
+            If you still need to answer, the school that sent it can send a
+            fresh link.
+          </p>
+        </>
+      )}
+
+      {request && outcome === 'approved' && (
+        <>
+          <h1 class="t-big">Confirmed. Thank you.</h1>
+          <p class="lede">
+            {request.student_name} may publish work through {request.org_name}.
+            They have been told.
+          </p>
+        </>
+      )}
+
+      {request && outcome === 'declined' && (
+        <>
+          <h1 class="t-big">Recorded. Nothing will be published.</h1>
+          <p class="lede">
+            The account is paused. {request.student_name}'s projects and
+            notebook are kept, and nothing is public.
+          </p>
+          <p class="fine">
+            {request.student_name} has been told. If this was a
+            misunderstanding, their teacher can sort it out with you.
+          </p>
+        </>
+      )}
+
+      {request && outcome === 'unavailable' && (
+        <>
+          <h1 class="t-big">That did not go through</h1>
+          <p class="lede">
+            The link may have been answered in another window. Nothing has been
+            published.
+          </p>
+        </>
+      )}
+
+      {openForAnswer && (
+        <>
+          <p class="t-lbl">{request.org_name}</p>
+          <h1 class="t-big">
+            {request.student_name} needs your permission
+          </h1>
+
+          <p class="lede">
+            {request.student_name} gave this address as their parent or
+            guardian when creating an account on SciPath, a tool for keeping a
+            research notebook and tracking science fair deadlines. They asked
+            on {formatDate(request.requested_at)}.
+          </p>
+
+          {/* What is actually being decided, in the terms it is decided in.
+              A parent is not agreeing to software; they are agreeing that
+              their child's name and work may be published. */}
+          <div class="what">
+            <h2 class="t-h2">What you are agreeing to</h2>
+            <ul>
+              <li>
+                Work {request.student_name} finishes may be published on a
+                public page, under their name.
+              </li>
+              <li>
+                They may take part in science fairs through {request.org_name},
+                which have their own forms and their own deadlines.
+              </li>
+            </ul>
+
+            <h2 class="t-h2">If you say no</h2>
+            <ul>
+              <li>The account is paused and nothing is published.</li>
+              <li>
+                Their projects and notebook are kept. Nothing they have written
+                is deleted.
+              </li>
+            </ul>
+          </div>
+
+          {/* Two named submits rather than a checkbox and one button. Each
+              says what it does, so nothing here can be answered by clicking
+              the thing that looks like the way forward. */}
+          <form method="POST" class="answer">
+            <button class="btn" type="submit" name="decision" value="approve">
+              Yes, I give permission
+            </button>
+            <button class="btn btn-2" type="submit" name="decision" value="decline">
+              No, I do not
+            </button>
+          </form>
+
+          <p class="fine">
+            If you were not expecting this, you can close this page and nothing
+            will be published. Sent by {request.org_name} through SciPath.
+          </p>
+        </>
+      )}
+    </section>
+  </div>
+</Base>
+
+<style>
+  .pane { max-width: 60ch; padding: 48px 0 72px; }
+  .pane .lede { margin-top: 14px; }
+  .what { margin-top: 32px; }
+  .what h2 { font-size: 1.05rem; margin: 24px 0 8px; }
+  .what ul { margin: 0; padding-left: 1.15rem; }
+  .what li { margin-bottom: 8px; }
+  .answer { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 32px; }
+  .fine { color: var(--ink-3); font-size: 0.9rem; margin-top: 20px; }
+</style>

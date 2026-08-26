@@ -19,6 +19,8 @@
 
 import fs from 'node:fs';
 import { loadDevVars, parseDevVars } from './dev-vars.mjs';
+import { dockerState, dockerAdvice, supabaseContainers } from './docker.mjs';
+import { DEFAULT_PASSWORD } from '../src/config/demo-accounts.mjs';
 
 const tick = (ok) => (ok ? 'ok  ' : 'X   ');
 const lines = [];
@@ -31,6 +33,83 @@ function report(ok, message, detail) {
 }
 
 console.log('\nChecking local sign-in.\n');
+
+/* ── 0. The thing underneath ──────────────────────────────────────────────
+ *
+ * First, because nothing below it can be true without it. The auth service
+ * is a container, so a stopped daemon makes checks 4 and 5 fail with
+ * `fetch failed` and an unreachable URL, which reads as a Supabase problem
+ * and is not one.
+ *
+ * It reports and does not exit. The four checks above the network are all
+ * file reads and stay useful with nothing running, and somebody asking this
+ * question at all is usually asking it because something is already wrong.
+ */
+
+const docker = dockerState();
+
+report(
+  docker.ok,
+  'a container runtime is answering',
+  docker.ok ? docker.detail : dockerAdvice(docker).split('\n')[0]
+);
+
+if (!docker.ok) {
+  lines.push('');
+  for (const line of dockerAdvice(docker).split('\n').slice(1)) {
+    lines.push(`       ${line}`);
+  }
+  lines.push('');
+  lines.push('       Everything below that needs the network will fail until it is.');
+  lines.push('');
+}
+
+/* ── 0a. And whether the stack is up ──────────────────────────────────────
+ *
+ * Separate from the runtime, because they fail separately and the fix is
+ * different. A running daemon with no Supabase containers is the state
+ * `npm run reset` walks straight into: `db reset` recreates the database and
+ * the API gateway is a different container, so the migration applies and the
+ * first request afterwards is refused.
+ *
+ * This says what to start rather than that something is wrong, since knowing
+ * which command comes next is the whole reason to run this.
+ */
+
+if (docker.ok) {
+  const stack = supabaseContainers();
+
+  if (!stack.known) {
+    report(false, 'the Supabase stack is running', 'could not read the container list');
+  } else if (stack.running.length === 0 && stack.stopped.length === 0) {
+    report(
+      false,
+      'the Supabase stack is running',
+      'no Supabase containers exist. Start it: npm run db:start'
+    );
+  } else if (stack.running.length === 0) {
+    report(
+      false,
+      'the Supabase stack is running',
+      `${stack.stopped.length} stopped, none running. Restart it: npm run restart`
+    );
+  } else if (stack.stopped.length > 0) {
+    /* Partly up is a failure, not a note. This is the state that reads as
+       healthy from every other angle: `supabase status` prints the whole
+       table of addresses, the database is genuinely fine, and the one
+       container that is missing is usually the gateway everything else
+       talks through. Reporting it as ok because most of them are running
+       is how an afternoon goes. */
+    report(
+      false,
+      'every Supabase container is running',
+      `${stack.running.length} up, ${stack.stopped.length} stopped: ` +
+        `${stack.stopped.join(', ')}. Restart it: npm run restart`
+    );
+  } else {
+    report(true, 'every Supabase container is running', `${stack.running.length} up`);
+  }
+}
 
 /* ── 1. The file ──────────────────────────────────────────────────────────── */
 
@@ -158,9 +237,9 @@ if (secret) {
    in the instructions is not zero. */
 const demoPassword = fromFile.DEMO_PASSWORD ?? process.env.DEMO_PASSWORD;
 
-if (demoPassword && demoPassword !== 'scipath') {
+if (demoPassword && demoPassword !== DEFAULT_PASSWORD) {
   lines.push('');
-  lines.push(`  Note: DEMO_PASSWORD is set to "${demoPassword}", not "scipath".`);
+  lines.push(`  Note: DEMO_PASSWORD is set to "${demoPassword}", not "${DEFAULT_PASSWORD}".`);
   lines.push('        Fixture accounts were created with it, so sign in with that.');
 }
 
@@ -168,6 +247,6 @@ console.log(lines.join('\n'));
 console.log(
   failed
     ? '\nSomething above needs attention. Password sign-in works regardless:\n' +
-      'any fixture address with the password scipath.\n'
+      `any fixture address with the password ${DEFAULT_PASSWORD}.\n`
     : '\nEverything checks out.\n'
 );

@@ -38,9 +38,23 @@ import { FIXTURE_DOMAIN, DEFAULT_PASSWORD, fixtureAddress } from '../src/config/
 
 const URL = process.env.PUBLIC_SUPABASE_URL ?? '';
 const KEY = process.env.SUPABASE_SECRET_KEY ?? '';
-/* Every tenant gets fixtures, so switching schools in the UI actually has
-   something to show on the other side. */
-const ORG_SLUGS = (process.env.DEMO_ORGS ?? 'montavista,svslc,scipath,demo')
+/* **The demonstration tenant, and no other.**
+
+   This defaulted to every tenant, on the reasoning that switching schools in
+   the UI should have something to show on the other side. That reasoning was
+   for a system nobody had shown to a school yet. It is now the opposite of
+   what is wanted: Monta Vista, SVSLC and the platform are about to hold real
+   students, and a school whose roster is half invented is a school whose
+   advisor cannot tell which half.
+
+   The cloud already ran this way — `reset-cloud.mjs` has passed
+   `DEMO_ORGS: 'demo'` at every step for months — so local and cloud produced
+   different databases from the same scripts, and the difference lived in one
+   environment variable nobody set locally. This makes the default the same
+   in both, which is the whole of "synchronize the seeds".
+
+   `DEMO_ORGS` still overrides, for anyone who wants the old spread. */
+const ORG_SLUGS = (process.env.DEMO_ORGS ?? 'demo')
   .split(',')
   .map((s) => s.trim())
   .filter(Boolean);
@@ -242,7 +256,17 @@ async function seedOrg(slug) {
       email,
       password: PASSWORD,
       email_confirm: true,
-      user_metadata: { full_name: person.name, fixture: true },
+      /* **Both flags, and `demo` is the one that matters.**
+      
+         This set `fixture` alone, and `wipe-demo` identified a fixture by
+         its address ending `@demo.invalid` — which worked for exactly as
+         long as the fixture domain was unregisterable. It is `scipath.org`
+         now, so a rule that deletes by domain would delete every real
+         account on it, including the advisors `seed-people` writes onto a
+         school's own domain on purpose.
+      
+         So the flag has to carry it, and the flag has to be here. */
+      user_metadata: { full_name: person.name, fixture: true, demo: true },
     });
 
     let id = created?.user?.id;

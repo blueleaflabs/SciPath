@@ -184,6 +184,44 @@ create table public.users (
   age_band        text check (age_band in ('under_13', '13_17', '18_plus')),
   age_attested_at timestamptz,
 
+  -- THE THREE AN OPEN TENANT ASKS AND A SCHOOL DOES NOT.
+  --
+  -- A school knows which school it is from the hostname. An open tenant has
+  -- no domain and no district, so the school is a claim the person makes,
+  -- and these are the only three questions worth asking at the moment an
+  -- account is created.
+  --
+  -- `school_name` is the one that is load bearing. It is the affiliation on
+  -- a published record, and it is the input to the two lookups that let this
+  -- project say who it reached without asking anybody a sensitive question:
+  -- Title I status from federal data, and whether the school has ever
+  -- appeared in a fair's published results. Both are computed from the name
+  -- afterwards and both are facts about a school. **Neither is ever stored
+  -- on a person.**
+  --
+  -- `school_runs_a_fair` is the eligibility signal several fairs turn on:
+  -- ACSEF admits an independent entry only where the school holds no fair of
+  -- its own, and a student whose school does hold one must come through it.
+  -- `not_sure` is a real answer and the commonest honest one, so it is a
+  -- value rather than a null.
+  --
+  -- `entered_before` identifies the first time entrant. Behavioural rather
+  -- than demographic, which is what makes it safe to ask a minor.
+  --
+  -- **Nothing here is a protected attribute.** No race, no ethnicity, no
+  -- income, no free or reduced price lunch status, no disability. That line
+  -- is not a matter of taste: this tenant holds minors with no district
+  -- agreement behind them, and a demographic question asked of them is a
+  -- disclosure nobody authorised.
+  --
+  -- All three are nullable, because a school tenant never asks them and a
+  -- column that is required in one tenant and meaningless in another cannot
+  -- be `not null`.
+  school_name        text check (school_name is null
+                                 or char_length(trim(school_name)) > 0),
+  school_runs_a_fair text check (school_runs_a_fair in ('yes', 'no', 'not_sure')),
+  entered_before     boolean,
+
   orcid            text,
   photo_path       text,
   photo_consent    boolean not null default false,
@@ -384,8 +422,34 @@ create table public.notifications (
 
   -- Who hears, and who caused it. Nobody is told about their own click, so
   -- the actor is kept in order to be excluded at send time.
-  recipient_id  uuid not null references public.users on delete restrict,
-  actor_id      uuid references public.users on delete restrict,
+  --
+  -- **`recipient_id` was `not null`, and that made the outbox unable to
+  -- address the one person it most needs to reach.** Guardian consent is a
+  -- message to a parent, a parent has no account, and every route out of
+  -- this system went through a `users` row. The consent email had a template
+  -- written for it and no way to be enqueued.
+  --
+  -- So a recipient is either an account or an address, never both and never
+  -- neither. An address carries a name beside it because a message to a
+  -- parent that opens "Hello," is worse than one that uses their name, and
+  -- there is no row to look it up in.
+  recipient_id    uuid references public.users on delete restrict,
+  recipient_email text,
+  recipient_name  text,
+  actor_id        uuid references public.users on delete restrict,
+
+
+  -- **The deduplication key had to change with it.**
+  --
+  -- `unique (recipient_id, dedupe_key)` stops working the moment
+  -- `recipient_id` is null, because null is distinct from null in a unique
+  -- index: every retry to a guardian would have been a fresh row and the
+  -- parent would receive the same request as many times as the drain ran.
+  -- This collapses both kinds of recipient to one comparable value, so the
+  -- guarantee is the same for an account and for an address.
+  recipient_key text generated always as (
+    coalesce(recipient_id::text, lower(recipient_email))
+  ) stored,
 
   -- What it is about, so a message can link to the exact thing and somebody
   -- can later ask what was ever sent about one entry.
@@ -432,7 +496,16 @@ create table public.notifications (
   created_at    timestamptz not null default now(),
   sent_at       timestamptz,
 
-  unique (recipient_id, dedupe_key)
+  -- One recipient or the other, never both and never neither. Without this
+  -- the nullable column above admits a row addressed to nobody, which the
+  -- drain would discover at send time and report as "no address for this
+  -- recipient" — true, and eight hours after the mistake was made.
+  constraint notifications_have_a_recipient check (
+    (recipient_id is not null and recipient_email is null)
+    or (recipient_id is null and recipient_email is not null)
+  ),
+
+  unique (recipient_key, dedupe_key)
 );
 
 -- The drain's only query: what is due, oldest first.
@@ -727,6 +800,269 @@ end;
 $$;
 
 grant execute on function public.sync_identities() to authenticated;
+
+
+-- ===========================================================================
+-- GUARDIAN CONSENT
+--
+-- The one exchange this system has with somebody who has no account and never
+-- will. A parent receives an email, follows a link, reads what they are being
+-- asked, and answers. Nothing about it involves signing in, because requiring
+-- a parent to make an account in order to say no is a way of not asking.
+--
+-- **Placed above `complete_signup` for the reason recorded below it.** That
+-- function calls `app.request_guardian_consent`, `tests/sql-order.mjs`
+-- refuses a function that references one defined later, and the migration
+-- applies top to bottom — a forward reference works on every database that
+-- already has the function and fails on a fresh reset.
+-- ===========================================================================
+
+/**
+ * The hash, written once.
+ *
+ * **Core Postgres, not pgcrypto.** The first draft reached for
+ * `extensions.digest` and `extensions.gen_random_bytes`, which are pgcrypto
+ * and which this migration never creates: Supabase's local image happens to
+ * ship them in the `extensions` schema, so it would have worked here and
+ * failed on any database that does not. Nothing else in this file depends on
+ * an extension, and this is not the feature to start with — `sha256(bytea)`
+ * has been core since Postgres 11.
+ *
+ * Written once rather than inlined in the three functions that need it, so
+ * the minting side and the two reading sides cannot drift into hashing the
+ * same string two different ways. That drift is silent: every token simply
+ * stops matching.
+ */
+create or replace function app.consent_token_hash(p_token text)
+returns text
+language sql
+immutable
+set search_path = ''
+as $$
+  select encode(sha256(convert_to(p_token, 'UTF8')), 'hex');
+$$;
+
+/**
+ * Mint a token, write its hash, and post the message.
+ *
+ * **Only the hash is stored.** `confirmation_tokens` carries no policies at
+ * all, so no session can read it under any circumstance, and even a dump of
+ * the table yields nothing that opens a link. The plaintext exists for the
+ * length of this function and in one email.
+ *
+ * Thirty days, which is the number 18.3 pauses an unconfirmed account at.
+ * A token that outlives the account state it governs is a link that works
+ * after the thing it authorises has stopped being true.
+ */
+create or replace function app.request_guardian_consent(p_consent_id uuid)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_row     record;
+  v_student text;
+  v_token   text;
+begin
+  select c.*, u.display_name
+    into v_row
+    from public.guardian_consents c
+    join public.users u on u.id = c.user_id
+   where c.id = p_consent_id;
+
+  if v_row.id is null then
+    raise exception 'no such consent request';
+  end if;
+
+  v_student := v_row.display_name;
+
+  /* Two random uuids with the hyphens taken out: 64 hex characters and 244
+     bits of randomness, from `gen_random_uuid()`, which is core.
+
+     Two rather than one because this is the only credential in the system
+     that arrives by email and authorises an action with no password behind
+     it, and 122 bits is thinner than that deserves. */
+  v_token := replace(gen_random_uuid()::text, '-', '')
+          || replace(gen_random_uuid()::text, '-', '');
+
+  insert into public.confirmation_tokens
+    (org_id, purpose, subject_type, subject_id, token_hash, expires_at)
+  values
+    (v_row.org_id, 'guardian_consent', 'guardian_consents', p_consent_id,
+     app.consent_token_hash(v_token),
+     now() + interval '30 days');
+
+  /* `recipient_email` rather than `recipient_id`, which is the whole point
+     of the columns above. `payload.path` carries the destination, because a
+     guardian following a link to `/app/` reaches a sign-in screen for a
+     service they have never heard of.
+
+     The dedupe key is the consent row, so a resend for the same request
+     cannot double the message; a *new* request supersedes the old row and
+     gets a new id, which is rightly a second email. */
+  insert into public.notifications
+    (org_id, kind, recipient_email, recipient_name, subject_kind, subject_id,
+     payload, dedupe_key)
+  values
+    (v_row.org_id, 'guardian_consent', lower(v_row.guardian_email),
+     nullif(trim(coalesce(v_row.guardian_name, '')), ''),
+     'guardian_consents', p_consent_id,
+     jsonb_build_object(
+       'student_name', v_student,
+       'path', '/consent/' || v_token || '/'
+     ),
+     'guardian_consent:' || p_consent_id)
+  on conflict (recipient_key, dedupe_key) do nothing;
+end;
+$$;
+
+revoke execute on function app.request_guardian_consent(uuid) from public, anon, authenticated;
+
+/**
+ * What a guardian is being asked, resolved from a token.
+ *
+ * Returns nothing rather than raising when the token is unknown, expired or
+ * already used. **The three are one answer on purpose.** Distinguishing them
+ * tells somebody holding a guessed token which guesses are closer, and no
+ * parent's next action differs between them.
+ */
+create or replace function public.guardian_consent_request(p_token text)
+returns table (
+  student_name text,
+  org_name     text,
+  requested_at timestamptz,
+  answered     text
+)
+language sql
+security definer
+set search_path = ''
+as $$
+  select u.display_name,
+         o.lockup_name,
+         c.requested_at,
+         case
+           when c.confirmed_at is not null then 'approved'
+           when c.revoked_at is not null then 'declined'
+           else null
+         end
+    from public.confirmation_tokens t
+    join public.guardian_consents c on c.id = t.subject_id
+    join public.users u on u.id = c.user_id
+    join public.organizations o on o.id = c.org_id
+   where t.purpose = 'guardian_consent'
+     and t.token_hash = app.consent_token_hash(p_token)
+     and t.expires_at > now();
+$$;
+
+grant execute on function public.guardian_consent_request(text) to anon, authenticated;
+
+/**
+ * The answer.
+ *
+ * **A decline is recorded, not silent.** 18.3 pauses an account nobody has
+ * answered for, and an explicit refusal is a different fact from thirty days
+ * of silence: the student is told, and nobody asks that address again for
+ * this request.
+ *
+ * Approving moves the account to `active` and publishing becomes possible.
+ * Declining moves it to `paused`, which is where an unanswered account
+ * eventually lands anyway — the work stays, the notebook stays, and nothing
+ * is published. **Not `closed`**, because a parent saying no this week is not
+ * the same act as deleting a child's work, and the one irreversible state is
+ * not the one to put behind a link in an email.
+ *
+ * The token is consumed either way, so a link cannot be replayed to reverse
+ * an answer. Changing an answer is a conversation with the school.
+ */
+create or replace function public.answer_guardian_consent(
+  p_token   text,
+  p_approve boolean
+)
+returns text
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_token   record;
+  v_consent record;
+begin
+  select * into v_token
+    from public.confirmation_tokens t
+   where t.purpose = 'guardian_consent'
+     and t.token_hash = app.consent_token_hash(p_token)
+     and t.expires_at > now()
+     and t.consumed_at is null;
+
+  /* One answer for unknown, expired and spent, for the reason above. */
+  if v_token.id is null then
+    return 'unavailable';
+  end if;
+
+  select * into v_consent
+    from public.guardian_consents c
+   where c.id = v_token.subject_id;
+
+  if v_consent.id is null then
+    return 'unavailable';
+  end if;
+
+  /* Already answered. Idempotent rather than an error: a parent who clicks
+     the link twice, or whose mail client prefetches it, has not done
+     anything wrong and should be shown what they decided. */
+  if v_consent.confirmed_at is not null then
+    return 'approved';
+  end if;
+  if v_consent.revoked_at is not null then
+    return 'declined';
+  end if;
+
+  update public.confirmation_tokens
+     set consumed_at = now(), updated_at = now()
+   where id = v_token.id;
+
+  if p_approve then
+    update public.guardian_consents
+       set confirmed_at = now(), updated_at = now()
+     where id = v_consent.id;
+
+    update public.users
+       set consent_state = 'active', updated_at = now()
+     where id = v_consent.user_id;
+  else
+    update public.guardian_consents
+       set revoked_at = now(), updated_at = now()
+     where id = v_consent.id;
+
+    update public.users
+       set consent_state = 'paused', updated_at = now()
+     where id = v_consent.user_id;
+  end if;
+
+  /* The student is told either way, and told by the outbox rather than on a
+     screen they may not be looking at. */
+  insert into public.notifications
+    (org_id, kind, recipient_id, subject_kind, subject_id, payload, dedupe_key)
+  values
+    (v_consent.org_id,
+     case when p_approve then 'guardian_approved' else 'guardian_declined' end,
+     v_consent.user_id, 'guardian_consents', v_consent.id,
+     jsonb_build_object('guardian_name', v_consent.guardian_name),
+     (case when p_approve then 'guardian_approved:' else 'guardian_declined:' end)
+       || v_consent.id)
+  on conflict (recipient_key, dedupe_key) do nothing;
+
+  perform app.audit(
+    v_consent.org_id,
+    case when p_approve then 'guardian.approved' else 'guardian.declined' end,
+    'guardian_consents', v_consent.id, null, '{}'::jsonb);
+
+  return case when p_approve then 'approved' else 'declined' end;
+end;
+$$;
+
+grant execute on function public.answer_guardian_consent(text, boolean) to anon, authenticated;
 -- Moved above `complete_signup` rather than left with the rest of the
 -- roster machinery. That function now requires a reservation before it
 -- will admit anybody to a school whose `signup_mode` is `invite`, and
@@ -929,7 +1265,14 @@ create or replace function public.complete_signup(
   p_age_band       text,
   p_grad_year      int      default null,
   p_guardian_name  text     default null,
-  p_guardian_email text     default null
+  p_guardian_email text     default null,
+
+  -- Asked only by an open tenant. A school resolves its own name from the
+  -- hostname, so these arrive null there and the columns stay null. See the
+  -- comment on `public.users`.
+  p_school_name        text default null,
+  p_school_runs_a_fair text default null,
+  p_entered_before     boolean default null
 )
 returns uuid
 language plpgsql
@@ -947,6 +1290,7 @@ declare
   v_affil      text := 'unverified';
   v_consent    text;
   v_grant      record;
+  v_consent_id uuid;
   v_year       int := extract(year from now())::int;
 begin
   if v_uid is null then
@@ -1056,10 +1400,34 @@ begin
 
   v_consent := case when p_age_band = '18_plus' then 'not_required' else 'pending' end;
 
+  /* THE THREE ARE REFUSED WHERE THEY WERE NOT ASKED.
+  
+     A school tenant's form does not render them, so a value arriving from
+     one is a request that did not come from the form. Discarded rather than
+     rejected: this is not an attack worth an exception, it is a stale tab or
+     a copied request, and the honest outcome is the account a school signup
+     would have produced.
+  
+     `not_sure` is a value here rather than a null. A student who does not
+     know whether their school runs a fair has answered the question, and
+     collapsing that into "unanswered" loses the one thing worth knowing
+     about them, which is that nobody has told them. */
+  if v_org.signup_mode <> 'open' then
+    p_school_name        := null;
+    p_school_runs_a_fair := null;
+    p_entered_before     := null;
+  end if;
+
+  if p_school_runs_a_fair is not null
+     and p_school_runs_a_fair not in ('yes', 'no', 'not_sure') then
+    raise exception 'school_runs_a_fair must be yes, no or not_sure';
+  end if;
+
   insert into public.users
     (id, org_id, display_name, grad_year, population, status,
      affiliation_state, affiliation_verified_at,
-     consent_state, consent_requested_at, age_band, age_attested_at)
+     consent_state, consent_requested_at, age_band, age_attested_at,
+     school_name, school_runs_a_fair, entered_before)
   values
     (v_uid, v_org.id, trim(p_display_name), p_grad_year, v_population,
      case when v_affil = 'unverified' then 'unaffiliated' else 'active' end,
@@ -1067,7 +1435,10 @@ begin
      case when v_affil = 'domain_verified' then now() end,
      v_consent,
      case when v_consent = 'pending' then now() end,
-     p_age_band, now());
+     p_age_band, now(),
+     nullif(trim(coalesce(p_school_name, '')), ''),
+     p_school_runs_a_fair,
+     p_entered_before);
 
   perform public.sync_identities();
   perform set_config('app.system_grant', 'on', true);  -- transaction local
@@ -1079,10 +1450,20 @@ begin
   end if;
 
   -- An adult is never asked for a guardian. A minor always is.
+  --
+  -- **The row used to be the whole of it.** A consent record was written and
+  -- nothing was ever sent to the address on it, so every minor's account sat
+  -- at `pending` waiting on a message nobody had posted. `app.request_guardian_consent`
+  -- mints the token and enqueues the mail in the same transaction as the row,
+  -- because a consent record with no request behind it is indistinguishable
+  -- from one a guardian has ignored.
   if v_consent = 'pending' and p_guardian_email is not null then
     insert into public.guardian_consents
       (org_id, user_id, guardian_name, guardian_email)
-    values (v_org.id, v_uid, coalesce(p_guardian_name, ''), lower(p_guardian_email));
+    values (v_org.id, v_uid, coalesce(p_guardian_name, ''), lower(p_guardian_email))
+    returning id into v_consent_id;
+
+    perform app.request_guardian_consent(v_consent_id);
   end if;
 
   -- Pending grants. Org scoped, and for a domain tenant also domain checked,
@@ -1130,7 +1511,7 @@ end;
 $$;
 
 grant execute on function
-  public.complete_signup(text, text, text, int, text, text)
+  public.complete_signup(text, text, text, int, text, text, text, text, boolean)
 to authenticated;
 
 
@@ -3277,7 +3658,7 @@ begin
     from public.memberships m
    where m.id = p_membership_id
      and m.user_id <> v_uid
-  on conflict (recipient_id, dedupe_key) do nothing;
+  on conflict (recipient_key, dedupe_key) do nothing;
 
   perform app.audit(v_org, case when p_grant then 'membership.granted' else 'membership.declined' end,
     'memberships', p_membership_id, null, jsonb_build_object('cohort_id', v_cohort));
@@ -4353,6 +4734,199 @@ $$;
 -- ---------------------------------------------------------------------------
 
 
+-- ===========================================================================
+-- NUDGES
+--
+-- **A nudge names one obligation, never a person in general.**
+--
+-- "How is your project going" produces nothing. "Form 1 is unsigned and the
+-- SRC deadline is 13 November" produces a signature. That is not a matter of
+-- tone: attaching a nudge to an `entry_milestones` row is what makes the loop
+-- measurable, because the same row either completes afterwards or it does
+-- not, and a screen can say which. A nudge attached to a student is a message
+-- with no observable consequence.
+--
+-- ── Who may nudge whom ─────────────────────────────────────────────────
+--
+--   A teacher nudges the Elder, or the student.
+--   An Elder nudges the students on the participations they oversee.
+--
+-- No escalation and no chains. A teacher going direct is a normal act rather
+-- than a breach, so it needs no ceremony and no state.
+--
+-- ── One per obligation per week ────────────────────────────────────────
+--
+-- The dedupe key carries an ISO week, so the same obligation can be nudged
+-- again next Monday and not five times this afternoon. **Enforced by the
+-- unique index rather than by a disabled button**, because a rate limit
+-- written in the interface is one a second tab does not know about — and
+-- twenty-five students who learn that these arrive in bursts are twenty-five
+-- students who filter them.
+-- ===========================================================================
+
+/**
+ * Send one, and say what happened.
+ *
+ * Returns `sent`, or `already` when this obligation has been nudged this
+ * week. `already` rather than an exception: pressing a button twice is not
+ * an error and a red message would teach somebody that the button is broken.
+ */
+create or replace function public.nudge(
+  p_milestone_id uuid,
+  p_recipient_id uuid
+)
+returns text
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_m        record;
+  v_project  record;
+  v_oversees boolean;
+  v_recipient_role text;
+  v_week     text;
+  v_written  int;
+begin
+  select em.id, em.name, em.due_on, em.completed_on, em.org_id,
+         em.participation_id, pt.project_id, pt.program_id
+    into v_m
+    from public.entry_milestones em
+    join public.participations pt on pt.id = em.participation_id
+   where em.id = p_milestone_id;
+
+  if v_m.id is null or v_m.org_id is distinct from app.org_id() then
+    raise exception 'no such obligation at this school';
+  end if;
+
+  /* Nothing to chase. Guarded here rather than trusted to the caller: the
+     screen reads a list and a row can be met between the render and the
+     click, and a nudge about a signed form is the message that teaches
+     somebody to ignore them. */
+  if v_m.completed_on is not null then
+    return 'done';
+  end if;
+
+  select p.* into v_project from public.projects p where p.id = v_m.project_id;
+
+  /* **The recipient has to be somebody on this project.**
+
+     Without this the function takes any user id at the school and mails them
+     about a stranger's obligation. It is the whole authorisation surface of
+     the feature: not who may press the button, but who the message may
+     reach. */
+  select a.role
+    into v_recipient_role
+    from public.project_authors a
+   where a.project_id = v_m.project_id
+     and a.user_id = p_recipient_id
+     and (a.participation_id is null or a.participation_id = v_m.participation_id)
+   order by case when a.role = 'officer' then 0 else 1 end
+   limit 1;
+
+  if v_recipient_role is null then
+    raise exception 'that person is not on this project';
+  end if;
+
+  /* An advisor reaches every project in the programs they run; an Elder
+     reaches the participations they were attached to. Both are already the
+     rule everywhere else, so this asks it rather than inventing a second. */
+  select exists (
+    select 1 from public.project_authors a
+     where a.participation_id = v_m.participation_id
+       and a.user_id = auth.uid()
+       and a.role = 'officer'
+  ) into v_oversees;
+
+  if not (app.is_advisor() or v_oversees) then
+    raise exception 'only the advisor or the officer looking after this may nudge';
+  end if;
+
+  /* Nobody nudges themselves. A self-managed author holds the oversight row
+     for their own project, so without this the button would appear on their
+     own screen and mail them about their own form. */
+  if p_recipient_id = auth.uid() then
+    return 'self';
+  end if;
+
+  v_week := to_char(now(), 'IYYY-"W"IW');
+
+  insert into public.notifications
+    (org_id, kind, recipient_id, actor_id, subject_kind, subject_id,
+     payload, dedupe_key)
+  values
+    (v_m.org_id,
+     /* Two templates, chosen from what the recipient is on this project
+        rather than from a parameter. A caller that had to say which template
+        to use is a caller that can send the Elder's wording to a student. */
+     case when v_recipient_role = 'officer' then 'nudge_officer' else 'nudge' end,
+     p_recipient_id, auth.uid(),
+     'entry_milestones', v_m.id,
+     jsonb_build_object(
+       'obligation', v_m.name,
+       'due_on', v_m.due_on,
+       'project_title', v_project.title,
+       'path', '/app/project/' || v_m.project_id || '/in/' || v_m.program_id || '/#deliverables'
+     ),
+     'nudge:' || v_m.id || ':' || p_recipient_id || ':' || v_week)
+  on conflict (recipient_key, dedupe_key) do nothing;
+
+  get diagnostics v_written = row_count;
+
+  return case when v_written > 0 then 'sent' else 'already' end;
+end;
+$$;
+
+grant execute on function public.nudge(uuid, uuid) to authenticated;
+
+/**
+ * How many, to whom, and whether it worked.
+ *
+ * **The count is the point.** A row saying "nudged" tells a teacher nothing
+ * she did not already know; a row saying "nudged three times, still open"
+ * tells her to stop typing and walk over, which is the right outcome and the
+ * software should say so plainly.
+ *
+ * Read from `notifications` rather than a table of its own. The outbox marks
+ * rows sent and failed rather than deleting them, so the history is already
+ * there, and a second table recording the same event is two places to
+ * disagree.
+ *
+ * `met_after` is what closes the loop: an obligation completed after the last
+ * nudge went out. Without it a nudge is a message into the dark, and a
+ * teacher learns that the button costs nothing and does nothing.
+ */
+create or replace function public.nudge_state(p_participation_id uuid)
+returns table (
+  milestone_id uuid,
+  nudges       int,
+  last_sent_at timestamptz,
+  last_to      text,
+  met_after    boolean
+)
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select n.subject_id,
+         count(*)::int,
+         max(n.created_at),
+         (array_agg(u.display_name order by n.created_at desc))[1],
+         bool_or(em.completed_on is not null)
+           and max(em.completed_on) >= max(n.created_at)::date
+    from public.notifications n
+    join public.entry_milestones em on em.id = n.subject_id
+    left join public.users u on u.id = n.recipient_id
+   where n.kind = 'nudge'
+     and n.subject_kind = 'entry_milestones'
+     and em.participation_id = p_participation_id
+     and em.org_id = app.org_id()
+   group by n.subject_id;
+$$;
+
+grant execute on function public.nudge_state(uuid) to authenticated;
+
 create or replace function public.set_selection(
   p_participation_id uuid,
   p_state    text,
@@ -5022,7 +5596,7 @@ begin
       on a.project_id = e.project_id and a.role = 'author'
    where e.id = p_participation_id
      and a.user_id is distinct from auth.uid()
-  on conflict (recipient_id, dedupe_key) do nothing;
+  on conflict (recipient_key, dedupe_key) do nothing;
 
   perform app.audit(
     v_org,
@@ -7048,7 +7622,7 @@ begin
     'submission', p_submission_id,
     jsonb_build_object('due_at', p_due_at),
     'reviewer_assigned:' || v_id)
-  on conflict (recipient_id, dedupe_key) do nothing;
+  on conflict (recipient_key, dedupe_key) do nothing;
 
   if v_state = 'screening' then
     perform app.move_submission(p_submission_id, 'in_review', 'With reviewers');
@@ -7112,7 +7686,7 @@ begin
       (org_id, kind, recipient_id, actor_id, subject_kind, subject_id, dedupe_key)
     values (v_org, 'review_returned', v_editor, auth.uid(),
       'submission', v_sub, 'review_returned:' || p_review_id)
-    on conflict (recipient_id, dedupe_key) do nothing;
+    on conflict (recipient_key, dedupe_key) do nothing;
   end if;
 end;
 $$;
@@ -7235,7 +7809,7 @@ begin
       /* The round, so a second time round is a second message rather than
          a duplicate suppressed by the constraint. */
       'revisions_requested:' || p_submission_id || ':' || v_round)
-    on conflict (recipient_id, dedupe_key) do nothing;
+    on conflict (recipient_key, dedupe_key) do nothing;
   end loop;
 end;
 $$;
@@ -7416,7 +7990,7 @@ begin
       'submission', p_submission_id,
       jsonb_build_object('decision', p_decision),
       'decision_made:' || p_submission_id)
-    on conflict (recipient_id, dedupe_key) do nothing;
+    on conflict (recipient_key, dedupe_key) do nothing;
   end loop;
 end;
 $$;
@@ -8305,7 +8879,7 @@ begin
       'submission', p_submission_id,
       jsonb_build_object('record_id', v_id),
       'record_published:' || v_id)
-    on conflict (recipient_id, dedupe_key) do nothing;
+    on conflict (recipient_key, dedupe_key) do nothing;
   end loop;
 
   perform app.audit(v_org, 'record.published', 'records', null, null,
@@ -9116,7 +9690,8 @@ begin
            end
       from taken t
      where n.id = t.id
-     returning n.id, n.kind, n.payload, n.attempts, n.created_at, n.recipient_id
+     returning n.id, n.kind, n.payload, n.attempts, n.created_at,
+               n.recipient_id, n.recipient_email, n.recipient_name, n.org_id
   )
   select m.id,
          m.kind,
@@ -9125,21 +9700,35 @@ begin
          case when m.created_at < now() - make_interval(mins => p_since_minutes)
               then 'stale' else 'send' end,
          v_token,
-         i.email,
-         u.display_name,
+         /* An account's address is looked up; a guardian's was supplied,
+            because there is no row to look one up in. */
+         coalesce(i.email, m.recipient_email),
+         coalesce(u.display_name, m.recipient_name),
          o.lockup_name,
          /* The apex for the platform tenant, a label for a school.
-         
+
             `subdomain || '.' || root` is right for every school and produces
             `scipath.scipath.org` for the one tenant whose subdomain *is* the
             root — a broken link, in an email, to somebody who cannot get
-            back. `is_platform` is on the organization for this. */
+            back. `is_platform` is on the organization for this.
+
+            **The path is the message's, not always `/app/`.** Every link this
+            sent landed on the working surface, which is right for somebody
+            who has an account and exactly wrong for somebody who does not: a
+            guardian following it reached a sign-in screen for a service they
+            have never heard of. A message that needs its own destination puts
+            it in `payload.path`. */
          'https://' ||
            case when o.is_platform then '' else o.subdomain || '.' end ||
-           coalesce(current_setting('app.root_domain', true), 'scipath.org') || '/app/'
+           coalesce(current_setting('app.root_domain', true), 'scipath.org') ||
+           coalesce(m.payload->>'path', '/app/')
     from marked m
-    join public.users u on u.id = m.recipient_id
-    join public.organizations o on o.id = u.org_id
+    /* Left, because a guardian has no account. This was an inner join, and
+       that join is what made `recipient_id not null` load bearing: even with
+       the column nullable, an inner join here would silently drop every
+       message addressed to an address rather than to a person. */
+    left join public.users u on u.id = m.recipient_id
+    join public.organizations o on o.id = m.org_id
     left join lateral (
       select i.email from public.identities i
        where i.user_id = u.id and i.revoked_at is null

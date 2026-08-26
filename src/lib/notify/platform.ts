@@ -173,6 +173,82 @@ const KINDS: Record<string, (m: Queued) => Written> = {
       `published. Sent by ${m.org_name} through SciPath.`,
   }),
 
+  /**
+   * The answer, told to the student.
+   *
+   * Sent by the outbox rather than shown on a screen, because the answer
+   * arrives whenever the parent gets round to it and the student is not
+   * sitting on the page waiting.
+   */
+  guardian_approved: (m) => ({
+    subject: 'Your account is confirmed',
+    text:
+      `${m.to_name},\n\n` +
+      `${m.payload.guardian_name || 'Your parent or guardian'} confirmed your ` +
+      `account at ${m.org_name}. Publishing is open to you now.` +
+      footer(m),
+  }),
+
+  /**
+   * A refusal, said plainly and without editorialising.
+   *
+   * **It does not suggest asking again.** The next move belongs to the
+   * student and whoever said no, and a system that nudges a child to
+   * re-approach a parent who has just declined is doing something it has no
+   * standing to do.
+   */
+  guardian_declined: (m) => ({
+    subject: 'Your account has been paused',
+    text:
+      `${m.to_name},\n\n` +
+      `${m.payload.guardian_name || 'Your parent or guardian'} did not confirm ` +
+      `your account at ${m.org_name}, so it is paused.\n\n` +
+      `Your projects and your notebook are kept and nothing is published. ` +
+      `If this was a misunderstanding, your teacher or club advisor can sort ` +
+      `it out with them.` +
+      footer(m),
+  }),
+
+  /**
+   * ONE OBLIGATION, AND THE DATE IT IS AGAINST.
+   *
+   * The whole message. No progress figure, no comparison, no note on how many
+   * other things are outstanding — a nudge that arrives with a summary of
+   * everything wrong is a message somebody reads once and then filters.
+   *
+   * The recipient decides which of the two below is sent, and they are two
+   * templates rather than one with a conditional. The Elder's version names
+   * another student, which is legitimate — it is their assigned oversight —
+   * and it must carry that student's obligation and nothing else about them.
+   * A field added to one should not be able to appear in the other.
+   */
+  nudge: (m) => ({
+    subject: `${m.payload.obligation} on ${m.payload.project_title}`,
+    text:
+      `${m.to_name},\n\n` +
+      `${m.payload.obligation} is outstanding on ${m.payload.project_title}` +
+      (m.payload.due_on ? `, due ${m.payload.due_on}` : '') +
+      `.` +
+      footer(m),
+  }),
+
+  /**
+   * The same obligation, addressed to whoever looks after it.
+   *
+   * Names the student because that is the point of delegating, and names
+   * nothing else about them: not their other obligations, not how far behind
+   * they are, not what anybody else on the roster is doing.
+   */
+  nudge_officer: (m) => ({
+    subject: `${m.payload.project_title} needs a chase`,
+    text:
+      `${m.to_name},\n\n` +
+      `${m.payload.obligation} is outstanding on ${m.payload.project_title}` +
+      (m.payload.due_on ? `, due ${m.payload.due_on}` : '') +
+      `. You look after this one.` +
+      footer(m),
+  }),
+
   /* ── Leaving ─────────────────────────────────────────────────────────── */
 
   /**

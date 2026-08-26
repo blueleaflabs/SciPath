@@ -36,16 +36,20 @@
 
 import { createClient } from '@supabase/supabase-js';
 import { loadDevVars } from './dev-vars.mjs';
+import { FIXTURE_DOMAIN as FIXTURE_HOST, DEFAULT_PASSWORD } from '../src/config/demo-accounts.mjs';
 
 loadDevVars();
 
 const URL = process.env.PUBLIC_SUPABASE_URL ?? '';
 const PUBLISHABLE = process.env.PUBLIC_SUPABASE_PUBLISHABLE_KEY ?? '';
-const PASSWORD = process.env.DEMO_PASSWORD ?? 'scipath';
+const PASSWORD = process.env.DEMO_PASSWORD ?? DEFAULT_PASSWORD;
 
 /* The domain every fixture address carries. Reserved by RFC 6761: it resolves
    nowhere, so an account on it is invented whatever project it lives in. */
-const FIXTURE_DOMAIN = 'demo.invalid';
+/* One home for this, in src/config/demo-accounts.mjs. Six files held
+   their own copy and the seventh would have been the one that missed a
+   rename. */
+const FIXTURE_DOMAIN = FIXTURE_HOST;
 
 /* One client per address. A scenario loop asks for the same officer nine
    times and nine sign-ins is nine round trips for one session. */

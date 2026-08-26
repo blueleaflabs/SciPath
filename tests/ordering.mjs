@@ -747,10 +747,24 @@ test('a page that explains the work ends with a way in', () => {
     if (!/href=\{?['"/]/.test(copy)) problems.push(`${file}: the call to action leads nowhere`);
   }
 
-  /* The home page's way in is the button in the hero, and the season list
-     below it at a school. Both are links, and neither may be a comment. */
+  /* The home page's way in, and both halves have to be links rather than
+     sentences in a comment.
+
+     **This asserted `class="btn" href=` and now asserts the audience cards.**
+     The hero carried two buttons and before that three, and each cut was made
+     for the same reason: a front door that opens on a decision asks for the
+     decision before the reader has the thing to decide about. The last cut
+     took the buttons entirely.
+
+     The rule survives the change because the rule was never about buttons.
+     It is that a page explaining the work must not stop without a way in, and
+     the three audience cards are that way in — real links, above the fold,
+     one per reader. Rewriting the assertion to match what the page does is
+     right here and wrong in general; what makes it right is that the intent
+     is untouched and the thing being checked is still a link. */
   const home = copyOf('src/pages/index.astro');
-  assert.match(home, /class="btn" href=/, 'the home page has no primary action');
+  const doors = [...home.matchAll(/class="who" href=/g)].length;
+  assert.ok(doors >= 3, `the home page offers ${doors} audience cards, expected 3`);
   assert.match(home, /join one<\/a>/, 'the season list has no way in');
 
   assert.deepEqual(problems, []);
@@ -1213,6 +1227,32 @@ test('the workbench link is called the same thing to everybody', () => {
 });
 
 /* ── A page is not a terminal ────────────────────────────────────────────── */
+
+test('the participation page checks standing before it handles a POST', () => {
+  /* **A guard after the handler refuses the page and accepts the writes.**
+
+     Everything on the participation page that acts — recording a
+     deliverable, verifying somebody else's, editing a warning, setting an
+     awarded amount — is a POST to this same address. A scope check placed
+     below that handler would render a redirect to somebody who had already
+     written the row.
+
+     Asserted on position rather than presence, for the same reason the
+     Docker pre-flight is: a check that runs too late is a check that does
+     not run. */
+  const file = 'src/pages/app/project/[id]/in/[program].astro';
+  const text = fs.readFileSync(file, 'utf8');
+
+  const guard = text.indexOf('reachesProgram(');
+  const post = text.indexOf("Astro.request.method === 'POST'");
+
+  assert.ok(guard !== -1, `${file} must ask reachesProgram()`);
+  assert.ok(post !== -1, `${file} is expected to handle a POST`);
+  assert.ok(
+    guard < post,
+    'reachesProgram() must run before the POST handler, or the writes go through'
+  );
+});
 
 test('no page tells a student to run a command', () => {
   /* Signing in to a demo account with the wrong password answered with a

@@ -304,6 +304,42 @@ const handle = async (context: any, next: any) => {
     try {
       return await next(target);
     } catch {
+      /**
+       * **THE DEVELOPMENT SERVER HAS NO ASSETS BINDING.**
+       *
+       * `ASSETS` is supplied by the platform to a worker deployed beside
+       * static output. `astro dev` is not that: the binding is absent, the
+       * loop above never runs, and every tenant page falls through to
+       * `next(target)` — which throws, because the target is prerendered and
+       * an on-demand route may not rewrite into one.
+       *
+       * So the catch answered every public page with a 404 in development
+       * while production served them correctly. `/guides/`, `/about/`,
+       * `/policies/`, `/how-it-works/` and every other page under `[org]/`,
+       * all of them, on the one surface a demonstration is given from.
+       * `/scipath/guides/` answered 200 the whole time, which is what makes
+       * it look like a routing fault rather than a missing binding.
+       *
+       * The dev server is itself an origin, so the page can be fetched the
+       * way the assets binding would have fetched it. Safe from recursion by
+       * the guard above: a path already beginning with a tenant slug returns
+       * `next()` before reaching any of this.
+       *
+       * Development only, deliberately. In production the binding exists and
+       * has already answered, and a worker fetching its own origin to serve a
+       * page is a request loop waiting for the day the binding is missing.
+       */
+      if (import.meta.env.DEV) {
+        try {
+          const served = await fetch(new URL(target, url.origin).toString(), {
+            headers: request.headers,
+          });
+          if (served.status !== 404) return served;
+        } catch {
+          /* No origin to reach, which is the build. Fall through. */
+        }
+      }
+
       return next();
     }
   }

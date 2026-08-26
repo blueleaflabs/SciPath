@@ -34,6 +34,8 @@
  * fixtures are all on demo.invalid" into a list somebody wrote on purpose.
  */
 
+import { FIXTURE_DOMAIN as FIXTURE_HOST } from '../../config/demo-accounts.mjs';
+
 export interface Message {
   to: string;
   subject: string;
@@ -57,16 +59,54 @@ export interface MailEnv {
   MAIL_FROM?: string;
   MAIL_ALLOWLIST?: string;
   RESEND_API_KEY?: string;
+  /** `send` permits the fixture domain. Anything else, including unset, refuses it. */
+  MAIL_FIXTURES?: string;
 }
 
-const FIXTURE_DOMAIN = '@demo.invalid';
+/* Read from the module that owns it, not restated.
+
+   This held its own literal, and so did four scripts and a test. When the
+   fixture domain moved, a guard naming the old one would have kept refusing
+   an address nothing uses and started permitting every address that does —
+   silently, and in the direction of sending mail rather than not sending it.
+
+   `.invalid` stays refused unconditionally alongside it. It costs one
+   comparison and it means a fixture written before the move, or by a branch
+   that predates it, cannot become mailable. */
+const FIXTURE_DOMAIN = `@${FIXTURE_HOST}`;
+const RESERVED_TLD = '.invalid';
 
 /** Whether this address may be written to at all, and why not. */
 export function refuse(address: string, env: MailEnv): string | null {
   const to = address.trim().toLowerCase();
 
   if (!to || !to.includes('@')) return 'not an address';
-  if (to.endsWith(FIXTURE_DOMAIN)) return 'a fixture address';
+
+  /* Nothing can be delivered to `.invalid` and nothing ever should be. No
+     switch, because there is no case where it is the right answer. */
+  if (to.endsWith(RESERVED_TLD)) return 'a fixture address';
+
+  /**
+   * **THE ONE GUARD THAT CAN BE TURNED OFF, AND WHY.**
+   *
+   * The fixture domain used to be unregisterable, so refusing it was belt to
+   * a brace nothing could undo. It is a real domain now, deliberately: the
+   * thing worth demonstrating is a guardian consent request arriving in an
+   * inbox and being answered, and a domain that cannot receive mail cannot
+   * show that.
+   *
+   * So this is a default rather than a law. Off, a run that is misconfigured
+   * still cannot mail a fixture. On, it is because somebody set a variable
+   * whose only purpose is to say so, which is the same shape as
+   * `--allow-remote` on the seed: one deliberate act, visible in the file
+   * that grants it.
+   *
+   * **Compared exactly, not truthily.** `Boolean(env.MAIL_FIXTURES)` would
+   * turn `MAIL_FIXTURES=no` into permission.
+   */
+  if (to.endsWith(FIXTURE_DOMAIN) && env.MAIL_FIXTURES !== 'send') {
+    return 'a fixture address';
+  }
 
   const allowlist = (env.MAIL_ALLOWLIST ?? '')
     .split(',')

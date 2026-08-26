@@ -20,6 +20,7 @@
 
 import { createClient } from '@supabase/supabase-js';
 import { loadDevVars } from './dev-vars.mjs';
+import { fixtureAddress } from '../src/config/demo-accounts.mjs';
 import { loadLibrary } from './template-library.mjs';
 import { loadOrgs } from './orgs-library.mjs';
 import { resolveProgram, datesFor } from '../src/lib/template-resolve.ts';
@@ -347,16 +348,39 @@ async function main() {
       handles.map((handle) => ({ role, handle }))
     );
     let granted = 0;
+    let unstaffed = 0;
 
     for (const { role, handle } of assignments) {
       /* Through the auth directory, which is where a fixture's address
          lives. It looked in `identities`, which holds Google sign-ins and is
          empty for every fixture: the lookup found nobody, granted nothing,
          and said nothing. */
-      const userId = byEmail.get(`${org.slug}.${handle}@demo.invalid`);
+      const userId = byEmail.get(fixtureAddress(org.slug, handle));
 
       if (!userId) {
-        console.error(`  no account for ${handle}, so no ${role} role`);
+        /* **Absent staff is the intended state everywhere but the demo.**
+        
+           Fixtures are seeded into the demonstration tenant and nowhere else
+           now, so Monta Vista, SVSLC and the platform get their programs with
+           nobody attached — which is correct: a real advisor's grant is a
+           deliberate act on the day she agrees, and a pre-seeded grant of
+           authority over minors' work is a standing offer made on her behalf.
+        
+           Shouting about it per handle would print a wall of errors on every
+           reset for a condition nothing is wrong with, and a reset that ends
+           in twenty red lines is one nobody reads. In the demonstration
+           tenant the same absence *is* a fault: the whole point of that
+           tenant is that somebody can sign in and see a program with staff. */
+        /* `ORG_RECORDS`, not `org`. The latter is a row from
+           `organizations`, and `demo` is a fact in the org file rather than a
+           column — `org.demo` would have been undefined on every tenant and
+           this branch would have been silent everywhere, including the one
+           place it has to speak. */
+        if (ORG_RECORDS[org.slug]?.demo) {
+          console.error(`  no account for ${handle}, so no ${role} role`);
+        } else {
+          unstaffed += 1;
+        }
         continue;
       }
 
@@ -372,6 +396,12 @@ async function main() {
       } else {
         granted += 1;
       }
+    }
+
+    /* Said once per program rather than once per handle, and said as a fact
+       rather than as a failure. */
+    if (unstaffed > 0) {
+      console.log(`  ${template}: no staff seeded (${unstaffed} awaiting a real person)`);
     }
 
     return granted;

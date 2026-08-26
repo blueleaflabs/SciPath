@@ -84,27 +84,21 @@ cachePublicPage(Astro);
   <div class="wrap">
     <section class="hero">
       <p class="t-lbl">{org.isPlatform ? platform.name : org.name}</p>
-      <h1 class="t-big">From idea through publication</h1>
+      <h1 class="t-big">From first idea to science fair</h1>
       <p class="lede">
         {org.isPlatform
-          ? 'Plan the project. Meet the requirements. Keep the record.'
+          ? 'Plan, track, and document your high school research project.'
           : 'Your high school science research companion'}
       </p>
-      {/* One way in, and one way to look before deciding.
-
-          "See this season" pointed at `/deadlines/`, which is gone, and
-          "Read published work" pointed at `/articles/`, which is a filtered
-          view of the showcase already in the nav. Three buttons of equal
-          weight made the one that starts anything a third of the offer.
-
-          The second button here is not a third of the offer: it is lighter
-          than the first and it answers the question somebody actually has at
-          the front door, which is what this thing looks like with a season
-          in it. A school's own visitors already know. */}
-      <div class="row" style="margin-top:24px">
-        <a class="btn" href={org.isPlatform ? '/get-started/' : '/app/'}>Start a project</a>
-        {org.isPlatform && <a class="btn btn-2" href="/try/">See a season in progress</a>}
-      </div>
+      {/* **No buttons here.**
+      
+          There were two, and they went from three. Each cut was made for the
+          same reason and the last one finishes it: a front door that opens on
+          a decision asks for the decision before the reader has the thing to
+          decide about. The audience cards below say who this is for, and the
+          navigation carries every destination these buttons named. A reader
+          who is ready to start does not need a button at the top of the page
+          to find out how. */}
     </section>
 
     {/* **The problem statement used to sit here, immediately under the

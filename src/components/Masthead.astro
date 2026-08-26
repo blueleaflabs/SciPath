@@ -45,12 +45,19 @@ const org = Astro.props.org ?? activeOrg(Astro);
  * do after starting, so at the front door it sits in the footer and at a
  * school, where people arrive mid-season, it does not.
  */
+/* **Demo is not a destination the masthead offers.**
+
+   `/try/` was the fourth item and it does not belong beside three pages that
+   describe the product: a demonstration is something a reader is shown once
+   they have a reason to want one, and putting it in the top bar offers a
+   sandbox to somebody who has not yet learned what the real thing is. The
+   page stays, the footer and `/get-started/` both route to it, and where it
+   belongs in the front-door sequence is a decision still to make. */
 const nav = org.isPlatform
   ? [
       { href: '/how-it-works/', label: 'How it works' },
       { href: '/showcase/', label: 'Showcase' },
       { href: '/guides/', label: 'Guides' },
-      { href: '/try/', label: 'Demo' },
     ]
   : [
       { href: '/showcase/', label: 'Showcase' },

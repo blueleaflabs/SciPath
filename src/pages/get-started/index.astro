@@ -25,11 +25,12 @@ if (!org.isPlatform) return Astro.redirect('/', 301);
   title="Get started"
   description="Start a project on your own, sign in at a school that already runs SciPath, or bring it to your program."
 >
-  <PageHead
-    eyebrow="Get started"
-    title="Choose how you are using SciPath"
-    lede="Three ways in. The first one takes about a minute."
-  />
+  {/* No lede. It said "Three ways in. The first one takes about a minute",
+      which counted the cards immediately below it and promised a duration for
+      one of them. The count is visible and the estimate was a guess. `lede`
+      is optional on PageHead and thirty-three other pages set it, so its
+      absence here is a decision rather than an omission. */}
+  <PageHead eyebrow="Get started" title="Choose how you are using SciPath" />
 
   <div class="wrap">
     <section class="sec">

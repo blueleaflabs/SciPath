@@ -33,6 +33,19 @@ const columns = [
       { href: '/guides/', label: 'Guides' },
       { href: '/mistakes/', label: 'Common mistakes' },
       { href: '/submit/', label: 'Publish your work' },
+      /* **Both of these were orphaned within two sessions.** `/get-started/`
+         was reached from a button in the home hero and `/try/` from the
+         masthead; the button went when the hero lost its buttons and the nav
+         item went when Demo left the top bar, and neither cut noticed that it
+         had taken the page's only route with it. A footer is a directory, so
+         this is where a page lands when it is real and does not belong in a
+         four-item bar. */
+      ...(org.isPlatform
+        ? [
+            { href: '/get-started/', label: 'Get started' },
+            { href: '/try/', label: 'Demonstration' },
+          ]
+        : []),
     ],
   },
   /* **The four readers, addressed by name.** The masthead deliberately does

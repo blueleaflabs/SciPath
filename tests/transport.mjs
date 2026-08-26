@@ -10,6 +10,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { refuse, transportFor, consoleTransport } from '../src/lib/notify/transport.ts';
+import { FIXTURE_DOMAIN, fixtureAddress } from '../src/config/demo-accounts.mjs';
 
 let passed = 0;
 
@@ -44,18 +45,76 @@ await test('the default transport sends nothing', () => {
 /* ── Two: fixtures are refused whatever else is configured ───────────────── */
 
 await test('a fixture address is refused', () => {
-  /* demo.invalid cannot resolve, so this would bounce rather than deliver.
-     Refusing it here means a misconfigured run fails visibly instead of
-     quietly off a mail server. */
+  /* **Read from the constant, not typed out.**
+
+     This asserted `demo.invalid` twice, in literals. When the fixture domain
+     moved to a subdomain of a domain we own, both assertions kept passing —
+     `.invalid` is still refused — while saying nothing whatever about the
+     domain every fixture is now actually on. A guard that goes on passing
+     after the thing it guards has moved is worse than no guard, because it
+     reports coverage it no longer has.
+
+     `FIXTURE_DOMAIN` is the same constant `transport.ts` reads, so a rename
+     moves the refusal and this assertion together. */
+  assert.equal(refuse(`demo.student.a@${FIXTURE_DOMAIN}`, {}), 'a fixture address');
+  assert.equal(
+    refuse(`ANYBODY@${FIXTURE_DOMAIN.toUpperCase()}`, {}),
+    'a fixture address'
+  );
+
+  /* And the old one stays refused. A fixture written before the move, or by
+     a branch that predates it, must not become mailable. */
   assert.equal(refuse('montavista.student.a@demo.invalid', {}), 'a fixture address');
-  assert.equal(refuse('ANYBODY@DEMO.INVALID', {}), 'a fixture address');
 });
 
 await test('and is still refused when an allowlist would have permitted it', () => {
   /* The guards are independent. Putting a fixture on the allowlist is a
      mistake, and it should stay a refusal. */
-  const env = { MAIL_ALLOWLIST: 'montavista.student.a@demo.invalid' };
-  assert.equal(refuse('montavista.student.a@demo.invalid', env), 'a fixture address');
+  const address = `demo.student.a@${FIXTURE_DOMAIN}`;
+  assert.equal(refuse(address, { MAIL_ALLOWLIST: address }), 'a fixture address');
+});
+
+await test('a fixture can be mailed, but only when somebody says so', () => {
+  /* The fixture domain is real now, so that a consent request arriving in an
+     inbox can actually be demonstrated. The refusal above is therefore a
+     default rather than a law, and the switch is what this checks: exactly
+     `send`, and nothing else.
+
+     `MAIL_FIXTURES=no` permitting delivery is the failure this shape exists
+     to avoid, and it is what `Boolean(env.MAIL_FIXTURES)` would have done. */
+  const address = `demo.student.a@${FIXTURE_DOMAIN}`;
+
+  assert.equal(refuse(address, { MAIL_FIXTURES: 'send' }), null);
+  assert.equal(refuse(address, { MAIL_FIXTURES: 'no' }), 'a fixture address');
+  assert.equal(refuse(address, { MAIL_FIXTURES: '' }), 'a fixture address');
+  assert.equal(refuse(address, { MAIL_FIXTURES: 'SEND' }), 'a fixture address');
+});
+
+await test('the reserved domain has no switch at all', () => {
+  /* `.invalid` cannot receive mail under any circumstance, so there is no
+     case where permitting it is the right answer. Turning fixtures on must
+     not turn this on with them. */
+  assert.equal(
+    refuse('montavista.student.a@demo.invalid', { MAIL_FIXTURES: 'send' }),
+    'a fixture address'
+  );
+});
+
+await test('a fixture address is namespaced, so it cannot be a real mailbox', () => {
+  /* What replaces the property `.invalid` gave for free.
+
+     On an apex domain the risk is collision: `student@scipath.org` is a shape
+     a person's mailbox takes. Every fixture is `{tenant}.{handle}@`, and the
+     dot is what answers it — nobody is issued an address in that shape by
+     accident. */
+  const address = fixtureAddress('demo', 'student.a');
+  const local = address.split('@')[0];
+
+  assert.ok(
+    local.includes('.'),
+    `${address} has an undotted local part, which a real mailbox could take`
+  );
+  assert.ok(local.startsWith('demo.'), 'a fixture address must name its tenant');
 });
 
 /* ── Three: the allowlist, which is the one that matters while this is new ── */

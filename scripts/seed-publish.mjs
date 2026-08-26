@@ -22,6 +22,7 @@ import fs from 'node:fs';
 import yaml from 'js-yaml';
 import { createClient } from '@supabase/supabase-js';
 import { loadDevVars } from './dev-vars.mjs';
+import { fixtureAddress } from '../src/config/demo-accounts.mjs';
 import { actingAs, signOutAll } from './act-as.mjs';
 import { loadOrgs } from './orgs-library.mjs';
 import { openBucket } from './notebook-bucket.mjs';
@@ -94,7 +95,7 @@ async function main() {
   const { data: org, error: orgError } = await db
     .from('organizations')
     .select('id, slug, lockup_name')
-    .eq('slug', process.env.DEMO_ORG ?? 'montavista')
+    .eq('slug', process.env.DEMO_ORG ?? 'demo')
     .maybeSingle();
 
   if (orgError) throw new Error(`Could not read the organization: ${orgError.message}`);
@@ -106,7 +107,7 @@ async function main() {
      the functions say so: `app.require_editor()` reads `auth.uid()`, which
      is null for the secret key. So this signs in as the fixture editor and
      publishes as her, which is also who would be doing it. */
-  const editor = await actingAs(`${org.slug}.officer.a@demo.invalid`);
+  const editor = await actingAs(fixtureAddress(org.slug, 'officer.a'));
 
   /* The prefix is a field on the organization and never a constant (8.3).
      It was written out twice here, and the second one said `SP` — the

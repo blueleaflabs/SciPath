@@ -12,16 +12,55 @@
  * different runtimes: Vite bundles it into the worker, and
  * `scripts/seed-demo.mjs` imports it under plain Node with no loader.
  *
- * **`.invalid` is reserved and can never be registered**, so a fixture
- * address cannot become somebody's real mailbox and no message the platform
- * ever sends can leave.
+ * **THE DOMAIN, AND WHY IT IS A REAL ONE.**
+ *
+ * This was `demo.invalid`, reserved by RFC 2606 and unregisterable, so a
+ * fixture address could never become a real mailbox and no message the
+ * platform sent could ever leave.
+ *
+ * That property is deliberately given up. Once notifications are on, the
+ * thing worth demonstrating is a message arriving — a guardian consent
+ * request landing in an inbox, opened, answered. A domain that cannot receive
+ * mail cannot show that, and a demonstration that stops at "and then an email
+ * would be sent" is asking somebody to take the most important part on trust.
+ *
+ * So fixtures live on a domain Blue Leaf Labs owns and can point a catch-all
+ * at. Two things replace what `.invalid` was doing:
+ *
+ * 1. **The local part is namespaced.** Every address is
+ *    `{tenant}.{handle}@`, so `demo.student.a@scipath.org` is not a shape a
+ *    person's real mailbox takes. Collision was the specific risk of moving
+ *    to an apex domain, and the dot is what answers it.
+ *
+ * 2. **Sending to them is off unless somebody turns it on.**
+ *    `src/lib/notify/transport.ts` refuses this domain by default and takes
+ *    `MAIL_FIXTURES=send` as the deliberate act that permits it. So the
+ *    default is still that fixture mail cannot leave, and demonstrating the
+ *    flow is one variable rather than an edit.
+ *
+ * `.invalid` stays refused unconditionally beside it, so a fixture written
+ * before this move cannot become mailable.
  */
 
-/** The reserved domain every fixture person is addressed on. */
-export const FIXTURE_DOMAIN = 'demo.invalid';
+/**
+ * The domain every fixture person is addressed on.
+ *
+ * Real, and receivable behind a catch-all. Read by the seed, by `/demo/`, and
+ * by the refusal in the transport — one constant, because it had six copies
+ * and a rename would have moved the addresses while leaving the guard naming
+ * a domain nothing uses.
+ */
+export const FIXTURE_DOMAIN = 'scipath.org';
 
-/** What the seed sets, unless `DEMO_PASSWORD` says otherwise. */
-export const DEFAULT_PASSWORD = 'scipath';
+/**
+ * What the seed sets, unless `DEMO_PASSWORD` says otherwise.
+ *
+ * The exclamation mark is not decoration: it takes the fixture password past
+ * the symbol requirement several password policies impose, and a
+ * demonstration that fails its own sign-in is one that stops in the first
+ * thirty seconds.
+ */
+export const DEFAULT_PASSWORD = 'scipath!';
 
 /** The tenant demonstrations are given from. Its org file carries `demo: true`. */
 export const DEMO_SLUG = 'demo';

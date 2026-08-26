@@ -35,6 +35,7 @@ import yaml from 'js-yaml';
 import { createClient } from '@supabase/supabase-js';
 
 import { loadDevVars } from './dev-vars.mjs';
+import { requireApi } from './api-ready.mjs';
 
 /* The shared reader, so a shell that has just been restarted needs nothing
    sourced into it — and so this script parses the file the same way every
@@ -48,6 +49,21 @@ if (!URL_ || !KEY) {
   console.error('PUBLIC_SUPABASE_URL and SUPABASE_SECRET_KEY are needed.');
   process.exit(1);
 }
+
+/* The first thing in `npm run reset` to open a socket.
+  
+   `supabase db reset` restarts the containers and returns before they are
+   listening, and `reset-storage` runs in between without touching the
+   network, so this loop was the first to find out — and it reported it as
+   `demo: TypeError: fetch failed`, naming whichever organization happened to
+   sort first. Waiting here fixes the whole chain, because everything after
+   this runs seconds later against a gateway that is already warm.
+  
+   Owned by this script rather than by the wrapper that did the restarting:
+   `db:stop` also leaves nothing listening, and a wait in the wrapper would
+   have to tell the two apart, which means a list of subcommands that grows a
+   case every time one is forgotten. See scripts/api-ready.mjs. */
+await requireApi({ url: URL_, key: KEY });
 
 const db = createClient(URL_, KEY, { auth: { persistSession: false } });
 

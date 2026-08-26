@@ -90,6 +90,55 @@ export function standing(
   };
 }
 
+/**
+ * WHETHER THIS PERSON MAY OPEN THIS PROGRAM'S PAGE FOR THIS PROJECT.
+ *
+ * **A scoped advisor could open a program they do not run.** The class
+ * teacher's screen correctly lists a project that is in both the class and
+ * the fair, because it is one project and hiding half of it would be a lie.
+ * The participation page then checked that a session existed, that an account
+ * existed, and that the participation existed — and nothing else. So the
+ * fair's page opened, and every control on it that reads `me.runsTheClub`
+ * opened with it: recording deliverables, verifying somebody else's,
+ * editing the warnings, setting an awarded amount. On a program that teacher
+ * has no standing in.
+ *
+ * **Removing the button would not have fixed it.** The button is a link to an
+ * address, and the address was the hole. This is the rule both of them ask,
+ * written once so a page and a button cannot come to disagree — which is the
+ * failure the two of them were already in.
+ *
+ * Four ways through, and they are separate reasons rather than one blurred
+ * one:
+ *
+ *   - **an author** reaches every program their own project is in. It is
+ *     their work, and a class teacher cannot fence a student out of the fair
+ *     they entered.
+ *   - **an attached officer** reaches the participation they were attached
+ *     to. Oversight names the participation (22.18), so this is the row, not
+ *     a guess from a standing role.
+ *   - **an unscoped role** reaches everything. That is what `anywhere`
+ *     means, and it is the right default for a school's advisor.
+ *   - **a scoped role** reaches the programs it names, and no others.
+ *
+ * Anyone else is watching from the project page, which still says the project
+ * is in that program. Knowing it is entered is not the same as being able to
+ * act on the entry.
+ */
+export function reachesProgram(
+  me: Standing,
+  programId: string | null | undefined,
+  context: { isAuthor?: boolean; attachedTo?: boolean } = {}
+): boolean {
+  if (context.isAuthor) return true;
+  if (context.attachedTo) return true;
+  if (!me.runsTheClub) return false;
+  if (me.anywhere) return true;
+  if (!programId) return false;
+
+  return me.scopes.includes(programId);
+}
+
 export function isAuthorOf(
   /* The embed either way.
   

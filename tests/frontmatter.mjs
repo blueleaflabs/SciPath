@@ -95,4 +95,51 @@ test('no immediately-invoked block reads a const declared below it', () => {
   assert.deepEqual(problems, [], 'move it below what it depends on');
 });
 
-console.log(`${passed} frontmatter assertions passed. ${checked} immediate blocks in ${pages.length} pages.`);
+/**
+ * No frontmatter writes a script tag out in full, not even inside a comment.
+ *
+ * Vite's dependency scanner finds script blocks in a `.astro` file by looking
+ * for the opening tag. It does not know the frontmatter is TypeScript and it
+ * does not know what a comment is, so an occurrence up there makes it read
+ * every line from that point to the real closing tag as JavaScript. The first
+ * template attribute it meets is a syntax error, and the message names that
+ * attribute rather than the comment two hundred lines above it that caused it.
+ *
+ * `astro build` is unaffected, because the scanner runs only in dev. So this
+ * passes every suite, passes CI, and breaks `npm run dev` for whoever installs
+ * next — which is what it did: one word in a comment about escaping script
+ * tags took out the dev server, and the error pointed at a pagefind filter.
+ *
+ * Describe the tag instead of writing it. The comment is not less clear for it.
+ */
+test('no frontmatter writes a literal script tag', () => {
+  const problems = [];
+
+  /* `src`, not `pages`. The scanner reads every `.astro` file, and the one
+     that broke was a component: checking only pages is a guard that would
+     have passed on the very file it was written for. Found by reintroducing
+     the tag and watching this stay green. */
+  for (const file of walk('src')) {
+    const text = fs.readFileSync(file, 'utf8');
+    if (!text.startsWith('---')) continue;
+
+    const end = text.indexOf('\n---', 3);
+    if (end === -1) continue;
+
+    text
+      .slice(0, end)
+      .split('\n')
+      .forEach((line, i) => {
+        if (/<\/?script\b/i.test(line)) {
+          problems.push(`${file}:${i + 1} writes a script tag in the frontmatter`);
+        }
+      });
+  }
+
+  assert.deepEqual(problems, [], 'describe the tag rather than writing it out');
+});
+
+console.log(
+  `${passed} frontmatter assertions passed. ${checked} immediate blocks in ` +
+    `${pages.length} pages, ${walk('src').length} components and pages scanned for script tags.`
+);

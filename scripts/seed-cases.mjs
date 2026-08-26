@@ -49,7 +49,9 @@ const KEY = process.env.SUPABASE_SECRET_KEY ?? '';
  * case needing somebody from *another* school has one; where they are absent,
  * those cases are skipped and say so.
  */
-const ORG_SLUGS = (process.env.DEMO_ORGS ?? 'montavista,svslc')
+/* The demonstration tenant. See seed-demo.mjs: the fourteen cases are
+   invented students and they belong where every other invented person is. */
+const ORG_SLUGS = (process.env.DEMO_ORGS ?? 'demo')
   .split(',')
   .map((slug) => slug.trim())
   .filter(Boolean);

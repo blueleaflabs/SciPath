@@ -20,6 +20,7 @@
 
 import { createClient } from '@supabase/supabase-js';
 import { loadDevVars } from './dev-vars.mjs';
+import { FIXTURE_DOMAIN as FIXTURE_HOST } from '../src/config/demo-accounts.mjs';
 import { fixtureTarget, fixtureName } from './fixture-target.mjs';
 import { openBucket } from './notebook-bucket.mjs';
 import { actingAs, signOutAll } from './act-as.mjs';
@@ -29,8 +30,14 @@ loadDevVars();
 
 const URL = process.env.PUBLIC_SUPABASE_URL ?? '';
 const KEY = process.env.SUPABASE_SECRET_KEY ?? '';
-const ORG_SLUG = process.env.DEMO_ORG ?? 'montavista';
-const FIXTURE_DOMAIN = 'demo.invalid';
+/* The demonstration tenant. Was `montavista`, which put thirteen invented
+   situations into the school that is about to hold real ones. See the note in
+   seed-demo.mjs. */
+const ORG_SLUG = process.env.DEMO_ORG ?? 'demo';
+/* One home for this, in src/config/demo-accounts.mjs. Six files held
+   their own copy and the seventh would have been the one that missed a
+   rename. */
+const FIXTURE_DOMAIN = FIXTURE_HOST;
 
 function fail(message) {
   console.error(`\n${message}\n`);
@@ -530,6 +537,159 @@ const SCENARIOS = [
     startedDaysAgo: 20,
     complete: 0,
     notes: 2,
+  },
+
+  /* ── A class, not a sample ──────────────────────────────────────────────
+   *
+   * Two IRPD projects demonstrated that a course fits the template model.
+   * They do not demonstrate what a teacher's screen is *for*, which is
+   * twenty-something projects at once and the question of which three need
+   * her this week. With two, every list is short enough to read at a glance
+   * and the sorting, the counters and the attention rules are all untestable.
+   *
+   * Six more, chosen so that no two are stuck for the same reason. The point
+   * is not volume: it is that `assess()` in `src/lib/attention.ts` returns a
+   * different verdict for each, so the advisor's view has something to
+   * order. One is already disqualified, one is about to be, one is overdue,
+   * one has nobody looking after it, one is a pair, and one is simply fine —
+   * because a queue where everything is on fire teaches an advisor to ignore
+   * the queue.
+   *
+   * All human-participants or observational work, which is what an IRPD
+   * class actually produces: no vertebrates, no hazardous agents, and the
+   * one regulated-institution case belongs to the club rather than here.
+   * ─────────────────────────────────────────────────────────────────────── */
+
+  {
+    key: 'irpd-disqualified',
+    program: 'course',
+    title: 'Screen time and self-reported focus in ninth graders',
+    question: 'Does evening phone use predict how focused students feel in class?',
+    /* Minors surveyed about their own behaviour. The consent paperwork is
+       the whole difficulty and it is why this one is already lost. */
+    facts: { humans: true, minors: true },
+    authors: ['student.g'],
+    officer: 'officer.b',
+    /* Started before the approval that had to precede it. This is the
+       verdict `assess()` calls disqualifying, and it is the number an
+       advisor most needs to see stay at zero. */
+    startedDaysAgo: 120,
+    complete: 3,
+    notes: 9,
+    note:
+      'Surveying began before the review board answered. Nothing here is ' +
+      'recoverable, and it is the one row on the screen that cannot be ' +
+      'fixed by doing something today.',
+  },
+
+  {
+    key: 'irpd-approval-pending',
+    program: 'course',
+    title: 'Bilingual households and reading speed',
+    question: 'Do students who read at home in two languages read English faster?',
+    facts: { humans: true, minors: true },
+    authors: ['student.h'],
+    officer: 'officer.b',
+    startedDaysAgo: 14,
+    complete: 1,
+    notes: 3,
+    note:
+      'Waiting on approval and not yet collecting. The one on this screen ' +
+      'where saying something this week changes the outcome.',
+  },
+
+  {
+    key: 'irpd-overdue',
+    program: 'course',
+    title: 'Noise levels in the library through the day',
+    question: 'When is the library actually quiet enough to work in?',
+    /* Observational. Nobody is a participant, which is why this one has no
+       paperwork problem and an ordinary one instead: it is late. */
+    facts: {},
+    authors: ['student.i'],
+    officer: 'officer.b',
+    startedDaysAgo: 70,
+    complete: 4,
+    overdue: 2,
+    notes: 11,
+    manuscript: {
+      write: 2,
+      references: 3,
+      keywords: ['acoustics', 'study spaces'],
+      discipline: 'social-science',
+    },
+  },
+
+  {
+    key: 'irpd-unsupervised',
+    program: 'course',
+    title: 'Where campus recycling actually ends up',
+    question: 'What proportion of sorted recycling leaves campus sorted?',
+    /* **No facts.** IRPD's template declares `humans` and `minors` and
+       nothing else, so a course fixture claiming `field_work` would be
+       describing paperwork this program has no way to require —
+       `tests/fixtures.mjs` refuses it, and caught this one. Counting bins is
+       observational anyway. */
+    facts: {},
+    authors: ['student.j'],
+    /* **No officer.** `assess()` reports this as needing attention, and it
+       is the failure mode a class produces that a fair does not: a student
+       who is doing the work and whom nobody has been assigned to read. */
+    startedDaysAgo: 55,
+    complete: 3,
+    notes: 6,
+    note:
+      'Nobody is looking after this one. The work is happening and the ' +
+      'reading is not, which is invisible unless somebody is counting.',
+  },
+
+  {
+    key: 'irpd-pair',
+    program: 'course',
+    title: 'Water refill stations and single-use bottles on campus',
+    question: 'Did adding refill stations reduce bottles in the recycling stream?',
+    /* Observational, for the reason above: a course asks about human
+       participants and minors, and about nothing else. */
+    facts: {},
+    /* Two authors, so the roster, the byline order and the co-author
+       consent path all have something in this program to act on. */
+    authors: ['student.k', 'student.l'],
+    officer: 'officer.d',
+    startedDaysAgo: 60,
+    complete: 5,
+    notes: 8,
+    images: 2,
+    manuscript: {
+      write: 3,
+      references: 5,
+      keywords: ['waste', 'campus infrastructure'],
+      discipline: 'earth-climate',
+    },
+  },
+
+  {
+    key: 'irpd-on-track',
+    program: 'course',
+    title: 'Handwriting and recall in note-taking',
+    question: 'Do handwritten notes beat typed ones for recall a week later?',
+    facts: { humans: true, minors: true },
+    authors: ['student.m'],
+    officer: 'officer.d',
+    /* **In order, and that is the point.** Six rows of trouble and none of
+       this teaches an advisor to read the screen; a queue where everything
+       needs attention is a queue nobody opens twice. This is what `ok`
+       looks like, and it has to be visible for the other verdicts to mean
+       anything. */
+    startedDaysAgo: 85,
+    complete: 8,
+    notes: 14,
+    images: 1,
+    manuscript: {
+      write: 6,
+      references: 7,
+      keywords: ['memory', 'note-taking', 'classroom research'],
+      discipline: 'neuroscience',
+    },
   },
 
 ];

@@ -1,8 +1,10 @@
 # The Synopsys Silicon Valley Science and Technology Championship, 2027.
 #
-# Read off science-fair.org on 2026-08-06. Check again before a season runs on
-# this: the fair publishes changes annually and several 2027 dates were still
-# TBD when it was written.
+# Read off science-fair.org, most recently on 2026-08-25. Every anchor below
+# now matches the fair's published Important Dates block; the note that
+# several 2027 dates were still TBD was true at the first reading and is not
+# any more. The one date the fair still shows as TBD is the awards ceremony,
+# which is in `unscheduled` for that reason.
 #
 # Fourteen steps once merged with the process, of which five come from the
 # fair and every one of those is compliance. The fair asks for nothing during
@@ -16,12 +18,21 @@ id: scvsefa-2027
 # season looks exactly like one checked this morning.
 provenance:
   owner: Rohan Agarwal
-  source_url: https://scvsefa.org/
+  source_url: https://science-fair.org/students-parents/important-dates/
   rules_year: 2027
-  verified_on: 2026-08-22
+  verified_on: 2026-08-25
   changes:
     - on: 2026-08-22
       what: First reading. Inherits ISEF's forms and rulebook; the dates and the categories here are the fair's own.
+    - on: 2026-08-25
+      what: >-
+        Re-read against the fair's own Important Dates block. All eight
+        anchors confirmed unchanged. `source_url` corrected: it named
+        scvsefa.org, which is not the host the dates are published on, so a
+        year from now the staleness warning would have sent somebody to the
+        wrong page. The fair posted a 2027 Changes from Previous Rules and
+        Procedures page on 2026-08-21 which has not been read into this file
+        yet; the dates are unaffected, the rules may not be.
 
 family: scvsefa
 extends: isef
@@ -103,10 +114,8 @@ steps:
         - { ref: approval_1b }
         - { ref: permission_hold_harmless }
       risk: >-
-        Applications are read in the order received, so the final date means
-        being reviewed last. **A human participants project after the final
-        date is refused outright** — not late, not penalized, refused. This is
-        the one date in the calendar that ends seasons.
+        **A human participants project after the final date is refused
+        outright**.
 
     - id: register
       name: Register the entry

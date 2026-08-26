@@ -73,9 +73,18 @@ const published =
    http, https and mailto.
    
    This called `marked.parse` directly, so a manuscript containing a literal
-   `<script>` was published as a script tag on a public page — the one surface
-   where the author and the reader are different people and the reader has no
-   reason to distrust it. */
+   script tag was published as one on a public page: the one surface where the
+   author and the reader are different people and the reader has no reason to
+   distrust it.
+
+   The tag is described rather than written out, and that is not squeamishness.
+   Vite's dependency scanner slices a `.astro` file on the opening tag with no
+   idea that this one is inside a comment inside the frontmatter, so writing it
+   here made the scanner read every line from this comment to the real closing
+   tag as JavaScript and fail on the first attribute it met. The production
+   build was unaffected, because that scanner runs only in development, so
+   this survived every green suite and broke the development server on the
+   next cold install. `tests/frontmatter.mjs` now refuses it. */
 const html = body ? renderMarkdown(body) : '';
 ---
 

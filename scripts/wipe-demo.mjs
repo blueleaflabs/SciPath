@@ -51,7 +51,10 @@ const db = createClient(URL_, KEY, { auth: { persistSession: false } });
 /* The one thing that identifies a fixture. `seed-demo` puts every account on
    this domain and nothing else does, which is why the domain is the test
    rather than a name pattern: a name can be typed by a person. */
-const FIXTURE_DOMAIN = '@demo.invalid';
+/* One home for this, in src/config/demo-accounts.mjs. Six files held
+   their own copy and the seventh would have been the one that missed a
+   rename. */
+const RESERVED_TLD = '.invalid';
 
 /**
  * The marker on a demo account, which is a flag and not a domain.
@@ -87,7 +90,24 @@ for (let page = 1; page <= 20; page += 1) {
   const batch = data?.users ?? [];
   for (const account of batch) {
     const address = (account.email ?? '').toLowerCase();
-    if (address.endsWith(FIXTURE_DOMAIN) || DEMO_FLAG(account)) {
+    /* **The flag, and `.invalid`. Never the live fixture domain.**
+    
+       This read `address.endsWith(FIXTURE_DOMAIN)`, and that was safe while
+       the domain was `demo.invalid`, which nobody can register. The fixture
+       domain is `scipath.org` now — a real domain, deliberately, so that mail
+       arriving can be demonstrated — and the same line would have made this
+       delete every account on it and everything those accounts made.
+    
+       `seed-people.mjs` says so in its own header: its accounts sit on an
+       organization's own domain so they read properly in a demonstration,
+       and using that namespace as the safe-to-delete rule would destroy real
+       people. It was right, and the domain move turned its warning into a
+       live fault.
+    
+       `demo: true` is what a seed sets on purpose. `.invalid` stays matched
+       because nothing there can ever be real and a fixture from before the
+       move should still be removable. */
+    if (address.endsWith(RESERVED_TLD) || DEMO_FLAG(account)) {
       fixtures.set(account.id, account.email);
     }
   }
@@ -127,7 +147,7 @@ for (const row of everyone ?? []) {
   }
 }
 
-console.log(`${ids.length} demo accounts on ${FIXTURE_DOMAIN} or flagged demo`);
+console.log(`${ids.length} accounts flagged demo, or on a .invalid address`);
 console.log(`${projectIds.length} projects they are on`);
 
 if (shared.size > 0) {

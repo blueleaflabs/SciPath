@@ -11,7 +11,7 @@ import { resolveProgram, deliverablesFor, stepApplies, shape } from '../../../..
 import { programTitle, staffWord } from '../../../../../lib/program-names';
 import { one, serverClient } from '../../../../../lib/supabase';
 import { checkDateOrder, worstFinding } from '../../../../../lib/dateOrder';
-import { standing, isAuthorOf } from '../../../../../lib/roles';
+import { standing, isAuthorOf, reachesProgram } from '../../../../../lib/roles';
 import { afterPost, outcomeFrom } from '../../../../../lib/post-redirect';
 import { linkDomain } from '../../../../../lib/notes';
 import { blobStore, projectImagePath, MAX_UPLOAD_BYTES } from '../../../../../lib/blob';
@@ -65,6 +65,45 @@ const participation = await participationFor(supabase, projectId, programId);
    Rendering a class's deadlines against a project that never joined would be
    showing somebody an obligation nobody agreed to. */
 if (!participation) return Astro.redirect(`/app/project/${projectId}/`);
+
+/**
+ * **AND IN A PROGRAM THIS PERSON REACHES.**
+ *
+ * The check above asks whether the project is in the program. It does not
+ * ask whether the reader has any standing in it, and for a long time nothing
+ * did: a teacher scoped to the class could open the fair's page for a project
+ * that is in both, and every control below that reads `me.runsTheClub` came
+ * with it — recording deliverables, verifying somebody else's, editing the
+ * warnings, setting an awarded amount, on a program they do not run.
+ *
+ * The Open button on the project page is hidden for the same case, and this
+ * is why hiding it was never the fix: the button is a link to an address, and
+ * the address was the hole. Both ask `reachesProgram`.
+ *
+ * **Before the POST handler**, which is the half that matters. A guard placed
+ * after it refuses the page and accepts the writes.
+ *
+ * Sent back to the project rather than shown a refusal. The project page
+ * still lists this program and still says the project is entered in it, which
+ * is true and worth knowing; what stops here is acting on the entry. A 404
+ * would be a lie about a row they can already see.
+ */
+if (
+  !reachesProgram(me, programId, {
+    /* `participation.row.projects`, which `PARTICIPATION_COLUMNS` already
+       selects. Read here rather than from `entry`, which is bound three
+       hundred lines below and would put this guard after the POST handler. */
+    isAuthor: isAuthorOf(
+      (participation as any)?.row?.projects?.project_authors ?? [],
+      account.id
+    ),
+    attachedTo: (roles ?? []).some(
+      (r: any) => r.scope_id === programId && (r.role === 'officer' || r.role === 'advisor')
+    ),
+  })
+) {
+  return Astro.redirect(`/app/project/${projectId}/`);
+}
 
 /* The rest of this page was written when the route was keyed on the
    participation row, and `id` means that row throughout. Bound here rather
@@ -1148,7 +1187,7 @@ const sectionNo = new Map(sections.map((section, i) => [section.id, String(i + 1
           </p>
         ))}
         <p class="t-sm">
-          <a href="#deliverables">The rest are on the thing they belong to</a>.
+          <a href="#deliverables">All deliverables can be recorded below</a>.
         </p>
       </div>
     )}
@@ -1479,7 +1518,28 @@ const sectionNo = new Map(sections.map((section, i) => [section.id, String(i + 1
                             })}
                         </div>
                       ) : (
-                        <a class="linkish" href={`#d-${wantedBy(m)[0]?.id ?? ''}`}>
+                        <a
+                          class="linkish"
+                          href={
+                            /* **`#d-` is not an anchor.**
+                            
+                               This read `#d-${wantedBy(m)[0]?.id ?? ''}`, and
+                               the fallback made a link to nowhere rather than
+                               no link: `wantedBy` filters `expected`, so a
+                               step whose deliverables are all excluded by
+                               `applies_when` leaves it empty and the href
+                               collapses to a bare prefix. Clicking moved
+                               nothing, which reads as a broken page.
+                            
+                               The section is the honest destination when the
+                               row cannot name one document. It always exists
+                               here, because this branch only runs when the
+                               step has deliverables. */
+                            wantedBy(m)[0]?.id
+                              ? `#d-${wantedBy(m)[0].id}`
+                              : '#deliverables'
+                          }
+                        >
                           Record it below
                         </a>
                       )
@@ -1569,7 +1629,7 @@ const sectionNo = new Map(sections.map((section, i) => [section.id, String(i + 1
                       is a sentence nobody opens. */}
                   {d.steps.some((st: any) => st.risk || warningsFor(st.id).length > 0) && (
                     <div class="dl-wrong">
-                      <p class="dl-wrong-h">What goes wrong here</p>
+                      <p class="dl-wrong-h">Common mistakes</p>
 
                       {d.steps
                         .filter((st: any) => st.risk)
@@ -2019,9 +2079,22 @@ const sectionNo = new Map(sections.map((section, i) => [section.id, String(i + 1
   /* Equal columns. The uneven fractions were sized to the content that
      happened to be in each card, which is why nothing lined up the moment a
      label ran to two lines. */
+  /* **The row owns the rows. The card only borrows them.**
+  
+     The comment below used to say subgrid and the code did not use it: each
+     card was its own `auto 1fr auto` grid, so the three tracks were sized
+     from that card's own content and nothing was shared. One label wrapping
+     to two lines — "Days to next milestone" is the one that does — pushed
+     that card's number up while its neighbours stayed put, and the four
+     figures sat at three different heights.
+  
+     Real subgrid now. `.cards` declares the three tracks once, each card
+     spans all three and adopts them, so every label occupies the tallest
+     label's height and every number sits on one line across the row. */
   .cards {
     display: grid;
     grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-rows: auto auto auto;
     gap: 12px;
     margin-top: 28px;
   }
@@ -2033,23 +2106,21 @@ const sectionNo = new Map(sections.map((section, i) => [section.id, String(i + 1
     .cards { grid-template-columns: 1fr; }
   }
 
-  /* Subgrid so the three rows are shared across the row rather than being
-     four independent stacks. Every value sits on one line and every footnote
-     on another, however long a label is. */
   .card {
     border: 1px solid var(--rule);
     border-radius: var(--radius);
     background: var(--card);
     padding: 16px 18px 18px;
+    grid-row: span 3;
     display: grid;
-    grid-template-rows: auto 1fr auto;
+    grid-template-rows: subgrid;
     row-gap: 10px;
   }
 
   .card .kicker { margin: 0; align-self: start; }
 
-  /* The value sits at the bottom of its track, so a wrapped label above it
-     does not push the number down out of line with its neighbours. */
+  /* Bottom of its own track, so the figures share a baseline even where one
+     is a word and the others are numerals. */
   .card .val {
     margin: 0;
     display: flex;
@@ -2058,7 +2129,7 @@ const sectionNo = new Map(sections.map((section, i) => [section.id, String(i + 1
     align-self: end;
   }
 
-  .card .under { margin: 0; align-self: end; }
+  .card .under { margin: 0; align-self: start; }
 
   .resultf {
     display: grid;

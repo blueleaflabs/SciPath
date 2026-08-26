@@ -15,6 +15,7 @@ import { loadLibrary } from '../scripts/template-library.mjs';
 import { resolveProgram, evaluate } from '../src/lib/template-resolve.ts';
 import * as templateResolve from '../src/lib/template-resolve.ts';
 import { migrationSql } from './migrations.mjs';
+import { FIXTURE_DOMAIN } from '../src/config/demo-accounts.mjs';
 
 let passed = 0;
 function test(name, fn) {
@@ -34,12 +35,30 @@ const library = loadLibrary();
 const scenarios = [...seed.matchAll(/key: '([\w-]+)',([\s\S]*?)(?=\n  \{|\n\s*\];)/g)].map(
   ([, key, body]) => {
     const facts = body.match(/facts: \{([^}]*)\}/)?.[1] ?? '';
+    const authors = body.match(/authors: \[([^\]]*)\]/)?.[1] ?? '';
+
+    /* **Three fields added, and the reason is worth recording.**
+
+       This parsed `key`, `program` and `facts` and nothing else. A test
+       written later asserted on `s.officer` — a field the parser never
+       produced — so every scenario read as having no officer and the
+       assertion was measuring `undefined` across the board. It failed
+       loudly only because it used a strict count; `>= 1` would have passed
+       forever while checking nothing.
+
+       A parser that silently yields `undefined` for a field somebody will
+       reasonably reach for is a trap, so the fields the advisor screen turns
+       on are extracted rather than left to be discovered one at a time. */
     return {
       key,
       program: body.match(/program: '(\w+)'/)?.[1] ?? 'competition',
       facts: Object.fromEntries(
         [...facts.matchAll(/(\w+):\s*true/g)].map((m) => [m[1], true])
       ),
+      officer: body.match(/officer: '([\w.]+)'/)?.[1] ?? null,
+      authors: authors.split(',').map((a) => a.trim()).filter(Boolean),
+      complete: Number(body.match(/complete: (\d+)/)?.[1] ?? 0),
+      overdue: Number(body.match(/overdue: (\d+)/)?.[1] ?? 0),
     };
   }
 );
@@ -100,6 +119,54 @@ test('a course project declares nothing a course cannot ask', () => {
       assert.ok(asks.has(fact), `${scene.key} declares "${fact}", which the course never asks`);
     }
   }
+});
+
+test('the course shows an advisor more than one kind of trouble', () => {
+  /* **A queue where everything is on fire is a queue nobody opens twice.**
+
+     The course had two projects, which is enough to prove a course fits the
+     template model and not enough to test the screen an advisor actually
+     uses. `src/lib/attention.ts` sorts a program into disqualifying, needs
+     attention, and in order — and with two rows there is nothing to sort.
+
+     So the fixtures have to span the verdicts rather than merely be numerous.
+     Asserted on the shapes that produce them, because `assess()` reads live
+     rows and this file reads the seed:
+
+       - one that began work before its approval, which is disqualifying
+       - one with nobody attached, which needs attention for a reason no
+         competition produces
+       - one overdue
+       - one with two authors, so the roster has something to act on
+       - one that is simply fine
+
+     The last is the one worth defending. Without a project in order, every
+     row on the screen is a problem, and an advisor learns that the screen is
+     noise. */
+  const course = scenarios.filter((s) => s.program === 'course');
+
+  assert.ok(course.length >= 8, `the course has ${course.length} projects, expected at least 8`);
+
+  const unattended = course.filter((s) => !s.officer);
+  assert.equal(unattended.length, 1, 'exactly one course project should have no officer');
+
+  assert.ok(
+    course.some((s) => s.overdue > 0),
+    'no course project is overdue, so the overdue count is untestable'
+  );
+
+  assert.ok(
+    course.some((s) => s.authors.length > 1),
+    'no course project has co-authors, so the roster has nothing to act on'
+  );
+
+  /* In order: attached, nothing overdue, and well past the start. */
+  assert.ok(
+    course.some(
+      (s) => s.officer && s.overdue === 0 && s.complete >= 6
+    ),
+    'no course project is in good order, so every row on the advisor screen is a problem'
+  );
 });
 
 test('the fair fixtures reach a program that exists', () => {
@@ -220,11 +287,21 @@ test('no scenario names its sponsor', () => {
      code deletes the prose that explains it. */
   const code = seed.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\*.*$/gm, '');
 
+  /* Both spellings allowed: the current fixture domain, read from the module
+     that owns it, and `.invalid`, which is where fixtures used to live and
+     which nothing can register. Naming only one meant this passed for the
+     wrong reason after the move — the literal addresses had gone from the
+     seed entirely, so it was checking a file with nothing left in it to
+     check. */
   const real = [
-    ...code.matchAll(/@([a-z0-9.-]+\.(?:org|com|net|edu|gov))/g),
-  ].filter((m) => m[1] !== 'demo.invalid');
+    ...code.matchAll(/@([a-z0-9.-]+\.(?:org|com|net|edu|gov|invalid))/g),
+  ].filter((m) => m[1] !== FIXTURE_DOMAIN && !m[1].endsWith('.invalid'));
 
-  assert.deepEqual([...new Set(real.map((m) => m[1]))], [], 'fixtures live on demo.invalid');
+  assert.deepEqual(
+    [...new Set(real.map((m) => m[1]))],
+    [],
+    `fixtures live on ${FIXTURE_DOMAIN}`
+  );
 });
 
 /* ── Every program asks for something ────────────────────────────────────── */

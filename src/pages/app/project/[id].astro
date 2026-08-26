@@ -8,7 +8,7 @@ import AppShell from '../../../components/AppShell.astro';
 import { activeOrg } from '../../../lib/tenant';
 import { programTitle, staffWord } from '../../../lib/program-names';
 import { serverClient } from '../../../lib/supabase';
-import { standing, isAuthorOf, attachmentLabel } from '../../../lib/roles';
+import { standing, isAuthorOf, attachmentLabel, reachesProgram } from '../../../lib/roles';
 import { renderNote } from '../../../lib/notes';
 import { blobStore, notePath, MAX_UPLOAD_BYTES } from '../../../lib/blob';
 import { afterPost, outcomeFrom } from '../../../lib/post-redirect';
@@ -362,9 +362,15 @@ const fmt = (d: string | null) =>
                     wanted any of the other four had no reason to click. The
                     row already names the program, so the verb does not have
                     to repeat it. */}
-                <a class="btn btn-sm" href={`/app/project/${id}/in/${c.program_id}/`}>
-                  Open
-                </a>
+                {/* Only where they can act on it. Same rule the page itself
+                    asks, so the two cannot come to disagree — which is the
+                    state they were already in: the button was offered to
+                    everybody and the page refused nobody. */}
+                {reachesProgram(me, c.program_id, { isAuthor: iAuthor }) && (
+                  <a class="btn btn-sm" href={`/app/project/${id}/in/${c.program_id}/`}>
+                    Open
+                  </a>
+                )}
                 {iAuthor && (
                   <form method="POST" action="#outcome" class="inline">
                     <input type="hidden" name="action" value="cohort" />
@@ -394,7 +400,17 @@ const fmt = (d: string | null) =>
                       : 'entered'}
               </span>
               <span class="b-do">
-                <a class="btn btn-sm" href={`/app/project/${id}/in/${e.program_id}/`}>Open</a>
+                {/* **The row stays, the button goes.**
+                
+                    A class teacher looking at a project that is in the class
+                    and the fair should see that it is in the fair: it is one
+                    project, and showing half of it would be a lie about the
+                    work. What they should not have is a way in. Entered is a
+                    fact worth knowing; acting on the entry belongs to whoever
+                    runs that program. */}
+                {reachesProgram(me, e.program_id, { isAuthor: iAuthor }) && (
+                  <a class="btn btn-sm" href={`/app/project/${id}/in/${e.program_id}/`}>Open</a>
+                )}
               </span>
             </li>
           ))}

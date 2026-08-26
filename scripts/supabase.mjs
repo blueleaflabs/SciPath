@@ -21,8 +21,16 @@
 
 import { spawn } from 'node:child_process';
 import { loadDevVars } from './dev-vars.mjs';
+import { requireDocker } from './docker.mjs';
 
 const applied = loadDevVars();
+
+/* Before anything is spawned. The local stack is containers, and the CLI's
+   answer to a missing daemon names the socket it could not open rather than
+   the application that is not running — which is the same failure mode as
+   `invalid_client` above, reported by the layer that noticed instead of the
+   layer that knows what it means. See scripts/docker.mjs. */
+requireDocker();
 
 /* Named once, because a missing one produces an error from Google rather than
    from here, and nothing in that error says which variable is absent. */

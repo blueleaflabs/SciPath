@@ -244,6 +244,155 @@ test('no seed script writes without checking whether the write worked', () => {
   assert.deepEqual(problems, [], 'destructure { error }, or wrap it in must()');
 });
 
+test('the first seed to open a socket waits for the gateway', () => {
+  /* `supabase db reset` restarts the containers and returns before they are
+     listening. `seed-orgs` is the next thing in `npm run reset` to make a
+     request, and without a wait it answered with `TypeError: fetch failed`
+     prefixed by whichever organization sorted first — a message that names
+     an organization file and says nothing about the gateway.
+
+     Asserted on order, not presence. A wait placed after the client is built
+     is still a wait, but the first RPC can already be in flight, so this
+     requires it above `createClient`. */
+  const text = fs.readFileSync('scripts/seed-orgs.mjs', 'utf8');
+
+  const wait = text.indexOf('requireApi(');
+  const client = text.indexOf('createClient(');
+
+  assert.ok(wait !== -1, 'scripts/seed-orgs.mjs must call requireApi()');
+  assert.ok(client !== -1, 'scripts/seed-orgs.mjs is expected to build a client');
+  assert.ok(
+    wait < client,
+    'requireApi() must run before the client is built, or the first call races it'
+  );
+});
+
+test('the cleanup tool never identifies a fixture by the live domain', () => {
+  /* **A fixture is a flag, not a namespace.**
+
+     `wipe-demo` deleted every account whose address ended in the fixture
+     domain, and everything those accounts made. That was safe for exactly as
+     long as the domain was `demo.invalid`, which nobody can register. It is
+     `scipath.org` now — a real domain, on purpose, so mail arriving can be
+     demonstrated — and the same rule would delete every real account on it.
+
+     `seed-people.mjs` had already written the warning in its own header: its
+     advisors sit on an organization's own domain so they read properly in a
+     demonstration, and using that namespace as the safe-to-delete rule would
+     destroy real people. The domain move turned a documented hazard into a
+     live one.
+
+     So: the tool may match `.invalid`, where nothing can ever be real, and
+     the flag a seed sets on purpose. It may not match `FIXTURE_DOMAIN`. */
+  const wipe = fs.readFileSync('scripts/wipe-demo.mjs', 'utf8');
+  const code = wipe.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/^\s*\/\/.*$/gm, ' ');
+
+  assert.doesNotMatch(
+    code,
+    /FIXTURE_DOMAIN|demo-accounts\.mjs/,
+    'wipe-demo must not identify a fixture by the fixture domain'
+  );
+  assert.match(code, /user_metadata/, 'wipe-demo must identify a fixture by its flag');
+
+  /* And the flag has to be set, or matching on it finds nothing. */
+  const seed = fs.readFileSync('scripts/seed-demo.mjs', 'utf8');
+  assert.match(
+    seed,
+    /demo:\s*true/,
+    'seed-demo must flag its accounts, or the cleanup tool matches none of them'
+  );
+});
+
+test('no script shadows a global it then constructs', () => {
+  /* `const URL = process.env.PUBLIC_SUPABASE_URL` reads perfectly and makes
+     `new URL(...)` later in the same file a TypeError, because the const
+     shadows the global constructor. It is not a parse error and no type
+     check sees it: the file loads, and it throws on the line that runs.
+
+     `restart-stack.mjs` did exactly this and only failed when the prompt was
+     answered, which is the branch a quick smoke test does not reach.
+
+     Narrow on purpose. This is not a general shadowing rule; it is the pair
+     that bit, and a rule wide enough to cover every global would report
+     every local named `Response` in a project that never constructs one. */
+  const GLOBALS = ['URL', 'Response', 'Request', 'Headers', 'Date', 'Error'];
+  const problems = [];
+
+  /* A mention inside a comment is not a declaration, and the comment above
+     this rule contains both halves of the pair it refuses. */
+  const bare = (text) =>
+    text.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/^\s*\/\/.*$/gm, ' ');
+
+  for (const file of files) {
+    const text = bare(fs.readFileSync(file, 'utf8'));
+
+    for (const name of GLOBALS) {
+      const declared = new RegExp(`\\b(?:const|let|var)\\s+${name}\\s*=`).test(text);
+      const constructed = new RegExp(`\\bnew\\s+${name}\\s*\\(`).test(text);
+
+      if (declared && constructed) {
+        problems.push(`${file} declares ${name} and also calls new ${name}()`);
+      }
+    }
+  }
+
+  assert.deepEqual(problems, [], 'rename the local, or the constructor is shadowed');
+});
+
+test('the readiness failure asks Docker rather than guessing', () => {
+  /* The first version of this message said a container had not come back,
+     which assumes containers existed. They did not: the stack had never been
+     started, `db reset` recreates only the database, and the message sent
+     somebody to restart something that was not running.
+
+     A wrong diagnosis is worse than none, so the failure path has to consult
+     Docker. Asserted on the import rather than the wording, because the
+     wording will change and the consultation must not. */
+  const text = fs.readFileSync('scripts/api-ready.mjs', 'utf8');
+
+  assert.match(
+    text,
+    /supabaseContainers/,
+    'the failure path must ask which containers exist, not assume'
+  );
+  assert.match(
+    text,
+    /db:start/,
+    'it must name the command that fixes the commonest case'
+  );
+
+  /* A hardcoded container name is wrong the moment the directory is renamed,
+     and `no such container` reads as the diagnosis being broken. */
+  assert.doesNotMatch(
+    text,
+    /docker logs supabase_\w+_\w+/,
+    'name the container from what Docker reported, not from a literal'
+  );
+});
+
+test('the Supabase wrapper asks about Docker before it spawns anything', () => {
+  /* The local stack is containers. Without a daemon the CLI answers with the
+     socket path it could not open, which reads as a broken path and is
+     almost always Docker Desktop being closed — a morning went to that once.
+     `scripts/docker.mjs` asks the question first and says the answer.
+
+     Asserted on the wrapper rather than on the helper, because a helper
+     nothing calls is the failure this is guarding against. Order matters as
+     much as presence: a check that runs after `spawn` is a check that never
+     runs, so this reads positions rather than just looking for the name. */
+  const text = fs.readFileSync('scripts/supabase.mjs', 'utf8');
+
+  const guard = text.indexOf('requireDocker()');
+  const spawned = text.indexOf('spawn(');
+
+  assert.ok(guard !== -1, 'scripts/supabase.mjs must call requireDocker()');
+  assert.ok(spawned !== -1, 'scripts/supabase.mjs is expected to spawn the CLI');
+  assert.ok(
+    guard < spawned,
+    'requireDocker() must run before the CLI is spawned, or the CLI reports first'
+  );
+});
+
 test('every module a script imports can actually be loaded by node', () => {
   /* Vite resolves `./publish`; node does not, and the seed died on it after
      everything before it had already written. The build passed the whole

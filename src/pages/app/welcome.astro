@@ -111,6 +111,23 @@ if (Astro.request.method === 'POST') {
       p_grad_year: gradYear ? Number(gradYear) : null,
       p_guardian_name: String(form.get('guardian_name') ?? '').trim() || null,
       p_guardian_email: guardianEmail || null,
+
+      /* Sent only where the form rendered them, and refused server side
+         anyway if a school tenant ever receives them. See the note above
+         `public.users`. */
+      p_school_name: openProgram
+        ? String(form.get('school_name') ?? '').trim() || null
+        : null,
+      p_school_runs_a_fair: openProgram
+        ? String(form.get('school_runs_a_fair') ?? '') || null
+        : null,
+      p_entered_before: openProgram
+        ? form.get('entered_before') === 'yes'
+          ? true
+          : form.get('entered_before') === 'no'
+            ? false
+            : null
+        : null,
     });
 
     if (rpcError) error = rpcError.message;
@@ -219,10 +236,69 @@ const band = sent.age_band ?? '';
         </label>
       </fieldset>
 
+      {/* **THE THREE AN OPEN TENANT ASKS.**
+      
+          A school knows which school it is from the hostname and must not ask.
+          Here there is no domain and no district, so the school is a claim,
+          and these are the only three worth the moment an account is created.
+      
+          Not asked here, deliberately, and both were on an earlier draft of
+          this list. A **zip code** was going to narrow a fair search, but a
+          fair belongs to a project rather than to a person and the relevant
+          zip is the school's; it is asked where a fair is chosen. A **teacher
+          sponsor** is named on the project, per 1.18, because affiliation is
+          per participation and one student may have three different teachers
+          across three programs.
+      
+          Nothing here is a protected attribute. Whether a school is Title I,
+          and whether it has ever appeared in a fair's results, are both
+          looked up from the name afterwards and are facts about a school. */}
       {openProgram && (
-        <p class="fine">
-          This is an open program. No school and no district behind it.
-        </p>
+        <fieldset>
+          <legend>Your school</legend>
+
+          <label>
+            <span>School name</span>
+            <input
+              name="school_name"
+              value={sent.school_name ?? ''}
+              autocomplete="organization"
+            />
+          </label>
+
+          {/* `not_sure` is an answer rather than a missing one. A student
+              who does not know is telling you nobody has told them, which is
+              the single most useful thing this form learns.
+             
+              The hint sits inside the label rather than as a sibling
+              paragraph. Between two fields it read as an introduction to the
+              next one; attached, it explains the control above it. */}
+          <label>
+            <span>Does your school hold its own science fair?</span>
+            <select name="school_runs_a_fair">
+              <option value="">Choose one</option>
+              <option value="yes" selected={sent.school_runs_a_fair === 'yes'}>Yes</option>
+              <option value="no" selected={sent.school_runs_a_fair === 'no'}>No</option>
+              <option value="not_sure" selected={sent.school_runs_a_fair === 'not_sure'}>
+                I am not sure
+              </option>
+            </select>
+            <span class="hint">
+              Some fairs take an entry straight from a student where the school
+              holds a fair of its own, and some ask the student to come through
+              it. Knowing in August is worth a lot more than knowing in January.
+            </span>
+          </label>
+
+          <label>
+            <span>Have you entered a science fair before?</span>
+            <select name="entered_before">
+              <option value="">Choose one</option>
+              <option value="yes" selected={sent.entered_before === 'yes'}>Yes</option>
+              <option value="no" selected={sent.entered_before === 'no'}>No</option>
+            </select>
+          </label>
+        </fieldset>
       )}
 
       <div class="finish">
@@ -261,14 +337,92 @@ const band = sent.age_band ?? '';
 </script>
 
 <style>
+  /* **ONE SHAPE FOR EVERY FIELD.**
+  
+     `form fieldset > label` was `display: flex; align-items: center`, written
+     for the three radio buttons in the age band and correct for them. It
+     matched every direct label in every fieldset, so the moment a text box or
+     a dropdown went inside one it laid the question beside the control at
+     whatever width the words happened to occupy — a different left edge per
+     row, and none of them aligned with the fields outside the fieldset that
+     were still stacked.
+  
+     The rule now matches what it was written for. Everything that is not a
+     radio gets the same stack: question above, control below, one width, one
+     rhythm. Inside a fieldset and outside it are the same, which is the
+     property that makes a long form scannable. */
   form.stack { max-width: 52ch; }
-  form label { display: block; margin-bottom: 16px; }
-  form label > span { display: block; margin-bottom: 6px; font-family: var(--face-ui); font-size: 0.92rem; }
-  form fieldset { border: 1px solid var(--rule-fine); padding: 16px 18px; margin-bottom: 20px; }
-  form legend { font-family: var(--face-ui); font-size: 0.92rem; padding: 0 6px; }
-  form input, form select { width: 100%; padding: 9px 11px; border: 1px solid var(--rule); background: var(--card); color: var(--ink); font: inherit; }
+
+  form label { display: block; margin-bottom: 18px; }
+  form label:last-child { margin-bottom: 0; }
+
+  /* The question, and it reads as one. 500 rather than 600: these sit above
+     every control on the page and bold at that density becomes stripes. */
+  form label > span {
+    display: block;
+    margin-bottom: 6px;
+    font-family: var(--face-ui);
+    font-size: 0.94rem;
+    font-weight: 500;
+    color: var(--ink);
+    line-height: 1.35;
+  }
+
+  form input,
+  form select {
+    width: 100%;
+    padding: 10px 12px;
+    border: 1px solid var(--rule);
+    border-radius: var(--radius);
+    background: var(--card);
+    color: var(--ink);
+    font: inherit;
+  }
+
+  /* A native select is a different height from a text input at the same
+     padding, which is visible the moment one sits under the other. */
+  form select { height: calc(1lh + 22px); }
+
+  form fieldset {
+    border: 1px solid var(--rule-fine);
+    border-radius: var(--radius);
+    padding: 18px 20px 20px;
+    margin: 0 0 20px;
+  }
+
+  /* Heavier than the questions inside it, so a section reads as a section.
+     Every fieldset on this page carries one and they are the only headings
+     the form has. */
+  form legend {
+    font-family: var(--face-ui);
+    font-size: 0.94rem;
+    font-weight: 700;
+    letter-spacing: 0.01em;
+    padding: 0 6px;
+  }
+
+  /* Radios only. This is the rule the one above used to be. */
+  form fieldset > label:has(input[type='radio']) {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    margin-bottom: 8px;
+    font-weight: 400;
+  }
   form fieldset label input[type='radio'] { width: auto; margin-right: 8px; }
-  form fieldset > label { display: flex; align-items: center; gap: 4px; margin-bottom: 8px; }
+
+  /* Attached to the control it explains, rather than floating between two
+     fields where it reads as belonging to the next one. */
+  .hint {
+    display: block;
+    margin-top: 6px;
+    font-family: var(--face-ui);
+    font-size: 0.86rem;
+    font-weight: 400;
+    color: var(--ink-3);
+    line-height: 1.4;
+  }
+
   .fine { color: var(--ink-3); font-size: 0.9rem; margin-top: 10px; }
   .finish { display: flex; flex-wrap: wrap; gap: 20px; align-items: center; margin-top: 6px; }
   .terms { margin: 0; padding-left: 1.1rem; color: var(--ink-3); font-size: 0.92rem; }

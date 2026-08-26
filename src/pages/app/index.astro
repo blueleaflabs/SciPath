@@ -892,9 +892,17 @@ const grouped = () => {
       <section class="hero">
         <p class="t-lbl">{org.name}</p>
         <h1 class="t-big">Sign in to work on a project</h1>
+        {/* **A school account is right for a school and wrong here.**
+        
+            This said "Use your school Google account" on every tenant,
+            including the open one, where there is no school and the first
+            real signup was a personal Gmail address. A sentence that tells
+            somebody the thing they just did is not allowed is worse than no
+            sentence. */}
         <p class="lede">
-          Use your school Google account. Reading anything published here never
-          needs an account.
+          {org.signupMode === 'open'
+            ? 'Sign in with Google. Any Google account works, including a personal one.'
+            : 'Use your school Google account.'}
         </p>
         <div class="row" style="margin-top:24px">
           <a
@@ -903,6 +911,21 @@ const grouped = () => {
           >Sign in with Google</a>
         </div>
 
+        {/* **Kept on every tenant, and the gate was wrong.**
+        
+            This was briefly hidden behind `org.demo`, on the reasoning that a
+            form nothing the public possesses can satisfy is a dead end rather
+            than a second way in. The reasoning holds and the gate did not:
+            the platform tenant is not a demonstration tenant, so the flag
+            removed sign-in from the one address every fixture account is
+            actually used at, and the demonstration this exists for could not
+            be given.
+        
+            A gate that hides a control from the person who needs it is worse
+            than a control the public will not use. If this is ever hidden
+            again it has to be on something that is true in development and
+            false in production, which `demo: true` is not — it marks one
+            tenant, not one environment. */}
         <div class="fixture">
           <p class="t-lbl">Or with an email and password</p>
           <form method="POST" action="/auth/password/" class="fixrow">

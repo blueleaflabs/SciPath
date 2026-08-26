@@ -1621,5 +1621,300 @@ exception when others then
   raise;
 end $body$;
 
+-- ===========================================================================
+-- GUARDIAN CONSENT
+--
+-- The one exchange with somebody who has no account, and the one credential
+-- that arrives by email and authorises an action with no password behind it.
+-- Read-only checks cannot reach any of it: the token is hashed, the answer
+-- is a state machine, and the whole thing is SECURITY DEFINER.
+--
+-- These run against a real database because the alternative is finding out
+-- from a parent.
+-- ===========================================================================
+
+do $body$
+declare
+  v_org     uuid;
+  v_student uuid;
+  v_consent uuid;
+  v_hash    text;
+  v_token   text;
+  v_answer  text;
+  v_n       int;
+begin
+  select org_id into v_org from public.users limit 1;
+
+  insert into public.users (id, org_id, display_name, population, age_band,
+                            consent_state, consent_requested_at)
+  values (gen_random_uuid(), v_org, 'Consent fixture', 'student', '13_17',
+          'pending', now())
+  returning id into v_student;
+
+  insert into public.guardian_consents (org_id, user_id, guardian_name, guardian_email)
+  values (v_org, v_student, 'A Guardian', 'guardian@demo.invalid')
+  returning id into v_consent;
+
+  perform app.request_guardian_consent(v_consent);
+
+  -- ── The outbox can address somebody with no account ────────────────────
+  --
+  -- This is the assertion the whole schema change exists for.
+  -- `recipient_id` was `not null references users`, so this row could not be
+  -- written at all and the consent email had a template and no way to be sent.
+  select count(*) into v_n
+    from public.notifications
+   where subject_id = v_consent
+     and kind = 'guardian_consent'
+     and recipient_id is null
+     and recipient_email = 'guardian@demo.invalid';
+
+  if v_n <> 1 then
+    raise exception 'FAIL the guardian message was not enqueued (% rows)', v_n;
+  end if;
+  raise notice '  ok   a message can be addressed to an address rather than an account';
+
+  -- ── The link goes somewhere a guardian can use ─────────────────────────
+  select payload->>'path' into v_token
+    from public.notifications where subject_id = v_consent and kind = 'guardian_consent';
+
+  if v_token is null or v_token not like '/consent/%' then
+    raise exception 'FAIL the guardian was sent to % rather than a consent page', v_token;
+  end if;
+  raise notice '  ok   the link is the consent page, not the sign-in screen';
+
+  v_token := replace(replace(v_token, '/consent/', ''), '/', '');
+
+  -- ── Only the hash is stored ────────────────────────────────────────────
+  select token_hash into v_hash
+    from public.confirmation_tokens where subject_id = v_consent;
+
+  if v_hash = v_token then
+    raise exception 'FAIL the token itself is in the table';
+  end if;
+  if v_hash <> app.consent_token_hash(v_token) then
+    raise exception 'FAIL the stored hash does not match the token that was sent';
+  end if;
+  raise notice '  ok   the table holds a hash and the plaintext exists only in the email';
+
+  -- ── A wrong token says nothing ─────────────────────────────────────────
+  select count(*) into v_n from public.guardian_consent_request('not-a-real-token');
+  if v_n <> 0 then
+    raise exception 'FAIL an unknown token returned a request';
+  end if;
+
+  if public.answer_guardian_consent('not-a-real-token', true) <> 'unavailable' then
+    raise exception 'FAIL an unknown token was accepted';
+  end if;
+  raise notice '  ok   an unknown token is refused, and says only that';
+
+  -- ── Approving ──────────────────────────────────────────────────────────
+  v_answer := public.answer_guardian_consent(v_token, true);
+  if v_answer <> 'approved' then
+    raise exception 'FAIL approving returned %', v_answer;
+  end if;
+
+  select consent_state into v_answer from public.users where id = v_student;
+  if v_answer <> 'active' then
+    raise exception 'FAIL an approved account is at % rather than active', v_answer;
+  end if;
+  raise notice '  ok   approving opens the account';
+
+  -- ── The token is spent ─────────────────────────────────────────────────
+  --
+  -- A link that still works after it has been answered is a link that can be
+  -- replayed to reverse a decision.
+  if (select consumed_at from public.confirmation_tokens where subject_id = v_consent) is null then
+    raise exception 'FAIL the token was not consumed';
+  end if;
+
+  v_answer := public.answer_guardian_consent(v_token, false);
+  if v_answer <> 'approved' then
+    raise exception 'FAIL a spent token reversed the answer to %', v_answer;
+  end if;
+  raise notice '  ok   a spent link cannot reverse an answer, and reports what was decided';
+
+  -- ── The student is told ────────────────────────────────────────────────
+  select count(*) into v_n
+    from public.notifications
+   where recipient_id = v_student and kind = 'guardian_approved';
+  if v_n <> 1 then
+    raise exception 'FAIL the student was not told (% rows)', v_n;
+  end if;
+  raise notice '  ok   the student hears the answer from the outbox';
+
+  -- ── Declining pauses, and does not close ───────────────────────────────
+  --
+  -- `closed` is the irreversible state and it does not belong behind a link
+  -- in an email. A parent saying no is not the same act as deleting a
+  -- child's work.
+  insert into public.users (id, org_id, display_name, population, age_band,
+                            consent_state, consent_requested_at)
+  values (gen_random_uuid(), v_org, 'Consent fixture two', 'student', '13_17',
+          'pending', now())
+  returning id into v_student;
+
+  insert into public.guardian_consents (org_id, user_id, guardian_name, guardian_email)
+  values (v_org, v_student, 'B Guardian', 'guardian.b@demo.invalid')
+  returning id into v_consent;
+
+  perform app.request_guardian_consent(v_consent);
+
+  select replace(replace(payload->>'path', '/consent/', ''), '/', '')
+    into v_token
+    from public.notifications where subject_id = v_consent and kind = 'guardian_consent';
+
+  if public.answer_guardian_consent(v_token, false) <> 'declined' then
+    raise exception 'FAIL declining did not report a decline';
+  end if;
+
+  select consent_state into v_answer from public.users where id = v_student;
+  if v_answer <> 'paused' then
+    raise exception 'FAIL a decline left the account at % rather than paused', v_answer;
+  end if;
+  raise notice '  ok   declining pauses the account and never closes it';
+end $body$;
+
+-- ===========================================================================
+-- NUDGES
+--
+-- Authorisation here is not who may press the button. It is who the message
+-- may reach: a function that takes any user id and mails them about a
+-- stranger's obligation is the failure worth a real database to catch.
+-- ===========================================================================
+
+do $body$
+declare
+  v_part    uuid;
+  v_ms      uuid;
+  v_author  uuid;
+  v_other   uuid;
+  v_org     uuid;
+  v_answer  text;
+  v_n       int;
+begin
+  select em.id, em.participation_id, em.org_id
+    into v_ms, v_part, v_org
+    from public.entry_milestones em
+   where em.completed_on is null
+   limit 1;
+
+  if v_ms is null then
+    raise notice '  --   no open obligation seeded, nudge checks skipped';
+    return;
+  end if;
+
+  select a.user_id into v_author
+    from public.project_authors a
+    join public.participations pt on pt.project_id = a.project_id
+   where pt.id = v_part and a.role = 'author'
+   limit 1;
+
+  -- Somebody at the school who is not on this project.
+  select u.id into v_other
+    from public.users u
+   where u.org_id = v_org
+     and u.id <> coalesce(v_author, u.id)
+     and not exists (
+       select 1 from public.project_authors a
+        join public.participations pt on pt.project_id = a.project_id
+       where pt.id = v_part and a.user_id = u.id
+     )
+   limit 1;
+
+  -- ── A nudge cannot reach somebody who is not on the project ────────────
+  --
+  -- The whole authorisation surface. Without it the function is a way to mail
+  -- any account at the school about work that is not theirs.
+  if v_other is not null then
+    begin
+      perform public.nudge(v_ms, v_other);
+      raise exception 'FAIL a nudge reached somebody who is not on the project';
+    exception
+      when others then
+        if sqlerrm like 'FAIL%' then raise; end if;
+    end;
+    raise notice '  ok   a nudge cannot reach somebody who is not on the project';
+  end if;
+
+  -- ── An unknown obligation is refused ───────────────────────────────────
+  begin
+    perform public.nudge(gen_random_uuid(), coalesce(v_author, v_org));
+    raise exception 'FAIL an unknown obligation was accepted';
+  exception
+    when others then
+      if sqlerrm like 'FAIL%' then raise; end if;
+  end;
+  raise notice '  ok   an unknown obligation is refused';
+
+  -- ── A met obligation is not nudged ─────────────────────────────────────
+  --
+  -- The screen reads a list and a row can be met between the render and the
+  -- click. A nudge about a signed form is the message that teaches somebody
+  -- to ignore the rest.
+  declare
+    v_done uuid;
+  begin
+    select em.id into v_done
+      from public.entry_milestones em
+     where em.completed_on is not null
+     limit 1;
+
+    if v_done is not null then
+      select a.user_id into v_author
+        from public.entry_milestones em
+        join public.participations pt on pt.id = em.participation_id
+        join public.project_authors a on a.project_id = pt.project_id
+       where em.id = v_done and a.role = 'author'
+       limit 1;
+
+      if v_author is not null then
+        if public.nudge(v_done, v_author) <> 'done' then
+          raise exception 'FAIL a met obligation was nudged anyway';
+        end if;
+        raise notice '  ok   a met obligation is not nudged';
+      end if;
+    end if;
+  end;
+
+  -- ── One per obligation per week, from the index rather than the UI ─────
+  select a.user_id into v_author
+    from public.project_authors a
+    join public.participations pt on pt.project_id = a.project_id
+   where pt.id = v_part and a.role = 'author'
+   limit 1;
+
+  if v_author is not null then
+    v_answer := public.nudge(v_ms, v_author);
+
+    if v_answer not in ('sent', 'self') then
+      raise exception 'FAIL the first nudge returned %', v_answer;
+    end if;
+
+    if v_answer = 'sent' then
+      if public.nudge(v_ms, v_author) <> 'already' then
+        raise exception 'FAIL the same obligation was nudged twice in one week';
+      end if;
+      raise notice '  ok   one nudge per obligation per week';
+
+      select count(*) into v_n
+        from public.notifications
+       where kind in ('nudge', 'nudge_officer') and subject_id = v_ms;
+
+      if v_n <> 1 then
+        raise exception 'FAIL % nudge rows written for one obligation', v_n;
+      end if;
+
+      -- ── The count is readable, which is the point ──────────────────────
+      select nudges into v_n from public.nudge_state(v_part) where milestone_id = v_ms;
+
+      if coalesce(v_n, 0) <> 1 then
+        raise exception 'FAIL nudge_state reported % rather than 1', coalesce(v_n, 0);
+      end if;
+      raise notice '  ok   the count is readable from nudge_state';
+    end if;
+  end if;
+end $body$;
+
 \echo ''
 \echo '  All function assertions passed.'

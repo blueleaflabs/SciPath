@@ -56,6 +56,15 @@ export const NON_TENANT_TREES = [
      an overlap now rather than trusting whoever adds the next school. */
   'try',
   'for-organizations',
+  /* **A guardian is not a tenant's visitor.**
+  
+     `/consent/{token}/` is followed from an email by somebody with no
+     account and no idea which subdomain they are on. Left tenant scoped it
+     would be rewritten to `/{org}/consent/…`, which matches no route,
+     and the one page in the system whose reader cannot recover from a dead
+     link would be the page that 404s. The token names the organization; the
+     URL does not have to. */
+  'consent',
 ] as const;
 
 export type NonTenantTree = (typeof NON_TENANT_TREES)[number];
