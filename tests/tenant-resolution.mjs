@@ -152,6 +152,21 @@ if (offenders.length > 0) {
   const at = code.indexOf(anchor);
   const occurrences = code.split(anchor).length - 1;
 
+  /* **The path does not cross the boundary.**
+
+     The redirect carried `url.pathname`, so `/app/project/abc/` at one tenant
+     became `/app/project/abc/` at another — an id from a namespace that
+     tenant does not have. RLS refuses it, so nothing leaks, but somebody
+     lands on a dead page immediately after a redirect they did not ask for.
+     `/app/` is the only path that means the same thing in every tenant. */
+  const redirect = code.match(/originForOrg\(home\)\}[^`]*/);
+
+  if (!redirect) {
+    problems.push('cannot find the redirect to the account\u2019s own school');
+  } else if (/url\.pathname/.test(redirect[0])) {
+    problems.push('the redirect must not carry the path across a tenant boundary');
+  }
+
   if (occurrences !== 1) {
     problems.push(
       `cannot locate the membership branch: "${anchor}" appears ${occurrences} times`

@@ -37,6 +37,12 @@ const supabase = account
    src/lib/post-redirect.ts. */
 let { error: error2, note: attached } = outcomeFrom(Astro.url);
 
+/* Set by the middleware when it sends somebody from another school's address
+   to their own. Compared against this tenant's slug rather than merely being
+   present, so a link somebody pastes with `?at=` on the wrong tenant says
+   nothing. */
+const switchedHome = Astro.url.searchParams.get('at') === (Astro.locals as any).orgSlug;
+
 /**
  * Two different people post to this page, and the guard is per action.
  *
@@ -1010,6 +1016,24 @@ const grouped = () => {
       {error2 && <p class="note flash" role="alert">{error2}</p>}
     </div>
     {attached && <p class="note flash" role="status">{attached}</p>}
+
+    {/* **Why the address changed.**
+    
+        An account belongs to one school, so signing in at another school's
+        address sends somebody home. That redirect used to be silent: you
+        typed one hostname, arrived at a different one, and nothing said why.
+        Somebody who does not notice keeps the wrong bookmark; somebody who
+        does notice assumes it went wrong.
+    
+        The parameter is a slug and is never rendered. `org.name` is read from
+        the tenant this page already resolved, so what appears is the school's
+        own name — a query string cannot put text on the screen. */}
+    {switchedHome && (
+      <p class="note flash" role="status">
+        Signed in at {org.name}. Your account is here, so that is where this
+        address takes you.
+      </p>
+    )}
 
     {configured && !session && (
       <section class="hero">

@@ -484,12 +484,30 @@ const handle = async (context: any, next: any) => {
     clearSessionHint(context.cookies);
 
     if (url.pathname.startsWith(GUARDED)) {
-      /* Their own school, at the same path. A refusal would be correct and
-         useless: the software knows which address works, so sending them
-         there is cheaper than explaining. */
+      /**
+       * Their own school, and **not the path they were on**.
+       *
+       * This carried `url.pathname` across, which is wrong the moment a path
+       * contains a resource id: `scipath.org/app/project/abc/` became
+       * `montavista.scipath.org/app/project/abc/`, and that project id
+       * belongs to the platform tenant's namespace. Row level security
+       * refuses it, so nothing leaks — but somebody lands on a dead page
+       * immediately after a redirect they did not ask for, which reads as
+       * the software being broken rather than as being sent home.
+       *
+       * `/app/` is the only destination that means the same thing in every
+       * tenant.
+       *
+       * **And it says so on arrival.** The redirect was silent: you typed one
+       * address, arrived at another, and nothing explained it. Somebody who
+       * does not notice keeps the wrong bookmark forever; somebody who does
+       * notice assumes something went wrong. The slug is passed so the
+       * landing page can name the school — read back through `orgs`, so what
+       * is rendered is the organization's own name and never the parameter.
+       */
       const home = accountSlug ? orgs[accountSlug] : null;
       if (home) {
-        return context.redirect(`${originForOrg(home)}${url.pathname}${url.search}`);
+        return context.redirect(`${originForOrg(home)}/app/?at=${accountSlug}`);
       }
       return context.redirect('/');
     }
