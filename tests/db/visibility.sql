@@ -44,6 +44,7 @@ insert into public.users (id, org_id, display_name, consent_state) values
  ('a0000000-0000-0000-0000-000000000001','11111111-1111-1111-1111-111111111111','Author one','not_required'),
  ('a0000000-0000-0000-0000-000000000002','11111111-1111-1111-1111-111111111111','Fair officer','not_required'),
  ('a0000000-0000-0000-0000-000000000003','11111111-1111-1111-1111-111111111111','Elder','not_required'),
+ ('a0000000-0000-0000-0000-00000000000a','11111111-1111-1111-1111-111111111111','Elder two','not_required'),
  ('a0000000-0000-0000-0000-000000000004','11111111-1111-1111-1111-111111111111','Advisor','not_required'),
  ('a0000000-0000-0000-0000-000000000005','11111111-1111-1111-1111-111111111111','Graduated officer','not_required'),
  ('a0000000-0000-0000-0000-000000000006','11111111-1111-1111-1111-111111111111','Another student','not_required'),
@@ -63,7 +64,10 @@ insert into public.user_roles (org_id, user_id, role, scope_id) values
  ('11111111-1111-1111-1111-111111111111','a0000000-0000-0000-0000-000000000004','advisor',null),
  -- Last year's officer. Their edition has ended and nothing has re-granted.
  ('11111111-1111-1111-1111-111111111111','a0000000-0000-0000-0000-000000000005','officer','b0000000-0000-0000-0000-000000000001'),
- ('11111111-1111-1111-1111-111111111111','a0000000-0000-0000-0000-000000000006','student',null);
+ ('11111111-1111-1111-1111-111111111111','a0000000-0000-0000-0000-000000000006','student',null),
+ -- A second Elder of the same class. Without one, "another Elder's project"
+ -- cannot be written down, and the clause that refuses it cannot be tested.
+ ('11111111-1111-1111-1111-111111111111','a0000000-0000-0000-0000-00000000000a','officer','b0000000-0000-0000-0000-000000000003');
 
 -- One project per case, each with its own author, because a student may only
 -- be entered once in a program.
@@ -93,6 +97,27 @@ insert into public.participations (org_id, project_id, program_id) values
  ('11111111-1111-1111-1111-111111111111','c0000000-0000-0000-0000-000000000005','b0000000-0000-0000-0000-000000000002'),
  ('11111111-1111-1111-1111-111111111111','c0000000-0000-0000-0000-000000000005','b0000000-0000-0000-0000-000000000003');
 
+-- ── Oversight, which names a participation rather than a project ───────────
+--
+-- Every project above is unattended, and that is why an officer clause
+-- scoped to the whole program passed every assertion in this file for as
+-- long as it did: with nobody attached anywhere, "attached to it, or nobody
+-- is" and "in my program" agree on every row.
+--
+-- `Elder` takes the course project. That single row is what makes the two
+-- rules disagree, and it is the case the screen was getting wrong: an Elder
+-- reading a colleague's students.
+insert into public.project_authors (org_id, project_id, participation_id, user_id, role, accepted_at)
+select '11111111-1111-1111-1111-111111111111',
+       e.project_id,
+       e.id,
+       'a0000000-0000-0000-0000-000000000003',
+       'officer',
+       now()
+  from public.participations e
+ where e.project_id = 'c0000000-0000-0000-0000-000000000002'
+   and e.program_id = 'b0000000-0000-0000-0000-000000000003';
+
 -- ── The assertions ─────────────────────────────────────────────────────────
 
 create or replace function pg_temp.sees(p_user uuid, p_project uuid) returns boolean
@@ -114,6 +139,22 @@ declare
 begin
   select id into v_user from public.users where display_name = p_user;
   select id into v_project from public.projects where title = p_project;
+
+  -- **A name that does not resolve must not pass.**
+  --
+  -- A misspelled person gives a null uuid, `sees` sets the jwt subject to
+  -- null, and `can_see_project` answers false — so every assertion expecting
+  -- false passes without testing anything, and it passes for the rest of the
+  -- file's life. The assertions most worth having here are the negative ones,
+  -- which makes this exactly the wrong place for a silent null.
+  if v_user is null then
+    raise exception 'FAIL %: there is no person called "%"', p_what, p_user;
+  end if;
+
+  if v_project is null then
+    raise exception 'FAIL %: there is no project called "%"', p_what, p_project;
+  end if;
+
   v_actual := pg_temp.sees(v_user, v_project);
 
   if v_actual is distinct from p_expected then
@@ -194,6 +235,35 @@ select pg_temp.expect('an officer does not, because it is in no program',
 
 select pg_temp.expect('and another school never does',
   'Other school student', 'In no program at all', false);
+
+-- 8: an officer sees what they look after, and what nobody looks after.
+--
+-- A role over a program is standing to *take* work, not standing over work
+-- somebody else took. The screen showed an Elder `0 in your care` and then
+-- listed twelve projects, and both were accurate.
+
+select pg_temp.expect('the Elder who took it sees it',
+  'Elder', 'Course project', true);
+
+select pg_temp.expect('another Elder of the same class does not',
+  'Elder two', 'Course project', false);
+
+-- The half that is load bearing rather than a courtesy. Without it an officer
+-- cannot see an unassigned project, so cannot pick one up, and the
+-- `No officer` queue comes back empty for exactly the people meant to empty
+-- it. `Private, this year` is in the fair and has no officer attached.
+select pg_temp.expect('an officer still sees a project nobody has taken',
+  'Fair officer', 'Private, this year', true);
+
+-- The advisor is answered before the officer clause is reached, and a
+-- teacher's duty of care does not narrow to the projects she was assigned.
+select pg_temp.expect('the advisor still sees a project an Elder took',
+  'Advisor', 'Course project', true);
+
+-- Authorship is independent of every role, so narrowing the officer clause
+-- must not have reached it.
+select pg_temp.expect('the author still sees their own',
+  'Author two', 'Course project', true);
 
 \echo ''
 \echo '  All visibility assertions passed.'

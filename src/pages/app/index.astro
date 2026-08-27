@@ -712,23 +712,64 @@ if (supabase && account) {
            two cells to the left, and a button reading "Nudge Priya
            Raghunathan" is a button that sets the width of the table. */
         nudgeTo: (() => {
-          /* An officer who is not self managing, then an author. A
-             self-managed row is the author wearing the oversight hat, so
-             preferring it would address the nudge to the person it is
-             about. */
-          const who =
-            officers.find(
-              (o: any) => !o.self_managed_at && o.users?.id && o.users.id !== account?.id
-            ) ??
-            projectAuthors.find((a: any) => a.users?.id && a.users.id !== account?.id) ??
-            null;
+          /**
+           * **WHO MAY BE NUDGED DEPENDS ON WHO IS ASKING.**
+           *
+           * This picked the Elder wherever one existed, whoever was looking.
+           * An Elder reading the class therefore got *Nudge dm_officer2* on
+           * a project another Elder oversees — officer nudging officer, which
+           * is not one of the two arrangements that exist:
+           *
+           *   A teacher nudges the Elder, or the student.
+           *   An Elder nudges the students on the participations they oversee.
+           *
+           * `public.nudge` already refused it — the caller must be the
+           * advisor or the officer attached to that participation — so the
+           * button was offering an action guaranteed to fail. A control that
+           * cannot succeed is worse than no control: it reads as a permission
+           * somebody has, right up until they use it.
+           *
+           * A self-managed officer row is the author wearing the oversight
+           * hat, so it is skipped rather than preferred: addressing the
+           * nudge there sends it to the person it is about.
+           */
+          const elder = officers.find(
+            (o: any) => !o.self_managed_at && o.users?.id && o.users.id !== account?.id
+          );
+          const student = projectAuthors.find(
+            (a: any) => a.users?.id && a.users.id !== account?.id
+          );
 
-          if (!who?.users?.id) return null;
+          /* An advisor reaches the whole program, so the Elder is the right
+             default: chasing through whoever looks after the project is the
+             point of having assigned one. */
+          if (me.isAdvisor || me.anywhere) {
+            const who = elder ?? student ?? null;
+            return who?.users?.id
+              ? {
+                  id: who.users.id,
+                  first: String(who.users.display_name ?? '').split(' ')[0] || 'them',
+                }
+              : null;
+          }
 
-          return {
-            id: who.users.id,
-            first: String(who.users.display_name ?? '').split(' ')[0] || 'them',
-          };
+          /* An officer, and only for what they oversee. Attachment is a row
+             on this participation, not a role over the program — which is
+             the same distinction `reachesProgram` draws, and the reason an
+             Elder sees a colleague's project without being able to act on
+             it. */
+          const attached = officers.some(
+            (o: any) => o.users?.id && o.users.id === account?.id
+          );
+
+          if (!attached) return null;
+
+          return student?.users?.id
+            ? {
+                id: student.users.id,
+                first: String(student.users.display_name ?? '').split(' ')[0] || 'them',
+              }
+            : null;
         })(),
 
         /* **The one fact the table never showed.**

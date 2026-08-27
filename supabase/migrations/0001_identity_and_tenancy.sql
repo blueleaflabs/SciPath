@@ -3245,6 +3245,31 @@ as $$
     -- is answered in full by `app.is_advisor()` above, scope or none. It read
     -- `('officer', 'mentor')`, and a role the check constraint refuses adds
     -- nothing but the impression that teachers are handled here.
+    --
+    -- **THE ONES THEY LOOK AFTER, AND THE ONES NOBODY DOES.**
+    --
+    -- Holding an officer role in a program used to be the whole of this
+    -- clause, so every Elder of a class could read every project in it. The
+    -- screen said `0 in your care` and then listed twelve, and both were
+    -- accurate: an Elder saw her colleagues' students, and the nudge control
+    -- offered her an action the function would refuse.
+    --
+    -- Oversight names a participation (22.18). A role over a program is
+    -- standing to *take* work, not standing over work somebody else took, so
+    -- the two halves below are the whole rule:
+    --
+    --   attached to this participation, or nobody is.
+    --
+    -- The second half is load bearing and not a courtesy. Without it an
+    -- officer cannot see an unassigned project, so cannot pick one up, and
+    -- the `No officer` filter — the one queue whose entire purpose is work
+    -- nobody has taken — would come back empty for exactly the people meant
+    -- to empty it. `assign_officer` gates on `app.is_staff()` rather than on
+    -- seeing the project, so the taking itself keeps working either way; what
+    -- would break is finding anything to take.
+    --
+    -- Advisors are untouched. They are answered above, and a teacher's duty
+    -- of care does not narrow to the projects she happened to be assigned.
     or exists (
       select 1
         from public.participations e
@@ -3265,6 +3290,25 @@ as $$
          and (
            not (select p.is_private from public.projects p where p.id = p_project_id)
            or theirs.id = mine.id
+         )
+         and (
+           -- Attached to it.
+           exists (
+             select 1
+               from public.project_authors a
+              where a.participation_id = e.id
+                and a.user_id = auth.uid()
+                and a.role = 'officer'
+           )
+           -- Or nobody is. Read against this participation rather than the
+           -- project, because a project in a class and a fair has two of
+           -- them and an Elder of the class has no standing over the fair's.
+           or not exists (
+             select 1
+               from public.project_authors a
+              where a.participation_id = e.id
+                and a.role = 'officer'
+           )
          )
     );
 $$;
