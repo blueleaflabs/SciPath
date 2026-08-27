@@ -25,12 +25,35 @@ import { requireDocker } from './docker.mjs';
 
 const applied = loadDevVars();
 
-/* Before anything is spawned. The local stack is containers, and the CLI's
-   answer to a missing daemon names the socket it could not open rather than
-   the application that is not running — which is the same failure mode as
-   `invalid_client` above, reported by the layer that noticed instead of the
-   layer that knows what it means. See scripts/docker.mjs. */
-requireDocker();
+/**
+ * **BEFORE ANYTHING IS SPAWNED, AND ONLY FOR THE LOCAL STACK.**
+ *
+ * The local stack is containers, and the CLI's answer to a missing daemon
+ * names the socket it could not open rather than the application that is not
+ * running — the same failure mode as `invalid_client` above, reported by the
+ * layer that noticed instead of the layer that knows what it means.
+ *
+ * **This ran unconditionally, and that was wrong.** The note here claimed
+ * every command routed through this file needs the local stack, and listed
+ * the ones in `package.json` as evidence. `reset-cloud.mjs` also spawns this
+ * file — for `db reset --linked`, which targets the hosted project and needs
+ * no container at all — and it was not in that list because the list was
+ * read off the wrong source. So a cloud reset stopped partway through, after
+ * the confirmation, with a message telling somebody to start Docker Desktop
+ * for a command that never wanted it.
+ *
+ * That is the exact failure the diagnosis in `api-ready.mjs` was written to
+ * avoid: a wrong answer sends somebody to fix the wrong thing, and when that
+ * changes nothing they conclude the tool is broken.
+ *
+ * `--linked` is the discriminator, and it is the CLI's own vocabulary rather
+ * than a list of subcommands this repository maintains. A list would have
+ * grown a case the next time a script spawned this file, which is precisely
+ * what just happened.
+ */
+if (!process.argv.includes('--linked')) {
+  requireDocker();
+}
 
 /* Named once, because a missing one produces an error from Google rather than
    from here, and nothing in that error says which variable is absent. */

@@ -391,6 +391,43 @@ test('the Supabase wrapper asks about Docker before it spawns anything', () => {
     guard < spawned,
     'requireDocker() must run before the CLI is spawned, or the CLI reports first'
   );
+
+  /* **And not for a command that targets the hosted project.**
+
+     The pre-flight ran unconditionally on the reasoning that every command
+     routed through this file needs the local stack. That reasoning read the
+     command list off `package.json` and missed `reset-cloud.mjs`, which
+     spawns this file for `db reset --linked` — a command that needs no
+     container. A cloud reset stopped after its confirmation with a message
+     about starting Docker Desktop.
+
+     `--linked` is the CLI's own word for the remote project, so this is not
+     a list of exempt subcommands that grows a case each time somebody
+     forgets one. It is the same fact the CLI itself reads. */
+  const code = text.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/^\s*\/\/.*$/gm, ' ');
+
+  assert.match(
+    code,
+    /--linked[\s\S]{0,120}requireDocker\(\)/,
+    'the Docker pre-flight must be skipped for a --linked command'
+  );
+});
+
+test('the cloud reset does not ask for a container it does not need', () => {
+  /* Asserted from the caller's side as well, because the two files have to
+     agree and only one of them was checked. `reset-cloud` passing something
+     other than `--linked` would walk straight past the condition above while
+     that condition still reads correctly on its own. */
+  const cloud = fs.readFileSync('scripts/reset-cloud.mjs', 'utf8');
+  const spawnsLocal = /supabase\.mjs'[^\]]*\]/g;
+
+  for (const call of cloud.match(spawnsLocal) ?? []) {
+    assert.match(
+      call,
+      /--linked/,
+      `reset-cloud spawns the CLI without --linked: ${call.trim()}`
+    );
+  }
 });
 
 test('every module a script imports can actually be loaded by node', () => {

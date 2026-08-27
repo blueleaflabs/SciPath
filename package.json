@@ -73,6 +73,7 @@
     "test:probes": "bash tests/db/probes.sh",
     "seed:orgs": "node scripts/seed-orgs.mjs",
     "seed:people": "node scripts/seed-people.mjs",
+    "who": "node scripts/who.mjs",
     "reset:cloud": "node scripts/reset-cloud.mjs",
     "verify:cloud": "node scripts/reset-cloud.mjs --verify",
     "wipe:demo": "node scripts/wipe-demo.mjs",
