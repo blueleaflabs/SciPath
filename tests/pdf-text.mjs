@@ -93,4 +93,53 @@ test('a long string of symbols is not, however long', () => {
   assert.equal(worthIndexing({ text: noise, streams: 2, skipped: 0 }), false);
 });
 
+/* ── What a database can actually hold ──────────────────────────────────── */
+
+/**
+ * The one that stopped a seed.
+ *
+ * Postgres cannot store a NUL in a `text` column, so a JSON body carrying
+ * `\u0000` is refused with *unsupported Unicode escape sequence* — an error
+ * about the encoding that says nothing about the file. Eight of the twenty
+ * three papers in the back catalogue carry NULs and all twenty three carry
+ * some C0 byte, because a subset font's glyph indices are small integers and
+ * the extractor decodes streams as latin1.
+ *
+ * Removed in `tidy` rather than in the caller that hit it: `manuscript.astro`
+ * stores this same text when a student uploads a paper, and would have met
+ * the same refusal with less to go on.
+ */
+test('a NUL never survives, because a text column cannot hold one', () => {
+  const withNul = 'Survival at thirty two degrees\u0000 fell to forty one percent.';
+  const cleaned = tidy(withNul);
+
+  assert.ok(!cleaned.includes('\u0000'), 'a NUL survived tidying');
+  assert.equal(cleaned, 'Survival at thirty two degrees fell to forty one percent.');
+});
+
+test('the other C0 debris goes with it, and tab and newline stay', () => {
+  const raw = 'one\u0001two\u0008three\u000Bfour\u001Ffive\u007Fsix';
+  assert.equal(tidy(raw), 'onetwothreefourfivesix');
+
+  /* Kept, because every rule after the strip is about them. */
+  assert.equal(tidy('a\tb'), 'a b');
+  assert.equal(tidy('a\nb'), 'a b');
+});
+
+/**
+ * The strip must not rescue a failed extraction into the index.
+ *
+ * Taking control characters out raises the letter ratio `worthIndexing`
+ * measures, so a font program full of binary could in principle cross the
+ * threshold by being cleaned. Measured against the real archive rather than
+ * reasoned about: the split before and after the change is the same seventeen
+ * and six, and the six sit at 0.18 to 0.47 rather than near the 0.6 line.
+ */
+test('cleaning does not turn a failed extraction into an indexable one', () => {
+  const binary = Array.from({ length: 400 }, (_, i) => String.fromCharCode(i % 32)).join('');
+  const noise = tidy(binary + 'X++?+?+?'.repeat(60));
+
+  assert.equal(worthIndexing({ text: noise, streams: 8, skipped: 0 }), false);
+});
+
 console.log(`${passed} pdf text assertions passed.`);

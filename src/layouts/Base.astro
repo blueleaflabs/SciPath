@@ -42,7 +42,7 @@ const pageTitle = `${title} · ${org.name}`;
  * still a real address, and stripping against the whole set rather than
  * against the one would take it apart.
  */
-const slugPrefix = `/${org.id}`;
+const slugPrefix = `/${org.slug}`;
 const path =
   Astro.url.pathname === slugPrefix
     ? '/'
@@ -55,7 +55,7 @@ const fontHref = themeFonts[org.theme];
 ---
 
 <!doctype html>
-<html lang="en" data-theme={org.theme} data-school={org.id}>
+<html lang="en" data-theme={org.theme} data-school={org.slug}>
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />

@@ -28,7 +28,7 @@
 # would fail as a leak. It also has to be legible on screen — somebody looking
 # at a demonstration should be able to tell it is one.
 
-id: demo
+slug: demo
 
 name: Monta Vista Demo
 mark: MVD

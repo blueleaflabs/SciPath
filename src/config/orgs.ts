@@ -46,8 +46,8 @@ export const orgs: Record<string, Org> = {};
 
 for (const [path, text] of Object.entries(files)) {
   const doc = yaml.load(text) as any;
-  if (!doc?.id) throw new Error(`${path} has no id`);
-  orgs[doc.id] = shapeOrg(doc);
+  if (!doc?.slug) throw new Error(`${path} has no slug`);
+  orgs[doc.slug] = shapeOrg(doc);
 }
 
 /**

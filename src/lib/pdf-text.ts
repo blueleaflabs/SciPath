@@ -132,16 +132,39 @@ export function textFromContentStream(content: string): string {
 
 /** Whitespace, hyphenation at line ends, and the debris of a bad extraction. */
 export function tidy(text: string): string {
-  return text
-    .replace(/\r/g, '\n')
+  return (
+    text
+      /**
+       * **Control characters, and a NUL is the one that matters.**
+       *
+       * Postgres cannot hold a NUL in a `text` column at all: a JSON body
+       * carrying `\u0000` is refused with *unsupported Unicode escape
+       * sequence*, which names the encoding and not the file, so the error
+       * arrives with no clue which of twenty three papers produced it.
+       *
+       * They get here honestly. The extractor decodes streams as latin1 and
+       * walks the text-showing operators, and a subset font's glyph indices
+       * are ordinary small integers — eight of these papers carry NULs and
+       * every one of the twenty three carries some C0 byte. It is debris of
+       * exactly the kind this function exists to remove, which is why it
+       * belongs here and not in the one caller that happened to hit it: the
+       * upload path in `manuscript.astro` stores this same text, and a
+       * student uploading the wrong PDF would have met the same refusal with
+       * even less to go on.
+       *
+       * Tab and newline are kept, because the rules below are about them.
+       */
+      .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, '')
+      .replace(/\r/g, '\n')
     /* A word broken across a line break, which is most of the nonsense words
        an unprocessed extraction produces. */
-    .replace(/([a-z])-\n\s*([a-z])/g, '$1$2')
-    .replace(/[ \t]+/g, ' ')
-    .replace(/\n{2,}/g, '\n')
-    .replace(/ ?\n ?/g, ' ')
-    .replace(/[^\S\n]{2,}/g, ' ')
-    .trim();
+      .replace(/([a-z])-\n\s*([a-z])/g, '$1$2')
+      .replace(/[ \t]+/g, ' ')
+      .replace(/\n{2,}/g, '\n')
+      .replace(/ ?\n ?/g, ' ')
+      .replace(/[^\S\n]{2,}/g, ' ')
+      .trim()
+  );
 }
 
 export interface Extraction {

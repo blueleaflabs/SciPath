@@ -70,7 +70,7 @@ export function demoOnlySlugs() {
   return new Set(
     Object.values(loadOrgs())
       .filter((org) => org.demo === true)
-      .map((org) => org.id)
+      .map((org) => org.slug)
   );
 }
 

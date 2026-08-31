@@ -18,8 +18,23 @@
 import type { ThemeId } from './fonts';
 
 export interface Org {
-  /** Stable identifier. Becomes the organizations.slug. Never reused. */
-  id: string;
+  /**
+   * Stable identifier, and the same string as `organizations.slug`.
+   *
+   * **Named `slug` rather than `id`, because it was `id` and that cost an
+   * archive.** A seed reading its organization out of the database also has
+   * an `org.id`, and that one is the uuid primary key. Both were spelled
+   * `org.id`, so `seed-publish` and `seed-journal` wrote every record under
+   * `records/<uuid>/` while every page read `records/<slug>/`, and the
+   * showcase said *Nothing published yet* about a full archive. Nothing threw
+   * and nothing was logged, because an absent manifest is answered with an
+   * empty one so a corrupt file cannot take the archive down.
+   *
+   * The two values are spelled differently everywhere now, which is the fix.
+   * `prefixFor` still refuses a uuid, and that is not the same rule twice:
+   * the seeds are plain `.mjs` and no type reaches them.
+   */
+  slug: string;
   /**
    * The subdomain that resolves this tenant, where it differs from the slug.
    *
@@ -122,7 +137,7 @@ export interface Org {
  */
 export function shapeOrg(doc: any): Org {
   return {
-    id: doc.id,
+    slug: doc.slug,
     subdomain: doc.subdomain,
     signupMode: doc.signup_mode,
     requiresMentor: doc.requires_mentor,

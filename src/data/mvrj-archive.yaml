@@ -1,0 +1,1210 @@
+# ===========================================================================
+# THE MONTA VISTA RESEARCH JOURNAL BACK CATALOGUE.
+#
+# Twenty nine articles published between October 2020 and July 2024 on
+# sites.google.com/view/mvrj, transcribed here so they can be loaded as
+# permanent records by `scripts/seed-journal.mjs`. Section 4 of the design
+# brief is the survey this comes from; `mvrj-migration-inventory.csv` is the
+# recovery sheet that runs alongside it.
+#
+# **Twenty nine, not twenty eight.** Section 4.1 says twenty eight unique
+# articles and then lists a year breakdown that sums to twenty nine, and the
+# inventory has twenty nine rows. The Tanisha Sood paper is listed twice on
+# the current site and appears once here, so the duplicate is not the
+# difference. Twenty nine is what the page holds.
+#
+# ── What is verbatim and what is ours ─────────────────────────────────────
+#
+# **Titles, bylines, dates and abstracts are the authors' and are copied
+# exactly.** Where a title was stored wrongly the corrected form is `title`
+# and the published form is kept beside it in `title_as_published`, so the
+# change is visible rather than silent. Two articles have no abstract on the
+# current site and carry `abstract: null`; an abstract is the author's to
+# supply and nothing here invents one.
+#
+# **Discipline and keywords are the journal's classification** and are a
+# first pass to be reviewed. Discipline names the domain of the question,
+# never the method (8.2), which is why a dozen machine learning papers land
+# in eight different fields.
+#
+# ── Licence ───────────────────────────────────────────────────────────────
+#
+# Every record is `All rights reserved`, set in the loader rather than here
+# because it is the same answer for all of them. None of these authors was
+# ever asked to choose a licence, and putting CC BY on a paper on their
+# behalf grants the world redistribution rights they did not give. A licence
+# is changed per record when an author asks for one.
+#
+# ── Publishing and holding ────────────────────────────────────────────────
+#
+# A record loads unless it carries `publish: false`, and every held record
+# says why in `hold_reason`. Three are held, all on decisions section 4
+# leaves open: one politically sensitive subject and two studies with human
+# participants. Releasing one is a single line.
+#
+# `prior_venue` is not a hold. Where a paper appeared somewhere first the
+# record carries the venue and publishes as metadata and an abstract, which
+# is the landing page 4.4 describes. Open decision 4 governs the full text,
+# so the loader refuses to attach a PDF to a record with a prior venue until
+# that is settled.
+#
+# `source_pdf` is the filename on the current site. It is how a recovered
+# file is matched to its record and is not itself a claim that the file has
+# been recovered.
+#
+# ── The papers ────────────────────────────────────────────────────────────
+#
+# The files live in `local-data/mvrj-pdfs/`, gitignored, because they are
+# students' work rather than source code and a takedown must not be a history
+# rewrite. Twenty three of the twenty nine are recovered; the other six were
+# too large to hand over and are named in `tests/journal.mjs`. A record with
+# no file publishes as its abstract and metadata, which is a working record
+# and not a placeholder.
+#
+# A record with a `prior_venue` does not take its file even when one is
+# present. Open decision 4 is the version of record, and the abstract with the
+# venue named is the landing page 4.4 describes.
+# ===========================================================================
+
+records:
+- seq: 1
+  slug: qvista-quantum-vision-transformer-alzheimers
+  title: 'QViSTA: A Novel Quantum Vision Transformer for Early Multi-Stage Alzheimer''s
+    Diagnosis Using Optimized Variational Quantum Circuits'
+  authors:
+  - name: Aryan Singhal
+    school: Monta Vista High School
+  - name: Hursh Shah
+    school: Monta Vista High School
+  published_on: '2024-07-01'
+  date_precision: month
+  discipline: neuroscience
+  keywords:
+  - Alzheimer's disease
+  - quantum machine learning
+  - vision transformer
+  - MRI
+  - diagnosis
+  abstract: >-
+    Magnetic resonance imaging (MRI) is widely used by neurologists to detect
+    brain abnormalities such as strokes, tumors, and various forms of dementia,
+    including Alzheimer's disease. However, accurately diagnosing the different
+    stages of Alzheimer's disease remains a challenge, with nearly one in five
+    patients misdiagnosed due to symptom overlap with other conditions. This paper
+    introduces QViSTA, a novel hybrid quantum vision transformer (QViT) model
+    that exploits quantum parallelism to improve early diagnosis and differentiation
+    of Alzheimer's disease stages. By integrating quantum variational circuits
+    (VQCs) with vision transformers (ViTs), QViSTA addresses the data scalability
+    and computational efficiency limitations of classical machine learning models.
+    Using a balanced, multi-class dataset of 40,000 MRI images, QViSTA achieved
+    a validation area under the receiver operating characteristic (AUC) of 87.86%
+    and a test AUC of 86.67%, closely matching the performance of a benchmarked
+    classical ViT while reducing feature space by 3.18%. Early and accurate detection
+    of Alzheimer's disease is critical, as it allows for timely interventions
+    that can significantly improve the quality of life for patients and their
+    caregivers. As more hospitals adopt AI for biomedical imaging, QViSTA's innovative
+    approach could dramatically reduce misdiagnosis rates, improve patient outcomes,
+    and reduce costs.
+  source_pdf: QViSTA.pdf
+- seq: 2
+  slug: pediatric-seizure-detection-system
+  title: 'Pediatric Seizure Detection System: A Data-Driven Approach with Predictive
+    and Generative AI Integration'
+  authors:
+  - name: Tanisha Sood
+    school: Monta Vista High School
+  published_on: '2024-06-01'
+  date_precision: month
+  discipline: neuroscience
+  keywords:
+  - epilepsy
+  - seizure detection
+  - wearable prototype
+  - pediatrics
+  - machine learning
+  abstract: >-
+    The gravity of seizures in pediatric populations cannot be overstated. From
+    the youngest infants to adolescents on the brink of adulthood, seizures disrupt
+    not only neurological functions but also the fabric of daily life. According
+    to the Centers for Disease Control and Prevention, about 470,000 children
+    in the United States have epilepsy, which is a neurological disorder characterized
+    by recurrent seizures. Drawing from personal encounters with seizures, I recognize
+    the critical need for effective seizure detection mechanisms. This study addresses
+    the challenge of detecting seizures in children, especially in environments
+    where constant supervision may not be feasible. Utilizing CAD, 3D design,
+    and machine learning algorithms, this prototype predicts a seizure onset by
+    analyzing bio data from a simulation of possible data sets carefully overviewed
+    by my pediatrician Sara MachMan. The prototype integrates insights from a
+    literature search, including the CDC publication on seizure detection, highlighting
+    brain activity, fever, and body movements as triggers. Based on these triggers
+    and thorough data analysis with a pediatrician, I was able to discover a breakthrough.
+    Despite encountering a 15% error rate from my simulated data analysis, the
+    prototype effectively alerts parents and medical professionals, demonstrating
+    its potential to reduce the unpredictability of seizures and positively impact
+    lives.
+  source_pdf: Research Paper - Tanisha.pdf
+  note: >-
+    Listed twice on the current site with identical text. Published once here.
+- seq: 3
+  slug: chitosan-nanoparticles-seed-germination-glycine-max
+  title: Utilizing Chitosan Nanoparticles To Deliver Natural Growth Promoters
+    To Optimize Seed Germination In Glycine Max
+  authors:
+  - name: Praneel Shah
+    school: Monta Vista High School
+  published_on: '2024-06-01'
+  date_precision: month
+  discipline: biology-biomedicine
+  keywords:
+  - nanoparticles
+  - chitosan
+  - soybean
+  - seed germination
+  - zinc
+  abstract: >-
+    This project aims to create biodegradable nanoparticles that deliver zinc
+    ions to the soybean plant using a slow-release mechanism, allowing for accelerated
+    seed germination without introducing synthetic materials into the environment
+    and limiting overfertilization of agricultural land. Nanoparticles were formed
+    using Ionic Gelation through an alginate pre-gel matrix. Once the nanoparticle
+    solution was formed, the solution was then diluted to concentrations of 0.25,
+    0.5, and 1 mg/mL for further testing. Nanoparticle supplementation promoted
+    shorter, thicker root growth in Glycine Max versus non-supplemented plants,
+    suggesting improved zinc uptake as traditionally applied zinc fertilizers
+    leach through the soil, requiring plants to develop longer roots to access
+    it. Optimal growth was seen at 0.25 mg/mL, where plants doubled root quantity,
+    increased root density by 74%, and shoot length by 25% under normal conditions.
+    Under drought and nutrient deficient conditions, 0.25 mg/mL plants grew similarly
+    to control conditions, suggesting nanoparticles improve water conservation
+    within the plant and uptake of nutrients present in the soil ecosystem.
+  source_pdf: MVRJ Paper_ Praneel Shah - praneel shah.pdf
+- seq: 4
+  slug: multi-source-data-fusion-flood-mapping
+  title: Multi-Source Data Fusion for Flood Mapping in Response to Climate Change
+  authors:
+  - name: Advaith Anand
+    school: Monta Vista High School
+  published_on: '2024-06-01'
+  date_precision: month
+  discipline: earth-climate
+  keywords:
+  - flood mapping
+  - synthetic aperture radar
+  - U-Net
+  - remote sensing
+  - disaster response
+  abstract: >-
+    In the context of escalating climate change impacts, precise flood mapping
+    has become crucial for effective disaster response and management. We address
+    this challenge by developing a deep learning model based on the U-Net architecture,
+    specifically tailored for rapid and accurate flood extent mapping using Synthetic
+    Aperture Radar (SAR) data from the Copernicus Sentinel-1 mission published
+    as part of IEEE 2024 GRSS data fusion challenge. Our approach leverages the
+    unique capabilities of U-Net for detailed image segmentation, combined with
+    SAR imagery, digital elevation models, land-use patterns, and historical water
+    presence data to differentiate between water and non-water surfaces accurately.
+    The model was rigorously trained and validated across a comprehensive dataset
+    representing a variety of geographic conditions and flood events. It demonstrated
+    significant advancements over traditional flood mapping techniques, achieving
+    an overall accuracy of 95% and an F1-score of 0.7. These metrics underscore
+    the model's effectiveness in accurately classifying flooded areas. Furthermore,
+    the model exhibits excellent scalability and adaptability, offering potential
+    applications beyond the initial flood mapping scope to other environmental
+    and disaster management scenarios. Our findings not only contribute to the
+    improvement of flood response strategies but also underscore the potential
+    of advanced machine learning techniques in enhancing the accuracy and efficiency
+    of environmental monitoring in the face of global climate challenges. This
+    research represents a significant step forward in the application of deep
+    learning to hydrological extremes, providing a robust tool for emergency response
+    planners and climate scientists alike.
+  prior_venue: IEEE 2024 GRSS Data Fusion Contest
+  source_pdf: Multi-Source Flood Mapping - Advaith Anand.pdf
+  note: >-
+    The abstract names the IEEE 2024 GRSS data fusion challenge. Open decision
+    4 governs whether the full text is ever attached.
+- seq: 5
+  slug: machine-learning-risk-analysis-israeli-palestinian-conflict-zones
+  title: Developing a Novel Machine Learning Based Approach for Enhanced Risk
+    Analysis in Israeli-Palestinian Conflict Zones
+  authors:
+  - name: Tashvi Bansal
+    school: Monta Vista High School
+  published_on: '2024-06-01'
+  date_precision: month
+  discipline: social-science
+  keywords:
+  - geospatial risk analysis
+  - conflict zones
+  - K-nearest neighbours
+  - bootstrapping
+  - humanitarian technology
+  abstract: >-
+    The Israeli-Palestinian conflict poses significant safety challenges for individuals
+    in affected regions. However, predictive mechanisms can help individuals navigate
+    war areas, enabling proactive decision-making necessary for tasks like traveling
+    to hospitals or obtaining food supplies. This project leverages novel machine
+    learning techniques to conduct geospatial risk analysis in these conflict
+    zones. I initially modeled fatality frequencies from geographic coordinates
+    using regression. However, drawbacks included poor user-friendliness and less-accurate
+    predictions. Thus, I explored classification models. Though the Random-Forest
+    model initially showed promising accuracy, on-field testing revealed significant
+    data imbalances. I then shifted to K-means clustering to preserve data representative
+    variance, but its dependency on fatality frequency data was impractical. Consequently,
+    I shifted to the KNN algorithm for improved data compatibility, but it necessitated
+    comprehensive data augmentation and preprocessing. To address the imbalance,
+    my initial attempt to normalize data by population failed to capture data
+    variance. Thus, I created a multi-phase bootstrapping algorithm to generate
+    data from highly imbalanced data. After evenly generating data with coordinate-offsets
+    using trigonometry to account for Earth's geometry, the points lacked spatial
+    awareness. To resolve this, I applied the Haversine formula to dynamically
+    adjust risk classifications based on proximity to higher-risk areas. I then
+    integrated the optimal KNN model (96.57% accuracy) using cross-validation
+    metrics into an application to perform on-field testing. Furthermore, the
+    app has the potential to evolve from prototype to global use, which is why
+    I'm engaging with larger companies for feature-integration into their platforms.
+    Ultimately, this project establishes a new standard for peace technology development
+    for global-conflicts.
+  source_pdf: final research paper -- tashvi bansal -- mvrj (1) - Tashvi Bansal.pdf
+  publish: false
+  hold_reason: >-
+    Open decision 6. Republishing a politically sensitive paper under a school-branded,
+    search-indexed domain with a named minor author is an editorial decision to
+    take deliberately. Set publish: true to release it.
+- seq: 6
+  slug: biological-aging-clock-dna-methylation-skeletal-muscle
+  title: Development of an Accurate Biological Aging Clock Using Machine Learning
+    Models and DNA Methylation Patterns in Skeletal Muscle
+  authors:
+  - name: Rishab Perati
+    school: Monta Vista High School
+  published_on: '2024-06-01'
+  date_precision: month
+  discipline: biology-biomedicine
+  keywords:
+  - epigenetics
+  - DNA methylation
+  - aging clock
+  - elastic net
+  - skeletal muscle
+  abstract: >-
+    Objective: A leading challenge in aging research is measuring age accurately,
+    as monitoring healthy individuals over decades to assess the effects of interventions
+    for the aging process is time and cost-prohibitive. The goal of this work
+    was to develop an accurate epigenetic skeletal muscle-based aging clock using
+    high-dimensional DNA methylation patterns to calculate chronological age.
+    Method: Genome-wide DNA methylation values from skeletal muscle tissue samples
+    from 47 individuals with 200,000 methylation sites (CpGs) per sample were
+    used for the study. Feature selection was used to narrow down CpGs. An Elastic
+    Net regression model with a Leave-One-Sample-Out Cross-Validation (LO-SAMPLE-OCV)
+    was used to evaluate feature relevance and model performance. I then implemented
+    an ensemble approach where predictions from the LO-SAMPLE-OCV process served
+    as inputs to another model using ElasticNet regression. This two-step approach
+    leverages the strengths of ElasticNet for both feature selection and meta-learning,
+    aiming to enhance predictive accuracy while also capturing the complex relationships
+    of high-dimensional data. Results & Conclusion: The model outperformed the
+    Voisin et. al. method against the performance metrics of median absolute age
+    differences (6.5 years using the Voisin method versus 1.9 years and 2.31 years
+    using the LO-SAMPLE-OCV and ensemble methods respectively) and mean age differences
+    (1.9 years using the Voisin method versus 0.26 years and -0.17 years using
+    the LO-SAMPLE-OCV and ensemble methods respectively). Impact: This tool can
+    be used to accurately predict and understand aging to develop interventions
+    for the prevention, early detection, diagnosis, and treatment of aging-related
+    diseases, including cancer.
+  source_pdf: Epigenetic Aging Paper - Rishab Perati.pdf
+- seq: 7
+  slug: deep-learning-pipeline-drought-assessment-vision-transformers
+  title: A Deep Learning Pipeline for Drought Assessment using Spatial Satellite
+    Images and Vision Transformers
+  authors:
+  - name: Aaryan Doshi
+    school: Monta Vista High School
+  published_on: '2024-06-01'
+  date_precision: month
+  discipline: earth-climate
+  keywords:
+  - drought
+  - satellite imagery
+  - vision transformer
+  - remote sensing
+  - climate adaptation
+  abstract: >-
+    700 million people are in danger of being displaced due to inept drought prediction
+    and prevention systems. Current research on drought assessment focuses solely
+    on factors such as soil moisture and rainfall, which require painstaking measurements
+    and lab samples, and can often be misleading. This research eliminates this
+    requirement by proposing an end-to-end pipeline to detect and prevent droughts
+    in at-risk areas using satellite images and vision transformers. The dataset
+    is comprised of over 86,000 satellite images labeled by pastoralists and divided
+    with an 80-20 ratio for training and validation. First, using feature filtering,
+    normalization, and a Gaussian filter, the images in the dataset are modified
+    to yield a better performance. Next, a deep vision transformer model with
+    multi-headed attention is constructed, consisting of four heads, three transformer
+    layers, and a patch size of five. The final MLP head produces logits for drought
+    severity prediction level. Overall, the best transformer model achieves 78.3%
+    accuracy in predicting drought conditions on a validation set of 10,000, unseen
+    satellite images. In addition, this method outperforms state-of-the-art convolutional
+    neural networks on this classification task, as compared to VGG-16, ResNet-50
+    and DenseNet-121 models. The model harnesses AWS cloud computing, deep vision
+    transformers, and specific image augmentation to achieve state-of-the-art
+    results in drought prediction and prevention. With this research, scientists
+    have the potential to assess droughts quickly and accurately, revolutionizing
+    our ability to provide resources and care to those affected by the increasingly
+    common droughts caused by the climate crisis worldwide.
+  source_pdf: Drought Transformer - Aaryan Doshi.pdf
+- seq: 8
+  slug: detecting-music-enjoyment-eeg-machine-learning
+  title: Detecting Music Enjoyment Level Using Electroencephalogram Signals and
+    Machine Learning Techniques
+  authors:
+  - name: Raymond Feng
+    school: Monta Vista High School
+  published_on: '2024-06-01'
+  date_precision: month
+  discipline: neuroscience
+  keywords:
+  - electroencephalography
+  - affective computing
+  - power spectral density
+  - music
+  - classification
+  abstract: >-
+    An electroencephalogram (EEG) is a non-invasive technique that records electrical
+    activity in the brain using scalp electrodes. Researchers have studied the
+    use of EEG to detect emotions and moods by collecting signals from participants
+    and analyzing how those signals correlate with their activities. In this study,
+    researchers investigated the relationship between EEG signals and music enjoyment.
+    Participants listened to music while EEG signals were collected. During the
+    signal-processing phase, power spectral densities (PSDs) were computed from
+    the signals, and dominant brainwave frequencies were extracted from the PSDs
+    to form a comprehensive feature matrix. A machine learning approach was then
+    taken to find correlations between the processed data and the music enjoyment
+    level indicated by the participants. To improve on previous research, multiple
+    machine learning models were employed, including K-Nearest Neighbors Classifier,
+    Support Vector Classifier, and Decision Tree Classifier. Hyperparameters were
+    used to fine-tune each model to further increase its performance. The experiments
+    showed that a strong correlation exists, with the Decision Tree Classifier
+    with hyperparameters yielding 85% accuracy. This study proves that EEG is
+    a reliable means to detect music enjoyment and has future applications including
+    personalized music recommendation, mood adjustment, and mental health therapy.
+  source_pdf: RaymondFeng_MusicEEG.pdf
+  publish: false
+  hold_reason: >-
+    Human participants. Section 4.4 asks that consent documentation be confirmed
+    before republication under a domain with real search visibility. Set publish:
+    true once that is on file.
+- seq: 9
+  slug: plapt-protein-ligand-binding-affinity-pretrained-transformers
+  title: 'PLAPT: Protein-Ligand Binding Affinity Prediction Using Pre-Trained
+    Transformers'
+  title_as_published: 'PLAPT: PROTEIN-LIGAND BINDING AFFINITY PREDICTION USING
+    PRE-TRAINED TRANSFORMERS'
+  authors:
+  - name: Tyler Rose
+    school: Monta Vista High School
+  - name: Nicolò Monti
+    school: null
+    byline_only: true
+  - name: Navvye Anand
+    school: null
+    byline_only: true
+  - name: Tianyu Shen
+    school: null
+    byline_only: true
+  published_on: '2024-06-01'
+  date_precision: month
+  discipline: biology-biomedicine
+  keywords:
+  - drug discovery
+  - binding affinity
+  - transfer learning
+  - ProtBERT
+  - ChemBERTa
+  abstract: >-
+    Predicting protein-ligand binding affinity is crucial for drug discovery,
+    as it enables efficient identification of drug candidates. We introduce PLAPT,
+    a novel model utilizing transfer learning from pre-trained transformers like
+    ProtBERT and ChemBERTa to predict binding affinities with high accuracy. Our
+    method processes one-dimensional protein and ligand sequences, leveraging
+    a branching neural network architecture for feature integration and affinity
+    estimation. We demonstrate PLAPT's superior performance through validation
+    on multiple datasets, achieving state-of-the-art results while requiring significantly
+    less computational resources for training compared to existing models. Our
+    findings indicate that PLAPT offers a highly effective and accessible approach
+    for accelerating drug discovery efforts.
+  source_pdf: Tyler_PLAPT.pdf
+  note: >-
+    Stored in full capitals on the current site; sentence case restored here.
+    Three co-authors appear to be outside Monta Vista and carry plain-text bylines
+    with no author page (8.10).
+- seq: 10
+  slug: watergate-accessible-computational-model-of-flooding-patterns
+  title: 'WaterGate: An Accessible Computational Model of Flooding Patterns'
+  authors:
+  - name: Navvye Anand
+    school: null
+    byline_only: true
+  - name: George Cheng
+    school: null
+    byline_only: true
+  - name: Tyler Rose
+    school: Monta Vista High School
+  published_on: '2024-06-01'
+  date_precision: month
+  discipline: earth-climate
+  keywords:
+  - computational hydrology
+  - flood modelling
+  - rational method
+  - elevation data
+  - 3D visualisation
+  abstract: >-
+    240 million people are affected by floods each year, reflecting the urgent
+    need for accessible flood prediction and detection. WaterGate is a computational
+    model that uses geographic elevation data and the rational method to predict
+    flooding patterns, generating an interactive 3D model for user accessibility.
+    Computational hydrology applies numerical methods, machine learning algorithms,
+    and computational simulations to understand, predict, and manage water resources,
+    including floods. Our project employs computational hydrology by analyzing
+    the structure of river tributaries in 2D through polygon clustering, satellite
+    imaging, and various cleaning protocols. We developed respective tributary
+    tree graphs, morphological graphs, and nodes to create a comprehensive tree
+    and 3D model. Afterward, we examine the morphology of flood plains in 3D space,
+    implementing the rational method (Q = CiA) framework with curated relief plots
+    to predict, model, and visualize flooding elevation. Then, we constructed
+    our stream order analysis, waterline delineation, and statistical analysis
+    to validate our data. Lastly, we modeled different river systems and developed
+    further extensions to increase the applicability of WaterGate to communities
+    around the world.
+  source_pdf: Tyler_Watergate.pdf
+  note: >-
+    Overlapping author set with PLAPT.
+- seq: 11
+  slug: inferring-hate-speech-trends-contemporary-tweets
+  title: Inferring Hate Speech Trends for Contemporary Tweets Using a Novel Machine
+    Learning Approach from Supervised Learning Algorithms
+  authors:
+  - name: Aryan Singhal
+    school: Monta Vista High School
+  published_on: '2023-07-01'
+  date_precision: month
+  discipline: social-science
+  keywords:
+  - hate speech
+  - social media
+  - naive Bayes
+  - natural language processing
+  - content moderation
+  abstract: >-
+    Social media platforms such as Twitter have become ubiquitous in our contemporary
+    society, providing a platform for individuals to express their opinions and
+    engage in discussions on a wide range of topics including those that are neutral
+    and controversial. However, the growing popularity of Twitter has also led
+    to an increase in the prevalence of hate speech, which raises concerns about
+    its impact on individuals and society. This research investigates hate speech
+    trends on Twitter by utilizing supervised machine learning classification,
+    specifically Naive Bayes, and employing Natural Language Processing (NLP)
+    features such as on a range of neutral and controversial topics. The study
+    compares the prevalence of hate speech in these topics and tracks such trends
+    from January 2022 to January 2023. The results show that hate speech was nearly
+    400% more prevalent in controversial topics than in neutral topics over the
+    course of the year. In addition, this research finds that controversial topics
+    are consistently more vulnerable to hate speech throughout the course of the
+    year when compared to neutral topics. To conduct this study, a Multinomial
+    Naive Bayes classification model was trained on a publicly available Twitter
+    dataset that was specifically labeled for semantic hate speech and achieved
+    an accuracy rate of 94.46%. Ultimately, the higher vulnerability of controversial
+    topics should necessitate policymakers to introduce stricter warnings or frequent
+    policy reminders to platform users. Such changes will foster a respectful
+    and inclusive platform for users, preserving their freedom of expression and
+    encouraging constructive discussions.
+  source_pdf: Aryan Singhal Research Paper 2023 - Aryan Singhal.pdf
+- seq: 12
+  slug: correcting-mislabeled-quasars-in-extragalactic-catalogs
+  title: Correcting Mislabeled Quasars in Extragalactic Catalogs
+  authors:
+  - name: Arjun Shrivastava
+    school: Monta Vista High School
+  published_on: '2023-06-01'
+  date_precision: month
+  discipline: astronomy-astrophysics
+  keywords:
+  - quasars
+  - active galactic nuclei
+  - light curves
+  - LSTM
+  - sky surveys
+  abstract: >-
+    Quasars, a type of active galactic nuclei (AGNs), are some of the brightest
+    objects in the universe. They allow astronomers to accurately observe distant
+    objects and look farther back in time, offering researchers a better understanding
+    of our universe's history. However, the X-ray and extragalactic databases
+    that catalog astronomical objects often mislabel quasars as other objects.
+    Therefore, I seek to improve these classifications by identifying quasars
+    in the Deep Fields component of the Canada-France-Hawaii Telescope Legacy
+    Survey (CFHTLS) database and cross-checking them with the extragalactic catalogs.
+    The typical method of classifying an object as a quasar is via manual visual
+    classification: examining unfolded light curves for star-like objects that
+    exhibit irregular short-term and long-term variations in brightness. Unfortunately,
+    this is time-intensive and prone to human error, so I attempted to accelerate
+    the process and boost accuracy with deep neural networks. I first visually
+    classified data of about 4,000 objects for my training set and included four
+    different filters. After preprocessing, I trained a Long Short-Term Memory
+    (LSTM) neural network with different variations of hyperparameters until I
+    achieved an accuracy of 97.5%. When I ran my model through my data, it identified
+    992 new quasars, 796 of them being actually quasars while the rest were misclassified,
+    yielding an overall binary accuracy of 80% for the entire CHFTLS Deep Field
+    database. Of the identified quasars, 14.8% of which were new quasars and 83.3%
+    were mislabeled in the NASA/IPAC Extragalactic Database (NED). Many of the
+    mislabeled quasars tended to appear as galaxies as well as unidentified sources
+    of ultraviolet or X-ray radiation. In the future, I seek to improve my model
+    for higher accuracy.
+  source_pdf: Correcting_Mislabeled_Quasars_in_Extragalactic_Catalogs_3_1.pdf
+- seq: 13
+  slug: pillar-based-overhang-generation-3d-printing
+  title: Pillar-Based Overhang Generation to Reduce Waste in 3D Printing
+  authors:
+  - name: Raymond Feng
+    school: Monta Vista High School
+  published_on: '2023-06-01'
+  date_precision: month
+  discipline: engineering-robotics
+  keywords:
+  - additive manufacturing
+  - support structures
+  - material waste
+  - algorithms
+  - 3D printing
+  abstract: >-
+    Pillar-Based Overhang Generation, or PBOG, is a novel algorithm that generates
+    support structures for 3D printing. In 3D printing, overhangs are parts in
+    midair that cannot be printed. The most popular way to overcome this issue
+    is to add support structure. The PBOG algorithm is proposed to decrease material
+    usage in support structure. The algorithm uses three steps: overhang detection,
+    vertex simplification, and pillar generation. Compared with Cura and Meshmixer,
+    results show that PBOG uses less waste and has a higher success rate. In conclusion,
+    PBOG outperforms currently popular methods Cura and Meshmixer in material
+    waste and success rate.
+  prior_venue: IYRC
+  source_pdf: IYRC_RaymondFeng_Paper_FINAL.docx - Google Docs.pdf
+  note: >-
+    Source filename references IYRC. Confirm the venue before any full text is
+    attached. Open decision 4.
+- seq: 14
+  slug: deep-learning-pose-estimation-parkinsonism-dyskinesia
+  title: Deep Learning Pose Estimation Model for Parkinsonism and Levodopa-Induced
+    Dyskinesia
+  title_as_published: Deep Learning Pose Estimation Model for Parkisonism and
+    Levodopa-Induced Dyskinesia
+  authors:
+  - name: Yashnil Saha
+    school: Monta Vista High School
+  published_on: '2023-06-01'
+  date_precision: month
+  discipline: neuroscience
+  keywords:
+  - Parkinson's disease
+  - levodopa-induced dyskinesia
+  - pose estimation
+  - UPDRS
+  - clinical rating
+  abstract: >-
+    Diagnosing Parkinson's disease is one of the largest challenges healthcare
+    systems face due to the absence of a specific test for the condition and symptoms
+    varying widely from person to person. Designing an automated model to aid
+    in early diagnosis would greatly contribute to solving this problem. Currently,
+    diagnosis for PD relies on clinical evaluation which has an error rate of
+    approximately 20%, indicating the urgent need for an automated system to be
+    developed. Levodopa is used for the treatment of Parkinson's Disease (PD)
+    but can lead to motor complications known as levodopa-induced dyskinesia (LID)
+    when taken for too long. PD and LID are evaluated according to the Unified
+    Parkinson's Disease Rating Scale (UPDRS) and Unified Dyskinesia Rating Scale
+    (UDysRS) scales, respectively, which range from 0 to 4 (0-normal, 4-severely
+    impaired). The tests are conducted by medical personnel and are very subjective.
+    The goal of this project was to design an algorithm using deep learning for
+    assessment of parkinsonism and LID using pose estimation. Two models were
+    created: a regression model to predict the clinical rating from 0 to 4 and
+    a classification model to determine whether the patient had PD or LID. During
+    the feature extraction process, 32 features were extracted per joint trajectory
+    including 15 kinematic, 16 spectral, and the convex hull of the movements.
+    Then, the two neural network models were trained on these features to be able
+    to predict their respective targets. The classification model achieved a mean
+    F1-score greater than 0.8 and the regression model attained a root mean square
+    error less than 0.550, proving that this project was a promising start in
+    the venture to automate diagnosis of Parkinson's disease.
+  source_pdf: research_paper_Yashnil_Saha.pdf
+  note: >-
+    The current site spells it Parkisonism. Corrected in the title, with the published
+    spelling kept alongside. Confirm with the author before this goes live.
+- seq: 15
+  slug: detection-of-parkinsons-disease-using-breathing-signals
+  title: Detection of Parkinson's disease using Breathing Signals
+  authors:
+  - name: Advaith Anand
+    school: Monta Vista High School
+  published_on: '2023-06-01'
+  date_precision: month
+  discipline: neuroscience
+  keywords:
+  - Parkinson's disease
+  - respiratory signals
+  - ultrasonic sensing
+  - convolutional neural network
+  - early detection
+  abstract: >-
+    Parkinson's disease (PD) is a progressive neurodegenerative disorder that
+    affects millions of people worldwide. The disease primarily impacts the dopaminergic
+    neurons in the substantia nigra, leading to motor symptoms such as tremors,
+    muscle rigidity, and loss of balance. Early diagnosis of PD is crucial for
+    better management of the disease, allowing for early initiation of treatment
+    and improved patient outcomes. Currently, there is no definitive test for
+    PD; diagnosis relies primarily on the evaluation of clinical symptoms, which
+    often appear several years after the onset of the disease. This delayed detection
+    limits the potential for early intervention and disease management. As a result,
+    there is a growing need for non-invasive, cost-effective, and reliable methods
+    to detect PD at an early stage. In this study, I propose a novel approach
+    for early PD detection by capturing respiratory breathing patterns during
+    sleep using smartphone-generated ultrasonic rays. I employ a Deep Neural Network
+    (DNN) model combining a convolutional neural network (CNN) and a recurrent
+    neural network (RNN) for the classification of the breathing signals into
+    two classes: PD and control.
+  source_pdf: Research Document - Google Docs.pdf
+  note: >-
+    Untraceable source filename. Match the file carefully before attaching it.
+- seq: 16
+  slug: deep-learning-automatic-ergonomic-assessment-webcam
+  title: Deep-Learning Based Automatic Ergonomic Assessment Using Webcam Data
+  authors:
+  - name: Owen Lu
+    school: Monta Vista High School
+  published_on: '2023-06-01'
+  date_precision: month
+  discipline: biology-biomedicine
+  keywords:
+  - ergonomics
+  - posture
+  - pose keypoints
+  - Mediapipe
+  - musculoskeletal health
+  abstract: >-
+    Primarily due to increasing computer use, people are spending more and more
+    time sitting in front of a desk every day. However, prolonged sitting has
+    been associated with tiredness, hypertension, and pain in areas like the lower
+    back or shoulders. These symptoms may arise for a variety of reasons, but
+    musculoskeletal disorders in particular are largely associated with poor posture.
+    Nevertheless, the adverse results caused by poor posture can be controlled
+    with proper training and monitoring. Thus, this study attempts to provide
+    automatic ergonomic assessment using only image data. Since laptops, desktops,
+    and phones are now widely available and equipped with built-in cameras, this
+    solution is accessible and convenient for most people. More importantly, automatic
+    posture assessment may help prevent conditions associated with poor posture
+    by giving reminders whenever improper posture occurs. To create our model,
+    we make use of Mediapipe, which provides a solution to identifying keypoint
+    locations from an image. By training a fully connected neural network (FC)
+    on this keypoint data, we achieved a 96.96% test F1 score, indicating that
+    our system serves as a convenient way to assess posture while maintaining
+    high performance. To illustrate our results, we perform a final video classification
+    by overlaying the model's predictions on each frame.
+  source_pdf: Ergonomics_Paper_v2.pdf
+  publish: false
+  hold_reason: >-
+    Webcam imagery of people. Section 4.4 asks that consent be confirmed and that
+    no identifiable images appear in the PDF before republication. Set publish:
+    true once both are checked.
+- seq: 17
+  slug: particle-geodesics-in-the-kerr-spacetime
+  title: Particle Geodesics in the Kerr Spacetime
+  authors:
+  - name: Jenna Van Dyke
+    school: Monta Vista High School
+  published_on: '2022-06-01'
+  date_precision: month
+  discipline: physics
+  keywords:
+  - general relativity
+  - Kerr metric
+  - geodesics
+  - black holes
+  - effective potential
+  abstract: >-
+    The Kerr spacetime is investigated. The singularity structure and horizon
+    structure of the spacetime are explored. Two sets of equations of motion for
+    a particle orbiting a Kerr black hole are derived: the first by the calculating
+    nonzero Christoffel symbols of the metric and utilizing the geodesic equation;
+    the second by dot products of Killing vectors and the four-velocity. The effective
+    potential of the radial motion is found and analyzed in comparison with the
+    Schwarzschild effective potential. The Kerr/CFT correspondence and its recent
+    use in predicting polarimetric images of the supermassive black hole in the
+    galaxy M87 is also discussed briefly. An overview of special relativity, general
+    relativity, and orbits is provided in the appendix to serve as background
+    information for the body of the paper. The Mathematica programs used for this
+    paper can be found here: https://bit.ly/3dlwYH7.
+  source_pdf: Particle Geodesics in the Kerr Spacetime - Jenna Vandyke.pdf
+  note: >-
+    Filename spells the surname Vandyke; the byline spells it Van Dyke. The abstract
+    carries a bit.ly link to Mathematica code; confirm it still resolves before
+    publication.
+- seq: 18
+  slug: machine-learning-model-agnostic-explanations-cardiovascular-disease
+  title: Leveraging Machine Learning and Model Agnostic Explanations to Understand
+    Automated Diagnosis of Cardiovascular Disease
+  authors:
+  - name: Christopher Sun
+    school: Monta Vista High School
+  - name: Jai Sharma
+    school: Monta Vista High School
+  - name: Milind Maiti
+    school: Monta Vista High School
+  published_on: '2022-06-01'
+  date_precision: month
+  discipline: biology-biomedicine
+  keywords:
+  - cardiovascular disease
+  - interpretability
+  - LIME
+  - multilayer perceptron
+  - clustering
+  abstract: >-
+    The pervasiveness of cardiovascular disease and physician misdiagnosis creates
+    the urgent need for artificial intelligence models to improve diagnosis accuracy.
+    The first objective of this study was to train machine learning models on
+    publicly available data sets containing simple medical information of patients
+    to diagnose cardiovascular disease. The Multilayer Perceptron (MLP) assembled
+    for this task performed optimally with an F1 score of 0.8968. This prompted
+    the creation of an open-source, automated cardiovascular disease diagnosis
+    tool, powered by the MLP. The second objective of this study was to employ
+    a meta-learning methodology called Local Interpretable Model-Agnostic Explanations
+    (LIME) to understand the impact of different features on the model's diagnosis
+    in the form of marginal probabilities. K-Means Clustering was employed to
+    segment the data into ten clusters, after which each data example was passed
+    through LIME. The resulting histograms depict the complex relationship between
+    feature, cluster, and impact on diagnosis. A series of P-values with contrasting
+    orders of magnitude shows the nuances in the MLP's understanding of patients
+    from different clusters. The results of meta-learning analysis reveal that
+    the most important features for cardiovascular disease diagnosis are fasting
+    blood sugar, type of chest pain, and slope of the ST segment on an electrocardiogram.
+    Future experiments should replicate the novel methodology introduced in this
+    study on data sets containing more specialized medical features in order to
+    gain practical medical insights about different types of cardiovascular disease
+    represented by each cluster. Finally, feature engineering pathways should
+    be explored with consideration of these results to create versatile diagnosis
+    models not only for cardiovascular disease, but adaptable to other diseases
+    as well.
+  source_pdf: Leveraging_Machine_Learning_and_Model_Agnostic_Explanations_to_Understand_Automated_Diagnosis_of_Cardiovascular_Disease.pdf
+- seq: 19
+  slug: machine-learning-exoplanet-prediction-transit-method
+  title: A machine learning approach to exoplanet prediction through pattern analysis
+    using the transit method
+  authors:
+  - name: Amy Zheng
+    school: Monta Vista High School
+  published_on: '2022-06-01'
+  date_precision: month
+  discipline: astronomy-astrophysics
+  keywords:
+  - exoplanets
+  - transit method
+  - light curves
+  - pattern analysis
+  - machine learning
+  abstract: null
+  source_pdf: Research Paper 2022 - Exoplanets.pdf
+  note: >-
+    No abstract on the current site. One must be supplied by the author or extracted
+    from the PDF; nothing here invents one.
+- seq: 20
+  slug: multispectral-satellite-imagery-south-american-wildfires
+  title: Analyzing Multispectral Satellite Imagery of South American Wildfires
+    Using Deep Learning
+  authors:
+  - name: Christopher Sun
+    school: Monta Vista High School
+  published_on: '2022-06-01'
+  date_precision: month
+  discipline: earth-climate
+  keywords:
+  - wildfire detection
+  - Landsat 8
+  - image segmentation
+  - fully convolutional network
+  - Amazon
+  abstract: >-
+    Since frequent severe droughts are lengthening the dry season in the Amazon
+    Rainforest, it is important to detect wildfires promptly and forecast possible
+    spread for effective suppression response. Current wildfire detection models
+    are not versatile enough for the low-technology conditions of South American
+    hot spots. This deep learning study first trains a Fully Convolutional Neural
+    Network on Landsat 8 images of Ecuador and the Galapagos, using Green and
+    Short-wave Infrared bands to predict pixel-level binary fire masks. This model
+    achieves a 0.962 validation F2 score and a 0.932 F2 score on test data from
+    Guyana and Suriname. Afterward, image segmentation is conducted on the Cirrus
+    band using K-Means Clustering to simplify continuous pixel values into three
+    discrete classes representing differing degrees of cirrus cloud contamination.
+    Three additional Convolutional Neural Networks are trained to conduct a sensitivity
+    analysis measuring the effect of simplified features on model accuracy and
+    train time. The Experimental model trained on the segmented cirrus images
+    provides a statistically significant decrease in train time compared to the
+    Control model trained on raw cirrus images, without compromising binary accuracy.
+    This proof of concept reveals that feature engineering can improve the performance
+    of wildfire detection models by lowering computational expense.
+  prior_venue: ICAPAI 2022
+  source_pdf: ICAPAI_2022_Wildfire.pdf
+  note: >-
+    Source filename references ICAPAI 2022. Resolve the version of record before
+    any full text is attached. Open decision 4.
+- seq: 21
+  slug: deep-learning-ensemble-off-nadir-geocentric-pose-prediction
+  title: A Deep Learning Ensemble Framework for Off-Nadir Geocentric Pose Prediction
+  authors:
+  - name: Christopher Sun
+    school: Monta Vista High School
+  - name: Jai Sharma
+    school: Monta Vista High School
+  - name: Milind Maiti
+    school: Monta Vista High School
+  published_on: '2022-06-01'
+  date_precision: month
+  discipline: computer-science
+  keywords:
+  - geocentric pose
+  - satellite imagery
+  - autoencoder
+  - U-Net
+  - disaster response
+  abstract: >-
+    Roughly 6,800 natural disasters occur annually, and this alarming number continues
+    to grow due to climate change. Effective methods to improve natural disaster
+    response include change detection, map alignment, and vision-aided navigation
+    to allow for the time-efficient delivery of life-saving aid. Current software
+    functions optimally only on near-nadir images taken around ninety degrees
+    above ground level. The inability to generalize to oblique images increases
+    the need to compute an image's geocentric pose, which is its spatial orientation
+    with respect to gravity. This Deep Learning investigation presents three convolutional
+    models to predict geocentric pose using 5,923 nadir and off-nadir red, green,
+    and blue (RGB) satellite images of cities worldwide. Prior to the ensemble,
+    an autoencoder is assembled to condense the 256 x 256 x 3 images to 32 x 32
+    x 16 latent space representations, demonstrating the ability to learn useful
+    features from the data. The first model in the ensemble is a U-Net Fully Convolutional
+    Network (FCN) with skip connections used to predict each image's corresponding
+    pixel-level above-ground elevation mask. This FCN achieves a median absolute
+    deviation of 0.335 meters and an R2 of 0.865 on test data. Afterward, the
+    elevation masks are concatenated with the RGB images to form four-channel
+    inputs fed into the second model in the ensemble, which predicts each image's
+    rotation angle and magnification scale, the components of its geocentric pose.
+    This Deep Convolutional Model achieves an R2 of 0.943 on test data, significantly
+    outperforming previous models designed by researchers. In addition to achieving
+    superior model performance, outlier removal was performed through supervised
+    interpolation, and the usefulness of data features was gauged through a sensitivity
+    analysis of elevation masks, to target future avenues of feature engineering.
+    The high-accuracy software built in this study contributes to mapping and
+    navigation procedures to accelerate disaster relief and save human lives.
+  source_pdf: A_Deep_Learning_Ensemble_Framework_for_Off_Nadir_Geocentric_Pose_Prediction.pdf
+- seq: 22
+  slug: effect-of-iron-as-a-potential-inducer-of-cataracts
+  title: The Effect of Iron as a Potential Inducer of Cataracts
+  authors:
+  - name: Ethan Liu
+    school: Monta Vista High School
+  published_on: '2022-06-01'
+  date_precision: month
+  discipline: biology-biomedicine
+  keywords:
+  - cataracts
+  - oxidative stress
+  - Fenton reaction
+  - iron
+  - water quality
+  abstract: >-
+    Cataracts are a leading cause of blindness, especially in the developing world.
+    With clean water not always accessible in many third-world countries, the
+    poor quality of water may trigger oxidative stress, a major inducer of cataracts,
+    as demonstrated by previous studies, and one-way oxidation can occur is through
+    Fenton reactions reacting with iron. Perhaps the iron in the untreated water
+    causes oxidation, and this could be a potential cause of cataracts. The objective
+    of the study is to find if the presence of iron ions in drinkable water sources
+    is a contributing factor to cataracts. Pig eyes were soaked in iron solutions
+    and stored under a UV light for 24 hours, simulating human eyes in contact
+    with iron water over a long period, building up oxidative damage. The lenses
+    were then analyzed by comparing the color of the lenses and the change in
+    luminance compared to the control. The results were found to show how iron
+    in water can induce oxidation in the eye due to the Fenton Reaction, leading
+    to cataracts.
+  source_pdf: MVRC The Effect of Iron as a Potential Inducer of Cataracts_ Ethan
+    Liu.pdf
+  note: >-
+    Uses pig eyes from a food source. Confirm how the tissue source is described
+    in the paper.
+- seq: 23
+  slug: adversarial-networks-data-efficiency-self-driving-cars
+  title: Applying adversarial networks to increase the data efficiency and reliability
+    of Self-Driving Cars
+  authors:
+  - name: Aakash Kumar
+    school: Monta Vista High School
+  published_on: '2022-06-01'
+  date_precision: month
+  discipline: computer-science
+  keywords:
+  - adversarial examples
+  - generative adversarial networks
+  - autonomous vehicles
+  - robustness
+  - image classification
+  abstract: >-
+    Convolutional Neural Networks (CNNs) are vulnerable to misclassifying images
+    when small perturbations are present. With the increasing prevalence of CNNs
+    in self-driving cars, it is vital to ensure these algorithms are robust to
+    prevent collisions from occurring due to failure in recognizing a situation.
+    In the Adversarial Self-Driving framework, a Generative Adversarial Network
+    (GAN) is implemented to generate realistic perturbations in an image that
+    cause a classifier CNN to misclassify data. This perturbed data is then used
+    to train the classifier CNN further. The Adversarial Self-driving framework
+    is applied to an image classification algorithm to improve the classification
+    accuracy on perturbed images and is later applied to train a self-driving
+    car to drive in a simulation. A small-scale self-driving car is also built
+    to drive around a track and classify signs. The Adversarial Self-driving framework
+    produces perturbed images through learning a dataset, as a result removing
+    the need to train on significant amounts of data. Experiments demonstrate
+    that the Adversarial Self-driving framework identifies situations where CNNs
+    are vulnerable to perturbations and generates new examples of these situations
+    for the CNN to train on. The additional data generated by the Adversarial
+    Self-driving framework provides sufficient data for the CNN to generalize
+    to the environment. Therefore, it is a viable tool to increase the resilience
+    of CNNs to perturbations. Particularly, in the real-world self-driving car,
+    the application of the Adversarial Self-Driving framework resulted in an 18%
+    increase in accuracy, and the simulated self-driving model had no collisions
+    in 30 minutes of driving.
+  source_pdf: Adversarial Self Driving.pdf
+- seq: 24
+  slug: dropout-regularization-and-model-complexity-in-neural-networks
+  title: Investigating the Relationship Between Dropout Regularization and Model
+    Complexity in Neural Networks
+  authors:
+  - name: Jai Sharma
+    school: Monta Vista High School
+  - name: Milind Maiti
+    school: Monta Vista High School
+  - name: Christopher Sun
+    school: Monta Vista High School
+  published_on: '2021-08-01'
+  date_precision: month
+  discipline: computer-science
+  keywords:
+  - dropout
+  - regularisation
+  - hyperparameter tuning
+  - model complexity
+  - neural networks
+  abstract: >-
+    Dropout Regularization, serving to reduce variance, is nearly ubiquitous in
+    Deep Learning models. We explore the relationship between the dropout rate
+    and model complexity by training 2,000 neural networks configured with random
+    combinations of the dropout rate and the number of hidden units in each dense
+    layer, on each of the three data sets we selected. The generated figures,
+    with binary cross entropy loss and binary accuracy on the z-axis, question
+    the common assumption that adding depth to a dense layer while increasing
+    the dropout rate will certainly enhance performance. We also discover a complex
+    correlation between the two hyperparameters that we proceed to quantify by
+    building additional machine learning and Deep Learning models which predict
+    the optimal dropout rate given some hidden units in each dense layer. Linear
+    regression and polynomial logistic regression require the use of arbitrary
+    thresholds to select the cost data points included in the regression and to
+    assign the cost data points a binary classification, respectively. These machine
+    learning models have mediocre performance because their naive nature prevented
+    the modeling of complex decision boundaries. Turning to Deep Learning models,
+    we build neural networks that predict the optimal dropout rate given the number
+    of hidden units in each dense layer, the desired cost, and the desired accuracy
+    of the model. Though, this attempt encounters a mathematical error that can
+    be attributed to the failure of the vertical line test. The ultimate Deep
+    Learning model is a neural network whose decision boundary represents the
+    2,000 previously generated data points. This final model leads us to devise
+    a promising method for tuning hyperparameters to minimize computational expense
+    yet maximize performance. The strategy can be applied to any model hyperparameters,
+    with the prospect of more efficient tuning in industrial models.
+  source_pdf: Investigating_the_Relationship_Between_Dropout_Regularization_and_Model_Complexity_in_Neural_Networks.pdf
+- seq: 25
+  slug: identifying-lead-free-perovskites-for-high-efficiency-solar-cells
+  title: Identifying Lead-free Perovskites Using Machine Learning for High Efficiency
+    Solar Cells
+  authors:
+  - name: Sanjana S. Jilla
+    school: Monta Vista High School
+  published_on: '2021-06-01'
+  date_precision: month
+  discipline: chemistry-materials
+  keywords:
+  - perovskites
+  - solar cells
+  - materials discovery
+  - band gap
+  - heat of formation
+  abstract: >-
+    One of the biggest threats our planet faces is the threat of global warming.
+    Electrical power has become crucial to our modern lifestyle, but today, electricity
+    is generated by burning fossil fuels and coal, which has many harms and disadvantages
+    associated with it. Fortunately, there are multiple alternative energy sources,
+    including sunlight, a powerful, inexhaustible, and clean resource. There are
+    several different types of solar cells, but one of the most efficient and
+    low-cost types is the perovskite solar cell. Perovskite solar cells (PSCs)
+    have recently received considerable attention due to the high energy conversion
+    efficiency achieved within a few years of their inception. However, today,
+    the most common perovskite is methyl ammonium iodide (MAPbI3), which contains
+    levels of toxic lead. The science community has been searching for lower-toxicity
+    perovskite-type materials, but testing all of the possible lead-free perovskites
+    requires a huge amount of time and funding. Recent advances in computing power
+    have enabled the generation of large datasets for materials and data-driven
+    approaches to problem-solving in materials science, including materials discovery.
+    Machine learning is the primary tool for manipulating such large datasets,
+    predicting unknown material properties and uncovering relationships between
+    structure and property. The goal of this project is to create a Machine Learning
+    (ML) driven software system that increases the efficiency of the solar cell
+    design process. I will do this by identifying the best perovskites by optimizing
+    material composition and determining the importance of the features of each
+    element in the perovskite to the overall efficiency of the PSC. The Machine
+    Learning (ML) driven software system needs to accurately predict key information
+    such as the heat of formation (delta Hf) and band gap (Eg) and accurately
+    use the training data to form an accurate prediction of the best materials
+    to form a perovskite solar cell (Im). The models must predict with 90% accuracy
+    of prediction for the project to be successful. This program is written in
+    Python, and uses Machine Learning to make predictions about the heat of formation
+    and bandgap of various double halide perovskites.
+  source_pdf: Research Paper (2).pdf
+  note: >-
+    Untraceable source filename. The byline carries a middle initial; this is
+    the canonical form.
+- seq: 26
+  slug: searching-for-rare-quasar-ca-ii-absorbers-early-universe
+  title: Searching for Rare Quasar Ca II Absorbers in the Early Universe
+  authors:
+  - name: Iona Xia
+    school: Monta Vista High School
+  published_on: '2021-06-01'
+  date_precision: month
+  discipline: astronomy-astrophysics
+  keywords:
+  - quasar absorbers
+  - Ca II
+  - spectroscopy
+  - neural networks
+  - interstellar medium
+  abstract: >-
+    The universe is still largely a mystery to scientists. Quasars are one such
+    mystery, whose emission spectra produce absorption lines such as Ca II when
+    passing through gas of distant galaxies. This data helps astronomers understand
+    more about interstellar gas, dust, and galaxy and star formation and evolution
+    (including my Milky Way). However, these current absorber databases are extremely
+    limited, and traditional methods make them hard to detect. Thus, I seek to
+    discover more Ca II absorbers by developing deep neural networks, which are
+    more accurate and faster. I first found absorbers traditionally to produce
+    a test set. I cropped, normalized, and handpicked through thousands of spectra
+    and discovered 256 Ca II original absorbers. To obtain large training sets,
+    I generated tens of thousands of artificial samples by inserting Ca II lines
+    at corresponding wavelengths in real spectra. I preprocessed the data and
+    created neural network models after testing different hyperparameter configurations.
+    Overall, my accuracy for absorber detection is 95% (Ca II), 15 times higher
+    than traditional methods, and I added significant amounts of new absorbers
+    to the current dataset for Ca II, completing my goal. As for challenges, I
+    concluded that most false negatives are due to noise and weak lines. Furthermore,
+    my discovered absorbers agree with statistical tests of previous studies.
+    In the future, I plan to discover more absorbers using my models and run statistical
+    studies on them.
+  source_pdf: Iona Xia Research Club Paper (2020-2021).pdf
+- seq: 27
+  slug: potassium-iodide-on-asthma-in-drosophila-melanogaster
+  title: The Effect of Different Amounts of Potassium Iodide on Asthma in Drosophila
+    Melanogaster
+  authors:
+  - name: Anika Nagavara
+    school: Monta Vista High School
+  published_on: '2021-05-01'
+  date_precision: month
+  discipline: biology-biomedicine
+  keywords:
+  - asthma
+  - potassium iodide
+  - Drosophila melanogaster
+  - iodine
+  - inflammation
+  abstract: >-
+    According to the Centers for Disease Control and Prevention (CDC), 1 in 13
+    people have asthma. Each day, ten Americans die from asthma (Asthma and Allergy
+    Foundation of America 2018). A previous project that was conducted last year
+    looked at the correlation between zinc deficiency and asthma and yielded positive
+    results meaning that a correlation between additional zinc intake and a better
+    control of asthma could be seen. This project observed whether there is a
+    correlation between iodine deficiency and asthma since iodine has previously
+    been used to treat inflammatory diseases since it has properties that can
+    stabilize thyroid hormone levels as well as reduce bronchial secretions and
+    mediate immune cell responses (Lake 2017). In order to supply the iodine,
+    potassium iodide was used since iodine is more easily absorbed by the body
+    when it is in the form of potassium iodide. A combination treatment of potassium
+    iodide and zinc was also given.
+  source_pdf: Final Research Paper 2021.pdf
+  note: >-
+    Untraceable source filename. Continues a prior-year zinc study by the same
+    author.
+- seq: 28
+  slug: alternative-spliced-multiple-myeloma-cells-tunicamycin
+  title: Observing the Genetic Difference of alternative spliced multiple myeloma
+    cells with dose-escalation Tunicamycin
+  authors:
+  - name: Rishi Pankhaniya
+    school: Monta Vista High School
+  published_on: '2021-03-01'
+  date_precision: month
+  discipline: biology-biomedicine
+  keywords:
+  - multiple myeloma
+  - tunicamycin
+  - drug resistance
+  - transcriptome
+  - alternative splicing
+  abstract: >-
+    Tunicamycin is a commonly used drug to cause an unfolded protein response
+    in multiple myeloma cells in order to treat the cancer. However, many multiple
+    myeloma cell lines have slowly developed resistance to this treatment. The
+    goal of my project is to find out the reasons in the RNA behind why this resistance
+    is caused, in order to create a better, altered treatment that could possibly
+    circumvent these problems. First, multiple myeloma cells were treated with
+    tunicamycin repeatedly four times, such that the living cells would sufficiently
+    have developed resistance to the treatment. Then a short-term treatment was
+    performed before plating the cells, dividing the cells into a control and
+    treated group to find differences between their RNA to find indicators that
+    cause the resistance. After plating the cells and isolating the RNA, a mass
+    transcriptome analysis returned exonic data to allow us to look at how the
+    resistance was being developed through the creation of proteins and certain
+    protein responses. Upon looking at the data, several markers were made clear,
+    such as the suppression of VAPA and DDIT3 as examples. Through looking at
+    all of these gene markers, the treatment can be slightly altered in order
+    to prevent the suppression of certain responses that would cause the cancer
+    cell to die, thus making the treatment apply to a wider range of cells.
+  source_pdf: Observing the Genetic Difference of alternative spliced multiple
+    myeloma cells with dose-escalation Tunicamycin.pdf
+  note: >-
+    Cell culture and transcriptome analysis implies institutional laboratory access.
+    Relevant to the contributions statement (7.12).
+- seq: 29
+  slug: looping-and-divergence-in-the-collatz-conjecture
+  title: Looping and Divergence in the Collatz Conjecture
+  authors:
+  - name: Jai Sharma
+    school: Monta Vista High School
+  - name: Akshat Jha
+    school: Monta Vista High School
+  - name: Sambhabi Bose
+    school: Monta Vista High School
+  - name: Garrett Heller
+    school: Monta Vista High School
+  published_on: '2020-10-01'
+  date_precision: month
+  discipline: mathematics
+  keywords:
+  - Collatz conjecture
+  - number theory
+  - iteration
+  - divergence
+  - cycles
+  abstract: null
+  source_pdf: Looping_and_Divergence_in_the_Collatz_Conjecture__Version_2_.pdf
+  note: >-
+    No abstract on the current site. The filename says Version 2; confirm which
+    version is authoritative. Oldest item in the archive.

@@ -218,7 +218,7 @@ test('every tenant has a name prefix', () => {
     .map((f) => yaml.load(fs.readFileSync(`${dir}/${f}`, 'utf8')))
     .filter((doc) => doc.provisioned !== false);
 
-  const missing = provisioned.filter((doc) => !prefixes[doc.id]).map((doc) => doc.id);
+  const missing = provisioned.filter((doc) => !prefixes[doc.slug]).map((doc) => doc.slug);
 
   assert.deepEqual(missing, [], 'add one in scripts/fixture-target.mjs');
 });

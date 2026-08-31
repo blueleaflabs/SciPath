@@ -339,6 +339,36 @@ test('no script shadows a global it then constructs', () => {
   assert.deepEqual(problems, [], 'rename the local, or the constructor is shadowed');
 });
 
+test('nothing spells out a nudge kind except the one place that owns them', () => {
+  /* **Two names for one event, written in three places.**
+
+     `nudge` picks its template from what the recipient is, so a nudge to an
+     Elder is written as `nudge_officer`. `nudge_state` filtered
+     `kind = 'nudge'` alone, so the case a teacher uses most was sent
+     successfully and counted nowhere: the button came back unchanged and read
+     as a button that does not work.
+
+     `app.nudge_kinds()` is the list. A literal anywhere else is a fourth
+     place for a third template to be forgotten — and this is a failure with
+     no error, on a screen whose whole job is to show that something happened. */
+  const sql = fs.readFileSync('supabase/migrations/0001_identity_and_tenancy.sql', 'utf8');
+
+  /* Comments explaining the rule name both kinds, which is the point of them. */
+  const code = sql.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/^\s*--.*$/gm, ' ');
+
+  const owner = code.indexOf('function app.nudge_kinds()');
+  assert.ok(owner !== -1, 'app.nudge_kinds() must exist');
+
+  /* Everything except the function that defines them. */
+  const elsewhere = code.slice(0, owner) + code.slice(code.indexOf('$$;', owner));
+
+  assert.doesNotMatch(
+    elsewhere,
+    /'nudge_officer'/,
+    "the nudge kinds belong in app.nudge_kinds(), not spelled out"
+  );
+});
+
 test('the readiness failure asks Docker rather than guessing', () => {
   /* The first version of this message said a container had not come back,
      which assumes containers existed. They did not: the stack had never been

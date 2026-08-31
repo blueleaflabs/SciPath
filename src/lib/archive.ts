@@ -28,7 +28,7 @@ export interface Archive {
 
 export async function openArchive(context: any): Promise<Archive> {
   const org = activeOrg(context);
-  const manifest = await readManifest(bucketFrom(context.locals), org.id);
+  const manifest = await readManifest(bucketFrom(context.locals), org.slug);
 
   return {
     org,
@@ -56,7 +56,7 @@ export async function readBody(
 
   const space = record.recordKind === 'project' ? 'projects' : 'articles';
   const object = await bucket.get(
-    `records/${org.id}/${space}/${record.year}/${record.slug}/record.md`
+    `records/${org.slug}/${space}/${record.year}/${record.slug}/record.md`
   );
   if (!object) return null;
 

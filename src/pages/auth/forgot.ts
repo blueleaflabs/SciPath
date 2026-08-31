@@ -33,7 +33,7 @@ export const POST: APIRoute = async ({ request, cookies, url, locals, redirect }
   const email = String(form.get('email') ?? '').trim().toLowerCase();
 
   const org = activeOrg({ locals: locals as { org?: unknown } });
-  const origin = org.isPlatform ? apexOrigin() : originFor(org.subdomain ?? org.id);
+  const origin = org.isPlatform ? apexOrigin() : originFor(org.subdomain ?? org.slug);
 
   const supabase = serverClient(request, cookies, runtime);
 

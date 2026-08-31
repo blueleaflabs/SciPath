@@ -60,7 +60,7 @@ if (Astro.request.method === 'POST' && me.isEditor) {
       const { files, entry, missing } = await assembleRecord(
         supabase,
         blobStore(Astro.locals),
-        org.id,
+        org.slug,
         record,
         shape('imrad')
       );
@@ -74,7 +74,7 @@ if (Astro.request.method === 'POST' && me.isEditor) {
               httpMetadata: { contentType: file.contentType },
             });
           }
-          const manifest = await readManifest(bucket, org.id);
+          const manifest = await readManifest(bucket, org.slug);
           await writeManifest(bucket, upsert(manifest, entry));
 
           /* No decision to wait on and nobody to notify, so writing the files
@@ -160,7 +160,7 @@ if (Astro.request.method === 'POST' && me.isEditor) {
       const { files, entry, missing } = await assembleRecord(
         supabase,
         blobStore(Astro.locals),
-        org.id,
+        org.slug,
         record,
         shape('imrad')
       );
@@ -179,7 +179,7 @@ if (Astro.request.method === 'POST' && me.isEditor) {
 
           /* The manifest last, so a reader never sees a listing pointing at a
              record whose file has not landed. */
-          const manifest = await readManifest(bucket, org.id);
+          const manifest = await readManifest(bucket, org.slug);
           await writeManifest(bucket, upsert(manifest, entry));
 
           committed = { files: files.length };

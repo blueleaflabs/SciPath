@@ -162,9 +162,9 @@ test('a demo organization claims no email domain', () => {
     const doc = yaml.load(fs.readFileSync(path.join(dir, file), 'utf8'));
     if (doc.demo !== true) continue;
 
-    assert.deepEqual(doc.domains ?? [], [], `${doc.id} carries signup domains`);
-    assert.deepEqual(doc.verified_domains ?? [], [], `${doc.id} carries verified domains`);
-    assert.notEqual(doc.signup_mode, 'domain', `${doc.id} signs up by domain`);
+    assert.deepEqual(doc.domains ?? [], [], `${doc.slug} carries signup domains`);
+    assert.deepEqual(doc.verified_domains ?? [], [], `${doc.slug} carries verified domains`);
+    assert.notEqual(doc.signup_mode, 'domain', `${doc.slug} signs up by domain`);
   }
 });
 
@@ -184,7 +184,7 @@ test('a demo organization runs the programs it is demonstrating', () => {
 
   for (const file of files) {
     const doc = yaml.load(fs.readFileSync(path.join(dir, file), 'utf8'));
-    bySlug[doc.id] = doc;
+    bySlug[doc.slug] = doc;
   }
 
   for (const doc of Object.values(bySlug)) {
@@ -192,7 +192,7 @@ test('a demo organization runs the programs it is demonstrating', () => {
 
     assert.ok(
       (doc.programs ?? []).length > 0,
-      `${doc.id} runs no programs, so there is nothing to demonstrate`
+      `${doc.slug} runs no programs, so there is nothing to demonstrate`
     );
 
     /* Every one of them belongs to some real school's list. A program that
@@ -208,7 +208,7 @@ test('a demo organization runs the programs it is demonstrating', () => {
     assert.deepEqual(
       invented,
       [],
-      `${doc.id} runs ${invented.join(', ')}, which no real organization runs`
+      `${doc.slug} runs ${invented.join(', ')}, which no real organization runs`
     );
   }
 });

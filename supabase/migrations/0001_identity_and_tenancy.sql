@@ -493,6 +493,18 @@ create table public.notifications (
   attempts      int not null default 0,
   last_error    text,
 
+  -- **WHEN THE PERSON IT WAS ADDRESSED TO SAID THEY HAD IT.**
+  --
+  -- Distinct from `state`, which is about the *message* — whether the drain
+  -- managed to hand it to a transport. This is about the *person*, and the
+  -- two answer different questions: `sent` says a mail server accepted it,
+  -- and tells a teacher nothing about whether anybody read it.
+  --
+  -- Nullable and one-way. A nudge is acknowledged or it is not; there is no
+  -- un-acknowledging, because the useful fact is that somebody saw it once
+  -- and the interesting case afterwards is whether the work happened.
+  acknowledged_at timestamptz,
+
   created_at    timestamptz not null default now(),
   sent_at       timestamptz,
 
@@ -4809,6 +4821,31 @@ $$;
 -- ===========================================================================
 
 /**
+ * THE KINDS A NUDGE IS WRITTEN AS.
+ *
+ * Two, because the template is chosen from what the recipient is on the
+ * project: an Elder gets wording that names a student, a student gets wording
+ * that does not. That is a real distinction and it belongs in the row.
+ *
+ * **It is not a distinction the counters care about**, and separating the two
+ * lists is what broke them. `nudge_state` filtered `kind = 'nudge'` while the
+ * sender wrote `nudge_officer` for exactly the case a teacher uses most, so a
+ * successful send changed nothing on screen and read as a button that does
+ * not work.
+ *
+ * One list, so a third template cannot be added to the sender without being
+ * added to everything that counts one.
+ */
+create or replace function app.nudge_kinds()
+returns text[]
+language sql
+immutable
+set search_path = ''
+as $$
+  select array['nudge', 'nudge_officer'];
+$$;
+
+/**
  * Send one, and say what happened.
  *
  * Returns `sent`, or `already` when this obligation has been nudged this
@@ -4903,7 +4940,9 @@ begin
      /* Two templates, chosen from what the recipient is on this project
         rather than from a parameter. A caller that had to say which template
         to use is a caller that can send the Elder's wording to a student. */
-     case when v_recipient_role = 'officer' then 'nudge_officer' else 'nudge' end,
+     /* Indexed into the one list rather than spelled out, so the names the
+        sender writes and the names the counters read cannot diverge. */
+     (app.nudge_kinds())[case when v_recipient_role = 'officer' then 2 else 1 end],
      p_recipient_id, auth.uid(),
      'entry_milestones', v_m.id,
      jsonb_build_object(
@@ -4940,13 +4979,236 @@ grant execute on function public.nudge(uuid, uuid) to authenticated;
  * nudge went out. Without it a nudge is a message into the dark, and a
  * teacher learns that the button costs nothing and does nothing.
  */
-create or replace function public.nudge_state(p_participation_id uuid)
+/**
+ * WHAT SOMEBODY HAS BEEN ASKED ABOUT, FOR THEM TO READ.
+ *
+ * **The outbox had no reader.** A nudge was a row in `notifications`, and the
+ * drain turns those into email — except `notifications` has row level
+ * security on and no policies at all, so no session can read it, and no page
+ * showed one. Pressing the button incremented a counter on the sender's
+ * screen and reached nobody. The loop closed for the person who did not need
+ * it closed.
+ *
+ * Email still matters, because there is no guarantee anybody is in the app.
+ * This is the other half rather than a replacement: the same row, read where
+ * the person already is.
+ *
+ * `security definer` because the table is closed by design and should stay
+ * closed — the outbox holds every message to every person at the school, and
+ * a policy permissive enough to let somebody read their own would be one more
+ * predicate to get right on a table where getting it wrong means reading
+ * somebody else's mail. A function that hard-codes `recipient_id =
+ * auth.uid()` cannot be pointed at anybody else.
+ *
+ * **Only obligations still outstanding.** A nudge about a form signed
+ * yesterday is noise, and worse, it is noise that teaches somebody to stop
+ * reading these. The join to `entry_milestones` drops it the moment the thing
+ * is done, with no dismissing and nothing to mark read.
+ */
+create or replace function public.my_nudges()
 returns table (
   milestone_id uuid,
-  nudges       int,
-  last_sent_at timestamptz,
-  last_to      text,
-  met_after    boolean
+  obligation   text,
+  due_on       date,
+  project_id   uuid,
+  program_id   uuid,
+  project_title text,
+  asked_by     text,
+  asked_at     timestamptz,
+  times        int,
+
+  -- Whether this person has said they have it. The card offers the verb
+  -- while this is null and reports it afterwards.
+  acknowledged_at timestamptz,
+
+  -- **AND WHO THEY CAN PASS IT TO.**
+  --
+  -- An Elder who is asked about a student's form has one useful next action
+  -- besides doing nothing, and it is the whole reason a teacher nudges the
+  -- Elder rather than the student. Without this the recipient of a relayed
+  -- nudge has a card that tells them something and offers them nothing.
+  --
+  -- Null for a student, who is the end of the chain. Null for an Elder on a
+  -- project whose author is themself.
+  relay_to_id   uuid,
+  relay_to_name text
+)
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select em.id,
+         em.name,
+         em.due_on,
+         pt.project_id,
+         pt.program_id,
+         p.title,
+         /* Whoever asked most recently. Named, because "somebody asked about
+            Form 1" is a message with no one to answer. */
+         (array_agg(u.display_name order by n.created_at desc))[1],
+         max(n.created_at),
+         count(*)::int,
+         max(n.acknowledged_at),
+
+         /* The student on this participation, offered only to somebody who
+            holds the oversight row for it — which is the same condition
+            `public.nudge` enforces, so the button cannot appear where the
+            function would refuse it. */
+         /* **An author row is project level. An officer row names a
+            participation.** The table's own check constraint says so:
+         
+              (role = 'author'  and participation_id is null) or
+              (role = 'officer' and participation_id is not null)
+         
+            The first version looked for an author on `em.participation_id`
+            and matched nothing, ever — so the Elder's card offered no way to
+            pass anything on, which is the whole reason a teacher nudges an
+            Elder rather than the student. Authors join on `project_id`;
+            only the officer check uses the participation. */
+         (select a.user_id from public.project_authors a
+           where a.project_id = pt.project_id
+             and a.role = 'author'
+             and a.user_id <> auth.uid()
+             and exists (
+               select 1 from public.project_authors o
+                where o.participation_id = em.participation_id
+                  and o.user_id = auth.uid()
+                  and o.role = 'officer'
+             )
+           limit 1),
+
+         (select au.display_name from public.project_authors a
+            join public.users au on au.id = a.user_id
+           where a.project_id = pt.project_id
+             and a.role = 'author'
+             and a.user_id <> auth.uid()
+             and exists (
+               select 1 from public.project_authors o
+                where o.participation_id = em.participation_id
+                  and o.user_id = auth.uid()
+                  and o.role = 'officer'
+             )
+           limit 1)
+    from public.notifications n
+    join public.entry_milestones em on em.id = n.subject_id
+    join public.participations pt on pt.id = em.participation_id
+    join public.projects p on p.id = pt.project_id
+    left join public.users u on u.id = n.actor_id
+   where n.kind = any (app.nudge_kinds())
+     and n.subject_kind = 'entry_milestones'
+     and n.recipient_id = auth.uid()
+     and em.completed_on is null
+
+   group by em.id, em.name, em.due_on, em.participation_id,
+            pt.project_id, pt.program_id, p.title
+
+  /* **PASSING IT ON IS DOING IT.**
+
+     An Elder asked to chase a student has one thing to do, and once they have
+     done it the ask is answered — but the card stayed with its button live,
+     so the screen went on saying *this is yours* about something already
+     handled. The teacher's row correctly read `passed to dm_student9` while
+     the Elder was still being told to act.
+
+     Compared by time rather than by existence, because a teacher who nudges
+     again next week is asking again: a relay from a fortnight ago does not
+     answer a request made this morning. The card returns when the newer ask
+     arrives.
+
+     **`having`, not `where`.** `max(n.created_at)` is an aggregate and
+     Postgres refuses one in a `where` clause outright — the first version put
+     it there, which parses in the head and fails on apply. */
+  having coalesce(
+    (select max(r.created_at)
+       from public.notifications r
+      where r.kind = any (app.nudge_kinds())
+        and r.subject_id = em.id
+        and r.actor_id = auth.uid()),
+    '-infinity'::timestamptz
+  ) < max(n.created_at)
+
+   order by em.due_on nulls last;
+$$;
+
+grant execute on function public.my_nudges() to authenticated;
+
+/**
+ * "I HAVE THIS."
+ *
+ * The missing verb. A nudge could be sent and it could be met, and between
+ * those two there was nothing: a teacher who nudged on Monday saw the same
+ * row on Wednesday whether the Elder had read it and started work or had not
+ * opened the app at all. Those are different situations needing different
+ * responses — wait, or go and find them — and the screen could not tell them
+ * apart, so it told her to do the same thing in both.
+ *
+ * Acknowledging is not doing. It says somebody has it, and the obligation
+ * still shows as outstanding until it is met. **A system where saying "on it"
+ * cleared the row would teach everybody to say "on it".**
+ *
+ * Every row for this obligation addressed to the caller, because a teacher
+ * and an Elder may both have asked and answering once is answering.
+ */
+create or replace function public.acknowledge_nudge(p_milestone_id uuid)
+returns text
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_touched int;
+begin
+  /* No `updated_at` on this table, and assuming one is what crashed the
+     button: nearly every other table here has the column, so it was written
+     from the pattern rather than from the schema. `tests/schema-drift.mjs`
+     reads queries in `src/` and not SQL inside the migration, which is where
+     this lived. */
+  update public.notifications n
+     set acknowledged_at = now()
+   where n.kind = any (app.nudge_kinds())
+     and n.subject_kind = 'entry_milestones'
+     and n.subject_id = p_milestone_id
+     and n.recipient_id = auth.uid()
+     and n.acknowledged_at is null;
+
+  get diagnostics v_touched = row_count;
+
+  /* Not an error when there is nothing to acknowledge. Pressing twice, or
+     pressing after somebody else met the obligation, is ordinary. */
+  return case when v_touched > 0 then 'acknowledged' else 'nothing' end;
+end;
+$$;
+
+grant execute on function public.acknowledge_nudge(uuid) to authenticated;
+
+/**
+ * **A TRACK IS PER OBLIGATION AND PER RECIPIENT, NOT PER OBLIGATION.**
+ *
+ * This counted every nudge on a milestone whoever it went to, and the screen
+ * read that count as "what I have sent". So an Elder nudged by her teacher
+ * opened her own oversight table and found `Nudged 1× · dm_student9 not seen`
+ * against a nudge she had not sent, to a person who had not been written to.
+ * The row reported somebody else's action as hers.
+ *
+ * The recipient is now part of the key. A row's nudge cell asks about the one
+ * person that row would write to, and answers about that person only.
+ *
+ * `relayed_at` deliberately does not narrow with it. A relay is by definition
+ * a *different* recipient — the Elder writing to the student — so scoping it
+ * to the same recipient would delete the fact it exists to carry.
+ */
+create or replace function public.nudge_state(p_participation_id uuid)
+returns table (
+  milestone_id    uuid,
+  recipient_id    uuid,
+  nudges          int,
+  last_sent_at    timestamptz,
+  last_to         text,
+  met_after       boolean,
+  acknowledged_at timestamptz,
+  relayed_at      timestamptz,
+  relayed_to      text
 )
 language sql
 stable
@@ -4954,19 +5216,73 @@ security definer
 set search_path = ''
 as $$
   select n.subject_id,
+         n.recipient_id,
          count(*)::int,
          max(n.created_at),
          (array_agg(u.display_name order by n.created_at desc))[1],
          bool_or(em.completed_on is not null)
-           and max(em.completed_on) >= max(n.created_at)::date
+           and max(em.completed_on) >= max(n.created_at)::date,
+
+         /* **Seen is not done, and both are worth knowing.** A teacher who
+            nudged on Monday saw the same row on Wednesday whether the Elder
+            had read it and started or had not opened the app. Those need
+            opposite responses — wait, or go and find them. */
+         max(n.acknowledged_at),
+
+         /* **THE SECOND HOP, WHICH FALLS OUT OF THE DATA.**
+         
+            A relay is not a new concept and needed no new table: when an
+            Elder nudges the student about the same obligation, that is
+            another row on the same `subject_id` whose actor is the Elder.
+            So "did they pass it on" is a fact already in the outbox.
+         
+            It matters because a delegated nudge that is not tracked to its
+            second hop is a way of doing nothing while feeling like you did.
+            Without this the teacher cannot tell a relayed nudge from one the
+            Elder is sitting on, which is worse than nudging directly. */
+         (select max(r.created_at)
+            from public.notifications r
+           where r.kind = any (app.nudge_kinds())
+             and r.subject_id = n.subject_id
+             and r.actor_id in (
+               select n2.recipient_id
+                 from public.notifications n2
+                where n2.subject_id = n.subject_id
+                  and n2.kind = any (app.nudge_kinds())
+             )),
+
+         (select ru.display_name
+            from public.notifications r
+            join public.users ru on ru.id = r.recipient_id
+           where r.kind = any (app.nudge_kinds())
+             and r.subject_id = n.subject_id
+             and r.actor_id in (
+               select n2.recipient_id
+                 from public.notifications n2
+                where n2.subject_id = n.subject_id
+                  and n2.kind = any (app.nudge_kinds())
+             )
+           order by r.created_at desc
+           limit 1)
+
     from public.notifications n
     join public.entry_milestones em on em.id = n.subject_id
     left join public.users u on u.id = n.recipient_id
-   where n.kind = 'nudge'
+   /* **Both kinds.** `nudge` picks its template from what the recipient is,
+      so a nudge to an Elder is written as `nudge_officer` — and this read
+      `kind = 'nudge'` alone, so counting missed exactly the nudges a teacher
+      sends. The button stayed unchanged after a successful send, which reads
+      as the button not working.
+
+      Two names for one event is the shape that caused it. The kind is a
+      template selector; it is not what the row *is*. `nudge_kinds()` is the
+      one place either name is written, so a third template cannot be added
+      to the sender without being added to the counter. */
+   where n.kind = any (app.nudge_kinds())
      and n.subject_kind = 'entry_milestones'
      and em.participation_id = p_participation_id
      and em.org_id = app.org_id()
-   group by n.subject_id;
+   group by n.subject_id, n.recipient_id;
 $$;
 
 grant execute on function public.nudge_state(uuid) to authenticated;
@@ -9270,6 +9586,206 @@ $$;
 grant execute on function public.mark_record_live(text) to authenticated;
 
 notify pgrst, 'reload schema';
+
+-- ===========================================================================
+-- THE BACK CATALOGUE.
+--
+-- Four years of the Monta Vista Research Journal arrive with no project, no
+-- submission, no manuscript and no accounts. 8.6a calls a migration "an
+-- external submission whose editorial decision was made four years ago by
+-- somebody else", and that is the right description of the editorial act.
+-- It is the wrong description of the data: `generate_record` reads its
+-- byline out of `project_authors` joined to `public.users`, so routing
+-- twenty nine articles through it would mean inventing twenty nine projects
+-- and thirty accounts for people who graduated years ago -- rows a teacher
+-- would then meet in her queue and `can_see_project` would have to reason
+-- about. So the back catalogue gets its own allocator, and the byline
+-- arrives as an argument.
+--
+-- **Granted to `service_role` and to nobody else.** Every other publishing
+-- function asks `app.require_editor()`, which reads `auth.uid()`. There is
+-- no editor account at a school whose archive predates the software, and
+-- inventing one to satisfy a check is worse than not having the check. What
+-- replaces it is the grant: no browser session holds this key, so no session
+-- can reach this function at all. Loading an archive is an operator act
+-- performed once, and `generated_by` is left null rather than attributed to
+-- somebody who was not there.
+--
+-- Two steps, like every other publication path (8.6b), and for the same
+-- reason: the identifier is permanent and the files can fail to write.
+-- Allocation happens here, and `confirm_migrated_record` runs after the
+-- store has the record.
+-- ===========================================================================
+
+create or replace function public.generate_migrated_record(
+  p_org_slug      text,
+  p_prefix        text,
+  p_slug          text,
+  p_title         text,
+  p_authors       jsonb,
+  p_published_on  date,
+  p_date_precision text default 'month',
+  p_abstract      text default null,
+  p_keywords      text[] default '{}',
+  p_discipline    text default 'unclassified',
+  p_license       text default 'All rights reserved',
+  p_prior_venue   text default null,
+  p_body_format   text default 'none',
+  p_pdf_path      text default null,
+  p_pdf_text      text default null,
+  p_external_url  text default null
+)
+returns text
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_org   uuid;
+  v_year  int;
+  v_seq   int;
+  v_id    text;
+  a       jsonb;
+  v_order int := 0;
+begin
+  select o.id into v_org from public.organizations o where o.slug = p_org_slug;
+
+  if v_org is null then
+    raise exception 'no such organization: %', p_org_slug;
+  end if;
+
+  v_year := extract(year from p_published_on);
+
+  /* **Re-running the loader is not re-publishing.**
+  
+     A seed runs on every reset and an operator runs it again after fixing a
+     typo. `generate_record` resolves a slug collision by appending `-2`,
+     which is right when two different papers share a title and wrong here:
+     it would mint a second permanent identifier for the same article and
+     leave the first one in the manifest. A migrated record already at this
+     address is this record, so hand back what it was given. */
+  select r.id into v_id
+    from public.records r
+   where r.org_id = v_org and r.year = v_year and r.slug = p_slug;
+
+  if v_id is not null then
+    return v_id;
+  end if;
+
+  if coalesce(btrim(coalesce(p_prefix, '')), '') = '' then
+    raise exception 'no record prefix for this organization';
+  end if;
+
+  /* The same counter, under the same row lock, as the two paths that
+     already exist. Per organization per year, never reused (8.3). */
+  insert into public.record_sequences (org_id, year, next_seq)
+  values (v_org, v_year, 1)
+  on conflict (org_id, year) do nothing;
+
+  update public.record_sequences
+     set next_seq = next_seq + 1
+   where org_id = v_org and year = v_year
+  returning next_seq - 1 into v_seq;
+
+  v_id := upper(btrim(p_prefix)) || '-' || v_year || '-' || lpad(v_seq::text, 4, '0');
+
+  insert into public.records (
+    id, org_id, record_kind, submission_id, project_id, participation_id,
+    manuscript_id, slug, year, title, abstract, keywords, discipline,
+    published_on, date_precision, source, reviewed, body_format,
+    external_url, pdf_path, pdf_text, prior_venue, license, generated_by
+  ) values (
+    v_id, v_org, 'article', null, null, null,
+    null, p_slug, v_year, p_title, p_abstract, coalesce(p_keywords, '{}'),
+    coalesce(p_discipline, 'unclassified'),
+    p_published_on, coalesce(p_date_precision, 'month'), 'migrated', false,
+    coalesce(p_body_format, 'none'),
+    /* `pdf_text` is indexed and never rendered. The extraction is rough by
+       design and a reader should meet the file rather than a flattened
+       approximation of it. */
+    p_external_url, p_pdf_path, p_pdf_text, p_prior_venue, p_license, null
+  );
+
+  /* The byline, in the order it was printed.
+  
+     `user_id` is null for every one of them and that is the ordinary case
+     rather than a gap: these authors graduated before the software existed.
+     `byline_only` is what decides whether somebody gets an author page
+     (8.10), and it is the caller's to set -- true for a co-author from
+     outside the school, who never agreed to a permanent indexed page. */
+  for a in select * from jsonb_array_elements(coalesce(p_authors, '[]'::jsonb))
+  loop
+    v_order := v_order + 1;
+
+    insert into public.record_authors
+      (record_id, display_order, display_name, user_id, school, grad_year,
+       affiliation_verified, byline_only)
+    values (v_id, v_order, a->>'name', null, a->>'school', null,
+            false, coalesce((a->>'byline_only')::boolean, false));
+  end loop;
+
+  if v_order = 0 then
+    raise exception 'a record with no byline: %', p_slug;
+  end if;
+
+  perform app.audit(v_org, 'record.migrated', 'records', null, null,
+    jsonb_build_object('record_id', v_id, 'slug', p_slug));
+
+  return v_id;
+end;
+$$;
+
+revoke execute on function public.generate_migrated_record(
+  text, text, text, text, jsonb, date, text, text, text[], text, text, text,
+  text, text, text, text) from public, anon, authenticated;
+
+grant execute on function public.generate_migrated_record(
+  text, text, text, text, jsonb, date, text, text, text[], text, text, text,
+  text, text, text, text) to service_role;
+
+
+-- Step two. Separate for the reason in 8.6b: allocation is irreversible and
+-- writing the files is not guaranteed, so `confirmed_at` means the store has
+-- it. No consent check, because there is no account here to hold consent
+-- for: these bylines are historical facts about people the system has never
+-- met, and asking `refuse_unless_consented` about a null project would be
+-- asking a question with no subject.
+create or replace function public.confirm_migrated_record(p_record_id text)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_org    uuid;
+  v_source text;
+begin
+  select r.org_id, r.source into v_org, v_source
+    from public.records r where r.id = p_record_id;
+
+  if v_org is null then
+    raise exception 'no such record';
+  end if;
+
+  if v_source is distinct from 'migrated' then
+    raise exception 'this is not a migrated record; use mark_record_live';
+  end if;
+
+  update public.records
+     set confirmed_at = now()
+   where id = p_record_id;
+
+  perform app.audit(v_org, 'record.published', 'records', null, null,
+    jsonb_build_object('record_id', p_record_id, 'source', 'migrated'));
+end;
+$$;
+
+revoke execute on function public.confirm_migrated_record(text)
+  from public, anon, authenticated;
+grant execute on function public.confirm_migrated_record(text) to service_role;
+
+notify pgrst, 'reload schema';
+
 
 
 -- ===========================================================================

@@ -121,7 +121,41 @@ export interface Bucket {
 
 export const RECORDS_ROOT = 'records';
 
-export const prefixFor = (org: string) => `${RECORDS_ROOT}/${org}`;
+/**
+ * The prefix is named by the organization's **slug**, never by its row id.
+ *
+ * Both halves of this system meet here and they used to disagree. Every
+ * reader passed `activeOrg(...).id`, the identifier from `src/config/orgs/`,
+ * and the two seeds passed `org.id` off a database row, which is the uuid
+ * primary key. Same expression, two values, so the seeds wrote
+ * `records/<uuid>/manifest.json` while every page read `records/demo/…`.
+ *
+ * Nothing failed. `readManifest` answers an absent manifest with an empty one
+ * so a corrupt file cannot take the archive down, `index-records` discovers
+ * prefixes from the store and indexed the uuid, and the showcase rendered
+ * *Nothing published yet* — the worst shape a bug can take, because the empty
+ * state is a real state and reads as the truth.
+ *
+ * **The fix is the rename**: the config field is `Org.slug` now, so the two
+ * values are spelled differently and TypeScript separates them.
+ *
+ * **This is not that rule written twice.** The rename protects the typed
+ * half. The two callers that got it wrong are `scripts/*.mjs`, plain
+ * JavaScript that no type reaches, and they are also where the next seed will
+ * be written. So the one place both halves pass through refuses the shape
+ * outright. A slug is never uuid-shaped, so it can only fire on the error it
+ * names.
+ */
+export const prefixFor = (org: string) => {
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(org)) {
+    throw new Error(
+      `The record store is keyed by an organization's slug, and "${org}" is a row id. ` +
+        'Pass `slug` rather than `id`; a uuid here writes an archive no page can read.'
+    );
+  }
+
+  return `${RECORDS_ROOT}/${org}`;
+};
 
 export const manifestKey = (org: string) => `${prefixFor(org)}/manifest.json`;
 
@@ -139,8 +173,37 @@ export function keysFor(org: string, record: { recordKind: string; year: number;
   };
 }
 
-/** The public path for an asset, served back through /records/. */
-export const assetUrl = (key: string) => `/records/${key.replace(`${RECORDS_ROOT}/`, '')}`;
+/**
+ * The public path for an asset, served back through `/records/`.
+ *
+ * **The organization comes off, and that is the whole point of the route.**
+ * `/records/[...key]` prepends `records/{slug}/` from the hostname, and its
+ * own comment says why: "one school's address cannot reach another's files
+ * even by guessing a key: the prefix is prepended here rather than taken from
+ * the URL." A URL that carries the prefix is a URL somebody can edit.
+ *
+ * This stripped `records/` alone and left the slug behind, so every published
+ * asset was addressed `/records/demo/articles/…` and the route looked up
+ * `records/demo/demo/articles/…`. One 404 per PDF, per figure, per showcase
+ * image, on a path nothing had ever exercised because no seeded record had
+ * ever reached a page.
+ *
+ * Refused rather than trimmed when the key is the wrong shape. This runs
+ * while a record is being assembled, so a throw here stops a publication;
+ * silently producing a plausible URL puts a dead link on a permanent page.
+ */
+export function assetUrl(key: string): string {
+  const parts = key.split('/');
+
+  if (parts[0] !== RECORDS_ROOT || parts.length < 3) {
+    throw new Error(
+      `"${key}" is not a key in the record store, so it has no public address. ` +
+        `Keys are ${RECORDS_ROOT}/{org}/…`
+    );
+  }
+
+  return `/${RECORDS_ROOT}/${parts.slice(2).join('/')}`;
+}
 
 export function bucketFrom(locals: any): Bucket | null {
   return (locals?.runtime?.env?.NOTEBOOK as Bucket) ?? null;

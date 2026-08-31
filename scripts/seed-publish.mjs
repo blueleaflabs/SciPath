@@ -180,7 +180,11 @@ async function main() {
   }
 
   console.log('\nThe showcase, the archive, and the author and topic pages');
-  console.log('now have something in them. Search needs `npm run index:records`.\n');
+  console.log('now have something in them, read from the manifest at request time.');
+  /* The same correction as in `seed-journal`: inside a reset the index is
+     rebuilt two steps later, and a line saying it is needed reads as a step
+     that was missed. */
+  console.log('`/search/` reads the index, which `npm run reset` rebuilds for you.\n');
 }
 
 /**
@@ -212,7 +216,7 @@ async function publish({ what, title, allocate, confirm, org }) {
     throw new Error(`${what}: allocated ${recordId} and could not read it back`);
   }
 
-  const { files, entry, missing } = await assembleRecord(db, blob, org.id, record, imrad);
+  const { files, entry, missing } = await assembleRecord(db, blob, org.slug, record, imrad);
 
   if (missing.length > 0) {
     throw new Error(`${what}: ${missing.join(', ')} could not be read from storage`);
@@ -226,7 +230,7 @@ async function publish({ what, title, allocate, confirm, org }) {
     });
   }
 
-  const manifest = await readManifest(bucket, org.id);
+  const manifest = await readManifest(bucket, org.slug);
   await writeManifest(bucket, upsert(manifest, entry));
 
   const { error: confirmError } = await confirm(recordId);

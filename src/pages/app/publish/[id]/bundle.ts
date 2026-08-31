@@ -37,7 +37,7 @@ export const GET: APIRoute = async (context) => {
   const { files, entry, missing, url } = await assembleRecord(
     supabase,
     blobStore(context.locals),
-    org.id,
+    org.slug,
     record,
     shape('imrad')
   );

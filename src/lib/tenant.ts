@@ -81,7 +81,7 @@ export function activeOrg(ctx?: {
 
   /* On demand: the middleware already resolved the hostname. */
   const fromRequest = ctx?.locals?.org as Org | undefined;
-  if (fromRequest && fromRequest.id) return fromRequest;
+  if (fromRequest && fromRequest.slug) return fromRequest;
 
   return resolveOrg().org;
 }

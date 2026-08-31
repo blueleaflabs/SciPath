@@ -9,7 +9,7 @@
 # row from it, so adding a school is a file rather than an edit in two places
 # that have to agree.
 
-id: montavista
+slug: montavista
 
 # The label this school answers on: montavista.localhost:4321 while
 # developing, montavista.scipath.org in production. Only the label is stored,

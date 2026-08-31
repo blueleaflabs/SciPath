@@ -34,7 +34,8 @@
  *   PUBLIC_SUPABASE_URL=... SUPABASE_SECRET_KEY=... \
  *     node scripts/reset-cloud.mjs --yes --project=<ref>
  *
- *   --verify   count only, change nothing
+ *   --verify         count only, change nothing
+ *   --keep-storage   leave R2 alone, accepting the orphans it leaves
  */
 
 import { spawn } from 'node:child_process';
@@ -191,11 +192,45 @@ if (!/^https?:\/\/(127\.0\.0\.1|localhost)(:|\/|$)/.test(URL ?? '')) {
  * night. This is for the ordinary case, where everything is right and worth
  * reading anyway.
  */
+/**
+ * **A reset that cannot empty the bucket is refused, before anything is
+ * dropped.**
+ *
+ * This used to skip the storage step and print a line saying so, three steps
+ * after the database had already been rebuilt. That leaves a project whose
+ * rows are new and whose files are last season's -- objects no row refers to,
+ * which `/app/media/` will not serve and no screen lists, so nobody finds
+ * them again. `reset-storage.mjs` opens by saying "the reset left nothing
+ * behind has to be true rather than nearly true", and a caller that permits
+ * the exception makes that a comment rather than a rule (19.9).
+ *
+ * Refused here rather than at the storage step, because the dependency runs
+ * the other way: the files cannot be emptied without these four variables, so
+ * the moment to find out is before the database is dropped, not after.
+ *
+ * `--keep-storage` is the way through for somebody deliberately testing
+ * against a project with no R2 yet. It has to be typed, it is named in the
+ * summary, and it says what it is leaving behind.
+ */
+const keepStorage = args.includes('--keep-storage');
+const R2_VARS = ['R2_ACCOUNT_ID', 'R2_ACCESS_KEY_ID', 'R2_SECRET_ACCESS_KEY'];
+
 if (!verifyOnly) {
   const bucketNamed = process.env.R2_BUCKET;
-  const r2Ready = ['R2_ACCOUNT_ID', 'R2_ACCESS_KEY_ID', 'R2_SECRET_ACCESS_KEY'].every(
-    (name) => process.env[name]
-  );
+  const r2Ready = R2_VARS.every((name) => process.env[name]);
+
+  if (!(r2Ready && bucketNamed) && !keepStorage) {
+    const absent = [...R2_VARS.filter((name) => !process.env[name]), ...(bucketNamed ? [] : ['R2_BUCKET'])];
+    console.error(
+      `\n  ${absent.join(', ')} not set, so file storage cannot be emptied.\n\n` +
+        '  Nothing has been changed. A rebuilt database beside last season\'s\n' +
+        '  files is a set of objects no row points at, which nothing serves and\n' +
+        '  nothing lists, so they are never found again.\n\n' +
+        '  Put the four R2_ variables in .cloud.vars, or pass --keep-storage if\n' +
+        '  you mean to leave the bucket alone.\n'
+    );
+    process.exit(1);
+  }
 
   console.log(`
   Project       ${ref}
@@ -204,7 +239,7 @@ if (!verifyOnly) {
   Addresses     ${apexOrigin()}
   CLI linked to ${linkedRef}
   File storage  ${
-    r2Ready && bucketNamed ? bucketNamed : 'skipped — R2 credentials not set'
+    r2Ready && bucketNamed ? bucketNamed : 'KEPT — --keep-storage, and the bucket will hold orphans'
   }
 
   This drops every table and recreates it from the migration, removes every
@@ -500,10 +535,9 @@ console.log(`\n  Accounts: ${removed} removed.`);
  * have them yet. Said out loud either way: a silent skip is how somebody
  * comes to believe a bucket is empty.
  */
-const R2 = ['R2_ACCOUNT_ID', 'R2_ACCESS_KEY_ID', 'R2_SECRET_ACCESS_KEY'];
 const bucket = process.env.R2_BUCKET;
 
-if (R2.every((name) => process.env[name]) && bucket) {
+if (R2_VARS.every((name) => process.env[name]) && bucket) {
   console.log(`\nEmptying ${bucket}\n`);
 
   const code = await new Promise((resolve) => {
@@ -518,10 +552,12 @@ if (R2.every((name) => process.env[name]) && bucket) {
 
   if (code !== 0) fail('File storage was not emptied. The database is already rebuilt.');
 } else {
-  const absent = [...R2.filter((name) => !process.env[name]), ...(bucket ? [] : ['R2_BUCKET'])];
+  /* Only reachable with `--keep-storage`, which the pre-flight above is what
+     insists on. Said again here, at the moment it happens, because the
+     summary was read several minutes and one confirmation ago. */
   console.log(
-    `\n  File storage: skipped, ${absent.join(' and ')} not set.\n` +
-      `  Any photographs already in R2 are still there and no row points at them.`
+    `\n  File storage: kept, because --keep-storage was passed.\n` +
+      `  Everything already in R2 is still there and no row points at it now.`
   );
 }
 
@@ -597,6 +633,21 @@ const SEEDS = [
     ['--experimental-strip-types', 'scripts/seed-publish.mjs'],
     { DEMO_ORG: 'demo' },
   ],
+  /* The back catalogue, into `demo` like everything above it -- and for a
+     different reason. The rest of this list is confined to `demo` because
+     its people are invented; this one is confined there because its people
+     are real and nobody at the school has agreed to the migration yet.
+
+     Named here rather than left to the script's default even though the two
+     agree, because they once did not: `DEMO_ORGS` was set at every step in
+     this file while local defaulted to all four tenants, and the whole
+     difference between the two databases lived in a variable nobody set
+     locally (19.6b). `tests/journal.mjs` holds the two in step. */
+  [
+    'Journal back catalogue',
+    ['--experimental-strip-types', 'scripts/seed-journal.mjs'],
+    { JOURNAL_ORG: 'demo' },
+  ],
   ['Search index', ['scripts/index-records.mjs', '--remote'], {}],
 ];
 
@@ -646,7 +697,7 @@ const callbacks = [
        database row by declaration, so nobody can sign in to it and a line
        for it is a line to wonder about later. */
     .filter((org) => !org.isPlatform && org.provisioned)
-    .map((org) => `${originFor(org.subdomain ?? org.id)}/auth/callback/`),
+    .map((org) => `${originFor(org.subdomain ?? org.slug)}/auth/callback/`),
 ];
 
 console.log(`  Sign-in returns to these, and Supabase has to be told so:

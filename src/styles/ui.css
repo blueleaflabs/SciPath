@@ -6,6 +6,15 @@
   max-width: var(--shell);
   margin: 0 auto;
   padding: 0 var(--shell-pad);
+
+  /* **Nothing inside this may widen the document.**
+
+     A grid or flex child defaults to `min-width: auto`, which means it will
+     not shrink below its content — so a wide table inside a wrapper with a
+     max-width still pushed the viewport out and scrolled the whole page,
+     masthead and all. This is the containment the max-width above only looked
+     like it was providing. */
+  min-width: 0;
 }
 
 .card {
@@ -896,14 +905,39 @@ select {
    columns without losing the line — the whole reason ledgers have ruled
    paper. And the row under the cursor lifts, so the thing you are about to
    act on is the thing that looks active. */
+/* **A table may be too wide. A page may not.**
+
+   The advisor table grew to ten columns and pushed the viewport sideways, so
+   the whole page scrolled: the masthead, the counters, everything. A teacher
+   dragging right to reach the verdict lost the heading that told her which
+   program she was reading.
+
+   `min-width: 0` on the cells is the part that is not obvious. A table cell
+   will not shrink below the widest unbreakable thing inside it, and a long
+   project title with no spaces is unbreakable — so one row could set the
+   width of the table and the table could set the width of the document.
+   Wrapping anywhere is worse than a document that scrolls, so it is allowed
+   only where a word genuinely cannot fit.
+
+   The real fix for too many columns is fewer columns. This is the floor
+   under that, so the next column somebody adds costs a wide table and not a
+   broken page. */
 .tbl {
   width: 100%;
+  max-width: 100%;
+  table-layout: auto;
   border-collapse: collapse;
   background: var(--card);
   border: 1px solid var(--rule);
   box-shadow: var(--lift);
   font-family: var(--face-ui);
   font-size: 0.92rem;
+}
+
+.tbl th,
+.tbl td {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .tbl th {

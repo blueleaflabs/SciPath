@@ -30,7 +30,13 @@ insert into auth.users (id) values
  ('a0000000-0000-0000-0000-000000000006'),
  ('a0000000-0000-0000-0000-000000000007'),
  ('a0000000-0000-0000-0000-000000000008'),
- ('a0000000-0000-0000-0000-000000000009');
+ ('a0000000-0000-0000-0000-000000000009'),
+ /* Elder two. Added to `public.users` when the second Elder of a class
+    was needed to test 6.9's clause, and not added here -- so
+    `users_id_fkey` refused the whole fixture and every assertion in
+    this file, in `access.sql` and in `functions.sql` stopped running.
+    A suite that dies on its first insert reports nothing at all. */
+ ('a0000000-0000-0000-0000-00000000000a');
 
 /* `consent_state` stated rather than defaulted.
  

@@ -12,7 +12,7 @@
 # hostname that names no tenant falls back to — the apex, `www`, and a bare
 # `localhost`.
 
-id: scipath
+slug: scipath
 
 name: SciPath
 mark: SP

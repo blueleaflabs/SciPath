@@ -88,9 +88,9 @@ export function apexOrigin(): string {
  * same fact rather than a fourth copy of it.
  */
 export function originForOrg(org: {
-  id: string;
+  slug: string;
   subdomain?: string;
   isPlatform?: boolean;
 }): string {
-  return org.isPlatform ? apexOrigin() : originFor(org.subdomain ?? org.id);
+  return org.isPlatform ? apexOrigin() : originFor(org.subdomain ?? org.slug);
 }

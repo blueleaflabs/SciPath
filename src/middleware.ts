@@ -390,10 +390,13 @@ const handle = async (context: any, next: any) => {
 
   /* `organizations(slug)` joined, not `org_id` compared.
   
-     `users.org_id` is a uuid the database generated; `org.id` in `src/config`
-     is the tenant's slug. Comparing the two is always unequal, which would
-     have locked every account out of every tenant — a fix worse than the bug
-     it was written for, and one that looks correct in a diff. Nothing in
+     `users.org_id` is a uuid the database generated; `org.slug` in
+     `src/config` is the tenant's slug. Comparing the two is always unequal,
+     which would have locked every account out of every tenant — a fix worse
+     than the bug it was written for, and one that looks correct in a diff.
+     The config field was called `id` when this was written, which is what
+     made the two look comparable; it is `slug` now, for that reason and
+     because the record store had already been caught by it. Nothing in
      `src/` reads `organizations` anywhere else, so there is no uuid on this
      side to compare against. The slug is the name both sides know. */
   const { data: accountRow } = await supabase
@@ -468,9 +471,8 @@ const handle = async (context: any, next: any) => {
    * that is not theirs reports it never.
    *
    * Compared against `slug`, which is what `resolveOrg` returns as the
-   * tenant's name, rather than `org.id`. The two agree today because every
-   * org file names an `id` equal to its key, and depending on that agreement
-   * is depending on a convention no test enforces.
+   * tenant's name. That is now the field's own name on the config record, so
+   * the two cannot drift apart the way they could while it was called `id`.
    */
   const accountSlug = account?.organizations?.slug ?? null;
 

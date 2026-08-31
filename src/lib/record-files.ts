@@ -14,7 +14,10 @@
 import { toMarkdown } from './publish.ts';
 import { parseVideo, posterFor } from './video.ts';
 import { sectionsFor } from '../config/structure.ts';
-import { keysFor, type RecordEntry } from './records-store.ts';
+/* The shared one. A local copy of this stripped `records/` and left the
+   organization behind, which is the second copy of a one-place fact doing
+   exactly what a second copy does. */
+import { assetUrl, keysFor, type RecordEntry } from './records-store.ts';
 
 export interface StoredFile {
   key: string;
@@ -266,8 +269,6 @@ export async function assembleRecord(
     missing.push('every attached file, because storage is not configured here');
   }
 
-  const assetUrl = (key: string) => `/records/${key.replace('records/', '')}`;
-
   const entry: RecordEntry = {
     recordId: record.id,
     recordKind: record.record_kind,
@@ -277,8 +278,22 @@ export async function assembleRecord(
     authors: (authors ?? []).map((a: any) => ({
       displayName: a.display_name,
       /* No author page for anybody outside the organization: they never
-         agreed to a permanent indexed page and cannot control one. */
-      authorSlug: a.byline_only || !a.user_id ? null : slugName(a.display_name),
+         agreed to a permanent indexed page and cannot control one.
+
+         **`byline_only` decides this, and holding an account does not.** The
+         test used to be `a.byline_only || !a.user_id`, and the second half is
+         a different question wearing the first one's clothes. `user_id` says
+         whether this person has an account here, which is false for every
+         author who has graduated and for all thirty in the back catalogue.
+         8.10 is explicit that author pages are built from bylines rather than
+         from a join, exactly so they work for people the system no longer
+         holds a row for, and 4.1's strongest argument for migrating at all is
+         that eight of those authors already have a bibliography. Under the
+         old test every one of them got a plain-text byline and no page, which
+         is that payoff removed by a clause nobody read twice. `byline_only`
+         already means "outside the organization, no page", and whoever writes
+         the byline sets it. */
+      authorSlug: a.byline_only ? null : slugName(a.display_name),
       school: a.school,
       gradYear: a.grad_year,
       affiliationVerified: a.affiliation_verified,

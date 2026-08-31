@@ -76,8 +76,8 @@ let skipped = 0;
 for (const file of files) {
   const doc = yaml.load(fs.readFileSync(path.join(dir, file), 'utf8'));
 
-  if (!doc?.id) {
-    console.error(`${file} has no id.`);
+  if (!doc?.slug) {
+    console.error(`${file} has no slug.`);
     process.exit(1);
   }
 
@@ -90,8 +90,8 @@ for (const file of files) {
   }
 
   const { error } = await db.rpc('provision_org', {
-    p_slug: doc.id,
-    p_subdomain: doc.subdomain ?? doc.id,
+    p_slug: doc.slug,
+    p_subdomain: doc.subdomain ?? doc.slug,
     p_lockup_name: doc.name,
     p_mark: doc.mark,
     p_theme: doc.theme,
@@ -110,11 +110,11 @@ for (const file of files) {
   });
 
   if (error) {
-    console.error(`${doc.id}: ${error.message}`);
+    console.error(`${doc.slug}: ${error.message}`);
     process.exit(1);
   }
 
-  console.log(`  ${doc.id.padEnd(14)} ${doc.subdomain ?? doc.id}`);
+  console.log(`  ${doc.slug.padEnd(14)} ${doc.subdomain ?? doc.slug}`);
   wrote += 1;
 }
 

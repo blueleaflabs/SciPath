@@ -1554,10 +1554,25 @@ test('a student with a project can start another', () => {
 test('the oversight table says when the notebook was last written in', () => {
   /* Being behind on a notebook means not having written in three weeks, and
      the table could not say it: the link read `notebook` and gave no reason
-     to open one. A date, not a computed standing (7.8). */
+     to open one. A date, not a computed standing (7.8).
+
+     **Asserted on the date rather than on a column**, which is what the rule
+     was always about. The table went from ten columns to four — ten does not
+     fit a laptop, and a teacher dragging sideways lost the verdict and the
+     verb off the right edge — and Notebook was one of the six that went. Its
+     date moved onto the link in the title cell, which is where somebody
+     opening a notebook was already clicking.
+
+     Rewriting an assertion to match a change is usually how a guard dies.
+     What makes it right here: the rule is that a teacher can see when the
+     notebook was last written in, and that is still checked. */
   const overview = fs.readFileSync('src/pages/app/index.astro', 'utf8');
   assert.match(overview, /from\('field_notes'\)/, 'the count has to be read');
-  assert.match(overview, /<th scope="col">Notebook<\/th>/, 'and the column has to exist');
+  assert.match(
+    overview,
+    /formatDate\(w\.notebook\.last/,
+    'and the date has to be rendered somewhere on the row'
+  );
 });
 
 test('a scoped role is not told it is looking at the school', () => {
@@ -1655,7 +1670,7 @@ test('the OAuth return address comes from configuration, not from a header', () 
      root, and `originFor` would name a subdomain that does not exist. */
   const signin = fs.readFileSync('src/pages/auth/signin.ts', 'utf8');
 
-  assert.match(signin, /originFor\(org\.subdomain \?\? org\.id\)/, 'the tenant decides the origin');
+  assert.match(signin, /originFor\(org\.subdomain \?\? org\.slug\)/, 'the tenant decides the origin');
   assert.match(signin, /org\.isPlatform \? apexOrigin\(\)/, 'and the apex is not a subdomain');
   assert.doesNotMatch(
     signin,
@@ -1797,7 +1812,7 @@ test('the reset page builds its return address from the tenant', () => {
      means it can differ from the registered one in ways nothing catches. */
   const forgot = fs.readFileSync('src/pages/auth/forgot.ts', 'utf8');
 
-  assert.match(forgot, /originFor\(org\.subdomain \?\? org\.id\)/);
+  assert.match(forgot, /originFor\(org\.subdomain \?\? org\.slug\)/);
   assert.doesNotMatch(forgot, /redirectTo:.*url\.origin/);
 });
 
@@ -2089,6 +2104,74 @@ test('no braced comment sits among an element\'s attributes', () => {
   }
 
   assert.deepEqual(problems, [], 'move the comment above the element');
+});
+
+/**
+ * **A recipient's own action must be dispatched before the staff gate.**
+ *
+ * `/app/` handles its POSTs as one `else if` chain, and part way down sits
+ * `!me.runsTheClub`, which refuses anybody who is not an officer or the
+ * advisor. Everything below it is staff work. `ack` was below it and is the
+ * opposite: the card offers "I have this" only where there is nobody to pass
+ * the ask to, which is a student, so the one branch reserved for students was
+ * reachable only by the people it is never shown to. Every student who
+ * pressed it was told that only an officer or their advisor can do that,
+ * about a request addressed to them by name.
+ *
+ * Ordering rather than a permission check, because the permission is already
+ * right: `acknowledge_nudge` hard-codes `recipient_id = auth.uid()`. The
+ * chain was the only thing in the way.
+ */
+test('a nudge recipient can answer before the staff gate refuses them', () => {
+  const source = fs.readFileSync('src/pages/app/index.astro', 'utf8');
+
+  /* **The whole statement, not the token.**
+
+     This anchored on `!me.runsTheClub` alone and found it first inside the
+     comment above `ack`, which explains the bug by naming the gate. So the
+     measured position was a sentence about the code rather than the code, and
+     the `ack` assertion passed for that reason rather than for the right one.
+     19.9 has this one twice already: a rule that reads prose, and a guard
+     satisfied by an unrelated line elsewhere in the file. */
+  const gate = source.indexOf('} else if (!me.runsTheClub) {');
+  assert.notEqual(gate, -1, 'the staff gate was not found');
+  assert.equal(
+    source.indexOf('} else if (!me.runsTheClub) {', gate + 1),
+    -1,
+    'the gate anchor is not unique'
+  );
+
+  /* Both halves of the nudge loop. `ack` is offered only to somebody who
+     runs nothing, and `nudge` says in its own comment that the database
+     decides who may be reached — so neither belongs behind a role check. */
+  for (const branch of ["action === 'ack'", "action === 'nudge'"]) {
+    const at = source.indexOf(branch);
+    assert.notEqual(at, -1, `${branch} was not found`);
+    assert.equal(source.indexOf(branch, at + 1), -1, `the ${branch} anchor is not unique`);
+    assert.ok(at < gate, `${branch} is dispatched after the staff gate`);
+  }
+});
+
+/**
+ * **The answer belongs below the nav, beside the thing it is about.**
+ *
+ * Every form on this page posts to `#outcome`, so the browser sends the
+ * reader to it. The anchor sat at the top of `.wrap`, outside the signed-in
+ * half, so a message about one card among forty painted itself above the
+ * masthead. Nothing sets `error2` or `attached` without an account, so the
+ * anchor belongs inside that half, after the nav.
+ */
+test('the outcome anchor sits below the app nav, not above the masthead', () => {
+  const source = fs.readFileSync('src/pages/app/index.astro', 'utf8');
+
+  const shell = source.indexOf('<AppShell org=');
+  const outcome = source.indexOf('id="outcome"');
+
+  assert.notEqual(shell, -1, 'the app nav was not found');
+  assert.notEqual(outcome, -1, 'the outcome anchor was not found');
+  assert.equal(source.indexOf('id="outcome"', outcome + 1), -1, 'the anchor is not unique');
+
+  assert.ok(outcome > shell, 'the outcome anchor renders above the nav');
 });
 
 console.log(`${passed} ordering assertions passed. ${pages.length} pages read.`);

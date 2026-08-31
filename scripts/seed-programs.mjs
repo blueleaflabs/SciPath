@@ -88,7 +88,7 @@ const STAFF = {
  * exists so the alternate theme is built and contrast checked.
  */
 const SEASONS = Object.values(ORG_RECORDS).flatMap((record) =>
-  (record.programs ?? []).map((template) => ({ org: record.id, template }))
+  (record.programs ?? []).map((template) => ({ org: record.slug, template }))
 );
 
 /**

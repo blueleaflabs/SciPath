@@ -65,7 +65,7 @@ export const GET: APIRoute = async ({ request, cookies, url, locals, redirect })
    * subdomain that does not exist.
    */
   const org = activeOrg({ locals: locals as { org?: unknown } });
-  const origin = org.isPlatform ? apexOrigin() : originFor(org.subdomain ?? org.id);
+  const origin = org.isPlatform ? apexOrigin() : originFor(org.subdomain ?? org.slug);
 
   const { data, error } = await supabase.auth.signInWithOAuth({
     provider: 'google',

@@ -2,7 +2,7 @@
 # checked in CI. Replace or delete when a real organization is provisioned.
 # Holds no student data of any kind, and is not provisioned as a row.
 
-id: example
+slug: example
 provisioned: false
 
 name: Example Research Program

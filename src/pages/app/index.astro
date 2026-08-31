@@ -37,6 +37,9 @@ const supabase = account
    src/lib/post-redirect.ts. */
 let { error: error2, note: attached } = outcomeFrom(Astro.url);
 
+/** Nudges addressed to whoever is reading. Empty for a signed-out visitor. */
+let myNudges: any[] = [];
+
 /* Set by the middleware when it sends somebody from another school's address
    to their own. Compared against this tenant's slug rather than merely being
    present, so a link somebody pastes with `?at=` on the wrong tenant says
@@ -166,6 +169,83 @@ if (Astro.request.method === 'POST' && supabase) {
       if (e) error2 = e.message;
       else return leaveTo(`/app/entry/${entryId}/`);
     }
+  } else if (action === 'ack') {
+    /**
+     * **ABOVE THE STAFF GATE, BECAUSE THIS IS THE ONE ACTION ONLY A STUDENT
+     * TAKES.**
+     *
+     * This sat below `!me.runsTheClub`, which refuses anybody who is not an
+     * officer or the advisor. The card offers "I have this" only where there
+     * is nobody to pass the ask on to, which is exactly a student — an Elder
+     * closes the card by relaying instead. So the button was reachable only
+     * by the people it is never shown to, and every student who pressed it
+     * was told that only an officer or their advisor can do that, about a
+     * request addressed to them.
+     *
+     * The gate is right about everything under it and this was simply filed
+     * on the wrong side of it, left there from a draft where a nudge went to
+     * the Elder and the student was not a recipient at all.
+     *
+     * **Authorisation was never this handler's to give.**
+     * `acknowledge_nudge` hard-codes `recipient_id = auth.uid()`, so whoever
+     * was written to may answer and nobody may answer for somebody else. That
+     * is the rule, it is in the database where a second tab cannot get around
+     * it, and it has been right the whole time.
+     *
+     * Saying you have it is not saying it is done. The obligation stays
+     * outstanding and the row stays on the list; what changes is that whoever
+     * asked can now tell waiting from chasing.
+     */
+    const { error: e } = await supabase.rpc('acknowledge_nudge', {
+      p_milestone_id: String(form.get('milestone_id') ?? ''),
+    });
+
+    if (e) error2 = e.message;
+    else attached = 'Noted. Whoever asked can see you have it.';
+  } else if (action === 'nudge') {
+    /**
+     * **The function decides who may be reached, not this handler.**
+     *
+     * `public.nudge` checks that the recipient is on the project and that the
+     * caller runs the program or was attached to the participation. A second
+     * copy of that reasoning here is a second thing to get wrong, and the one
+     * in the database is the one that holds when somebody posts to this
+     * address without the screen.
+     *
+     * **Which is why it sits above the staff gate rather than below it.** It
+     * was below, and that was a second copy of the rule wearing an ordering
+     * instead of an `if`: harmless while the only relay was an Elder passing
+     * an ask to a student, since an Elder runs the club and cleared it — and
+     * exactly the arrangement that hid the same mistake in `ack` until a
+     * student pressed a button meant for them. A branch whose comment says
+     * the database decides should not be standing behind a role check.
+     */
+    const { data, error: e } = await supabase.rpc('nudge', {
+      p_milestone_id: String(form.get('milestone_id') ?? ''),
+      p_recipient_id: String(form.get('recipient_id') ?? ''),
+    });
+
+    if (e) {
+      error2 = e.message;
+    } else {
+      /* Four outcomes, and three of them are not errors: pressing the button
+         twice, or pressing it on a row somebody met a minute ago, is
+         ordinary. A red message would teach somebody the button is broken. */
+      /* **Only where the row cannot say it itself.**
+      
+         `sent` needs no notice: the button comes back reading `Nudged 1×`,
+         which is the same news said in the place it happened. The other three
+         are outcomes the row has no way to show, so they still surface at the
+         top. */
+      attached =
+        data === 'already'
+          ? 'Already nudged about this one this week. It will send again next week.'
+          : data === 'done'
+            ? 'That one has been met, so nothing was sent.'
+            : data === 'sent'
+              ? null
+              : 'Nothing to send.';
+    }
   } else if (!me.runsTheClub) {
     error2 = 'Only an officer or your advisor can do that.';
     /* A `detach` branch stood here and no form on this page posted to it —
@@ -186,34 +266,6 @@ if (Astro.request.method === 'POST' && supabase) {
         p_note: String(form.get('note') ?? '') || null,
       });
       if (e) error2 = e.message;
-    }
-  } else if (action === 'nudge') {
-    /* **The function decides who may be reached, not this handler.**
-    
-       `public.nudge` checks that the recipient is on the project and that
-       the caller runs the program or was attached to the participation. A
-       second copy of that reasoning here is a second thing to get wrong, and
-       the one in the database is the one that holds when somebody posts to
-       this address without the screen. */
-    const { data, error: e } = await supabase.rpc('nudge', {
-      p_milestone_id: String(form.get('milestone_id') ?? ''),
-      p_recipient_id: String(form.get('recipient_id') ?? ''),
-    });
-
-    if (e) {
-      error2 = e.message;
-    } else {
-      /* Four outcomes, and three of them are not errors: pressing the button
-         twice, or pressing it on a row somebody met a minute ago, is
-         ordinary. A red message would teach somebody the button is broken. */
-      attached =
-        data === 'sent'
-          ? 'Sent.'
-          : data === 'already'
-            ? 'Already nudged about this one this week.'
-            : data === 'done'
-              ? 'That one has been met.'
-              : 'Nothing to send.';
     }
   } else if (action === 'attach') {
     const { data, error: e } = await supabase.rpc('attach_to_project', {
@@ -521,6 +573,34 @@ if (supabase && account) {
   }
 }
 
+/**
+ * WHAT HAS BEEN ASKED OF WHOEVER IS READING.
+ *
+ * **Outside every role branch, because a nudge is addressed to a person and
+ * not to a rank.** This sat inside `if (me.runsTheClub)`, so the one group
+ * most likely to be nudged — students, who hold no role at all — never loaded
+ * it and never saw the section. The half of the loop written for them was
+ * unreachable by them.
+ *
+ * Read through a function because `notifications` has row level security on
+ * and no policies: the outbox is closed to sessions by design, and
+ * `my_nudges()` hard-codes `recipient_id = auth.uid()`.
+ */
+if (supabase && account) {
+  const { data: nudgeRows, error: nudgeError } = await supabase.rpc('my_nudges');
+  myNudges = nudgeRows ?? [];
+
+  /* **Logged, not swallowed silently.**
+  
+     The first version discarded the error, on the reasoning that a page
+     should not fail to render over a notice. That reasoning is right and the
+     silence was not: when the section showed nothing there was no way to
+     tell an empty outbox from a function that does not exist yet, and the
+     answer to "why do I see no nudges" was unavailable to anybody. The page
+     still renders; the terminal now says why. */
+  if (nudgeError) console.error(`my_nudges: ${nudgeError.message}`);
+}
+
 /* --- What everyone else sees: the projects they are responsible for --- */
 if (supabase && account) {
   if (me.runsTheClub) {
@@ -811,15 +891,27 @@ if (supabase && account) {
     await Promise.all(
       [...new Set(watched.map((w: any) => w.entry?.id).filter(Boolean))].map(
         async (participationId) => {
-          const { data } = await supabase.rpc('nudge_state', {
+          const { data, error: stateError } = await supabase.rpc('nudge_state', {
             p_participation_id: participationId,
           });
-          for (const row of data ?? []) nudgeByMilestone.set(row.milestone_id, row);
+          if (stateError) console.error(`nudge_state: ${stateError.message}`);
+          /* Keyed on both, because a track is per obligation *and* per
+             recipient. Keyed on the milestone alone, an Elder's own row
+             showed the count of a nudge her teacher had sent to her, labelled
+             as one she had sent to the student. */
+          for (const row of data ?? []) {
+            nudgeByMilestone.set(`${row.milestone_id}:${row.recipient_id}`, row);
+          }
         }
       )
     );
 
-    for (const w of watched) w.nudge = w.next ? nudgeByMilestone.get(w.next.id) ?? null : null;
+    for (const w of watched) {
+      w.nudge =
+        w.next && w.nudgeTo
+          ? nudgeByMilestone.get(`${w.next.id}:${w.nudgeTo.id}`) ?? null
+          : null;
+    }
 
     const { data: rows } = await supabase
       .from('user_roles')
@@ -1050,13 +1142,6 @@ const grouped = () => {
     {signin === 'oauth' && <p class="note" role="alert">Sign in could not start. Try again.</p>}
     {signin === 'exchange' && <p class="note" role="alert">Sign in did not complete. Try again.</p>}
     {signin === 'no_code' && <p class="note" role="alert">Sign in did not complete. Try again.</p>}
-    {/* Anchored, and the forms on this page post to it. Attaching or
-        detaching happens far down a long list of projects, and the failure
-        message renders here. */}
-    <div id="outcome" tabindex="-1">
-      {error2 && <p class="note flash" role="alert">{error2}</p>}
-    </div>
-    {attached && <p class="note flash" role="status">{attached}</p>}
 
     {/* **Why the address changed.**
     
@@ -1147,6 +1232,26 @@ const grouped = () => {
       <>
         <AppShell org={org} account={account} roles={roles} here="/app/" />
 
+        {/**
+          * **Anchored, and below the nav rather than above it.**
+          *
+          * Every form on this page posts to `#outcome`, and attaching,
+          * nudging or acknowledging happens far down a long list, so the
+          * answer has to be somewhere the browser can send the reader. That
+          * part was right and the placement was not: this sat at the top of
+          * `.wrap`, outside `{account && …}`, so a message about one card
+          * painted itself above the masthead — detached from the thing it was
+          * about, and above the nav on a page the reader had not scrolled.
+          *
+          * Nothing sets either of these without an account, so they belong
+          * inside the signed-in half. The sign-in notices above stay where
+          * they are; they are about the door.
+          */}
+        <div id="outcome" tabindex="-1">
+          {error2 && <p class="note flash" role="alert">{error2}</p>}
+          {attached && <p class="note flash" role="status">{attached}</p>}
+        </div>
+
         <section class="hero">
           <p class="t-lbl">
             {me.names.length ? me.names.map((n) => roleLabel[n]).join(' · ') : org.name}
@@ -1196,6 +1301,144 @@ const grouped = () => {
           )}
         </section>
 
+        {/* ---------------- ASKED OF YOU ---------------- */}
+        {/**
+          * **Above oversight, and above the project list.**
+          *
+          * A nudge used to be a row in `notifications` that nothing read: the
+          * outbox is closed to sessions by design, no page showed one, and the
+          * drain that turns them into email runs on a cron set to the first of
+          * January. Pressing the button incremented a counter on the sender's
+          * screen and reached nobody.
+          *
+          * This is the half the app can answer immediately. Email still goes,
+          * because there is no guarantee anybody is here — but somebody who
+          * *is* here should not have to wait on a cron to find out they were
+          * asked.
+          *
+          * Placed before everything else on the page, because a person who
+          * holds a role sees their oversight queue first and would meet a
+          * request addressed to them somewhere below forty rows of other
+          * people's work.
+          *
+          * Nothing to dismiss and nothing to mark read. `my_nudges()` drops a
+          * row the moment its obligation is met, so the list empties by the
+          * work being done rather than by being tidied — and a nudge about a
+          * form signed yesterday never appears at all.
+          */}
+        {myNudges.length > 0 && (
+          <section class="sec asked">
+            <div class="sec-h">
+              <b>Asked of you</b>
+              <span>{myNudges.length === 1 ? '1 outstanding' : `${myNudges.length} outstanding`}</span>
+            </div>
+
+            <ul class="asked-list">
+              {myNudges.map((n: any) => (
+                <li>
+                  <a href={`/app/project/${n.project_id}/in/${n.program_id}/#deliverables`}>
+                    {n.obligation}
+                  </a>
+                  <span class="sub">
+                    {n.project_title}
+                    {' · '}
+                    {n.asked_by ? `${n.asked_by} asked` : 'asked'}
+                    {n.times > 1 ? ` ${n.times} times` : ''}
+                    {n.due_on ? ` · due ${n.due_on}` : ''}
+                  </span>
+
+                  {/* **THE VERBS.**
+                  
+                      This was a list and nothing else: it told somebody they
+                      had been asked and offered them no way to answer, so the
+                      only thing that ever changed the row was the obligation
+                      being met. Between "asked" and "done" there was nothing
+                      at all, and the person who asked could not tell somebody
+                      reading it and starting from somebody who had not opened
+                      the app.
+                  
+                      Two, and only two. Saying you have it, and passing it on
+                      where there is somebody to pass it to. */}
+                  {/* **SAY WHAT IS BEING ASKED, THEN OFFER THE VERB.**
+                  
+                      The card used to state an obligation and offer "I have
+                      this", which answers a question nobody asked. An Elder
+                      read it as *something is wrong with a project, and my
+                      only option is to agree that I have been told* — true,
+                      useless, and not why a teacher nudged the Elder rather
+                      than the student.
+                  
+                      The two people who receive a nudge are asked different
+                      things and the card now says which:
+                  
+                        an Elder is asked to chase the student
+                        a student is asked to do the work
+                  
+                      So the action leads. Acknowledging is secondary and
+                      stays available, because "I have it and I will do it
+                      today" is a real answer that costs a teacher a trip
+                      across the room. */}
+                  <p class="asked-ask">
+                    {n.relay_to_id
+                      ? `${String(n.relay_to_name ?? 'the student').split(' ')[0]} needs to do this. You are looking after it.`
+                      : 'This is yours to do.'}
+                  </p>
+
+                  <div class="asked-do">
+                    {/* Only where there is somebody to pass it to, which
+                        `my_nudges` decides from the same oversight row
+                        `public.nudge` checks — so the button cannot appear
+                        where the function would refuse it. */}
+                    {n.relay_to_id && (
+                      <form method="POST" action="#outcome" class="inline">
+                        <input type="hidden" name="action" value="nudge" />
+                        <input type="hidden" name="milestone_id" value={n.milestone_id} />
+                        <input type="hidden" name="recipient_id" value={n.relay_to_id} />
+                        <button class="btn btn-sm" type="submit">
+                          Nudge {String(n.relay_to_name ?? '').split(' ')[0] || 'them'}
+                        </button>
+                      </form>
+                    )}
+
+                    {!n.relay_to_id && (
+                      <a
+                        class="btn btn-sm"
+                        href={`/app/project/${n.project_id}/in/${n.program_id}/#deliverables`}
+                      >
+                        Record it
+                      </a>
+                    )}
+
+                    {/* **Only where there is nothing else to do.**
+                    
+                        An Elder had both this and a nudge button, and the two
+                        said different things about the same card: the nudge is
+                        the act being asked for, and "I have this" beside it
+                        offered a way to answer without answering. It also did
+                        not close the card, so an Elder who pressed it was told
+                        the same thing again with the same buttons.
+                    
+                        A student has no relay and cannot close the card by
+                        acting — the obligation may take a week — so for them
+                        saying "I have it and I will do it" is a real answer
+                        that saves a teacher a trip across the room. */}
+                    {!n.relay_to_id &&
+                      (n.acknowledged_at ? (
+                        <span class="sub ack">You said you had this</span>
+                      ) : (
+                        <form method="POST" action="#outcome" class="inline">
+                          <input type="hidden" name="action" value="ack" />
+                          <input type="hidden" name="milestone_id" value={n.milestone_id} />
+                          <button class="btn btn-2 btn-sm" type="submit">I have this</button>
+                        </form>
+                      ))}
+                  </div>
+                </li>
+              ))}
+            </ul>
+          </section>
+        )}
+
         {/* ---------------- OVERSIGHT ---------------- */}
         {me.runsTheClub && (
           watched.length > 0 ? (
@@ -1220,16 +1463,29 @@ const grouped = () => {
                   <table class="tbl">
                     <thead>
                       <tr>
+                        {/* **FOUR COLUMNS, DOWN FROM TEN.**
+                        
+                            Project, Students, Elder, Sponsor, Next, Notebook,
+                            Obligations, Nudge, Standing — and Selection on a
+                            fair. Ten columns do not fit a laptop, so the page
+                            scrolled sideways and a teacher lost the verdict
+                            and the verb off the right-hand edge: the two
+                            things this screen exists for were the two she
+                            could not see.
+                        
+                            The cut is not by width, it is by question. This
+                            screen answers *which of these needs me today*.
+                            Students, the Elder, the sponsor and the notebook
+                            are facts about a project, and they are all on the
+                            project page one click away — carrying them here
+                            made the row a record card rather than a queue.
+                        
+                            Sponsor in particular was already said twice:
+                            `assess()` reports "No teacher sponsor" in
+                            Standing, so the column repeated a verdict the
+                            screen was already giving. */}
                         <th scope="col">Project</th>
-                        <th scope="col">Students</th>
-                        <th scope="col">{staffWord(group.program)}</th>
-                        <th scope="col">Sponsor</th>
                         <th scope="col">Next</th>
-                        {/* Between what is coming and what is met, because it
-                            is the third fact of the same kind and the one
-                            most often looked for first. */}
-                        <th scope="col">Notebook</th>
-                        <th scope="col">Obligations</th>
                         <th scope="col">Nudge</th>
                         <th scope="col">Standing</th>
                         {/* Only where there is somewhere to go forward to. A
@@ -1253,24 +1509,36 @@ const grouped = () => {
                                 on the participation page is that somebody
                                 assembling paperwork for several projects
                                 should not have to open each one to find it. */}
+                            {/* Who, under the title. A name is not worth a
+                                column of its own and it is what identifies
+                                the row to a teacher, who thinks in students
+                                rather than in project titles. */}
                             <span class="sub">
-                              <a href={`/app/project/${w.id}/`}>notebook</a> ·{' '}
+                              {w.authors.map((a: any) => a.users?.display_name).join(', ') || 'no author'}
+                              {w.officers.length > 0
+                                ? ` · ${w.officers.map((m: any) => m.users?.display_name).join(', ')}`
+                                : w.selfManaged.length > 0
+                                  ? ' · self-managed'
+                                  : ''}
+                            </span>
+                            {/* **The notebook column went; the date it carried
+                                did not.** `tests/ordering.mjs` requires this
+                                and its reasoning is about the date rather
+                                than the column: being behind on a notebook
+                                means not having written in three weeks, and a
+                                link reading `notebook` gives no reason to open
+                                one. Cutting the column would have taken the
+                                only thing that says so, so it moves onto the
+                                link that was already here. */}
+                            <span class="sub">
+                              <a href={`/app/project/${w.id}/`}>
+                                {w.notebook.count > 0
+                                  ? `${w.notebook.count} ${w.notebook.count === 1 ? 'entry' : 'entries'}, last ${formatDate(w.notebook.last, 'short')}`
+                                  : 'notebook not started'}
+                              </a> ·{' '}
                               <a href={`/app/project/${w.id}/notebook/`}>export</a> ·{' '}
                               <a href={`/app/project/${w.id}/team/`}>who is on it</a>
                             </span>
-                          </td>
-                          <td>{w.authors.map((a: any) => a.users?.display_name).join(', ') || '—'}</td>
-                          <td>
-                            {w.officers.length > 0
-                              ? w.officers.map((m: any) => m.users?.display_name).join(', ')
-                              : w.selfManaged.length > 0
-                                ? <>{w.selfManaged.map((m: any) => m.users?.display_name).join(', ')}<span class="sub">self-managed</span></>
-                                : <span class="miss">none</span>}
-                          </td>
-                          <td>
-                            {w.sponsor
-                              ? w.sponsor.teacher_name
-                              : <span class="miss">none named</span>}
                           </td>
                           <td>
                             {w.next ? (
@@ -1306,23 +1574,23 @@ const grouped = () => {
                             ) : (
                               <span class="none">Nothing outstanding</span>
                             )}
-                          </td>
-                          {/* The cell is the link, so the reason to open a
-                              notebook and the way in are the same thing. The
-                              export keeps its place on the title, where
-                              somebody assembling paperwork for several
-                              projects at once already looks. */}
-                          <td>
-                            {w.notebook.count > 0 ? (
-                              <a href={`/app/project/${w.id}/`}>
-                                {w.notebook.count} {w.notebook.count === 1 ? 'entry' : 'entries'}
-                                <span class="sub">last {formatDate(w.notebook.last, 'short')}</span>
-                              </a>
-                            ) : (
-                              <a href={`/app/project/${w.id}/`} class="miss">not started</a>
+
+                            {/* **Progress under the obligation, not beside
+                                it.** `4 of 29` had a column and is a second
+                                fact about the same thing the cell already
+                                names: what is owed and how much of it is
+                                done. Kept rather than dropped — it is a
+                                gradebook figure and a teacher wants it — and
+                                folded, because it never needed a heading.
+                            
+                                The notebook count went entirely. It is on
+                                the project page, the title above already
+                                links to it, and it answers a question this
+                                screen is not asking. */}
+                            {w.total > 0 && (
+                              <span class="sub">{w.done} of {w.total} met</span>
                             )}
                           </td>
-                          <td>{w.total ? `${w.done} of ${w.total}` : '—'}</td>
 
                           {/* **THE VERB.**
                           
@@ -1350,24 +1618,80 @@ const grouped = () => {
                                 <input type="hidden" name="action" value="nudge" />
                                 <input type="hidden" name="milestone_id" value={w.next.id} />
                                 <input type="hidden" name="recipient_id" value={w.nudgeTo.id} />
-                                <button class="btn btn-sm" type="submit">
-                                  Nudge {w.nudgeTo.first}
-                                </button>
-                                {/* **The count, which is the point.**
+                                {/* **The button says what has already happened.**
                                 
+                                    Feedback used to be a flash at the top of
+                                    the page reading "Sent." — the right fact
+                                    in the wrong place. The action belongs to
+                                    one row among forty, and a notice above
+                                    the fold makes the reader carry it back
+                                    down to work out which. Worse, the button
+                                    underneath was unchanged, so the row still
+                                    read as though nothing had been done.
+                                
+                                    So the count moves onto the control.
                                     "Nudged" tells a teacher nothing she did
-                                    not already know. "Nudged twice, still
+                                    not already know; "nudged twice, still
                                     open" tells her to stop typing and walk
                                     over, which is the right outcome and the
-                                    software should say so rather than imply
-                                    it. And a row that met its obligation
-                                    after a nudge is the reason she uses the
-                                    button again. */}
+                                    software should say it rather than imply
+                                    it. A row that met its obligation after a
+                                    nudge is the reason she presses it again.
+                                
+                                    Still a button once nudged, never a
+                                    disabled label. One a week is refused by
+                                    the unique index and answered plainly, and
+                                    a control that greys itself out is one
+                                    somebody cannot use next Monday either. */}
+                                <button class="btn btn-sm" type="submit">
+                                  {w.nudge
+                                    ? `Nudged ${w.nudge.nudges}×`
+                                    : `Nudge ${w.nudgeTo.first}`}
+                                </button>
+
+                                {/* **THE TRACK, AND IT HAS FOUR STATES.**
+                                
+                                    It had two: nudged, and met. Between them
+                                    a teacher who asked on Monday saw the same
+                                    row on Wednesday whether the Elder had
+                                    read it and started, or had not opened the
+                                    app — situations needing opposite
+                                    responses, and the screen told her to do
+                                    the same thing in both.
+                                
+                                    Read worst first, so the row says the one
+                                    thing worth acting on rather than a
+                                    history:
+                                
+                                      met       the obligation is done
+                                      relayed   the Elder passed it to the
+                                                student, and named who
+                                      seen      somebody said they have it
+                                      not seen  nothing has come back
+                                
+                                    `relayed` above `seen` deliberately. An
+                                    Elder who passed it on has done the thing
+                                    that was asked of them, and saying only
+                                    "seen" would lose it. **A delegated nudge
+                                    that is not tracked to its second hop is a
+                                    way of doing nothing while feeling like
+                                    you did**, so the hop is the fact worth
+                                    surfacing. */}
                                 {w.nudge && (
-                                  <span class={w.nudge.met_after ? 'sub' : 'sub late'}>
+                                  <span
+                                    class={
+                                      w.nudge.met_after || w.nudge.relayed_at || w.nudge.acknowledged_at
+                                        ? 'sub'
+                                        : 'sub late'
+                                    }
+                                  >
                                     {w.nudge.met_after
-                                      ? `nudged ${w.nudge.nudges}× · met`
-                                      : `nudged ${w.nudge.nudges}× · still open`}
+                                      ? 'met'
+                                      : w.nudge.relayed_at
+                                        ? `passed to ${String(w.nudge.relayed_to ?? 'them').split(' ')[0]}`
+                                        : w.nudge.acknowledged_at
+                                          ? `${w.nudgeTo.first} has it`
+                                          : `${w.nudgeTo.first} · not seen`}
                                   </span>
                                 )}
                               </form>
@@ -2347,6 +2671,21 @@ const grouped = () => {
   .next { font-size: 0.94rem; }
 
   /* Narrow, so the verb does not take the width the facts need. */
+  /* The one section on this page addressed *to* the reader rather than about
+     other people's work. Given the alert tint so it does not read as another
+     table heading in a page of table headings. */
+  /* The rule is a marker, not a border on the text. Without the padding the
+     first character sat against it and the section read as clipped. */
+  .asked { border-left: 3px solid var(--alert); padding-left: 16px; }
+  .asked-list { list-style: none; margin: 0; padding: 0; }
+  .asked-list li { padding: 10px 0; border-bottom: 1px solid var(--rule-fine); }
+  .asked-list li:last-child { border-bottom: 0; }
+  .asked-list a { font-weight: 600; }
+  .asked-ask { margin: 6px 0 0; font-family: var(--face-ui); font-size: 0.92rem; }
+  .asked-do { display: flex; gap: 8px; margin-top: 8px; align-items: center; }
+  .asked-do .btn { font-size: 0.86rem; padding: 5px 10px; }
+  .sub.ack { margin: 0; }
+
   .nudge-cell { white-space: nowrap; }
   .nudge-cell .btn { font-size: 0.86rem; padding: 5px 10px; }
 

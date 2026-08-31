@@ -38,7 +38,7 @@ for (const file of fs.readdirSync(dir).filter((f) => f.endsWith('.yaml'))) {
   const doc = yaml.load(fs.readFileSync(path.join(dir, file), 'utf8'));
   /* The platform record's name appears in every tenant's footer by design
      ("on SciPath"), so it is not a tenant name and cannot be compared. */
-  if (doc?.name && !doc.is_platform) nameBySlug[doc.id] = doc.name;
+  if (doc?.name && !doc.is_platform) nameBySlug[doc.slug] = doc.name;
 }
 
 const names = Object.values(nameBySlug);

@@ -11,7 +11,7 @@
 # therefore that a domain cannot identify a tenant. That case is still worth
 # keeping in mind and is recorded in the brief; it is not worth a tenant.
 
-id: svslc
+slug: svslc
 
 name: Silicon Valley Student Leadership Council
 mark: SVSLC

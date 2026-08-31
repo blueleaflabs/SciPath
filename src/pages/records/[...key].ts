@@ -24,7 +24,7 @@ export const GET: APIRoute = async (context) => {
   /* No traversal, and no reading outside this organization's prefix. */
   if (!key || key.includes('..')) return new Response('Not found', { status: 404 });
 
-  const object = await bucket.get(`${RECORDS_ROOT}/${org.id}/${key}`);
+  const object = await bucket.get(`${RECORDS_ROOT}/${org.slug}/${key}`);
   if (!object) return new Response('Not found', { status: 404 });
 
   return new Response(object.body, {

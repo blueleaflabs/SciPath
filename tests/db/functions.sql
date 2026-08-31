@@ -1622,6 +1622,174 @@ exception when others then
 end $body$;
 
 -- ===========================================================================
+-- THE BACK CATALOGUE
+--
+-- `generate_migrated_record` is the third publishing path and the only one
+-- whose bylines belong to people the system has never met. What has to hold
+-- is that it allocates like the other two, that re-running the loader is not
+-- re-publishing, and that it never quietly invents an account for somebody
+-- who graduated in 2021.
+--
+-- Read against a real database because the whole of it is a SECURITY DEFINER
+-- function, a sequence taken under a row lock, and a foreign key.
+-- ===========================================================================
+
+do $body$
+declare
+  v_org  uuid;
+  v1     text;
+  v2     text;
+  v3     text;
+  v_n    int;
+begin
+  select o.id into v_org from public.organizations o where o.slug = 'mv';
+
+  v1 := public.generate_migrated_record(
+    'mv', 'MVRJ', 'looping-and-divergence-in-the-collatz-conjecture',
+    'Looping and Divergence in the Collatz Conjecture',
+    '[{"name":"Jai Sharma","school":"Monta Vista High School"},
+      {"name":"Akshat Jha","school":"Monta Vista High School"},
+      {"name":"Sambhabi Bose","school":"Monta Vista High School"},
+      {"name":"Garrett Heller","school":"Monta Vista High School"}]'::jsonb,
+    date '2020-10-01', 'month', null,
+    array['Collatz conjecture', 'number theory', 'iteration'], 'mathematics');
+
+  if v1 <> 'MVRJ-2020-0001' then
+    raise exception 'FAIL the first 2020 identifier is %', v1;
+  end if;
+  raise notice '  ok   the sequence runs per organization per year';
+
+  -- The year is the paper's own, never the year the loader ran.
+  if (select r.year from public.records r where r.id = v1) <> 2020 then
+    raise exception 'FAIL a 2020 paper was filed under another year';
+  end if;
+  raise notice '  ok   a 2020 paper is filed under 2020';
+
+  select count(*) into v_n from public.record_authors where record_id = v1;
+  if v_n <> 4 then
+    raise exception 'FAIL % authors on the byline, expected 4', v_n;
+  end if;
+
+  if exists (select 1 from public.record_authors
+              where record_id = v1 and user_id is not null) then
+    raise exception 'FAIL an author was given an account they do not have';
+  end if;
+  raise notice '  ok   the byline is frozen with no accounts behind it';
+
+  /* **Re-running the loader is not re-publishing.**
+  
+     `generate_record` appends `-2` to a colliding slug, which is right for
+     two different papers with one title and wrong for a seed that runs on
+     every reset: it would mint a second permanent identifier for the same
+     article and leave the first stranded in the manifest. */
+  v2 := public.generate_migrated_record(
+    'mv', 'MVRJ', 'looping-and-divergence-in-the-collatz-conjecture',
+    'Looping and Divergence in the Collatz Conjecture',
+    '[{"name":"Jai Sharma"}]'::jsonb, date '2020-10-01', 'month', null,
+    '{}', 'mathematics');
+
+  if v2 <> v1 then
+    raise exception 'FAIL a second run allocated %', v2;
+  end if;
+
+  select count(*) into v_n from public.records r
+   where r.org_id = v_org and r.slug = 'looping-and-divergence-in-the-collatz-conjecture';
+  if v_n <> 1 then
+    raise exception 'FAIL % rows at one address', v_n;
+  end if;
+  raise notice '  ok   running it twice returns the identifier already allocated';
+
+  v3 := public.generate_migrated_record(
+    'mv', 'MVRJ', 'a-second-paper-that-year', 'A Second Paper That Year',
+    '[{"name":"Somebody Else"}]'::jsonb, date '2020-12-01', 'month',
+    'An abstract long enough to be one.', array['a', 'b', 'c'], 'physics');
+
+  if v3 <> 'MVRJ-2020-0002' then
+    raise exception 'FAIL the next paper took %', v3;
+  end if;
+  raise notice '  ok   and a different paper still takes the next number';
+
+  -- Two steps, and the first one does not make anything live (8.6b).
+  if (select r.confirmed_at from public.records r where r.id = v1) is not null then
+    raise exception 'FAIL allocation marked the record live';
+  end if;
+
+  perform public.confirm_migrated_record(v1);
+
+  if (select r.confirmed_at from public.records r where r.id = v1) is null then
+    raise exception 'FAIL confirming changed nothing';
+  end if;
+  raise notice '  ok   allocation and going live are separate acts';
+
+  -- The page must not claim a process the record never went through.
+  if (select r.source from public.records r where r.id = v1) <> 'migrated'
+     or (select r.reviewed from public.records r where r.id = v1) then
+    raise exception 'FAIL a migrated record claims a review it never had';
+  end if;
+  raise notice '  ok   a migrated record claims no review';
+
+  -- The wrong door for a migrated record, said plainly.
+  begin
+    perform public.mark_record_live(v3);
+    raise exception 'FAIL mark_record_live accepted a migrated record with no editor';
+  exception when others then
+    if sqlerrm like 'FAIL%' then raise; end if;
+  end;
+  raise notice '  ok   the editor path still refuses a caller with no session';
+
+  begin
+    perform public.confirm_migrated_record('MVRJ-2020-9999');
+    raise exception 'FAIL an unknown record was confirmed';
+  exception when others then
+    if sqlerrm like 'FAIL%' then raise; end if;
+  end;
+  raise notice '  ok   an unknown record is refused';
+
+  -- A record with nobody on it is not a record.
+  begin
+    perform public.generate_migrated_record(
+      'mv', 'MVRJ', 'nobody-wrote-this', 'Nobody Wrote This',
+      '[]'::jsonb, date '2021-01-01', 'month', null, '{}', 'physics');
+    raise exception 'FAIL a record with no byline was accepted';
+  exception when others then
+    if sqlerrm like 'FAIL%' then raise; end if;
+  end;
+  raise notice '  ok   a record with no byline is refused';
+
+  begin
+    perform public.generate_migrated_record(
+      'no-such-school', 'XX', 'somewhere-else', 'Somewhere Else',
+      '[{"name":"A Person"}]'::jsonb, date '2021-01-01', 'month', null, '{}', 'physics');
+    raise exception 'FAIL a record was filed against no school';
+  exception when others then
+    if sqlerrm like 'FAIL%' then raise; end if;
+  end;
+  raise notice '  ok   and a record for a school that does not exist is refused';
+
+  /* 8.10: a co-author from outside the school gets a plain-text byline and no
+     author page, and `byline_only` is the flag that says so. It has to survive
+     the trip through jsonb or every migrated author looks like a local one. */
+  perform public.generate_migrated_record(
+    'mv', 'MVRJ', 'an-outside-collaboration', 'An Outside Collaboration',
+    '[{"name":"Inside Person","school":"Monta Vista High School"},
+      {"name":"Outside Person","byline_only":true}]'::jsonb,
+    date '2021-02-01', 'month', 'An abstract long enough to be one.',
+    array['a', 'b', 'c'], 'physics');
+
+  select count(*) into v_n
+    from public.record_authors ra
+    join public.records r on r.id = ra.record_id
+   where r.slug = 'an-outside-collaboration' and ra.byline_only;
+
+  if v_n <> 1 then
+    raise exception 'FAIL % byline-only authors, expected 1', v_n;
+  end if;
+  raise notice '  ok   a co-author from outside stays byline-only';
+end
+$body$;
+
+
+-- ===========================================================================
 -- GUARDIAN CONSENT
 --
 -- The one exchange with somebody who has no account, and the one credential
@@ -1645,11 +1813,18 @@ declare
 begin
   select org_id into v_org from public.users limit 1;
 
+  /* The account row first. `public.users.id` references `auth.users`,
+     so a person minted with `gen_random_uuid()` and no credential
+     behind them is refused by the foreign key -- which is what
+     stopped this whole section from ever running. Every other
+     fixture in this file already does it in this order. */
+  v_student := gen_random_uuid();
+  insert into auth.users (id) values (v_student);
+
   insert into public.users (id, org_id, display_name, population, age_band,
                             consent_state, consent_requested_at)
-  values (gen_random_uuid(), v_org, 'Consent fixture', 'student', '13_17',
-          'pending', now())
-  returning id into v_student;
+  values (v_student, v_org, 'Consent fixture', 'student', '13_17',
+          'pending', now());
 
   insert into public.guardian_consents (org_id, user_id, guardian_name, guardian_email)
   values (v_org, v_student, 'A Guardian', 'guardian@demo.invalid')
@@ -1748,11 +1923,18 @@ begin
   -- `closed` is the irreversible state and it does not belong behind a link
   -- in an email. A parent saying no is not the same act as deleting a
   -- child's work.
+  /* The account row first. `public.users.id` references `auth.users`,
+     so a person minted with `gen_random_uuid()` and no credential
+     behind them is refused by the foreign key -- which is what
+     stopped this whole section from ever running. Every other
+     fixture in this file already does it in this order. */
+  v_student := gen_random_uuid();
+  insert into auth.users (id) values (v_student);
+
   insert into public.users (id, org_id, display_name, population, age_band,
                             consent_state, consent_requested_at)
-  values (gen_random_uuid(), v_org, 'Consent fixture two', 'student', '13_17',
-          'pending', now())
-  returning id into v_student;
+  values (v_student, v_org, 'Consent fixture two', 'student', '13_17',
+          'pending', now());
 
   insert into public.guardian_consents (org_id, user_id, guardian_name, guardian_email)
   values (v_org, v_student, 'B Guardian', 'guardian.b@demo.invalid')
@@ -1874,6 +2056,225 @@ begin
         end if;
         raise notice '  ok   a met obligation is not nudged';
       end if;
+    end if;
+  end;
+
+  -- ── A nudge to an Elder is counted, which is the case a teacher uses ───
+  --
+  -- `nudge` chooses its template from what the recipient is, so a nudge to an
+  -- officer is written as `nudge_officer`. `nudge_state` filtered
+  -- `kind = 'nudge'` alone and counted none of them: the send succeeded, the
+  -- button came back unchanged, and it read as a button that does not work.
+  --
+  -- Asserted through the *counters* rather than by reading `kind`, because
+  -- the kind is a template selector and the thing that must hold is that
+  -- every nudge is countable whoever it went to.
+  declare
+    v_elder uuid;
+    v_ms2   uuid;
+    v_seen  int;
+  begin
+    select a.user_id into v_elder
+      from public.project_authors a
+     where a.participation_id = v_part and a.role = 'officer'
+     limit 1;
+
+    if v_elder is not null then
+      select em.id into v_ms2
+        from public.entry_milestones em
+       where em.participation_id = v_part
+         and em.completed_on is null
+         and em.id <> v_ms
+       limit 1;
+
+      if v_ms2 is not null then
+        if public.nudge(v_ms2, v_elder) not in ('sent', 'self') then
+          raise exception 'FAIL an Elder could not be nudged';
+        end if;
+
+        select nudges into v_seen
+          from public.nudge_state(v_part) where milestone_id = v_ms2;
+
+        if coalesce(v_seen, 0) < 1 then
+          raise exception 'FAIL a nudge to an Elder was not counted';
+        end if;
+        raise notice '  ok   a nudge to an Elder is counted like any other';
+
+        -- And it reaches them, which is the other half nothing was reading.
+        if not exists (
+          select 1 from public.notifications
+           where subject_id = v_ms2 and recipient_id = v_elder
+        ) then
+          raise exception 'FAIL the Elder was not the recipient';
+        end if;
+        raise notice '  ok   and it is addressed to the Elder';
+      end if;
+    end if;
+  end;
+
+  -- ── The whole loop: sent, seen, relayed ────────────────────────────────
+  --
+  -- Teacher nudges the Elder. Elder says they have it. Elder passes it to the
+  -- student. Every step has to be visible from both ends, because a delegated
+  -- nudge that is not tracked to its second hop is a way of doing nothing
+  -- while feeling like you did.
+  declare
+    v_elder2  uuid;
+    v_kid     uuid;
+    v_ms3     uuid;
+    v_ack     timestamptz;
+    v_relay   timestamptz;
+  begin
+    select a.user_id into v_elder2
+      from public.project_authors a
+     where a.participation_id = v_part and a.role = 'officer'
+     limit 1;
+
+    select a.user_id into v_kid
+      from public.project_authors a
+     where a.participation_id = v_part and a.role = 'author'
+     limit 1;
+
+    select em.id into v_ms3
+      from public.entry_milestones em
+     where em.participation_id = v_part and em.completed_on is null
+     order by em.due_on nulls last
+     limit 1;
+
+    if v_elder2 is not null and v_kid is not null and v_ms3 is not null
+       and v_elder2 <> v_kid then
+
+      perform public.nudge(v_ms3, v_elder2);
+
+      -- Nothing has come back yet.
+      select acknowledged_at into v_ack
+        from public.nudge_state(v_part)
+       where milestone_id = v_ms3 and recipient_id = v_elder2;
+      if v_ack is not null then
+        raise exception 'FAIL a nudge reported as seen before anybody saw it';
+      end if;
+      raise notice '  ok   a fresh nudge reports as not seen';
+
+      -- Acknowledging does not clear the obligation. A system where saying
+      -- "on it" cleared the row would teach everybody to say "on it".
+      perform set_config('request.jwt.claim.sub', v_elder2::text, true);
+
+      if public.acknowledge_nudge(v_ms3) <> 'acknowledged' then
+        raise exception 'FAIL the Elder could not acknowledge';
+      end if;
+
+      if not exists (
+        select 1 from public.entry_milestones
+         where id = v_ms3 and completed_on is null
+      ) then
+        raise exception 'FAIL acknowledging completed the obligation';
+      end if;
+      raise notice '  ok   acknowledging says seen and does not say done';
+
+      -- The Elder passes it to the student, and the teacher can tell.
+      perform public.nudge(v_ms3, v_kid);
+
+      select acknowledged_at, relayed_at into v_ack, v_relay
+        from public.nudge_state(v_part)
+       where milestone_id = v_ms3 and recipient_id = v_elder2;
+
+      if v_ack is null then
+        raise exception 'FAIL the acknowledgement was not visible to the sender';
+      end if;
+      if v_relay is null then
+        raise exception 'FAIL the relay was not visible to the sender';
+      end if;
+      raise notice '  ok   seen and passed on are both visible from the other end';
+
+      -- ── A track belongs to a recipient, not to an obligation ───────────
+      --
+      -- Counting every nudge on a milestone made an Elder's own row report
+      -- her teacher's nudge as one she had sent, to a person nobody had
+      -- written to. The two rows must be separate and count separately.
+      declare
+        v_to_elder int;
+        v_to_kid   int;
+      begin
+        select nudges into v_to_elder from public.nudge_state(v_part)
+         where milestone_id = v_ms3 and recipient_id = v_elder2;
+
+        select nudges into v_to_kid from public.nudge_state(v_part)
+         where milestone_id = v_ms3 and recipient_id = v_kid;
+
+        if coalesce(v_to_elder, 0) <> 1 or coalesce(v_to_kid, 0) <> 1 then
+          raise exception
+            'FAIL the track is not per recipient (elder %, student %)',
+            coalesce(v_to_elder, 0), coalesce(v_to_kid, 0);
+        end if;
+        raise notice '  ok   each recipient has their own count, not a shared one';
+      end;
+
+      -- ── The Elder is offered somebody to pass it to ────────────────────
+      --
+      -- An author row is project level and an officer row names a
+      -- participation, by check constraint. Looking for the author on the
+      -- participation matched nothing ever, so the Elder's card offered no
+      -- way to pass anything on.
+      perform set_config('request.jwt.claim.sub', v_elder2::text, true);
+
+      if not exists (
+        select 1 from public.my_nudges()
+         where milestone_id = v_ms3 and relay_to_id = v_kid
+      ) then
+        raise exception 'FAIL the Elder was offered nobody to pass it to';
+      end if;
+      raise notice '  ok   the Elder is offered the student to pass it to';
+
+      -- ── And the ask closes once they have passed it on ─────────────────
+      --
+      -- The relay is the act being asked for, so a card that stays after it
+      -- goes on saying "this is yours" about something already handled —
+      -- while the teacher's own row correctly reads `passed to`.
+      if exists (select 1 from public.my_nudges() where milestone_id = v_ms3) then
+        raise exception 'FAIL the Elder is still being asked after passing it on';
+      end if;
+      raise notice '  ok   passing it on closes the ask';
+
+      -- ── Asking again reopens it ────────────────────────────────────────
+      --
+      -- Compared by time rather than by existence: a relay from a fortnight
+      -- ago does not answer a request made this morning. Without this the
+      -- Elder could never be nudged about the same obligation twice.
+      perform set_config('request.jwt.claim.sub', null, true);
+
+      update public.notifications
+         set created_at = created_at - interval '8 days'
+       where subject_id = v_ms3;
+
+      perform public.nudge(v_ms3, v_elder2);
+
+      perform set_config('request.jwt.claim.sub', v_elder2::text, true);
+
+      if not exists (select 1 from public.my_nudges() where milestone_id = v_ms3) then
+        raise exception 'FAIL a fresh ask did not reopen after an older relay';
+      end if;
+      raise notice '  ok   a fresh ask reopens the card';
+
+      -- And the student is offered nobody, being the end of the chain.
+      perform set_config('request.jwt.claim.sub', v_kid::text, true);
+
+      if exists (
+        select 1 from public.my_nudges()
+         where milestone_id = v_ms3 and relay_to_id is not null
+      ) then
+        raise exception 'FAIL the student was offered somebody to pass it to';
+      end if;
+      raise notice '  ok   the student is the end of the chain';
+
+      -- And the student has it to act on.
+      perform set_config('request.jwt.claim.sub', v_kid::text, true);
+
+      if not exists (select 1 from public.my_nudges() where milestone_id = v_ms3) then
+        raise exception 'FAIL the student cannot see what was passed to them';
+      end if;
+      raise notice '  ok   the student sees what was passed to them';
+
+      perform set_config('request.jwt.claim.sub', null, true);
     end if;
   end;
 

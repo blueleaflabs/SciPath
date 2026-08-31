@@ -23,7 +23,7 @@ export const GET: APIRoute = async (context) => {
   const path = String(context.params.path ?? '');
   if (!path || path.includes('..')) return new Response('Not found', { status: 404 });
 
-  const object = await bucket.get(`records/${org.id}/pagefind/${path}`);
+  const object = await bucket.get(`records/${org.slug}/pagefind/${path}`);
   if (!object) return new Response('Not found', { status: 404 });
 
   return new Response(object.body, {

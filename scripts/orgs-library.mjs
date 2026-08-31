@@ -36,8 +36,8 @@ export function loadOrgs() {
 
   for (const file of fs.readdirSync(DIR).filter((f) => f.endsWith('.yaml')).sort()) {
     const doc = yaml.load(fs.readFileSync(path.join(DIR, file), 'utf8'));
-    if (!doc?.id) throw new Error(`${DIR}/${file} has no id`);
-    orgs[doc.id] = shapeOrg(doc);
+    if (!doc?.slug) throw new Error(`${DIR}/${file} has no slug`);
+    orgs[doc.slug] = shapeOrg(doc);
   }
 
   return orgs;
@@ -49,7 +49,7 @@ export function loadOrgDocuments() {
 
   for (const file of fs.readdirSync(DIR).filter((f) => f.endsWith('.yaml')).sort()) {
     const doc = yaml.load(fs.readFileSync(path.join(DIR, file), 'utf8'));
-    if (!doc?.id) throw new Error(`${DIR}/${file} has no id`);
+    if (!doc?.slug) throw new Error(`${DIR}/${file} has no slug`);
     docs.push(doc);
   }
 
