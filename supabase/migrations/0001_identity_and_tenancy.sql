@@ -6042,23 +6042,37 @@ begin
     raise exception 'that person does not run this program';
   end if;
 
-  /* An officer does not appoint the officer for their own project.
+  /* An author does not choose **somebody else** to oversee their own project.
    
      Officers are assigned by other officers, and somebody who is both an
      author here and an officer of the club has an obvious interest in who
      oversees their work. Hiding the button is not enough: this is the rule,
      and the page merely reflects it.
    
-     The advisor is the exception. They oversee the club rather than compete
-     in it, and somebody has to be able to act when a project is stuck. */
-  if (select not app.is_advisor()) and exists (
-    select 1 from public.project_authors a
-     where a.project_id = v_project
-       and a.user_id = auth.uid()
-       and a.role = 'author'
-  ) then
+     **Taking it themselves is the exception, and it is not a loophole.**
+     The rule is about picking a supervisor, and there is no picking when the
+     answer is you: an officer who writes a project and looks after it is
+     self managing, which this product already has a name, a flag and a badge
+     for. `self_managed_at` is set a few lines below, the row reads
+     `self-managed` on the assignment screen and on the queue, and `assess()`
+     counts it as looked after rather than as unattended. So the act is
+     recorded rather than concealed, which is what the rule was protecting.
+     Refusing it only meant a club officer had to find a colleague to type
+     their own name, which is work the club does not need.
+   
+     The advisor is the other exception. They oversee the club rather than
+     compete in it, and somebody has to be able to act when a project is
+     stuck. */
+  if p_user_id is distinct from auth.uid()
+     and (select not app.is_advisor())
+     and exists (
+       select 1 from public.project_authors a
+        where a.project_id = v_project
+          and a.user_id = auth.uid()
+          and a.role = 'author'
+     ) then
     raise exception
-      'an author does not assign the officer for their own project. Another officer or the advisor does.';
+      'an author does not choose somebody else to oversee their own project. Take it yourself, or another officer or the advisor assigns it.';
   end if;
 
   select exists (

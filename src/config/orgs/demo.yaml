@@ -50,9 +50,20 @@ demo: true
 
 contact_email: hello@blueleaflabs.org
 editorial_review: true
+# **It said every record here was invented, and that stopped being true.**
+#
+# The line read "A working demonstration of the platform. Every project,
+# person and record here is invented." That was right while the tenant held
+# only fixtures. It now also holds the Monta Vista Research Journal back
+# catalogue: twenty six papers by thirty one real students, published under
+# their own names. A page carrying those bylines must not tell a reader they
+# are made up.
+#
+# Replaced rather than emptied, because this is the lede on the showcase, on
+# the article index and on /about/, and it is the description of the RSS feed.
 showcase_note: >-
-  A working demonstration of the platform. Every project, person and record
-  here is invented.
+  Published student research, alongside invented projects that demonstrate the
+  platform.
 
 # Monta Vista's list, unchanged. Two of them are shared and seed once for
 # everybody; the other four are school level and get a row of their own under

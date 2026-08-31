@@ -152,9 +152,20 @@ select pg_temp.refuses(
 -- here and an officer of the club has an obvious interest in who oversees
 -- their work, and hiding the button on the page is not the rule: this is.
 
+/* **The participation, not the project.**
+
+   These two asserted on `assign_officer(<project id>, …)`, and the first
+   argument has been a participation since oversight moved to a place
+   (22.18). So the lookup found no row, the function raised *no such place at
+   this school*, and both checks passed on that rather than on the rule they
+   name. Neither had ever exercised the author clause -- 19.9's shape, twice
+   in four lines. */
 \set QUIET on
 select id as author_officer from public.users where display_name = 'Fair officer' \gset
 select id as their_project  from public.projects where title = 'Private, this year' \gset
+select pa.id as their_place from public.participations pa
+  join public.projects p on p.id = pa.project_id
+ where p.title = 'Private, this year' limit 1 \gset
 \set QUIET off
 
 /* Make the officer an author of a project, which is the ordinary case: a
@@ -164,13 +175,22 @@ select org_id, :'their_project', :'author_officer', 'author', now()
   from public.projects where id = :'their_project'
 on conflict do nothing;
 
+/* Naming somebody else to oversee your own work. The rule is about choosing
+   a supervisor, and this is the choosing. */
 select pg_temp.refuses(
-  'an author does not assign the officer for their own project', :'author_officer',
-  format('select public.assign_officer(%L, %L)', :'their_project', :'author_officer'));
+  'an author does not choose who oversees their own project', :'author_officer',
+  format('select public.assign_officer(%L, %L)', :'their_place', :'elder'));
 
-select pg_temp.refuses(
-  'nor can an author of a project be named its officer', :'advisor',
-  format('select public.assign_officer(%L, %L)', :'their_project', :'author_officer'));
+/* **And the advisor may name an author as the officer of their own project**,
+   which is how self management is recorded. This asserted the opposite --
+   `refuses`, as the advisor -- and passed only because the argument was a
+   project id. `self_managed_at` and the `self-managed` badge exist for
+   exactly this row, so refusing it would have been refusing a state the
+   product renders. */
+select pg_temp.allows(
+  'and the advisor may record an author as looking after their own work',
+  :'advisor',
+  format('select public.assign_officer(%L, %L)', :'their_place', :'author_officer'));
 
 -- ── Granting a place ───────────────────────────────────────────────────────
 --
@@ -1620,6 +1640,72 @@ exception when others then
   perform set_config('role', 'postgres', true);
   raise;
 end $body$;
+
+-- ── An officer may take their own project, and may not hand it to a friend ──
+--
+-- 22.x: the rule is about choosing a supervisor, and there is no choosing
+-- when the answer is you. Read against a real database because it is one
+-- SECURITY DEFINER function reading `auth.uid()` three different ways.
+do $body$
+declare
+  v_org   uuid;
+  v_prog  uuid;
+  v_p1    uuid := gen_random_uuid();
+  v_part  uuid := gen_random_uuid();
+  v_off   uuid := gen_random_uuid();
+  v_other uuid := gen_random_uuid();
+  v_n     int;
+begin
+  select o.id into v_org from public.organizations o where o.slug = 'mv';
+  select p.id into v_prog from public.programs p
+   where p.org_id = v_org and p.program_role = 'opportunity' limit 1;
+
+  insert into auth.users (id) values (v_off), (v_other);
+  insert into public.users (id, org_id, display_name, consent_state)
+  values (v_off, v_org, 'Officer Author', 'not_required'),
+         (v_other, v_org, 'Another Officer', 'not_required');
+
+  insert into public.user_roles (org_id, user_id, role, scope_id)
+  values (v_org, v_off, 'officer', v_prog), (v_org, v_other, 'officer', v_prog);
+
+  insert into public.projects (id, org_id, title, created_by)
+  values (v_p1, v_org, 'A project its officer wrote', v_off);
+
+  insert into public.project_authors (org_id, project_id, user_id, role)
+  values (v_org, v_p1, v_off, 'author');
+
+  insert into public.participations (id, org_id, project_id, program_id)
+  values (v_part, v_org, v_p1, v_prog);
+
+  perform set_config('request.jwt.claim.sub', v_off::text, true);
+
+  -- Handing it to a colleague is still refused.
+  begin
+    perform public.assign_officer(v_part, v_other);
+    raise exception 'FAIL an author chose somebody else to oversee their own project';
+  exception when others then
+    if sqlerrm like 'FAIL%' then raise; end if;
+  end;
+  raise notice '  ok   an author cannot choose somebody else to oversee their own work';
+
+  -- Taking it themselves is allowed, and is recorded as self managed.
+  perform public.assign_officer(v_part, v_off);
+
+  select count(*) into v_n from public.project_authors a
+   where a.participation_id = v_part and a.user_id = v_off and a.role = 'officer';
+  if v_n <> 1 then raise exception 'FAIL an officer could not take their own project'; end if;
+  raise notice '  ok   and may take it themselves, which is the ordinary club case';
+
+  select count(*) into v_n from public.project_authors a
+   where a.participation_id = v_part and a.user_id = v_off
+     and a.role = 'officer' and a.self_managed_at is not null;
+  if v_n <> 1 then raise exception 'FAIL taking your own project was not marked self managed'; end if;
+  raise notice '  ok   and the row says self managed, so nothing is concealed';
+
+  perform set_config('request.jwt.claim.sub', '', true);
+end
+$body$;
+
 
 -- ===========================================================================
 -- THE BACK CATALOGUE
