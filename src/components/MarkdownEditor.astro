@@ -1,0 +1,796 @@
+---
+/**
+ * A NOTEBOOK ENTRY, WRITTEN THE WAY A DOCUMENT IS WRITTEN.
+ *
+ * The storage format is Markdown and stays Markdown. Brief 7.2 chose it so
+ * that an editor could be laid over it later with no migration, and this is
+ * that editor: what a student sees is bold, headings and lists; what the
+ * form submits, and the database stores, and `renderNote` renders, and the
+ * export prints, is the same small Markdown vocabulary it always was.
+ *
+ * ── Why it shows the result and not the marks ──────────────────────────────
+ *
+ * The first version put a toolbar over the textarea and wrote `**` into it.
+ * Pressing Bold and being handed four asterisks is fine for a programmer
+ * and wrong for a fifteen year old with thirty seconds to write down a
+ * reading. Docs is the reference: press B, the next thing typed is bold,
+ * press B again and it is not. That needs the field to *be* the rendered
+ * entry, so the field is a `contenteditable` surface and the Markdown is
+ * derived from it on every change, into the real form field underneath.
+ *
+ * ── Why the shortcuts are Google Docs' ─────────────────────────────────────
+ *
+ * Every student in the pilot writes in Docs daily, and `⌘B`, `⌘I`, `⌘⌥1`
+ * and `⌘⇧8` are already in their hands. Docs has more than this. Underline,
+ * colour, fonts and alignment have no Markdown and the brief refuses them
+ * on purpose (7.2: a notebook is a record, and styling it produces worse
+ * notebooks). Those keys are swallowed rather than passed to the browser,
+ * because a browser given `⌘U` on an editable surface underlines, and the
+ * underline would then vanish on save, which reads as the software losing
+ * work.
+ *
+ * ── Only the vocabulary survives ───────────────────────────────────────────
+ *
+ * Whatever the browser or a paste puts into the surface, the serializer
+ * writes Markdown for eleven things and plain text for everything else. A
+ * paragraph pasted from Docs keeps its bold and its list and loses its
+ * font, which is the rule 7.2 states, applied at the only point that
+ * matters. Nothing here is a second parser to keep faithful to `marked`:
+ * the surface is seeded from `renderNote`, the serializer reads the DOM,
+ * and the vocabulary is small enough that the two cannot disagree about
+ * much.
+ *
+ * ── Progressive ────────────────────────────────────────────────────────────
+ *
+ * The textarea is real and is what the form submits. With scripting off it
+ * is visible and takes Markdown by hand, as before. With scripting on it is
+ * hidden and written by the editor, and `required` moves from the textarea,
+ * which the browser cannot focus while hidden and so would refuse silently,
+ * to a check the editor makes itself.
+ */
+import { renderNote } from '../lib/notes';
+
+interface Props {
+  /** The form field name. */
+  name: string;
+  /** What is in it already, on a redisplay after an error. */
+  value?: string;
+  rows?: number;
+  required?: boolean;
+  id?: string;
+}
+
+const { name, value = '', rows = 7, required = false, id } = Astro.props;
+const fieldId = id ?? `md-${name}`;
+const seeded = value.trim() ? renderNote(value) : '';
+
+/* One entry per button, in the order they sit on the bar. The tooltip is
+   assembled in the browser, because only the browser knows whether the
+   person is on a Mac. */
+const TOOLS = [
+  { cmd: 'bold', label: 'B', title: 'Bold', keys: 'B', cls: 'b' },
+  { cmd: 'italic', label: 'I', title: 'Italic', keys: 'I', cls: 'i' },
+  { cmd: 'strike', label: 'S', title: 'Strikethrough', keys: '⇧X', cls: 's' },
+  { cmd: 'h1', label: 'H1', title: 'Heading 1', keys: '⌥1' },
+  { cmd: 'h2', label: 'H2', title: 'Heading 2', keys: '⌥2' },
+  { cmd: 'h3', label: 'H3', title: 'Heading 3', keys: '⌥3' },
+  { cmd: 'ul', label: '• List', title: 'Bulleted list', keys: '⇧8' },
+  { cmd: 'ol', label: '1. List', title: 'Numbered list', keys: '⇧7' },
+  { cmd: 'quote', label: '“ Quote', title: 'Quote', keys: null },
+  { cmd: 'code', label: '</>', title: 'Code', keys: null },
+  { cmd: 'link', label: 'Link', title: 'Link', keys: 'K' },
+];
+---
+
+<div class="mdx" data-md-editor data-required={required ? '1' : '0'}>
+  <div class="mdx-bar" role="toolbar" aria-label="Formatting" aria-controls={fieldId}>
+    {TOOLS.map((t) => (
+      <button
+        type="button"
+        class:list={['mdx-btn', t.cls && `mdx-${t.cls}`]}
+        data-cmd={t.cmd}
+        data-keys={t.keys}
+        data-title={t.title}
+        title={t.title}
+        aria-label={t.title}
+        aria-pressed="false"
+      >{t.label}</button>
+    ))}
+  </div>
+  <div class="mdx-linkbar" hidden>
+    <label>
+      <span>Address</span>
+      <input class="mdx-url" type="url" placeholder="https://" />
+    </label>
+    <button type="button" class="btn btn-sm mdx-link-ok">Add link</button>
+    <button type="button" class="btn btn-sm btn-2 mdx-link-no">Cancel</button>
+  </div>
+  <div
+    class="mdx-edit"
+    contenteditable="false"
+    role="textbox"
+    aria-multiline="true"
+    aria-labelledby={`${fieldId}-label`}
+    style={`min-height: ${rows * 1.55 + 1.2}em`}
+    hidden
+    set:html={seeded}
+  />
+  <textarea id={fieldId} name={name} rows={rows} required={required}>{value}</textarea>
+  <p class="mdx-empty" role="alert" hidden>Write what happened before recording it.</p>
+  <small class="mdx-help">
+    The same shortcuts as Google Docs: <kbd data-mod>Ctrl</kbd>+<kbd>B</kbd> bold,
+    <kbd data-mod>Ctrl</kbd>+<kbd>I</kbd> italic, <kbd data-mod>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>1</kbd> heading,
+    <kbd data-mod>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>8</kbd> list, <kbd data-mod>Ctrl</kbd>+<kbd>K</kbd> link.
+    Headings, lists, links and code are the whole vocabulary; a notebook has no fonts and no colors.
+  </small>
+</div>
+
+<script>
+  const MAC = /Mac|iPhone|iPad/.test(navigator.platform ?? '');
+  const MOD = MAC ? '⌘' : 'Ctrl';
+  const ALT = MAC ? '⌥' : 'Alt';
+  const SHIFT = MAC ? '⇧' : 'Shift';
+
+  /* ── The DOM, read as Markdown ──────────────────────────────────────── */
+
+  /** Characters that would otherwise start a mark the writer did not make. */
+  function escapeInline(text: string): string {
+    return text.replace(/([\\*_`~\[\]])/g, '\\$1');
+  }
+
+  /** A line that would otherwise read as a heading, a quote or a list. */
+  function escapeLineStart(text: string): string {
+    return text.replace(/^(\s*)([#>+-]|\d+[.)])(\s)/gm, '$1\\$2$3');
+  }
+
+  const BLOCKS = new Set([
+    'P', 'DIV', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'UL', 'OL', 'LI',
+    'BLOCKQUOTE', 'PRE', 'HR', 'TABLE', 'SECTION', 'ARTICLE', 'FIGURE',
+  ]);
+
+  function isBlock(node: Node): boolean {
+    return node.nodeType === Node.ELEMENT_NODE && BLOCKS.has((node as Element).tagName);
+  }
+
+  /** Inline content of one element, as Markdown on one logical line. */
+  function inline(node: Node): string {
+    if (node.nodeType === Node.TEXT_NODE) {
+      return escapeInline((node.textContent ?? '').replace(/\s+/g, ' '));
+    }
+    if (node.nodeType !== Node.ELEMENT_NODE) return '';
+    const el = node as HTMLElement;
+    const tag = el.tagName;
+    const kids = () => Array.from(el.childNodes).map(inline).join('');
+
+    if (tag === 'BR') return '\n';
+    if (tag === 'B' || tag === 'STRONG') return wrap(kids(), '**');
+    if (tag === 'I' || tag === 'EM') return wrap(kids(), '*');
+    if (tag === 'S' || tag === 'STRIKE' || tag === 'DEL') return wrap(kids(), '~~');
+    if (tag === 'CODE') return '`' + (el.textContent ?? '') + '`';
+    if (tag === 'A') {
+      const href = el.getAttribute('href') ?? '';
+      const text = kids();
+      return /^https?:\/\//i.test(href) ? `[${text || href}](${href})` : text;
+    }
+    /* Docs pastes weight and slant as styles on spans. */
+    if (tag === 'SPAN' || tag === 'FONT') {
+      let out = kids();
+      const w = el.style.fontWeight;
+      if (w === 'bold' || (Number(w) >= 600)) out = wrap(out, '**');
+      if (el.style.fontStyle === 'italic') out = wrap(out, '*');
+      if (/line-through/.test(el.style.textDecoration)) out = wrap(out, '~~');
+      return out;
+    }
+    if (isBlock(el)) return block(el).trim() + '\n';
+    return kids();
+  }
+
+  /** Markers go around the words, never around the spaces beside them. */
+  function wrap(text: string, mark: string): string {
+    const m = text.match(/^(\s*)([\s\S]*?)(\s*)$/);
+    if (!m || !m[2]) return text;
+    return `${m[1]}${mark}${m[2]}${mark}${m[3]}`;
+  }
+
+  /** One block element, as Markdown ending in a newline. */
+  function block(el: HTMLElement, depth = 0): string {
+    const tag = el.tagName;
+    const pad = '  '.repeat(depth);
+
+    if (/^H[1-6]$/.test(tag)) {
+      const level = Math.min(3, Number(tag[1]));
+      /* An empty block, chosen from the bar and never typed into, is
+         nothing on paper. */
+      const text = inlineOf(el).replace(/\n/g, ' ').trim();
+      return text ? `${'#'.repeat(level)} ${text}\n` : '';
+    }
+    if (tag === 'PRE') {
+      const code = (el.textContent ?? '').replace(/\n$/, '');
+      return code.trim() ? '```\n' + code + '\n```\n' : '';
+    }
+    if (tag === 'BLOCKQUOTE') {
+      const inner = children(el, depth).trim();
+      return inner ? inner.split('\n').map((l) => `> ${l}`).join('\n') + '\n' : '';
+    }
+    if (tag === 'UL' || tag === 'OL') {
+      let n = 0;
+      let out = '';
+      for (const li of Array.from(el.children)) {
+        if (li.tagName !== 'LI') continue;
+        /* The item's own words first, then any list nested inside it. */
+        let text = '';
+        let nested = '';
+        for (const child of Array.from(li.childNodes)) {
+          if (child.nodeType === Node.ELEMENT_NODE && /^(UL|OL)$/.test((child as Element).tagName)) {
+            nested += block(child as HTMLElement, depth + 1);
+          } else if (isBlock(child)) {
+            text += inlineOf(child as HTMLElement) + '\n';
+          } else {
+            text += inline(child);
+          }
+        }
+        const lines = text.replace(/\n+$/, '').split('\n');
+        if (!lines[0].trim() && !nested) continue;
+        n += 1;
+        const marker = tag === 'OL' ? `${n}. ` : '- ';
+        out += `${pad}${marker}${lines[0].trim()}\n`;
+        for (const extra of lines.slice(1)) {
+          if (extra.trim()) out += `${pad}  ${extra.trim()}\n`;
+        }
+        out += nested;
+      }
+      return out;
+    }
+    if (tag === 'HR') return '---\n';
+
+    /* Paragraphs, and the DIVs a browser makes when Enter is pressed. */
+    if (Array.from(el.childNodes).some(isBlock)) return children(el, depth);
+    const text = inlineOf(el);
+    return text.trim() ? escapeLineStart(text).replace(/\n+$/, '') + '\n' : '';
+  }
+
+  function inlineOf(el: HTMLElement): string {
+    return Array.from(el.childNodes).map(inline).join('');
+  }
+
+  /** A container's children, blocks separated by a blank line. */
+  function children(root: HTMLElement, depth = 0): string {
+    const parts: string[] = [];
+    let run = '';
+    const flush = () => {
+      if (run.trim()) parts.push(escapeLineStart(run).replace(/\n+$/, '') + '\n');
+      run = '';
+    };
+    for (const child of Array.from(root.childNodes)) {
+      if (isBlock(child)) {
+        flush();
+        const b = block(child as HTMLElement, depth);
+        if (b.trim()) parts.push(b);
+      } else {
+        run += inline(child);
+      }
+    }
+    flush();
+    return parts.join('\n');
+  }
+
+  function toMarkdown(root: HTMLElement): string {
+    return children(root).replace(/\n{3,}/g, '\n\n').trim();
+  }
+
+  /* ── A paste, reduced to the vocabulary ─────────────────────────────── */
+
+  const KEEP: Record<string, string> = {
+    B: 'b', STRONG: 'b', I: 'i', EM: 'i', S: 's', STRIKE: 's', DEL: 's',
+    CODE: 'code', A: 'a', BR: 'br', P: 'p', DIV: 'p',
+    H1: 'h1', H2: 'h2', H3: 'h3', H4: 'h3', H5: 'h3', H6: 'h3',
+    UL: 'ul', OL: 'ol', LI: 'li', BLOCKQUOTE: 'blockquote', PRE: 'pre',
+  };
+
+  /** Copy a pasted tree keeping only the eleven things, and their text. */
+  function clean(node: Node, into: Node) {
+    for (const child of Array.from(node.childNodes)) {
+      if (child.nodeType === Node.TEXT_NODE) {
+        into.appendChild(document.createTextNode(child.textContent ?? ''));
+        continue;
+      }
+      if (child.nodeType !== Node.ELEMENT_NODE) continue;
+      const el = child as HTMLElement;
+      if (el.tagName === 'SCRIPT' || el.tagName === 'STYLE' || el.tagName === 'META') continue;
+
+      let tag = KEEP[el.tagName];
+      if (el.tagName === 'SPAN') {
+        const w = el.style.fontWeight;
+        if (w === 'bold' || Number(w) >= 600) tag = 'b';
+        else if (el.style.fontStyle === 'italic') tag = 'i';
+        else if (/line-through/.test(el.style.textDecoration)) tag = 's';
+      }
+      if (!tag) {
+        clean(el, into);
+        continue;
+      }
+      const made = document.createElement(tag);
+      if (tag === 'a') {
+        const href = el.getAttribute('href') ?? '';
+        if (!/^https?:\/\//i.test(href)) {
+          clean(el, into);
+          continue;
+        }
+        made.setAttribute('href', href);
+      }
+      if (tag === 'pre') made.textContent = el.textContent ?? '';
+      else clean(el, made);
+      into.appendChild(made);
+    }
+  }
+
+  /* ── The editor ─────────────────────────────────────────────────────── */
+
+  function exec(command: string, value?: string): boolean {
+    try {
+      return document.execCommand(command, false, value);
+    } catch {
+      return false;
+    }
+  }
+
+  function label(keys: string | null): string {
+    if (!keys) return '';
+    return `${MOD}+${keys.replace('⌥', `${ALT}+`).replace('⇧', `${SHIFT}+`)}`;
+  }
+
+  /** The Docs map. Returns the command a key chord names, or nothing. */
+  function chord(ev: KeyboardEvent): string | null {
+    const mod = MAC ? ev.metaKey : ev.ctrlKey;
+    if (!mod) return null;
+    const k = ev.key.toLowerCase();
+    const digit = ev.code.startsWith('Digit') ? ev.code.slice(5) : k;
+    if (ev.altKey && !ev.shiftKey) {
+      if (digit === '1') return 'h1';
+      if (digit === '2') return 'h2';
+      if (digit === '3') return 'h3';
+      if (digit === '0') return 'plain';
+      return null;
+    }
+    if (ev.shiftKey && !ev.altKey) {
+      if (digit === '8') return 'ul';
+      if (digit === '7') return 'ol';
+      if (k === 'x') return 'strike';
+      return null;
+    }
+    if (!ev.shiftKey && !ev.altKey) {
+      if (k === 'b') return 'bold';
+      if (k === 'i') return 'italic';
+      if (k === 'k') return 'link';
+      /* Docs keys for things a notebook does not have. Swallowed, so the
+         browser does not underline something that cannot be saved. */
+      if (k === 'u' || k === 'e' || k === 'j' || k === 'l' || k === 'r') return 'nothing';
+    }
+    return null;
+  }
+
+  function setup(root: HTMLElement) {
+    const edit = root.querySelector<HTMLElement>('.mdx-edit');
+    const ta = root.querySelector('textarea');
+    const linkbar = root.querySelector<HTMLElement>('.mdx-linkbar');
+    const url = root.querySelector<HTMLInputElement>('.mdx-url');
+    const empty = root.querySelector<HTMLElement>('.mdx-empty');
+    if (!edit || !ta || !linkbar || !url || !empty) return;
+
+    /* Take over from the textarea. */
+    edit.hidden = false;
+    edit.contentEditable = 'true';
+    ta.hidden = true;
+    const required = root.dataset.required === '1';
+    ta.required = false;
+    root.classList.add('is-rich');
+    exec('styleWithCSS', 'false');
+    exec('defaultParagraphSeparator', 'p');
+
+    /* A block format chosen on an empty surface has to survive the sync
+       that would otherwise clear it: the heading exists so the next word
+       lands in it. Set by `run` for the block commands and cleared by the
+       next keystroke. */
+    let holdEmpty = false;
+
+    const sync = () => {
+      /* Everything deleted leaves the last block standing: select all,
+         delete, and the next word typed is still a heading. An empty
+         surface goes back to being one empty paragraph. */
+      if (!holdEmpty && !(edit.textContent ?? '').trim() && edit.innerHTML !== '') {
+        edit.innerHTML = '';
+        const sel = window.getSelection();
+        const r = document.createRange();
+        r.setStart(edit, 0);
+        r.collapse(true);
+        sel?.removeAllRanges();
+        sel?.addRange(r);
+      }
+      ta.value = toMarkdown(edit);
+      if (ta.value) empty.hidden = true;
+    };
+
+    /* ── The bar ── */
+    const buttons = Array.from(root.querySelectorAll<HTMLButtonElement>('button[data-cmd]'));
+    for (const btn of buttons) {
+      const keys = btn.dataset.keys && btn.dataset.keys !== 'null' ? btn.dataset.keys : null;
+      const shortcut = label(keys);
+      btn.title = shortcut ? `${btn.dataset.title} (${shortcut})` : (btn.dataset.title ?? '');
+      /* Keep the selection in the surface; a click would otherwise move
+         focus to the button and the command would have nothing to act on. */
+      btn.addEventListener('mousedown', (e) => e.preventDefault());
+      btn.addEventListener('click', () => run(btn.dataset.cmd ?? ''));
+    }
+    for (const k of root.querySelectorAll<HTMLElement>('kbd[data-mod]')) k.textContent = MOD;
+    if (MAC) {
+      for (const k of root.querySelectorAll<HTMLElement>('kbd')) {
+        if (k.textContent === 'Alt') k.textContent = ALT;
+        if (k.textContent === 'Shift') k.textContent = SHIFT;
+      }
+    }
+
+    const blockOf = (): string => {
+      const v = (document.queryCommandValue('formatBlock') || '').toLowerCase();
+      return v.replace(/^<|>$/g, '');
+    };
+
+    const reflect = () => {
+      if (!edit.contains(document.activeElement) && document.activeElement !== edit) return;
+      const b = blockOf();
+      const inList = (cmd: string) => document.queryCommandState(cmd);
+      for (const btn of buttons) {
+        let on = false;
+        switch (btn.dataset.cmd) {
+          case 'bold': on = document.queryCommandState('bold'); break;
+          case 'italic': on = document.queryCommandState('italic'); break;
+          case 'strike': on = document.queryCommandState('strikeThrough'); break;
+          case 'h1': on = b === 'h1'; break;
+          case 'h2': on = b === 'h2'; break;
+          case 'h3': on = b === 'h3'; break;
+          case 'quote': on = b === 'blockquote'; break;
+          case 'code': on = b === 'pre'; break;
+          case 'ul': on = inList('insertUnorderedList'); break;
+          case 'ol': on = inList('insertOrderedList'); break;
+        }
+        btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+      }
+    };
+    document.addEventListener('selectionchange', reflect);
+
+    /* ── Links ── */
+    let saved: Range | null = null;
+    const openLink = () => {
+      const sel = window.getSelection();
+      saved = sel && sel.rangeCount ? sel.getRangeAt(0).cloneRange() : null;
+      /* Editing an existing link: start from its address. */
+      let at: Node | null = saved?.startContainer ?? null;
+      while (at && at !== edit && !(at instanceof HTMLAnchorElement)) at = at.parentNode;
+      url.value = at instanceof HTMLAnchorElement ? at.href : '';
+      linkbar.hidden = false;
+      url.focus();
+    };
+    const closeLink = () => {
+      linkbar.hidden = true;
+      edit.focus();
+      const sel = window.getSelection();
+      if (saved && sel) {
+        sel.removeAllRanges();
+        sel.addRange(saved);
+      }
+    };
+    const applyLink = () => {
+      const href = url.value.trim();
+      if (!/^https?:\/\//i.test(href)) {
+        url.setCustomValidity('An address starting with http:// or https://');
+        url.reportValidity();
+        url.setCustomValidity('');
+        return;
+      }
+      closeLink();
+      const sel = window.getSelection();
+      if (sel && sel.isCollapsed) {
+        /* Nothing selected: the address is the text. */
+        exec('insertHTML', `<a href="${href.replace(/"/g, '&quot;')}">${href.replace(/</g, '&lt;')}</a>`);
+      } else {
+        exec('createLink', href);
+      }
+      sync();
+    };
+    root.querySelector('.mdx-link-ok')?.addEventListener('click', applyLink);
+    root.querySelector('.mdx-link-no')?.addEventListener('click', closeLink);
+    url.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Enter') { ev.preventDefault(); applyLink(); }
+      if (ev.key === 'Escape') { ev.preventDefault(); closeLink(); }
+    });
+
+    /* ── Commands ── */
+
+    /* Chrome moves the caret to the start of a line it has just made
+       into a list item or a heading, so the next word typed lands in
+       front of the one already there. The selection is remembered as
+       character offsets and put back after the command, because the text
+       nodes themselves do not survive it. */
+    const offsets = (): [number, number] | null => {
+      const sel = window.getSelection();
+      if (!sel || !sel.rangeCount) return null;
+      const r = sel.getRangeAt(0);
+      if (!edit.contains(r.startContainer)) return null;
+      const pre = r.cloneRange();
+      pre.selectNodeContents(edit);
+      pre.setEnd(r.startContainer, r.startOffset);
+      const a = pre.toString().length;
+      pre.setEnd(r.endContainer, r.endOffset);
+      return [a, pre.toString().length];
+    };
+    const restore = (at: [number, number] | null) => {
+      if (!at) return;
+      const sel = window.getSelection();
+      if (!sel) return;
+      const walker = document.createTreeWalker(edit, NodeFilter.SHOW_TEXT);
+      let node: Node | null;
+      let acc = 0;
+      let from: [Node, number] | null = null;
+      let to: [Node, number] | null = null;
+      while ((node = walker.nextNode())) {
+        const len = (node.textContent ?? '').length;
+        if (!from && acc + len >= at[0]) from = [node, at[0] - acc];
+        if (!to && acc + len >= at[1]) { to = [node, at[1] - acc]; break; }
+        acc += len;
+      }
+      if (!from) return;
+      if (!to) to = from;
+      sel.setBaseAndExtent(from[0], from[1], to[0], to[1]);
+    };
+    const keepingCaret = (fn: () => void) => {
+      const at = offsets();
+      fn();
+      restore(at);
+    };
+
+    const toggleBlock = (tag: string) => {
+      keepingCaret(() => exec('formatBlock', blockOf() === tag ? 'p' : tag));
+    };
+
+    /* An empty surface has no block for `formatBlock` or a list command
+       to act on, so H1 or List clicked before anything was typed did
+       nothing, while bold and italic (which set state for the next
+       character) worked. Give it one empty paragraph with the caret in it
+       and the command has something to turn into a heading or an item. */
+    const ensureBlock = () => {
+      if ((edit.textContent ?? '').trim() || edit.querySelector('p, h1, h2, h3, ul, ol, blockquote, pre, div')) return;
+      edit.innerHTML = '<p><br></p>';
+      const sel = window.getSelection();
+      const r = document.createRange();
+      r.setStart(edit.firstChild as Node, 0);
+      r.collapse(true);
+      sel?.removeAllRanges();
+      sel?.addRange(r);
+    };
+
+    const BLOCKISH = new Set(['h1', 'h2', 'h3', 'plain', 'quote', 'code', 'ul', 'ol']);
+    const surface = edit;
+    function run(cmd: string) {
+      if (cmd !== 'link') surface.focus();
+      if (BLOCKISH.has(cmd)) {
+        ensureBlock();
+        holdEmpty = !(surface.textContent ?? '').trim();
+      }
+      switch (cmd) {
+        case 'bold': exec('bold'); break;
+        case 'italic': exec('italic'); break;
+        case 'strike': exec('strikeThrough'); break;
+        case 'h1': case 'h2': case 'h3': toggleBlock(cmd); break;
+        case 'plain': keepingCaret(() => exec('formatBlock', 'p')); break;
+        case 'quote': toggleBlock('blockquote'); break;
+        case 'code': toggleBlock('pre'); break;
+        case 'ul': keepingCaret(() => exec('insertUnorderedList')); break;
+        case 'ol': keepingCaret(() => exec('insertOrderedList')); break;
+        case 'link': openLink(); return;
+        case 'nothing': return;
+      }
+      sync();
+      reflect();
+    }
+
+    edit.addEventListener('keydown', (ev) => {
+      if (ev.isComposing) return;
+      /* A keystroke that is not a chord ends the hold: what is typed is in
+         the block, and if everything is then deleted the ordinary reset
+         applies. */
+      holdEmpty = false;
+      const cmd = chord(ev);
+      if (cmd) {
+        ev.preventDefault();
+        run(cmd);
+        return;
+      }
+      /* Enter at the end of a heading starts a paragraph, not another
+         heading, which is what a document does. Chrome continues the
+         heading; Firefox does not; this makes them agree. Inside `pre`
+         Enter stays a newline. */
+      if (ev.key === 'Enter' && !ev.shiftKey) {
+        const b = blockOf();
+        if (/^h[1-6]$/.test(b)) {
+          const sel = window.getSelection();
+          const r = sel?.rangeCount ? sel.getRangeAt(0) : null;
+          if (r && r.collapsed) {
+            const probe = r.cloneRange();
+            let node: Node | null = r.startContainer;
+            while (node && node !== edit && !/^H[1-6]$/.test((node as Element).tagName ?? '')) node = node.parentNode;
+            if (node && node !== edit) {
+              probe.setEnd(node, node.childNodes.length);
+              if (probe.toString().trim() === '') {
+                ev.preventDefault();
+                exec('insertParagraph');
+                exec('formatBlock', 'p');
+                sync();
+                return;
+              }
+            }
+          }
+        }
+        if (b === 'pre') {
+          ev.preventDefault();
+          exec('insertText', '\n');
+          sync();
+        }
+      }
+    });
+
+    edit.addEventListener('input', sync);
+
+    /* Fonts, colours and everything else a paste carries stop here. */
+    edit.addEventListener('paste', (ev) => {
+      const html = ev.clipboardData?.getData('text/html');
+      const text = ev.clipboardData?.getData('text/plain') ?? '';
+      ev.preventDefault();
+      if (html) {
+        const doc = new DOMParser().parseFromString(html, 'text/html');
+        const box = document.createElement('div');
+        clean(doc.body, box);
+        exec('insertHTML', box.innerHTML);
+      } else {
+        exec('insertText', text);
+      }
+      sync();
+    });
+
+    /* Required, done by hand, because the browser cannot focus a hidden
+       textarea and so refuses the form without saying why. */
+    const form = ta.closest('form');
+    form?.addEventListener('submit', (ev) => {
+      sync();
+      if (required && !ta.value.trim()) {
+        ev.preventDefault();
+        empty.hidden = false;
+        edit.focus();
+      }
+    });
+
+    sync();
+  }
+
+  for (const root of document.querySelectorAll<HTMLElement>('[data-md-editor]')) setup(root);
+</script>
+
+<style>
+  .mdx { display: block; }
+  .mdx-bar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 2px;
+    padding: 4px;
+    border: 1px solid var(--rule);
+    border-bottom: 0;
+    background: var(--paper);
+  }
+  .mdx-btn {
+    min-width: 2.2em;
+    padding: 4px 8px;
+    border: 1px solid transparent;
+    background: transparent;
+    color: var(--ink);
+    font-family: var(--face-ui);
+    font-size: 0.86rem;
+    line-height: 1.4;
+    cursor: pointer;
+    border-radius: 2px;
+  }
+  .mdx-btn:hover,
+  .mdx-btn:focus-visible {
+    border-color: var(--rule);
+    background: var(--card);
+  }
+  /* Pressed reads as a key held down: the ink and the paper swap. */
+  .mdx-btn[aria-pressed='true'] {
+    background: var(--ink);
+    border-color: var(--ink);
+    color: var(--card);
+  }
+  .mdx-b { font-weight: 700; }
+  .mdx-i { font-style: italic; }
+  .mdx-s { text-decoration: line-through; }
+
+  .mdx-linkbar {
+    display: flex;
+    gap: 8px;
+    align-items: flex-end;
+    flex-wrap: wrap;
+    padding: 8px;
+    border: 1px solid var(--rule);
+    border-bottom: 0;
+    background: var(--sunk);
+  }
+  .mdx-linkbar label { flex: 1 1 18ch; }
+  .mdx-linkbar label > span { display: block; margin-bottom: 3px; font-family: var(--face-ui); font-size: 0.82rem; }
+  .mdx-linkbar input {
+    width: 100%;
+    padding: 6px 9px;
+    border: 1px solid var(--rule);
+    background: var(--card);
+    color: var(--ink);
+    font: inherit;
+    font-size: 0.92rem;
+  }
+
+  .mdx-edit,
+  .mdx textarea {
+    display: block;
+    width: 100%;
+    padding: 9px 11px;
+    border: 1px solid var(--rule);
+    background: var(--card);
+    color: var(--ink);
+    font: inherit;
+    line-height: 1.55;
+  }
+  .mdx textarea { font-family: var(--face-num); font-size: 0.95rem; resize: vertical; }
+  .mdx-edit { overflow-wrap: anywhere; }
+  .mdx-edit:focus { outline: 2px solid var(--accent, var(--ink)); outline-offset: -1px; }
+  .mdx-edit[hidden] { display: none; }
+  /* The textarea is the form's field and the no-script fallback. Once the
+     editor has taken over it is `hidden`, and the rule above that gives it
+     `display: block` would otherwise win over the attribute and leave a
+     second, empty box under the editor. */
+  .mdx textarea[hidden] { display: none; }
+
+  /* What the entry looks like below the form, so what is written is what
+     is recorded. Tight margins: this is a field, not a page. */
+  .mdx-edit :global(p) { margin: 0 0 8px; }
+  .mdx-edit :global(p:last-child) { margin-bottom: 0; }
+  .mdx-edit :global(h1),
+  .mdx-edit :global(h2),
+  .mdx-edit :global(h3) { margin: 10px 0 6px; line-height: 1.2; }
+  .mdx-edit :global(h1) { font-size: 1.35rem; }
+  .mdx-edit :global(h2) { font-size: 1.18rem; }
+  .mdx-edit :global(h3) { font-size: 1.05rem; }
+  .mdx-edit :global(ul),
+  .mdx-edit :global(ol) { margin: 0 0 8px; padding-left: 1.6em; }
+  .mdx-edit :global(blockquote) {
+    margin: 0 0 8px;
+    padding-left: 12px;
+    border-left: 3px solid var(--rule);
+    color: var(--ink-2, var(--ink));
+  }
+  .mdx-edit :global(pre) {
+    margin: 0 0 8px;
+    padding: 8px 10px;
+    background: var(--sunk);
+    font-family: var(--face-num);
+    font-size: 0.9rem;
+    white-space: pre-wrap;
+  }
+  .mdx-edit :global(code) { font-family: var(--face-num); font-size: 0.92em; }
+  .mdx-edit :global(a) { text-decoration: underline; }
+
+  .mdx-empty { margin: 6px 0 0; color: var(--ink); font-family: var(--face-ui); font-size: 0.9rem; }
+  .mdx-help { display: block; margin-top: 5px; color: var(--ink-3); font-size: 0.86rem; }
+  .mdx-help kbd {
+    font-family: var(--face-num);
+    font-size: 0.8em;
+    padding: 0 3px;
+    border: 1px solid var(--rule);
+    border-radius: 2px;
+    background: var(--card);
+  }
+</style>

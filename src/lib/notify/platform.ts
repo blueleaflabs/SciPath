@@ -249,6 +249,68 @@ const KINDS: Record<string, (m: Queued) => Written> = {
       footer(m),
   }),
 
+  /**
+   * An answer to a nudge, written by the person who was asked.
+   *
+   * The note is theirs and goes verbatim. It names the obligation and the
+   * project so the sender knows which of the week's nudges it answers.
+   */
+  nudge_reply: (m) => ({
+    subject: `${m.payload.from ?? 'A reply'} on ${m.payload.obligation}, ${m.payload.project_title}`,
+    text:
+      `${m.to_name},\n\n` +
+      `${m.payload.from ?? 'The person you nudged'} replied about ${m.payload.obligation} on ${m.payload.project_title}:\n\n` +
+      `${m.payload.note ?? ''}` +
+      footer(m),
+  }),
+
+  /* ── Documents: comments, asks, versions, grades ────────────────────── */
+
+  /**
+   * Somebody wrote on a document. One of these an hour per document per
+   * person at most (the dedupe key carries the hour), so a reader who
+   * comments on five fields sends one mail and the page has the rest.
+   */
+  comment: (m) => ({
+    subject: m.payload.reply
+      ? `${m.payload.from ?? 'The author'} replied on ${m.payload.label ?? 'a document'}`
+      : `${m.payload.from ?? 'Somebody'} commented on your ${m.payload.label ?? 'document'}`,
+    text:
+      `${m.to_name},\n\n` +
+      `${m.payload.from ?? 'Somebody'} ${m.payload.reply ? 'replied' : 'commented'} on ${m.payload.label ?? 'a document'}:\n\n` +
+      `${m.payload.note ?? ''}\n\n` +
+      `There may be more on the page than this one line.` +
+      footer(m),
+  }),
+
+  revision_asked: (m) => ({
+    subject: `${m.payload.from ?? 'Your Elder'} asks for a revision of ${m.payload.label ?? 'a document'}`,
+    text:
+      `${m.to_name},\n\n` +
+      `${m.payload.from ?? 'Your Elder'} read ${m.payload.label ?? 'your document'} and asks for a revision:\n\n` +
+      `${m.payload.note ?? ''}\n\n` +
+      `Make the change and submit it again; that answers the ask.` +
+      footer(m),
+  }),
+
+  new_version: (m) => ({
+    subject: `${m.payload.from ?? 'The author'} submitted ${m.payload.label ?? 'a document'} again`,
+    text:
+      `${m.to_name},\n\n` +
+      `${m.payload.from ?? 'The author'} submitted version ${m.payload.version ?? ''} of ${m.payload.label ?? 'the document'}. ` +
+      `You commented on an earlier version, so this is yours to read.` +
+      footer(m),
+  }),
+
+  grade_released: (m) => ({
+    subject: `A grade on ${m.payload.obligation ?? 'your work'}`,
+    text:
+      `${m.to_name},\n\n` +
+      `Your teacher released a grade on ${m.payload.obligation ?? 'an obligation'}. ` +
+      `It is under the obligation on your project's deadlines, with the feedback.` +
+      footer(m),
+  }),
+
   /* ── Leaving ─────────────────────────────────────────────────────────── */
 
   /**

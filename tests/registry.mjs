@@ -189,7 +189,7 @@ test('a phase window resolves to the end of the month it names', () => {
 test('and rolls into the next year when the school year does', () => {
   /* The course starts in August. April is not four months earlier; it is
      eight months later. */
-  const notebook = datesFor(irpd).find((d) => d.step.id === 'notebook');
+  const showcase = datesFor(irpd).find((d) => d.step.id === 'community_showcase');
   const scaling = irpd.phases.find((p) => p.id === 'irpd_scaling');
   assert.equal(scaling.window.to, 'april');
   assert.equal(
@@ -197,7 +197,7 @@ test('and rolls into the next year when the school year does', () => {
     '2027-04-30',
     'November to April ends in the April after the course began'
   );
-  assert.ok(notebook.date, 'the weekly journal step still resolves');
+  assert.ok(showcase.date, 'the last step of the year still resolves');
 });
 
 test('a step with neither a date nor a phase window stays undated', () => {

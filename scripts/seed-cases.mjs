@@ -118,6 +118,18 @@ const CASES = [
     cohorts: ['irpd'],
     entries: [{ program: 'fair', result: 'competed' }],
     note: 'A partner from another school, in no cohort. The case that forced participations.',
+    discipline: 'earth-climate',
+    keywords: ['water reuse', 'greywater', 'greenhouse', 'irrigation'],
+    abstract:
+      'A school greenhouse draws mains water and sends most of it back to the ' +
+      'drain. This entry measures how much of that could be recovered by ' +
+      'capturing bench runoff, filtering it through a sand and charcoal ' +
+      'column, and returning it to the same beds. Flow was metered at the ' +
+      'inlet and the outlet across eight weeks, and conductivity and pH were ' +
+      'read at each pass to see whether salts accumulated. Roughly half the ' +
+      'applied water was recoverable and conductivity climbed slowly enough ' +
+      'that a periodic flush looks sufficient, which is the finding a school ' +
+      'can act on without new plumbing.',
   },
   {
     n: 3,
@@ -151,6 +163,19 @@ const CASES = [
     what: 'Nitrate in four catchments',
     cohorts: ['club'],
     entries: [{ program: 'fair', result: 'competed' }],
+    discipline: 'earth-climate',
+    keywords: ['nitrate', 'water quality', 'catchments', 'field sampling'],
+    abstract:
+      'Nitrate reaching a creek comes from the land around it, and the four ' +
+      'catchments sampled here differ in what covers that land. Grab samples ' +
+      'were taken fortnightly at the same four points across a winter, read on ' +
+      'a colorimeter against a calibration curve prepared each session, and ' +
+      'paired with rainfall from the nearest station. The two catchments with ' +
+      'the most impervious surface were consistently higher, and every ' +
+      'catchment rose after rain, which is what a runoff-driven source looks ' +
+      'like. The spread within a site was wide enough that no single reading ' +
+      'means much on its own, and that is the honest limit of a fortnightly ' +
+      'sampling interval.',
   },
   {
     n: 10,
@@ -165,6 +190,17 @@ const CASES = [
       { program: 'fair', second: true, result: 'competed' },
     ],
     note: 'Advanced. Two entries, two records.',
+    discipline: 'engineering-robotics',
+    keywords: ['bearings', 'acoustic monitoring', 'condition monitoring', 'signal processing'],
+    abstract:
+      'Rolling-element bearings fail gradually, and the sound they make ' +
+      'changes before the failure is visible. This entry reports a low-cost ' +
+      'acoustic monitor that records a bearing under load, extracts band ' +
+      'energy and kurtosis from the signal, and classifies wear against a set ' +
+      'of bearings run to failure on a test rig. The classifier separated ' +
+      'healthy from worn bearings across the test set, and the false negative ' +
+      'rate mattered more than overall accuracy, because a missed fault is the ' +
+      'expensive one.',
   },
 
   // ── Across cohorts, and outside them ────────────────────────────────────
@@ -175,6 +211,17 @@ const CASES = [
     cohorts: ['irpd', 'club'],
     entries: [{ program: 'fair', result: 'competed' }],
     note: 'One project, two cohorts, two words for its supervisor. 22.9.',
+    discipline: 'chemistry-materials',
+    keywords: ['desalination', 'brine', 'reverse electrodialysis', 'energy recovery'],
+    abstract:
+      'Desalination produces brine, and the salinity difference between that ' +
+      'brine and seawater carries energy that is normally discharged with it. ' +
+      'A bench-scale reverse electrodialysis stack was built from stacked ion ' +
+      'exchange membranes and run across a range of concentration ratios to ' +
+      'measure power density against the pumping energy needed to sustain the ' +
+      'flow. Net output was positive above a threshold ratio and negative ' +
+      'below it, which locates the question this design turns on: whether a ' +
+      'real outfall sits above that line often enough to be worth the stack.',
   },
   {
     n: 12,
@@ -327,6 +374,45 @@ async function main() {
       }),
       `author of case ${c.n}`
     );
+
+    /**
+     * **A fair entry is mostly its abstract, so a case that competed needs
+     * one.**
+     *
+     * `generate_project_record` reads the title, abstract, keywords,
+     * discipline and licence off `public.manuscripts` and refuses outright
+     * when the abstract is empty. These cases recorded a result and had no
+     * manuscript, so every one of them appeared in the publish queue and
+     * none of them could be published: the screen offered an action that
+     * could only fail, which is the shape 7.14 argues against about nudge
+     * buttons and is no better here.
+     *
+     * Only the cases that competed get one. A project with no result has
+     * nothing to publish yet, and giving it an abstract would put a row in
+     * the queue that does not belong there.
+     */
+    if (c.abstract) {
+      await must(
+        db.from('manuscripts').insert({
+          org_id: mv.org.id,
+          project_id: project.id,
+          record_kind: 'project',
+          source: 'workbench',
+          title: `${c.what} [case ${c.n}]`,
+          abstract: c.abstract,
+          keywords: c.keywords ?? [],
+          discipline: c.discipline ?? 'unclassified',
+          /* A fair entry has no body of its own: it is the abstract, the
+             category and what happened (8.1). */
+          body_format: 'none',
+          license: 'CC BY 4.0',
+          created_by: author,
+          completed_on: days(-5),
+          date_precision: 'month',
+        }),
+        `manuscript for case ${c.n}`
+      );
+    }
 
     /* A co-author from another school, who is in no cohort here and whose
        school this project does not belong to. */

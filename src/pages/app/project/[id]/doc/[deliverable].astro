@@ -1,0 +1,976 @@
+---
+export const prerender = false;
+
+/**
+ * THE DOCUMENT PAGE (6.16).
+ *
+ * A deliverable written in SciPath: the shape's sections and fields as a
+ * document, saved a field at a time as it is written, read and commented
+ * on by the Elders and the teacher while it is in progress, and submitted
+ * with one button, which records the deliverable on the class's step and
+ * fixes a version.
+ *
+ * Belongs to the project, not to a place (one literature review meets the
+ * class's step and a fair's), so the address is the project's and the
+ * places that want it are looked up. The author writes; whoever may see
+ * the project reads and, if they are an Elder on it or the advisor,
+ * comments. Nothing here needs JavaScript to work: every form posts; the
+ * script on top of it saves as you type, keeps a copy in the browser until
+ * the server confirms it, and shows another author's newer text instead
+ * of overwriting it.
+ */
+
+import Base from '../../../../../layouts/Base.astro';
+import AppShell from '../../../../../components/AppShell.astro';
+import ProjectCover from '../../../../../components/ProjectCover.astro';
+import { activeOrg } from '../../../../../lib/tenant';
+import { serverClient } from '../../../../../lib/supabase';
+import { standing, isAuthorOf } from '../../../../../lib/roles';
+import { formatDate, todayIn } from '../../../../../lib/dates';
+import { daysUntil } from '../../../../../lib/attention';
+import { afterPost, outcomeFrom } from '../../../../../lib/post-redirect';
+import { signInWith } from '../../../../../lib/next-path';
+import { shape as shapeOf, staffFieldsOf } from '../../../../../lib/templates';
+import { renderMarkdown } from '../../../../../lib/notes';
+import { staffWord } from '../../../../../lib/program-names';
+import { drivePreviewUrl, driveKind } from '../../../../../lib/gdrive';
+import { placesWanting, sectionsOf, progressOf, wordCount, textOf, isFilled, stateLabel, type DocState } from '../../../../../lib/documents';
+
+const { session, account, roles } = Astro.locals;
+const org = activeOrg(Astro);
+const { id: projectId, deliverable: deliverableId } = Astro.params;
+
+if (!session) return Astro.redirect(signInWith(Astro.url));
+if (!account) return Astro.redirect('/app/welcome/');
+if (!projectId || !deliverableId) return Astro.redirect('/app/');
+
+const me = standing(roles, account?.population);
+const supabase = serverClient(Astro.request, Astro.cookies, (Astro.locals as any).runtime?.env);
+const today = todayIn(org.timezone);
+
+const { data: project } = await supabase
+  .from('projects')
+  .select('id, title, facts, process_id, project_authors(role, participation_id, self_managed_at, users(id, display_name))')
+  .eq('id', projectId)
+  .maybeSingle();
+if (!project) return Astro.redirect('/app/');
+
+const iAuthor = isAuthorOf(project.project_authors ?? [], account.id);
+const authors = (project.project_authors ?? []).filter((a: any) => a.role === 'author' && a.users);
+const elders = (project.project_authors ?? []).filter((a: any) => a.role === 'officer' && !a.self_managed_at && a.users);
+const isElderHere = elders.some((e: any) => e.users?.id === account.id);
+const mayComment = iAuthor || isElderHere || me.isAdvisor;
+/* Whose field: the author's, or the Elder's part of the handout, which an
+   Elder on the project or the advisor writes and the author never does. */
+const canWrite = (f: { owner?: string }) => (f.owner === 'staff' ? isElderHere || me.isAdvisor : iAuthor);
+
+/* The places that want this deliverable, the class first. The shape and
+   the name come from the first; a document has one shape whichever
+   program reads it. */
+const places = await placesWanting(supabase, projectId, deliverableId, project.facts ?? {}, project.process_id ?? null);
+const wanted = places[0] ?? null;
+const shape = wanted?.deliverable.shape ? shapeOf(wanted.deliverable.shape) : null;
+const label = wanted?.deliverable.name ?? deliverableId;
+
+let { error, note } = outcomeFrom(Astro.url);
+
+/* ── Actions ────────────────────────────────────────────────────────── */
+
+let docRow: any = null;
+const loadDoc = async () => {
+  const { data } = await supabase
+    .from('documents')
+    .select('id, status, version_no, submitted_at, submitted_by, updated_at, shape_id, shape_version, opened_by')
+    .eq('project_id', projectId)
+    .eq('deliverable', deliverableId)
+    .maybeSingle();
+  docRow = data ?? null;
+};
+await loadDoc();
+
+/* The author opens it by arriving. Idempotent, authors only, and the one
+   write a GET makes: a document exists from the moment somebody looks at
+   it, which is what lets the teacher tell "not started" from "opened and
+   blank". */
+if (!docRow && iAuthor && shape && wanted && Astro.request.method === 'GET') {
+  const { data: opened, error: e } = await supabase.rpc('open_document', {
+    p_project_id: projectId,
+    p_deliverable: deliverableId,
+    p_shape_id: shape.id,
+    p_shape_version: shape.version ?? 1,
+    p_staff_fields: staffFieldsOf(shape),
+  });
+  if (e) error = e.message;
+  else if (opened) await loadDoc();
+}
+
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData();
+  const action = String(form.get('action') ?? '');
+
+  if (action === 'save' && docRow && shape) {
+    /* The no-JavaScript path: every field on the page, saved in turn, each
+       against the version the page rendered with. A conflict on one field
+       is reported and the rest still save. */
+    const conflicts: string[] = [];
+    const fieldsToSave: any[] = [...sectionsOf(shape).flatMap((s) => s.fields), { id: '_doc_link', kind: 'link', prompt: 'Google Doc' }];
+    for (const f of fieldsToSave) {
+      if (f.kind === 'note' || !canWrite(f)) continue;
+      if (!form.has(`f:${f.id}`) && f.kind !== 'choices' && f.kind !== 'table' && f.kind !== 'rubric') continue;
+      let value: any;
+      if (f.kind === 'choices') value = form.getAll(`f:${f.id}`).map(String);
+      else if (f.kind === 'number') value = String(form.get(`f:${f.id}`) ?? '').trim() === '' ? null : Number(form.get(`f:${f.id}`));
+      else if (f.kind === 'table') {
+        value = (f.rows ?? []).map((_: string, r: number) => (f.columns ?? []).map((__: string, c: number) => String(form.get(`f:${f.id}:${r}:${c}`) ?? '')));
+        if (!(f.rows ?? []).some((_: string, r: number) => form.has(`f:${f.id}:${r}:0`))) continue;
+      } else if (f.kind === 'rubric') {
+        const picks: Record<string, string> = {};
+        for (const c of wanted?.step?.rubric?.criteria ?? []) {
+          const level = String(form.get(`f:${f.id}:${c.id}`) ?? '');
+          if (level) picks[c.id] = level;
+        }
+        if (!(wanted?.step?.rubric?.criteria ?? []).some((c: any) => form.has(`f:${f.id}:${c.id}`)) && Object.keys(picks).length === 0) continue;
+        value = picks;
+      } else value = String(form.get(`f:${f.id}`) ?? '');
+      const version = Number(form.get(`v:${f.id}`) ?? 0);
+      const { data, error: e } = await supabase.rpc('save_field', {
+        p_document_id: docRow.id,
+        p_field_id: f.id,
+        p_value: value,
+        p_version: version,
+      });
+      if (e) {
+        error = e.message;
+        break;
+      }
+      if (data && data.ok === false) conflicts.push(f.prompt ?? f.id);
+    }
+    if (!error) {
+      note = conflicts.length
+        ? `Saved, except ${conflicts.join(', ')}: somebody else wrote there first. Their text is on the page now.`
+        : 'Saved.';
+    }
+  } else if (action === 'submit' && docRow) {
+    const { error: e } = await supabase.rpc('submit_document', {
+      p_document_id: docRow.id,
+      p_participation_id: String(form.get('participation_id') ?? ''),
+      p_milestone_id: String(form.get('milestone_id') ?? '') || null,
+      p_label: label,
+    });
+    if (e) error = e.message;
+    else note = docRow.version_no > 0 ? 'Submitted again. The new version stands; whoever commented has been told.' : 'Submitted. It is on the calendar as done, and your Elder can read it.';
+  } else if (action === 'comment' && docRow) {
+    const { error: e } = await supabase.rpc('comment_on_document', {
+      p_document_id: docRow.id,
+      p_field_id: String(form.get('field_id') ?? '') || null,
+      p_body_md: String(form.get('body') ?? ''),
+      p_needs_revision: String(form.get('needs_revision') ?? '') === '1',
+      p_reply_to: String(form.get('reply_to') ?? '') || null,
+    });
+    if (e) error = e.message;
+    else note = 'Sent.';
+  } else if (action === 'resolve') {
+    const { error: e } = await supabase.rpc('resolve_ask', { p_feedback_id: String(form.get('feedback_id') ?? '') });
+    if (e) error = e.message;
+    else note = 'Ask withdrawn.';
+  }
+
+  return afterPost(Astro.url, { error, note });
+}
+
+/* ── What is on the page ─────────────────────────────────────────────── */
+
+const { data: fieldRows } = docRow
+  ? await supabase.from('document_fields').select('field_id, value, version, updated_at, updated_by, by:updated_by(display_name)').eq('document_id', docRow.id)
+  : { data: [] as any[] };
+const values: Record<string, any> = {};
+const versions: Record<string, number> = {};
+const editedBy: Record<string, { name: string; at: string }> = {};
+for (const r of fieldRows ?? []) {
+  values[r.field_id] = r.value;
+  versions[r.field_id] = r.version;
+  editedBy[r.field_id] = { name: (r as any).by?.display_name ?? '', at: r.updated_at };
+}
+
+const { data: comments } = docRow
+  ? await supabase
+      .from('deliverable_feedback')
+      .select('id, field_id, field_version, reply_to, body_md, needs_revision, created_at, resolved_at, author_id, author:author_id(display_name)')
+      .eq('document_id', docRow.id)
+      .order('created_at', { ascending: true })
+  : { data: [] as any[] };
+
+const threadOn = (fieldId: string | null) =>
+  (comments ?? []).filter((c: any) => (fieldId ? c.field_id === fieldId : !c.field_id));
+const openAsks = (comments ?? []).filter((c: any) => c.needs_revision && !c.resolved_at);
+const openAskOn = (fieldId: string) => openAsks.some((c: any) => c.field_id === fieldId);
+
+const progress = shape ? progressOf(shape, values) : { asked: 0, filled: 0, missing: [], over: [] };
+const state: DocState = !docRow
+  ? 'not_started'
+  : docRow.status === 'submitted'
+    ? 'submitted'
+    : docRow.status === 'revising'
+      ? 'revising'
+      : 'in_progress';
+
+const fmt = (d: string | null | undefined) => (d ? formatDate(String(d).slice(0, 10), 'short') : '');
+const when = (iso: string | null | undefined) => {
+  if (!iso) return '';
+  const d = new Date(iso);
+  return `${formatDate(iso.slice(0, 10), 'short')} ${d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: org.timezone })}`;
+};
+const days = wanted?.dueOn ? daysUntil(wanted.dueOn, today) : null;
+const dueWord =
+  days === null ? '' : days < 0 ? `${Math.abs(days)} ${Math.abs(days) === 1 ? 'day' : 'days'} late` : days === 0 ? 'due today' : `${days} ${days === 1 ? 'day' : 'days'} left`;
+
+/* A document written in a Google Doc and linked here: the link stands in
+   for the fields, so Submit is open and the ledger gets the address. The
+   fields stay available, and feedback by field needs them. */
+const docLink: string = typeof values['_doc_link'] === 'string' ? values['_doc_link'] : '';
+const canSubmit = iAuthor && docRow && wanted && (progress.missing.length === 0 || docLink.length > 0);
+const rubric = wanted?.step?.rubric ?? null;
+const submitLabel = docRow?.version_no > 0 ? 'Submit again' : 'Submit';
+const elderWord = wanted ? staffWord(wanted.program as any) : 'Elder';
+const sections = shape ? sectionsOf(shape) : [];
+const changedSince = (c: any) => c.field_id && c.field_version != null && (versions[c.field_id] ?? 0) > c.field_version;
+---
+
+<Base title={`${label} · ${project.title}`} noindex={true}>
+  <div class="wrap doc-wrap">
+    <AppShell org={org} account={account} roles={roles} here={wanted ? `/app/project/${project.id}/in/${wanted.programId}/` : `/app/project/${project.id}/`} />
+
+    <ProjectCover
+      kick={project.title}
+      title={label}
+      people={[
+        { label: authors.length === 1 ? 'Author' : 'Authors', value: authors.map((a: any) => a.users?.display_name).join(', ') || 'None yet' },
+        ...(elders.length > 0 ? [{ label: elders.length === 1 ? elderWord : staffWord(wanted?.program as any, 'plural'), value: elders.map((e: any) => e.users?.display_name).join(', ') }] : []),
+      ]}
+    >
+      {wanted && <a class="btn btn-sm ghost" href={`/app/project/${project.id}/in/${wanted.programId}/#m-${wanted.milestoneId ?? ''}`}>Back to the calendar</a>}
+      <a class="btn btn-sm ghost" href={`/app/project/${project.id}/`}>Project Notebook</a>
+      <a class="btn btn-sm ghost noprint" href={`/app/project/${project.id}/doc/${deliverableId}/print/?go=1`} target="_blank" rel="noopener noreferrer">Save as PDF</a>
+    </ProjectCover>
+
+    <div id="outcome" tabindex="-1">
+      {error && <p class="note flash" role="alert">{error}</p>}
+      {note && !error && <p class="note flash" role="status">{note}</p>}
+    </div>
+
+    {!shape || !wanted ? (
+      <div class="allclear"><b>Nothing to write here</b>This deliverable is not written in SciPath, or this project is not in a program that asks for it.</div>
+    ) : (
+      <>
+        {/* The strip: where it stands, in one line, and the verb. */}
+        <div class:list={['docstrip', state]} id="docstrip">
+          <div class="ds-state">
+            <span class:list={['pill', state === 'submitted' ? 'ok' : state === 'revising' || openAsks.length ? 'late' : days !== null && days < 0 ? 'late' : 'soon']}>{stateLabel(state)}</span>
+            {docRow?.version_no > 0 && <span class="ds-v">version {docRow.version_no} · submitted {when(docRow.submitted_at)}</span>}
+          </div>
+          <div class="ds-facts">
+            <span><b>{progress.filled}</b> of {progress.asked} answered</span>
+            {wanted.dueOn && <span class:list={[days !== null && days < 0 && !docRow?.submitted_at && 'late']}>due {fmt(wanted.dueOn)}{dueWord ? ` · ${dueWord}` : ''}</span>}
+            {openAsks.length > 0 && <span class="late"><b>{openAsks.length}</b> {openAsks.length === 1 ? 'revision asked' : 'revisions asked'}</span>}
+            <span class="ds-saved" id="ds-saved" aria-live="polite">{docRow?.updated_at ? `last saved ${when(docRow.updated_at)}` : ''}</span>
+          </div>
+          {iAuthor && (
+            <form method="POST" action="#outcome" class="ds-submit">
+              <input type="hidden" name="action" value="submit" />
+              <input type="hidden" name="participation_id" value={wanted.participationId} />
+              <input type="hidden" name="milestone_id" value={wanted.milestoneId ?? ''} />
+              <button class="btn accent" type="submit" disabled={!canSubmit} title={progress.missing.length ? `Still needed: ${progress.missing.map((f) => f.prompt).join('; ')}` : ''}>{submitLabel}</button>
+            </form>
+          )}
+        </div>
+
+        {!iAuthor && (
+          <p class="note watching noprint">
+            {mayComment
+              ? 'You are reading this as it is written. Comment on any field; the author is told. Ask for a revision where one is needed.'
+              : 'You are reading this as it is written.'}
+          </p>
+        )}
+
+        <form method="POST" action="#outcome" id="docform" class="docform" data-doc={docRow?.id ?? ''} data-author={iAuthor ? '1' : '0'} data-project={project.id}>
+          <input type="hidden" name="action" value="save" />
+
+          {/* Wrote it somewhere else? The address stands in for the fields
+              and goes onto the deliverable row on Submit; the class's own
+              Google Doc template is one click away where the step has one. */}
+          <div class="field k-link doclink" data-field="_doc_link" data-version={versions['_doc_link'] ?? 0} data-kind="link" data-writable={iAuthor ? '1' : '0'} id="f-_doc_link">
+            <p class="fprompt">Wrote it in a Google Doc instead?</p>
+            <p class="ftip">Enter URL; make sure sharing is set correctly.</p>
+            {iAuthor ? (
+              <div class="fin">
+                <input type="hidden" name="v:_doc_link" value={versions['_doc_link'] ?? 0} class="fver" />
+                <div class="doclink-row">
+                  <label class="fwrap"><span class="sr">Google Doc address</span><input id="in-_doc_link" name="f:_doc_link" class="in" type="url" value={docLink} /></label>
+                  {wanted.deliverable.template_url && (
+                    <a class="btn btn-sm ghost" href={wanted.deliverable.template_url} target="_blank" rel="noopener noreferrer">Start from the class template</a>
+                  )}
+                </div>
+                <div class="fmeta noprint"><span class="fstate" aria-live="polite"></span></div>
+              </div>
+            ) : docLink ? (
+              <p><a href={docLink} target="_blank" rel="noopener noreferrer">{docLink}</a></p>
+            ) : (
+              <p class="fempty">No linked document</p>
+            )}
+            {/* Google's own read-only preview of the linked document, on the
+                page, for whoever Google lets read it. The browser asks
+                Google; we never fetch it (7.4). */}
+            {docLink && drivePreviewUrl(docLink) && (
+              <details class="dpreview noprint" open={!iAuthor}>
+                <summary class="linkish">Show the {driveKind(docLink)} here</summary>
+                <iframe src={drivePreviewUrl(docLink)!} title={`${driveKind(docLink)}: ${label}`} loading="lazy" referrerpolicy="no-referrer" sandbox="allow-scripts allow-same-origin allow-popups allow-forms"></iframe>
+                <p class="t-sm">If Google says you need access, the author has to share it with you. <a href={docLink} target="_blank" rel="noopener noreferrer">Open it in Google</a>.</p>
+              </details>
+            )}
+          </div>
+
+          {sections.map((section, si) => (
+            <section class="sec doc-sec" id={`s-${section.id}`}>
+              {section.name && (
+                <div class="sec-h"><b><span class="sec-n">{String(si + 1).padStart(2, '0')}</span>{section.name}</b><span></span></div>
+              )}
+              {section.fields.map((f) => {
+                const v = values[f.id];
+                const ver = versions[f.id] ?? 0;
+                const thread = threadOn(f.id);
+                const words = f.kind === 'long' || f.kind === 'text' ? wordCount(textOf(f, v)) : null;
+                return (
+                  <div class:list={['field', `k-${f.kind}`, openAskOn(f.id) && 'has-ask', f.owner === 'staff' && 'is-staff']} id={`f-${f.id}`} data-field={f.id} data-version={ver} data-kind={f.kind} data-writable={canWrite(f) ? '1' : '0'}>
+                    {f.kind === 'note' ? (
+                      <div class="fnote" set:html={renderMarkdown(f.text ?? '')} />
+                    ) : (
+                      <>
+                        <p class="fprompt">
+                          {f.prompt}
+                          {f.owner === 'staff' && <span class="fowner">{elderWord}'s part</span>}
+                          {f.required && <span class="req" title="Required">*</span>}
+                          {f.kind === 'long' && (f.min_words || f.max_words) && (
+                            <span class="flimit">{f.min_words ? `at least ${f.min_words}` : ''}{f.min_words && f.max_words ? ', ' : ''}{f.max_words ? `up to ${f.max_words}` : ''} words</span>
+                          )}
+                        </p>
+                        {f.tip && <p class="ftip">{f.tip}</p>}
+
+                        {canWrite(f) ? (
+                          <div class="fin">
+                            <input type="hidden" name={`v:${f.id}`} value={ver} class="fver" />
+                            {f.kind === 'table' && (
+                              <div class="ftable-wrap">
+                                <table class="ftable" id={`in-${f.id}`}>
+                                  <thead><tr><th></th>{(f.columns ?? []).map((c) => <th scope="col">{c}</th>)}</tr></thead>
+                                  <tbody>
+                                    {(f.rows ?? []).map((r, ri) => (
+                                      <tr>
+                                        <th scope="row">{r}</th>
+                                        {(f.columns ?? []).map((c, ci) => (
+                                          <td><label class="fwrap"><span class="sr">{r}, {c}</span><textarea class="ta fcell" name={`f:${f.id}:${ri}:${ci}`} rows="3">{Array.isArray(v) && Array.isArray(v[ri]) ? (v[ri][ci] ?? '') : ''}</textarea></label></td>
+                                        ))}
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </div>
+                            )}
+                            {f.kind === 'rubric' && (
+                              rubric ? (
+                                <div class="frubric-wrap">
+                                  <table class="frubric" id={`in-${f.id}`}>
+                                    <thead><tr><th></th>{[...new Map(rubric.criteria.flatMap((c: any) => c.levels.map((l: any) => [l.id, l]))).values()].sort((a: any, b: any) => b.points - a.points).map((l: any) => <th scope="col">{l.label}<small>{l.points}</small></th>)}</tr></thead>
+                                    <tbody>
+                                      {rubric.criteria.map((c: any) => {
+                                        const cols = [...new Map(rubric.criteria.flatMap((x: any) => x.levels.map((l: any) => [l.id, l]))).values()].sort((a: any, b: any) => b.points - a.points);
+                                        const picked = v && typeof v === 'object' ? v[c.id] : '';
+                                        return (
+                                          <tr>
+                                            <th scope="row">{c.name}{c.guidance && <small>{c.guidance}</small>}</th>
+                                            {cols.map((col: any) => {
+                                              const level = c.levels.find((l: any) => l.id === col.id);
+                                              return (
+                                                <td class:list={[!level && 'none']}>
+                                                  {level ? (
+                                                    <label class="fcell-pick"><input type="radio" name={`f:${f.id}:${c.id}`} value={level.id} checked={picked === level.id} /><span>{level.description ?? level.label}</span></label>
+                                                  ) : null}
+                                                </td>
+                                              );
+                                            })}
+                                          </tr>
+                                        );
+                                      })}
+                                    </tbody>
+                                  </table>
+                                </div>
+                              ) : (
+                                <p class="fempty">This step carries no rubric to evaluate against.</p>
+                              )
+                            )}
+                            {f.kind === 'long' && (
+                              <textarea id={`in-${f.id}`} name={`f:${f.id}`} class="ta fta" rows="6" data-paste="image" aria-label={f.prompt}>{textOf(f, v)}</textarea>
+                            )}
+                            {f.kind === 'text' && <label class="fwrap"><span class="sr">{f.prompt}</span><input id={`in-${f.id}`} name={`f:${f.id}`} class="in" value={textOf(f, v)} /></label>}
+                            {f.kind === 'number' && <label class="fwrap"><span class="sr">{f.prompt}</span><input id={`in-${f.id}`} name={`f:${f.id}`} class="in fnum" type="number" value={v ?? ''} /></label>}
+                            {f.kind === 'date' && <label class="fwrap"><span class="sr">{f.prompt}</span><input id={`in-${f.id}`} name={`f:${f.id}`} class="in" type="date" value={v ?? ''} /></label>}
+                            {f.kind === 'link' && <label class="fwrap"><span class="sr">{f.prompt}</span><input id={`in-${f.id}`} name={`f:${f.id}`} class="in" type="url" value={v ?? ''} /></label>}
+                            {f.kind === 'choice' && (
+                              <div class="fopts" id={`in-${f.id}`}>
+                                {(f.options ?? []).map((o) => (
+                                  <label class="fopt"><input type="radio" name={`f:${f.id}`} value={o} checked={v === o} /> <span>{o}</span></label>
+                                ))}
+                              </div>
+                            )}
+                            {f.kind === 'choices' && (
+                              <div class="fopts" id={`in-${f.id}`}>
+                                {(f.options ?? []).map((o) => (
+                                  <label class="fopt"><input type="checkbox" name={`f:${f.id}`} value={o} checked={Array.isArray(v) && v.includes(o)} /> <span>{o}</span></label>
+                                ))}
+                              </div>
+                            )}
+                            {f.kind === 'file' && (
+                              <div class="ffile" id={`in-${f.id}`}>
+                                {v?.path ? (
+                                  <p class="fhave">
+                                    {String(v.path).match(/\.(png|jpe?g|gif|webp)$/i) ? <img src={`/app/media/${v.path}`} alt={v.name ?? ''} /> : null}
+                                    <a href={`/app/media/${v.path}`} target="_blank" rel="noopener noreferrer">{v.name ?? 'the file'}</a>
+                                  </p>
+                                ) : null}
+                                <label class="fwrap"><span class="sr">{f.prompt}</span><input type="file" class="ffile-in" accept={f.accept === 'image' ? 'image/*' : undefined} data-field={f.id} /></label>
+                                <span class="t-sm">Uploads as soon as you choose it.</span>
+                              </div>
+                            )}
+                            <div class="fmeta noprint">
+                              {words !== null && <span class:list={['fwords', f.max_words != null && words > f.max_words && 'over']} data-max={f.max_words ?? ''} data-min={f.min_words ?? ''}>{words} {words === 1 ? 'word' : 'words'}</span>}
+                              <span class="fstate" aria-live="polite"></span>
+                              {editedBy[f.id]?.name && authors.length > 1 && <span class="fby">last by {editedBy[f.id].name}</span>}
+                            </div>
+                          </div>
+                        ) : (
+                          <div class="fread">
+                            {f.kind === 'table' ? (
+                              Array.isArray(v) && v.some((row: any) => Array.isArray(row) && row.some((cell: any) => String(cell ?? '').trim())) ? (
+                                <div class="ftable-wrap">
+                                  <table class="ftable read">
+                                    <thead><tr><th></th>{(f.columns ?? []).map((c) => <th scope="col">{c}</th>)}</tr></thead>
+                                    <tbody>
+                                      {(f.rows ?? []).map((r, ri) => (
+                                        <tr><th scope="row">{r}</th>{(f.columns ?? []).map((_, ci) => <td>{Array.isArray(v[ri]) ? (v[ri][ci] ?? '') : ''}</td>)}</tr>
+                                      ))}
+                                    </tbody>
+                                  </table>
+                                </div>
+                              ) : <p class="fempty">Not filled in</p>
+                            ) : f.kind === 'rubric' ? (
+                              rubric && v && typeof v === 'object' && Object.keys(v).length > 0 ? (
+                                <ul class="g-levels">
+                                  {rubric.criteria.map((c: any) => {
+                                    const level = c.levels.find((l: any) => l.id === v[c.id]);
+                                    return level ? <li><b>{c.name}</b> {level.label} · {level.points}</li> : <li><b>{c.name}</b> <span class="fempty">not marked</span></li>;
+                                  })}
+                                </ul>
+                              ) : <p class="fempty">Not evaluated yet</p>
+                            ) : f.kind === 'long' ? (
+                              isFilled(f, v) ? <div class="fprose" set:html={renderMarkdown(String(v))} /> : <p class="fempty">Not written yet</p>
+                            ) : f.kind === 'file' && v?.path ? (
+                              <p>{String(v.path).match(/\.(png|jpe?g|gif|webp)$/i) ? <img src={`/app/media/${v.path}`} alt={v.name ?? ''} /> : null}<a href={`/app/media/${v.path}`} target="_blank" rel="noopener noreferrer">{v.name ?? 'the file'}</a></p>
+                            ) : f.kind === 'link' && v ? (
+                              <p><a href={String(v)} target="_blank" rel="noopener noreferrer">{String(v)}</a></p>
+                            ) : isFilled(f, v) ? (
+                              <p>{textOf(f, v)}</p>
+                            ) : (
+                              <p class="fempty">Not answered yet</p>
+                            )}
+                            {words !== null && words > 0 && <p class="fmeta"><span class:list={['fwords', f.max_words != null && words > f.max_words && 'over']}>{words} words</span></p>}
+                          </div>
+                        )}
+
+                        {/* The thread on this field, and the box to add to it. */}
+                        {(thread.length > 0 || mayComment) && (
+                          <div class="thread noprint">
+                            {thread.length > 0 && (
+                              <ul class="tlist">
+                                {thread.map((c: any) => (
+                                  <li class:list={['tc', c.needs_revision && !c.resolved_at && 'asks', c.reply_to && 'reply', c.author_id === account.id && 'mine']} id={`c-${c.id}`}>
+                                    <span class="tc-who">{c.author?.display_name ?? 'Somebody'}</span>
+                                    <span class="tc-when">{when(c.created_at)}</span>
+                                    {c.needs_revision && <span class:list={['pill', c.resolved_at ? 'ok' : 'late']}>{c.resolved_at ? 'Revision made' : 'Revision asked'}</span>}
+                                    {changedSince(c) && !c.resolved_at && <span class="pill soon">Changed since</span>}
+                                    <div class="tc-body" set:html={renderMarkdown(c.body_md)} />
+                                    {c.needs_revision && !c.resolved_at && (c.author_id === account.id || me.isAdvisor) && (
+                                      <button class="btn btn-q" type="button" data-resolve={c.id}>Withdraw the ask</button>
+                                    )}
+                                  </li>
+                                ))}
+                              </ul>
+                            )}
+                            {mayComment && docRow && (
+                              <details class="tadd">
+                                <summary class="linkish">{iAuthor ? (thread.length ? 'Reply' : 'Ask a question here') : thread.length ? 'Add to this' : 'Comment on this'}</summary>
+                                <div class="tform" data-field={f.id} data-reply={thread.length ? thread[thread.length - 1].id : ''}>
+                                  <textarea class="ta" rows="2" name={`c:${f.id}`} form="noform" aria-label={iAuthor ? 'A question or a note for whoever reads this' : 'What to change, or what is good'}></textarea>
+                                  {!iAuthor && <label class="task"><input type="checkbox" name={`ask:${f.id}`} form="noform" value="1" /> <span>Ask for a revision</span></label>}
+                                  <button class="btn btn-sm btn-2" type="button" data-send="comment">Send</button>
+                                </div>
+                              </details>
+                            )}
+                          </div>
+                        )}
+                      </>
+                    )}
+                  </div>
+                );
+              })}
+            </section>
+          ))}
+
+          {iAuthor && (
+            <div class="docsave noprint">
+              <button class="btn" type="submit" id="save-all">Save</button>
+              <span class="t-sm">Saves as you type. This is here in case it cannot.</span>
+            </div>
+          )}
+        </form>
+
+        {/* The thread on the whole document. */}
+        <section class="sec noprint" id="whole">
+          <div class="sec-h"><b><span class="sec-n">{String(sections.length + 1).padStart(2, '0')}</span>On the whole document</b><span>{threadOn(null).length ? `${threadOn(null).length} ${threadOn(null).length === 1 ? 'comment' : 'comments'}` : ''}</span></div>
+          {threadOn(null).length > 0 ? (
+            <ul class="tlist">
+              {threadOn(null).map((c: any) => (
+                <li class:list={['tc', c.needs_revision && !c.resolved_at && 'asks', c.reply_to && 'reply', c.author_id === account.id && 'mine']} id={`c-${c.id}`}>
+                  <span class="tc-who">{c.author?.display_name ?? 'Somebody'}</span>
+                  <span class="tc-when">{when(c.created_at)}</span>
+                  {c.needs_revision && <span class:list={['pill', c.resolved_at ? 'ok' : 'late']}>{c.resolved_at ? 'Revision made' : 'Revision asked'}</span>}
+                  <div class="tc-body" set:html={renderMarkdown(c.body_md)} />
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p class="t-sm">Nothing yet. A comment here is about the document as a whole; a comment on a field is beside it.</p>
+          )}
+          {mayComment && docRow && (
+            <form method="POST" action="#outcome" class="tform whole">
+              <input type="hidden" name="action" value="comment" />
+              <input type="hidden" name="field_id" value="" />
+              <textarea class="ta" name="body" rows="3" required aria-label={iAuthor ? 'A note for whoever reads this' : 'What is good, what to change'}></textarea>
+              {!iAuthor && <label class="task"><input type="checkbox" name="needs_revision" value="1" /> <span>Ask for a revision</span></label>}
+              <button class="btn btn-sm btn-2" type="submit">Send</button>
+            </form>
+          )}
+        </section>
+
+        {/* The versions, for whoever wants the record. */}
+        {docRow?.version_no > 0 && (
+          <p class="t-sm noprint">Submitted {docRow.version_no} {docRow.version_no === 1 ? 'time' : 'times'}; the latest is the one on the calendar.</p>
+        )}
+      </>
+    )}
+  </div>
+</Base>
+
+<style>
+  .docstrip {
+    display: flex; flex-wrap: nowrap; align-items: center; gap: 14px 22px;
+    padding: 14px 18px; margin: 0 0 18px;
+    background: var(--card); border: 1px solid var(--rule-fine); border-left: 4px solid var(--accent);
+  }
+  .docstrip.submitted { border-left-color: var(--stage-comp); }
+  .docstrip.revising, .docstrip.in_progress { border-left-color: var(--accent); }
+  .ds-state { display: flex; gap: 10px; align-items: center; }
+  .ds-v { font-family: var(--face-ui); font-size: 0.82rem; color: var(--ink-3); }
+  .ds-facts { display: flex; flex-wrap: wrap; gap: 6px 16px; min-width: 0; font-family: var(--face-ui); font-size: 0.88rem; color: var(--ink-2); margin-right: auto; }
+  .ds-facts .late { color: var(--alert); }
+  .ds-saved { color: var(--ink-3); }
+  @media (max-width: 720px) { .docstrip { flex-wrap: wrap; } }
+  .ds-submit { display: flex; align-items: center; gap: 10px; flex: 0 0 auto; }
+  .doc-sec { max-width: var(--measure-text); }
+  .field { padding: 14px 0 18px; border-bottom: 1px solid var(--rule-fine); }
+  .field.has-ask { border-left: 3px solid var(--alert); padding-left: 12px; }
+  .fnote { color: var(--ink-2); }
+  .fnote :global(p) { margin: 0 0 8px; }
+  .fprompt { display: block; font-weight: 600; margin: 0 0 4px; }
+  .fprompt .req { color: var(--alert); margin-left: 4px; }
+  .flimit { margin-left: 10px; font-family: var(--face-ui); font-size: 0.8rem; font-weight: 400; color: var(--ink-3); }
+  .ftip { margin: 0 0 8px; font-style: italic; color: var(--ink-3); font-size: 0.92rem; }
+  .fin .ta, .fin .in { width: 100%; box-sizing: border-box; }
+  .fwrap { display: block; }
+  .fowner { margin-left: 10px; font-family: var(--face-ui); font-size: 0.78rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--accent-deep); }
+  .field.is-staff { background: var(--accent-pale); padding-left: 12px; padding-right: 12px; }
+  .doclink { border-bottom: 1px solid var(--rule-fine); }
+  .doclink-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .dpreview { margin-top: 10px; }
+  .dpreview summary { cursor: pointer; font-family: var(--face-ui); font-size: 0.86rem; }
+  .dpreview iframe { width: 100%; height: 70vh; min-height: 480px; border: 1px solid var(--rule-fine); background: var(--card); margin-top: 8px; }
+  .doclink-row .fwrap { flex: 1 1 320px; }
+  .ftable-wrap, .frubric-wrap { overflow-x: auto; }
+  .ftable { border-collapse: collapse; width: 100%; min-width: 720px; font-size: 0.9rem; }
+  .ftable th, .ftable td { border: 1px solid var(--rule-fine); padding: 6px; vertical-align: top; text-align: left; }
+  .ftable th[scope=row] { width: 160px; font-weight: 600; background: var(--sunk); }
+  .ftable .fcell { width: 100%; box-sizing: border-box; min-height: 64px; font-size: 0.88rem; }
+  .frubric { border-collapse: collapse; width: 100%; min-width: 760px; font-size: 0.86rem; }
+  .frubric th, .frubric td { border: 1px solid var(--rule-fine); padding: 6px 8px; vertical-align: top; text-align: left; }
+  .frubric th small { display: block; font-weight: 400; color: var(--ink-3); }
+  .frubric th[scope=row] { width: 150px; background: var(--sunk); }
+  .frubric td.none { background: var(--sunk); }
+  .fcell-pick { display: flex; gap: 6px; align-items: flex-start; cursor: pointer; }
+  .fcell-pick input { margin-top: 3px; }
+  .fcell-pick:has(input:checked) { background: var(--accent-pale); outline: 2px solid var(--accent); }
+  .g-levels { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; font-size: 0.9rem; }
+  .fin .fta { min-height: 140px; resize: vertical; font-family: inherit; line-height: 1.5; }
+  .fin .fnum { max-width: 160px; }
+  .fopts { display: grid; gap: 6px; }
+  .fopt { display: flex; gap: 8px; align-items: center; }
+  .ffile img, .fread img { display: block; max-width: 320px; max-height: 240px; margin: 6px 0; border: 1px solid var(--rule-fine); }
+  .fhave { margin: 0 0 8px; }
+  .fmeta { display: flex; gap: 14px; margin: 6px 0 0; font-family: var(--face-ui); font-size: 0.8rem; color: var(--ink-3); }
+  .fwords.over { color: var(--alert); font-weight: 600; }
+  .fby { color: var(--ink-3); }
+  .fstate.saving { color: var(--ink-3); }
+  .fstate.saved { color: var(--stage-comp); }
+  .fstate.kept { color: var(--alert); }
+  .fread .fprose :global(img) { max-width: 100%; }
+  .fempty { color: var(--ink-3); font-style: italic; margin: 0; }
+  .thread { margin-top: 10px; }
+  .tlist { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+  .tc { padding: 8px 12px; background: var(--card); border-left: 3px solid var(--rule); font-size: 0.94rem; }
+  .tc.asks { border-left-color: var(--alert); }
+  .tc.reply { margin-left: 18px; }
+  .tc.mine { border-left-color: var(--accent); }
+  .tc-who { font-weight: 600; margin-right: 8px; }
+  .tc-when { font-family: var(--face-ui); font-size: 0.78rem; color: var(--ink-3); margin-right: 8px; }
+  .tc-body :global(p) { margin: 4px 0 0; }
+  .tadd { margin-top: 6px; }
+  .tadd summary { cursor: pointer; font-family: var(--face-ui); font-size: 0.86rem; }
+  .tform { display: grid; gap: 8px; margin-top: 8px; justify-items: start; }
+  .tform .ta { width: 100%; box-sizing: border-box; }
+  .tform.whole { max-width: var(--measure-form); }
+  .task { display: flex; gap: 8px; align-items: center; font-family: var(--face-ui); font-size: 0.86rem; }
+  .docsave { display: flex; gap: 12px; align-items: center; margin: 18px 0; }
+  @media print {
+    .noprint, .appnav, .thread, .fmeta, .docsave { display: none !important; }
+    .field { border: 0; page-break-inside: avoid; }
+    .fin .ta, .fin .in { border: 0; padding: 0; background: transparent; }
+  }
+</style>
+
+<script>
+  /**
+   * SAVES AS YOU TYPE.
+   *
+   * Per field: a short idle after the last keystroke, and on blur. Each
+   * save carries the version the field was read at; the server accepts
+   * it only if nothing newer is there, and otherwise answers with the
+   * other author's text, which is shown beside yours rather than
+   * overwritten. Until the server says saved, the text sits in this
+   * browser's storage under the document and field, so a dropped
+   * connection loses nothing: on the next load the page offers it back.
+   * Nothing here is needed for the page to work; the Save button posts
+   * every field the ordinary way.
+   */
+  const form = document.getElementById('docform') as HTMLFormElement | null;
+  const writable = form ? form.querySelectorAll('.field[data-writable="1"]').length > 0 : false;
+  if (form && writable && form.dataset.doc) {
+    const docId = form.dataset.doc;
+    const saved = document.getElementById('ds-saved');
+    const key = (fieldId: string) => `sp:doc:${docId}:${fieldId}`;
+    const timers = new Map<string, number>();
+    const pending = new Set<string>();
+
+    const readValue = (wrap: HTMLElement): any => {
+      const kind = wrap.dataset.kind;
+      const fieldId = wrap.dataset.field!;
+      if (kind === 'choice') {
+        const on = wrap.querySelector<HTMLInputElement>('input[type=radio]:checked');
+        return on ? on.value : null;
+      }
+      if (kind === 'choices') {
+        return [...wrap.querySelectorAll<HTMLInputElement>('input[type=checkbox]:checked')].map((c) => c.value);
+      }
+      if (kind === 'file') return undefined;
+      if (kind === 'table') {
+        const rows: string[][] = [];
+        wrap.querySelectorAll<HTMLTableRowElement>('tbody tr').forEach((tr) => {
+          rows.push([...tr.querySelectorAll<HTMLTextAreaElement>('textarea')].map((t) => t.value));
+        });
+        return rows;
+      }
+      if (kind === 'rubric') {
+        const picks: Record<string, string> = {};
+        wrap.querySelectorAll<HTMLInputElement>('input[type=radio]:checked').forEach((r) => {
+          const crit = r.name.split(':').pop();
+          if (crit) picks[crit] = r.value;
+        });
+        return picks;
+      }
+      const el = wrap.querySelector<HTMLInputElement | HTMLTextAreaElement>(`[name="f:${fieldId}"]`);
+      if (!el) return undefined;
+      if (kind === 'number') return el.value.trim() === '' ? null : Number(el.value);
+      return el.value;
+    };
+
+    const writeValue = (wrap: HTMLElement, value: any) => {
+      const kind = wrap.dataset.kind;
+      const fieldId = wrap.dataset.field!;
+      if (kind === 'table') {
+        wrap.querySelectorAll<HTMLTableRowElement>('tbody tr').forEach((tr, ri) => {
+          tr.querySelectorAll<HTMLTextAreaElement>('textarea').forEach((t, ci) => (t.value = Array.isArray(value?.[ri]) ? value[ri][ci] ?? '' : ''));
+        });
+      } else if (kind === 'rubric') {
+        wrap.querySelectorAll<HTMLInputElement>('input[type=radio]').forEach((r) => {
+          const crit = r.name.split(':').pop() ?? '';
+          r.checked = Boolean(value && value[crit] === r.value);
+        });
+      } else if (kind === 'choice') {
+        wrap.querySelectorAll<HTMLInputElement>('input[type=radio]').forEach((r) => (r.checked = r.value === value));
+      } else if (kind === 'choices') {
+        const set = new Set(Array.isArray(value) ? value : []);
+        wrap.querySelectorAll<HTMLInputElement>('input[type=checkbox]').forEach((c) => (c.checked = set.has(c.value)));
+      } else {
+        const el = wrap.querySelector<HTMLInputElement | HTMLTextAreaElement>(`[name="f:${fieldId}"]`);
+        if (el) el.value = value == null ? '' : String(value);
+      }
+      countWords(wrap);
+    };
+
+    const setState = (wrap: HTMLElement, text: string, cls: string) => {
+      const el = wrap.querySelector<HTMLElement>('.fstate');
+      if (!el) return;
+      el.textContent = text;
+      el.className = `fstate ${cls}`;
+    };
+
+    const countWords = (wrap: HTMLElement) => {
+      const el = wrap.querySelector<HTMLElement>('.fwords');
+      const input = wrap.querySelector<HTMLTextAreaElement | HTMLInputElement>(`[name="f:${wrap.dataset.field}"]`);
+      if (!el || !input) return;
+      const n = input.value.trim() ? input.value.trim().split(/\s+/).length : 0;
+      el.textContent = `${n} ${n === 1 ? 'word' : 'words'}`;
+      const max = Number(el.dataset.max || 0);
+      el.classList.toggle('over', max > 0 && n > max);
+    };
+
+    const stash = (fieldId: string, value: any) => {
+      try { localStorage.setItem(key(fieldId), JSON.stringify({ value, at: Date.now() })); } catch {}
+    };
+    const unstash = (fieldId: string) => {
+      try { localStorage.removeItem(key(fieldId)); } catch {}
+    };
+
+    const post = async (body: any) => {
+      const res = await fetch('/app/api/field/', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) throw new Error(`save failed (${res.status})`);
+      return res.json();
+    };
+
+    const save = async (wrap: HTMLElement, attempt = 0) => {
+      const fieldId = wrap.dataset.field!;
+      const value = readValue(wrap);
+      if (value === undefined) return;
+      const version = Number(wrap.dataset.version || 0);
+      stash(fieldId, value);
+      pending.add(fieldId);
+      setState(wrap, 'Saving…', 'saving');
+      try {
+        const out = await post({ document_id: docId, field_id: fieldId, value, version });
+        if (out.ok) {
+          wrap.dataset.version = String(out.version);
+          const ver = wrap.querySelector<HTMLInputElement>('.fver');
+          if (ver) ver.value = String(out.version);
+          unstash(fieldId);
+          pending.delete(fieldId);
+          setState(wrap, 'Saved', 'saved');
+          if (saved) saved.textContent = `last saved ${new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`;
+        } else if (out.conflict) {
+          pending.delete(fieldId);
+          showConflict(wrap, out, value);
+        } else {
+          throw new Error(out.error || 'refused');
+        }
+      } catch (e) {
+        setState(wrap, navigator.onLine ? 'Could not save; kept on this device' : 'Offline; kept on this device', 'kept');
+        if (attempt < 5) {
+          window.setTimeout(() => save(wrap, attempt + 1), Math.min(30000, 2000 * 2 ** attempt));
+        }
+      }
+    };
+
+    /* A newer version on the server (another author, or another tab).
+       Nothing is overwritten; the row keeps the newer text and this tab is
+       told to reload for it. The three-way choice that stood here is held
+       for a later drop (2.8). */
+    const showConflict = (wrap: HTMLElement, out: any, _mine: any) => {
+      wrap.dataset.version = String(out.version);
+      const ver = wrap.querySelector<HTMLInputElement>('.fver');
+      if (ver) ver.value = String(out.version);
+      setState(wrap, `${out.by ?? 'Somebody else'} saved a newer version of this field. Reload the page to see it; your text is kept on this device.`, 'kept');
+    };
+
+    const schedule = (wrap: HTMLElement, delay = 1200) => {
+      const fieldId = wrap.dataset.field!;
+      stash(fieldId, readValue(wrap));
+      setState(wrap, 'Typing…', 'saving');
+      window.clearTimeout(timers.get(fieldId));
+      timers.set(fieldId, window.setTimeout(() => save(wrap), delay));
+    };
+
+    const fields = [...form.querySelectorAll<HTMLElement>('.field[data-field]')].filter((w) => w.dataset.kind !== 'note' && w.dataset.writable === '1');
+
+    for (const wrap of fields) {
+      const inputs = wrap.querySelectorAll<HTMLElement>('input, textarea');
+      inputs.forEach((el) => {
+        if ((el as HTMLInputElement).type === 'file') return;
+        if ((el as HTMLInputElement).type === 'hidden') return;
+        el.addEventListener('input', () => { countWords(wrap); schedule(wrap); });
+        el.addEventListener('change', () => { countWords(wrap); schedule(wrap, 200); });
+        el.addEventListener('blur', () => { if (timers.has(wrap.dataset.field!)) schedule(wrap, 100); });
+      });
+
+      /* Whatever this browser kept from an earlier visit is dropped on
+         load; the server's copy is the document. */
+      try { unstash(wrap.dataset.field!); } catch {}
+    }
+
+    /* Leaving with something unsaved: one last try, and the copy stays in
+       storage either way. */
+    window.addEventListener('beforeunload', () => {
+      for (const wrap of fields) {
+        const fieldId = wrap.dataset.field!;
+        if (!timers.has(fieldId) && !pending.has(fieldId)) continue;
+        const value = readValue(wrap);
+        if (value === undefined) continue;
+        try {
+          navigator.sendBeacon('/app/api/field/', new Blob([JSON.stringify({ document_id: docId, field_id: fieldId, value, version: Number(wrap.dataset.version || 0) })], { type: 'application/json' }));
+        } catch {}
+      }
+    });
+
+    /* Files and pasted images go up at once, and the field or the text
+       gets the address back. */
+    const upload = async (file: File): Promise<{ path: string; name: string } | null> => {
+      const fd = new FormData();
+      fd.append('document_id', docId);
+      fd.append('file', file, file.name || 'pasted');
+      const res = await fetch('/app/api/upload/', { method: 'POST', body: fd, credentials: 'same-origin' });
+      if (!res.ok) return null;
+      const out = await res.json();
+      return out.ok ? { path: out.path, name: out.name } : null;
+    };
+
+    form.querySelectorAll<HTMLInputElement>('.ffile-in').forEach((input) => {
+      input.addEventListener('change', async () => {
+        const file = input.files?.[0];
+        const wrap = input.closest<HTMLElement>('.field');
+        if (!file || !wrap) return;
+        setState(wrap, 'Uploading…', 'saving');
+        const got = await upload(file);
+        if (!got) { setState(wrap, 'Could not upload that', 'kept'); return; }
+        const version = Number(wrap.dataset.version || 0);
+        try {
+          const out = await post({ document_id: docId, field_id: wrap.dataset.field, value: got, version });
+          if (out.ok) {
+            wrap.dataset.version = String(out.version);
+            setState(wrap, 'Uploaded', 'saved');
+            const have = wrap.querySelector('.fhave') ?? (() => { const p = document.createElement('p'); p.className = 'fhave'; wrap.querySelector('.ffile')?.prepend(p); return p; })();
+            have.innerHTML = '';
+            if (/\.(png|jpe?g|gif|webp)$/i.test(got.path)) {
+              const img = document.createElement('img'); img.src = `/app/media/${got.path}`; img.alt = got.name; have.appendChild(img);
+            }
+            const a = document.createElement('a'); a.href = `/app/media/${got.path}`; a.target = '_blank'; a.rel = 'noopener noreferrer'; a.textContent = got.name; have.appendChild(a);
+          } else setState(wrap, 'Uploaded, but could not save the field', 'kept');
+        } catch { setState(wrap, 'Uploaded, but could not save the field', 'kept'); }
+      });
+    });
+
+    form.querySelectorAll<HTMLTextAreaElement>('textarea[data-paste=image]').forEach((ta) => {
+      const insert = async (file: File) => {
+        const wrap = ta.closest<HTMLElement>('.field');
+        if (!wrap) return;
+        setState(wrap, 'Uploading image…', 'saving');
+        const got = await upload(file);
+        if (!got) { setState(wrap, 'Could not upload that image', 'kept'); return; }
+        const at = ta.selectionStart ?? ta.value.length;
+        const md = `\n![${got.name.replace(/[\[\]]/g, '')}](/app/media/${got.path})\n`;
+        ta.value = ta.value.slice(0, at) + md + ta.value.slice(at);
+        ta.selectionStart = ta.selectionEnd = at + md.length;
+        countWords(wrap);
+        schedule(wrap, 200);
+      };
+      ta.addEventListener('paste', (ev) => {
+        const item = [...(ev.clipboardData?.items ?? [])].find((i) => i.kind === 'file' && i.type.startsWith('image/'));
+        if (!item) return;
+        const file = item.getAsFile();
+        if (!file) return;
+        ev.preventDefault();
+        insert(file);
+      });
+      ta.addEventListener('drop', (ev) => {
+        const file = [...(ev.dataTransfer?.files ?? [])].find((f) => f.type.startsWith('image/'));
+        if (!file) return;
+        ev.preventDefault();
+        insert(file);
+      });
+    });
+
+    /* Comments on a field, sent without leaving the page. */
+    form.querySelectorAll<HTMLButtonElement>('[data-send=comment]').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const box = btn.closest<HTMLElement>('.tform');
+        if (!box) return;
+        const ta = box.querySelector<HTMLTextAreaElement>('textarea');
+        const ask = box.querySelector<HTMLInputElement>('input[type=checkbox]');
+        if (!ta || !ta.value.trim()) { ta?.focus(); return; }
+        btn.disabled = true;
+        const fd = new FormData();
+        fd.append('action', 'comment');
+        fd.append('field_id', box.dataset.field ?? '');
+        fd.append('body', ta.value);
+        if (ask?.checked) fd.append('needs_revision', '1');
+        fd.append('reply_to', box.dataset.reply ?? '');
+        const res = await fetch(location.pathname, { method: 'POST', body: fd, credentials: 'same-origin', redirect: 'follow' });
+        if (res.ok) location.href = `${location.pathname}?m=${encodeURIComponent('Sent.')}#f-${box.dataset.field}`;
+        else { btn.disabled = false; alert('Could not send that. Try the Save button and send again.'); }
+      });
+    });
+  }
+
+  /* Withdrawing an ask, from inside the document form (a nested form is not HTML). */
+  document.querySelectorAll<HTMLButtonElement>('[data-resolve]').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const fd = new FormData();
+      fd.append('action', 'resolve');
+      fd.append('feedback_id', btn.dataset.resolve ?? '');
+      const res = await fetch(location.pathname, { method: 'POST', body: fd, credentials: 'same-origin', redirect: 'follow' });
+      if (res.ok) location.href = `${location.pathname}?m=${encodeURIComponent('Ask withdrawn.')}`;
+    });
+  });
+
+  /* Readers who may comment but are not authors: the same buttons, no autosave. */
+  const readerForm = document.getElementById('docform') as HTMLFormElement | null;
+  if (readerForm && !writable) {
+    readerForm.querySelectorAll<HTMLButtonElement>('[data-send=comment]').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const box = btn.closest<HTMLElement>('.tform');
+        if (!box) return;
+        const ta = box.querySelector<HTMLTextAreaElement>('textarea');
+        const ask = box.querySelector<HTMLInputElement>('input[type=checkbox]');
+        if (!ta || !ta.value.trim()) { ta?.focus(); return; }
+        btn.disabled = true;
+        const fd = new FormData();
+        fd.append('action', 'comment');
+        fd.append('field_id', box.dataset.field ?? '');
+        fd.append('body', ta.value);
+        if (ask?.checked) fd.append('needs_revision', '1');
+        fd.append('reply_to', box.dataset.reply ?? '');
+        const res = await fetch(location.pathname, { method: 'POST', body: fd, credentials: 'same-origin', redirect: 'follow' });
+        if (res.ok) location.href = `${location.pathname}?m=${encodeURIComponent('Sent.')}#f-${box.dataset.field}`;
+        else { btn.disabled = false; alert('Could not send that.'); }
+      });
+    });
+  }
+</script>

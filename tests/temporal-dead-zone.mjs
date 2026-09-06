@@ -378,7 +378,7 @@ function withoutImports(text) {
 
       /* `export const getStaticPaths = ...` is a declaration the check needs
          to see. Only the keyword is in the way, so only the keyword goes. */
-      if (!inside && /^export\s+(?:const|let|var|function|class|async|default)\b/.test(trimmed)) {
+      if (!inside && /^export\s+(?:const|let|var|function|class|async|default|interface|type|enum)\b/.test(trimmed)) {
         return line.replace(/export(\s)/, '      $1');
       }
 

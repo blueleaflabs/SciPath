@@ -1,0 +1,229 @@
+---
+export const prerender = false;
+
+/**
+ * MY SHOWCASE.
+ *
+ * The author's side of the class showcase: the card as the class sees it,
+ * the summary in their own words, and the switch that takes the card off
+ * the class page and puts it back. No approval stands between an edit and
+ * the class seeing it; the card is live because the class is the audience
+ * and the point is a living track of the work.
+ *
+ * The pictures and the video are the ones the participation page already
+ * collects for the published record, so this page shows them and sends the
+ * author there to change them rather than growing a second uploader.
+ */
+
+import Base from '../../../../layouts/Base.astro';
+import AppShell from '../../../../components/AppShell.astro';
+import { activeOrg } from '../../../../lib/tenant';
+import { serverClient } from '../../../../lib/supabase';
+import { afterPost, outcomeFrom } from '../../../../lib/post-redirect';
+import { signInWith } from '../../../../lib/next-path';
+import { programTitle } from '../../../../lib/program-names';
+import { parseVideo } from '../../../../lib/video';
+
+const { session, account, roles } = Astro.locals;
+const org = activeOrg(Astro);
+const { id } = Astro.params;
+
+if (!session) return Astro.redirect(signInWith(Astro.url));
+if (!account) return Astro.redirect('/app/welcome/');
+
+const supabase = serverClient(Astro.request, Astro.cookies, (Astro.locals as any).runtime?.env);
+
+let { error, note } = outcomeFrom(Astro.url);
+
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData();
+  const action = String(form.get('action') ?? '');
+  const hidden = action === 'hide' ? true : action === 'show' ? false : String(form.get('hidden') ?? '') === '1';
+
+  const { error: e } = await supabase.rpc('set_project_showcase', {
+    p_project_id: id,
+    p_summary: String(form.get('summary') ?? ''),
+    p_hidden: hidden,
+  });
+
+  if (e) error = e.message;
+  else note = action === 'hide' ? 'Taken off the class page. Put it back whenever you like.' : action === 'show' ? 'Shown to the class again.' : 'Saved. The class sees it now.';
+
+  return afterPost(Astro.url, { error, note });
+}
+
+const { data: project } = await supabase
+  .from('projects')
+  .select('id, title, summary, showcase_hidden, showcase_updated_at, video_url, project_authors(user_id, role)')
+  .eq('id', id)
+  .maybeSingle();
+
+if (!project) return Astro.redirect('/app/');
+
+const iAuthor = (project.project_authors ?? []).some((a: any) => a.user_id === account.id && a.role === 'author');
+
+/* Which class showcases this project is on. A project in no private
+   program has nothing to show here and says so. */
+const { data: places } = await supabase
+  .from('participations')
+  .select('id, program_id, programs(id, name, short_name, season_year, kind, program_role, showcase)')
+  .eq('project_id', id);
+
+const shows = (places ?? [])
+  .map((p: any) => p.programs)
+  .filter((g: any) => g && g.showcase === 'private');
+
+const { data: images } = await supabase
+  .from('project_images')
+  .select('id, position, storage_path, alt, caption')
+  .eq('project_id', id)
+  .is('withdrawn_at', null)
+  .order('position');
+
+const { data: links } = await supabase
+  .from('project_links')
+  .select('id, label, url, visibility')
+  .eq('project_id', id)
+  .order('created_at');
+
+const shownLinks = (links ?? []).filter((l: any) => l.visibility === 'published');
+const video = parseVideo(project.video_url);
+const mediaUrl = (path: string) => `/app/media/${path}`;
+const firstPlace = (places ?? []).find((p: any) => p.programs?.showcase === 'private');
+---
+
+<Base title="My showcase" noindex={true}>
+  <div class="wrap">
+    <AppShell org={org} account={account} roles={roles} here="/app/" />
+
+    <section class="cover">
+      <p class="kick">My showcase</p>
+      <h1>{project.title}</h1>
+      <p class="sub">
+        {shows.length > 0
+          ? <>What the class sees on the {shows.map((g: any) => `${g.short_name ?? g.name} Showcase`).join(' and ')}. Change it as often as you like; there is nothing to approve.</>
+          : 'This project is not in a class with a showcase, so there is nowhere for a card to appear yet.'}
+      </p>
+    </section>
+
+    <div id="outcome" tabindex="-1">
+      {error && <p class="note" role="alert" style="margin-top:24px">{error}</p>}
+      {note && !error && <p class="note" role="status" style="margin-top:24px">{note}</p>}
+    </div>
+
+    {shows.length > 0 && (
+      <div class:list={['state', project.showcase_hidden ? 'is-hidden' : 'is-shown']}>
+        <div>
+          <b>{project.showcase_hidden ? 'Hidden from the class' : 'Shown to the class'}</b>
+          <span>
+            {project.showcase_hidden
+              ? 'Your card is off the page. Everything you wrote is kept.'
+              : 'Your card is on the page as it appears below.'}
+          </span>
+        </div>
+        {iAuthor && (
+          <form method="POST" action="#outcome">
+            <input type="hidden" name="action" value={project.showcase_hidden ? 'show' : 'hide'} />
+            <input type="hidden" name="summary" value={project.summary ?? ''} />
+            <button class:list={['btn', project.showcase_hidden ? 'accent' : 'ghost']} type="submit">
+              {project.showcase_hidden ? 'Show it again' : 'Hide it for now'}
+            </button>
+          </form>
+        )}
+        {shows.map((g: any) => (
+          <a class="btn btn-sm btn-2" href={`/app/program/${g.id}/showcase/`}>Open the {g.short_name ?? g.name} Showcase</a>
+        ))}
+      </div>
+    )}
+
+    <div class="two">
+      <section class="sec">
+        <div class="sec-h"><b><span class="sec-n">01</span>In your words</b><span>up to 1200 characters</span></div>
+        {iAuthor ? (
+          <form method="POST" action="#outcome" class="sform">
+            <input type="hidden" name="action" value="save" />
+            <input type="hidden" name="hidden" value={project.showcase_hidden ? '1' : '0'} />
+            <label for="summary" class="skip">Summary</label>
+            <textarea class="ta" id="summary" name="summary" rows="7" maxlength="1200">{project.summary ?? ''}</textarea>
+            <p class="help">
+              What it is, who it is for, and where you are with it. Plain words;
+              the class is reading, not a judge. You can rewrite it every week.
+            </p>
+            <p><button class="btn" type="submit">Save</button></p>
+          </form>
+        ) : (
+          <p>{project.summary ?? <i>No summary yet.</i>}</p>
+        )}
+      </section>
+
+      <section class="sec">
+        <div class="sec-h"><b><span class="sec-n">02</span>Pictures and video</b><span>{(images ?? []).length} of 4</span></div>
+        {(images ?? []).length > 0 ? (
+          <ul class="shots">
+            {(images ?? []).map((img: any) => (
+              <li>
+                <img src={mediaUrl(img.storage_path)} alt={img.alt ?? ''} loading="lazy" />
+                {img.caption && <p>{img.caption}</p>}
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p class="t-sm">No pictures yet. The first one becomes the card's picture.</p>
+        )}
+        {video && (
+          <p class="t-sm">
+            Video: <a href={video.watch} target="_blank" rel="noopener noreferrer">{video.host === 'vimeo' ? 'Vimeo' : 'YouTube'}</a>
+          </p>
+        )}
+        {shownLinks.length > 0 && (
+          <p class="t-sm">
+            Links shown: {shownLinks.map((l: any) => l.label).join(', ')}
+          </p>
+        )}
+        {iAuthor && firstPlace && (
+          <p style="margin-top:14px">
+            <a class="btn btn-sm btn-2" href={`/app/project/${id}/in/${firstPlace.program_id}/#showcase`}>Add or change pictures</a>
+          </p>
+        )}
+      </section>
+    </div>
+  </div>
+</Base>
+
+<style>
+  .state {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 14px 20px;
+    margin: 26px 0 0;
+    padding: 18px 22px;
+    background: var(--card);
+    border: 1px solid var(--rule);
+    border-left: 8px solid var(--stage-comp);
+    box-shadow: var(--lift);
+  }
+  .state.is-hidden { border-left-color: var(--ink-3); background: var(--sunk); }
+  .state > div { flex: 1 1 24ch; }
+  .state b {
+    display: block;
+    font-family: var(--face-num);
+    font-size: 0.74rem;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--stage-comp);
+    margin-bottom: 3px;
+  }
+  .state.is-hidden b { color: var(--ink-3); }
+  .state span { font-size: 0.95rem; color: var(--ink-2); }
+  .state form { margin: 0; }
+
+  .two { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 0 32px; }
+  .sform { max-width: var(--measure-form); }
+  .sform .ta { resize: vertical; }
+
+  .shots { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
+  .shots img { display: block; width: 100%; aspect-ratio: 4 / 3; object-fit: cover; border: 1px solid var(--rule); }
+  .shots p { margin: 4px 0 0; font-size: 0.86rem; color: var(--ink-2); }
+</style>

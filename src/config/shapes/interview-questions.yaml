@@ -1,0 +1,58 @@
+# The user interview questions, due September 9, read by an Elder the same
+# day. A starting point in the handout's voice.
+
+id: interview-questions
+name: User interview questions
+version: 1
+guidance: >-
+  Questions you could ask a stranger in fifteen minutes and learn something
+  you did not already believe. Open questions, in their words, no leading.
+sections:
+  - id: who
+    name: Who you will ask
+    fields:
+      - id: who
+        kind: long
+        prompt: Who are you interviewing, and why them?
+        tip: Two or three kinds of people, and what each one knows that you do not.
+        min_words: 40
+        max_words: 200
+        required: true
+      - id: how_many
+        kind: number
+        prompt: How many interviews do you plan to do?
+        required: true
+      - id: minors
+        kind: choice
+        prompt: Will any of them be under 18?
+        tip: If yes, a guardian signs the consent form before the interview, not after.
+        options: [Yes, No, Not sure]
+        required: true
+  - id: questions
+    name: The questions
+    fields:
+      - id: opener
+        kind: text
+        prompt: The opening question, to put them at ease
+        tip: Something about them, not about your project.
+        required: true
+      - id: questions
+        kind: long
+        prompt: The questions, in the order you will ask them
+        tip: One per line. Eight to twelve. "Tell me about the last time..." beats "Do you think...".
+        min_words: 80
+        required: true
+      - id: learn
+        kind: long
+        prompt: What do you hope to learn that you cannot learn from reading?
+        max_words: 120
+        required: true
+  - id: elder
+    name: For the Elder
+    fields:
+      - id: elder_note
+        kind: note
+        text: >-
+          Your Elder reads this on September 9 and comments on each question.
+          A question they mark as leading gets rewritten before the interviews,
+          which is why this is due a week before the protocol.

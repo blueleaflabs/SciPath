@@ -40,20 +40,75 @@ const isEditor = me.isEditor;
    The warnings themselves are not gone: they are written on a step and shown
    on that step, next to the work they are warning about, which is the only
    moment they are worth reading. */
-const nav = [
-  { href: '/app/', label: 'Overview' },
-  ...(isEditor ? [{ href: '/app/editorial/', label: 'Editorial' }] : []),
-  ...(isEditor ? [{ href: '/app/publish/', label: 'Publish' }] : []),
-  ...(me.runsTheClub ? [{ href: '/app/assign/', label: 'Assign' }] : []),
-  ...(me.isAdvisor ? [{ href: '/app/roles/', label: 'Roles' }] : []),
+/* A class showcase, for anybody who may open one. Labelled with the
+   program's own short name, because "Showcase" alone is the public archive
+   in the masthead and the two are not the same thing. */
+const showcases = ((Astro.locals as any).showcases ?? []) as { program_id: string; name: string; short_name: string | null }[];
+
+/* The class page, for the advisor who runs it: the teacher's day, which
+   the Workbench's project list is not. */
+const classes = ((Astro.locals as any).classes ?? []) as { program_id: string; name: string; short_name: string | null }[];
+
+/* The reader's own projects, for the tabs that are the project's pages.
+   A person with one project gets *My project* (its place in the class,
+   which is where the plate and the calendar are), *Notebook*, and one
+   more tab per further place the same project is in (*In SCVSEFA*), so
+   the tab bar is the model drawn for one person: the notebook is the
+   project's and each calendar is a place's. Somebody with two projects
+   navigates from the Workbench, where both are cards. */
+const projects = ((Astro.locals as any).projects ?? []) as { project_id: string; title: string; places: { program_id: string; name: string; short_name: string | null; cohort: boolean }[] }[];
+const one = projects.length === 1 ? projects[0] : null;
+const projectTabs = one
+  ? [
+      ...(one.places[0]
+        ? [{ href: `/app/project/${one.project_id}/in/${one.places[0].program_id}/`, label: 'My project' }]
+        : []),
+      /* The Notebook tab is off the bar for the pilot (2.8): the notebook
+         is a section of the project page now, and the full notebook page
+         (images, export) is linked from there. */
+      ...one.places.slice(1).map((pl) => ({ href: `/app/project/${one.project_id}/in/${pl.program_id}/`, label: `In ${pl.short_name ?? pl.name}` })),
+    ]
+  : [];
+
+/* Whoever runs a class lands on it from `/app/`, and supervises from it:
+   the Workbench's care list is the class as a table, which the Class
+   page does better, so the tab is off her bar (the page still answers
+   at `?view=workbench`). A student with one project lands on it and has
+   its pages as tabs; the Workbench is where they go with two. Everybody
+   else, which is an Elder, has the Workbench first. */
+const landsOnProject = classes.length === 0 && !me.runsTheClub && one !== null && one.places.length > 0;
+/* The tracker: the family's scores, the teacher's whole class and the
+   Elder's own family, filled in on the grid. */
+const families = ((Astro.locals as any).families ?? []) as { program_id: string; name: string; short_name: string | null }[];
+const trackers = [
+  ...classes.map((c) => ({ href: `/app/program/${c.program_id}/tracker/`, label: `${c.short_name ?? c.name} Tracker` })),
+  ...families.filter((f) => !classes.some((c) => c.program_id === f.program_id)).map((f) => ({ href: `/app/program/${f.program_id}/tracker/`, label: `${f.short_name ?? f.name} Tracker` })),
 ];
+
+const nav = [
+  ...classes.map((c) => ({ href: `/app/program/${c.program_id}/class/`, label: `${c.short_name ?? c.name} Class` })),
+  ...(classes.length === 0 && !landsOnProject ? [{ href: '/app/', label: 'Projects Workbench' }] : []),
+  ...projectTabs,
+  ...trackers,
+  ...showcases.map((s) => ({ href: `/app/program/${s.program_id}/showcase/`, label: `${s.short_name ?? s.name} Showcase` })),
+  ...(isEditor ? [{ href: '/app/editorial/', label: 'Editorial', key: 'editorial' }] : []),
+  ...(isEditor ? [{ href: '/app/publish/', label: 'Publish', key: 'publish' }] : []),
+  ...(me.runsTheClub ? [{ href: '/app/assign/', label: 'Assign', key: 'assign' }] : []),
+  ...(me.isAdvisor ? [{ href: '/app/roles/', label: 'Roles', key: 'roles' }] : []),
+].filter((n: any) => {
+  /* A school's pilot can keep a tab off the bar until a date (org-shape.ts,
+     `hiddenUntil`). The page still answers; only the way in is withheld. */
+  const h = org.hiddenUntil;
+  if (!h || !n.key || !h.surfaces.includes(n.key)) return true;
+  return new Date().toISOString().slice(0, 10) >= h.date;
+});
 ---
 
 <nav class="appnav" aria-label="Working surface">
   <ul>
     {nav.map((n) => (
       <li>
-        <a href={n.href} aria-current={here === n.href ? 'page' : undefined}>{n.label}</a>
+        <a href={n.href} aria-current={here === n.href.split('?')[0] ? 'page' : undefined}>{n.label}</a>
       </li>
     ))}
   </ul>

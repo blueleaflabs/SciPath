@@ -49,13 +49,20 @@ const STYLES: Record<DateStyle, Intl.DateTimeFormatOptions> = {
 export function formatDate(
   value: string | Date | null | undefined,
   style: DateStyle = 'long',
-  fallback = '—'
+  fallback = '—',
+  timezone?: string
 ): string {
   const date = toDate(value);
   if (!date) return fallback;
+  /* A bare date was parsed as server-local midnight, so it must be printed
+     server-local too or it steps back a day; only a real timestamp is
+     moved into the school's zone. */
+  const zoned = timezone && !(typeof value === 'string' && DATE_ONLY.test(value))
+    ? { timeZone: timezone }
+    : {};
   return style === 'withTime'
-    ? date.toLocaleString('en-US', STYLES.withTime)
-    : date.toLocaleDateString('en-US', STYLES[style]);
+    ? date.toLocaleString('en-US', { ...STYLES.withTime, ...zoned })
+    : date.toLocaleDateString('en-US', { ...STYLES[style], ...zoned });
 }
 
 /** Whole days from today. Negative is in the past. */
@@ -97,4 +104,29 @@ export function arrivedAt(value: string | Date | null | undefined): string {
   return at
     ? `today, ${at.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}`
     : 'today';
+}
+
+/**
+ * TODAY, WHERE THE SCHOOL IS.
+ *
+ * The server runs in UTC. `new Date().toISOString().slice(0, 10)` is
+ * therefore tomorrow's date for anybody in California from five in the
+ * afternoon, and a student writing up an afternoon's work found the entry
+ * dated the next day. A date default has to be taken in the tenant's own
+ * zone, which every organization file declares.
+ *
+ * `en-CA` because its short form is `YYYY-MM-DD`, the shape a date input
+ * and a `date` column both want, with no reassembly.
+ */
+export function todayIn(timezone: string, at: Date = new Date()): string {
+  try {
+    return new Intl.DateTimeFormat('en-CA', {
+      timeZone: timezone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).format(at);
+  } catch {
+    return at.toISOString().slice(0, 10);
+  }
 }

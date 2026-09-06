@@ -1,0 +1,273 @@
+---
+export const prerender = false;
+
+/**
+ * THE TRACKER (6.13, 2.7).
+ *
+ * The class's shared spreadsheet, brought in: one row per student grouped
+ * by family (the Elders on their place), one column per assignment, and in
+ * each cell the family's score out of 4 with the Elder's comment. Every
+ * Elder of the class reads every family's scores, the teachers read all of
+ * it, and an Elder writes the cells of their own family here, on the grid,
+ * the way the spreadsheet was filled in. The teacher's grades are not on
+ * this page (an Elder never reads a classmate's grade, decision 78); they
+ * are on Grade a deadline.
+ */
+
+import Base from '../../../../layouts/Base.astro';
+import AppShell from '../../../../components/AppShell.astro';
+import { activeOrg } from '../../../../lib/tenant';
+import { serverClient } from '../../../../lib/supabase';
+import { standing } from '../../../../lib/roles';
+import { programTitle, staffWord } from '../../../../lib/program-names';
+import { formatDate, todayIn } from '../../../../lib/dates';
+import { afterPost, outcomeFrom } from '../../../../lib/post-redirect';
+import { signInWith } from '../../../../lib/next-path';
+import { allRows } from '../../../../lib/all-rows';
+
+const { session, account, roles } = Astro.locals;
+const org = activeOrg(Astro);
+const { id } = Astro.params;
+
+if (!session) return Astro.redirect(signInWith(Astro.url));
+if (!account) return Astro.redirect('/app/welcome/');
+
+const me = standing(roles, account?.population);
+const runsThis = ((Astro.locals as any).classes ?? []).some((c: any) => c.program_id === id);
+/* The teachers of the class, and the Elders who hold a role in it. */
+const elderHere = me.scopes.includes(id ?? '') && me.runsTheClub;
+if (!(me.isAdvisor && runsThis) && !elderHere) return Astro.redirect('/app/');
+
+const supabase = serverClient(Astro.request, Astro.cookies, (Astro.locals as any).runtime?.env);
+const today = todayIn(org.timezone);
+
+let { error, note } = outcomeFrom(Astro.url);
+
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData();
+  if (String(form.get('action') ?? '') === 'score') {
+    const raw = String(form.get('score') ?? '').trim();
+    const { error: e } = await supabase.rpc('grade_milestone', {
+      p_milestone_id: String(form.get('milestone_id') ?? ''),
+      p_student_id: String(form.get('student_id') ?? ''),
+      p_score: raw === '' ? null : Number(raw),
+      p_out_of: 4,
+      p_feedback_md: String(form.get('feedback') ?? ''),
+      p_rubric: null,
+      p_release: false,
+    });
+    if (e) error = e.message;
+    else note = `${String(form.get('student_name') ?? 'Scored')}: saved.`;
+  }
+  return afterPost(Astro.url, { error, note });
+}
+
+const { data: program } = await supabase
+  .from('programs')
+  .select('id, name, short_name, season_year, kind, program_role, roles, template_id')
+  .eq('id', id)
+  .maybeSingle();
+if (!program) return Astro.redirect('/app/');
+
+const { data: parts } = await supabase
+  .from('participations')
+  .select('id, project_id, projects(id, title, project_authors(role, participation_id, self_managed_at, users(id, display_name)))')
+  .eq('program_id', id)
+  .in('status', ['entered', 'competed']);
+const partIds = (parts ?? []).map((p: any) => p.id);
+
+const { data: milestones } = partIds.length
+  ? await allRows(() =>
+      supabase
+        .from('entry_milestones')
+        .select('id, participation_id, name, due_on, completed_on, kind, owner')
+        .in('participation_id', partIds)
+        .eq('owner', 'student')
+        .neq('kind', 'event')
+        .order('due_on', { ascending: true, nullsFirst: false })
+        .order('id')
+    )
+  : { data: [] as any[] };
+
+const { data: scores } = partIds.length
+  ? await allRows(() =>
+      supabase
+        .from('assessments')
+        .select('id, milestone_id, student_id, participation_id, score, out_of, feedback_md, created_at, kind, grader:grader_id(display_name)')
+        .in('participation_id', partIds)
+        .eq('kind', 'elder')
+        .is('superseded_by', null)
+        .order('id')
+    )
+  : { data: [] as any[] };
+const scoreFor = new Map<string, any>((scores ?? []).map((a: any) => [`${a.milestone_id}:${a.student_id}`, a]));
+
+/* Columns: every assignment, dated, in order. */
+type Col = { key: string; name: string; dueOn: string | null };
+const cols: Col[] = [];
+const seen = new Set<string>();
+for (const m of milestones ?? []) {
+  const key = `${m.name}|${m.due_on ?? ''}`;
+  if (seen.has(key)) continue;
+  seen.add(key);
+  cols.push({ key, name: m.name, dueOn: m.due_on });
+}
+/* The columns the class has reached: due by today, plus the next two. */
+const reached = cols.filter((c) => c.dueOn && c.dueOn <= today);
+const ahead = cols.filter((c) => !c.dueOn || c.dueOn > today).slice(0, 2);
+const showAll = Astro.url.searchParams.get('all') === '1';
+const shown = showAll ? cols : [...reached, ...ahead];
+
+/* Rows: each student, with their place, grouped by family. */
+type Row = { student: { id: string; name: string }; part: any; project: any; elders: { id: string; name: string }[]; mine: boolean };
+const rows: Row[] = (parts ?? []).flatMap((p: any) => {
+  const project = p.projects as any;
+  const elders = (project?.project_authors ?? [])
+    .filter((a: any) => a.role === 'officer' && a.participation_id === p.id && !a.self_managed_at && a.users)
+    .map((a: any) => ({ id: a.users.id, name: a.users.display_name }));
+  const mine = elders.some((e: any) => e.id === account.id);
+  return (project?.project_authors ?? [])
+    .filter((a: any) => a.role === 'author' && a.users)
+    .map((a: any) => ({ student: { id: a.users.id, name: a.users.display_name }, part: p, project, elders, mine }));
+});
+const families = (() => {
+  const by = new Map<string, { key: string; name: string; mine: boolean; rows: Row[] }>();
+  for (const r of rows) {
+    const key = r.elders.map((e) => e.id).sort().join('|') || 'none';
+    const name = r.elders.map((e) => e.name).join(', ') || `No ${staffWord(program)}`;
+    const held = by.get(key) ?? { key, name, mine: r.mine, rows: [] };
+    held.rows.push(r);
+    by.set(key, held);
+  }
+  return [...by.values()]
+    .map((f) => ({ ...f, rows: f.rows.sort((a, b) => a.student.name.localeCompare(b.student.name)) }))
+    .sort((a, b) => Number(b.mine) - Number(a.mine) || a.name.localeCompare(b.name));
+})();
+
+const milestoneOf = (row: Row, col: Col) => (milestones ?? []).find((m: any) => m.participation_id === row.part.id && `${m.name}|${m.due_on ?? ''}` === col.key) ?? null;
+const label = program.short_name ?? program.name;
+const fmt = (d: string | null) => (d ? formatDate(String(d).slice(0, 10), 'short') : '');
+const LEVELS = ['4', '3.5', '3', '2.5', '2', '1.5', '1'];
+---
+
+<Base title={`${label} tracker`} noindex={true}>
+  <div class="wrap">
+    <AppShell org={org} account={account} roles={roles} here={`/app/program/${id}/tracker/`} />
+
+    <section class="cover">
+      <p class="kick">{programTitle(program)} · {formatDate(today, 'long')}</p>
+      <h1>{label} tracker</h1>
+      <p class="sub">
+        The family's score on each assignment, out of 4, with the {staffWord(program)}'s comment.
+        {elderHere && !me.isAdvisor ? ' Your family is first; fill in its cells here.' : ' Every family, as the Elders filled it in.'}
+      </p>
+    </section>
+
+    <div id="outcome" tabindex="-1">
+      {error && <p class="note flash" role="alert">{error}</p>}
+      {note && !error && <p class="note flash" role="status">{note}</p>}
+    </div>
+
+    <div class="tbar">
+      <span class="t-sm">{shown.length} of {cols.length} assignments shown{showAll ? '' : ': the ones due so far and the next two'}.</span>
+      <a class="btn btn-sm ghost" href={showAll ? `/app/program/${id}/tracker/` : `/app/program/${id}/tracker/?all=1`}>{showAll ? 'Only the ones reached' : 'Every assignment'}</a>
+      {me.isAdvisor && <a class="btn btn-sm ghost" href={`/app/program/${id}/grade/`}>Grade a deadline</a>}
+      {me.isAdvisor && <a class="btn btn-sm ghost" href={`/app/program/${id}/class/`}>Class page</a>}
+    </div>
+
+    <div class="tracker-wrap">
+      <table class="tracker">
+        <thead>
+          <tr>
+            <th scope="col" class="stick">Student</th>
+            {shown.map((c) => (
+              <th scope="col"><span class="cname">{c.name}</span><span class="cdue">{c.dueOn ? fmt(c.dueOn) : 'no date'}</span></th>
+            ))}
+          </tr>
+        </thead>
+        {families.map((f) => (
+          <tbody class:list={[f.mine && 'mine']}>
+            <tr class="fam">
+              <th scope="rowgroup" colspan={shown.length + 1}>{staffWord(program, f.rows.some((r) => r.elders.length > 1) ? 'plural' : 'singular')}: {f.name}{f.mine ? ' (you)' : ''}<span class="fcount">{f.rows.length}</span></th>
+            </tr>
+            {f.rows.map((r) => (
+              <tr>
+                <th scope="row" class="stick">
+                  <a href={`/app/project/${r.project.id}/in/${id}/`}>{r.student.name}</a>
+                  <span class="sub">{r.project.title}</span>
+                </th>
+                {shown.map((c) => {
+                  const m = milestoneOf(r, c);
+                  const sc = m ? scoreFor.get(`${m.id}:${r.student.id}`) ?? null : null;
+                  const canWrite = Boolean(m) && (r.mine || (me.isAdvisor && r.elders.length === 0));
+                  return (
+                    <td class:list={[sc ? 'has' : m?.completed_on ? 'in' : 'none']}>
+                      {!m ? (
+                        <span class="dash">—</span>
+                      ) : canWrite ? (
+                        <details class="cell">
+                          <summary>
+                            <b>{sc ? sc.score ?? '—' : '·'}</b>
+                            {sc?.feedback_md && <span class="cmt" title={sc.feedback_md}>{sc.feedback_md}</span>}
+                            {!sc && <span class="cstate">{m.completed_on ? 'submitted' : 'not in'}</span>}
+                          </summary>
+                          <form method="POST" action="#outcome" class="cform">
+                            <input type="hidden" name="action" value="score" />
+                            <input type="hidden" name="milestone_id" value={m.id} />
+                            <input type="hidden" name="student_id" value={r.student.id} />
+                            <input type="hidden" name="student_name" value={r.student.name} />
+                            <label><span>Score</span>
+                              <select class="se" name="score">
+                                <option value="" selected={!sc || sc.score == null}>—</option>
+                                {LEVELS.map((l) => <option value={l} selected={sc && String(sc.score) === l}>{l}</option>)}
+                              </select>
+                            </label>
+                            <label><span>Comment</span><textarea class="ta" name="feedback" rows="2">{sc?.feedback_md ?? ''}</textarea></label>
+                            <button class="btn btn-sm" type="submit">Save</button>
+                          </form>
+                        </details>
+                      ) : sc ? (
+                        <span class="cell read">
+                          <b>{sc.score ?? '—'}</b>
+                          {sc.feedback_md && <span class="cmt" title={sc.feedback_md}>{sc.feedback_md}</span>}
+                        </span>
+                      ) : (
+                        <span class="cstate">{m.completed_on ? 'submitted' : 'not in'}</span>
+                      )}
+                    </td>
+                  );
+                })}
+              </tr>
+            ))}
+          </tbody>
+        ))}
+      </table>
+    </div>
+  </div>
+</Base>
+
+<style>
+  .tbar { display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: center; margin: 0 0 14px; }
+  .tracker-wrap { overflow-x: auto; border: 1px solid var(--rule-fine); background: var(--card); }
+  .tracker { border-collapse: separate; border-spacing: 0; min-width: 100%; font-size: 0.86rem; }
+  .tracker th, .tracker td { border-bottom: 1px solid var(--rule-fine); border-right: 1px solid var(--rule-fine); padding: 6px 8px; vertical-align: top; text-align: left; min-width: 150px; }
+  .tracker thead th { background: var(--sunk); position: sticky; top: 0; z-index: 2; }
+  .tracker .stick { position: sticky; left: 0; background: var(--card); z-index: 1; min-width: 200px; }
+  .tracker thead th.stick { z-index: 3; background: var(--sunk); }
+  .tracker .cname { display: block; font-weight: 600; }
+  .tracker .cdue { display: block; font-family: var(--face-ui); font-size: 0.76rem; color: var(--ink-3); font-weight: 400; }
+  .tracker tr.fam th { background: var(--accent-pale); font-family: var(--face-ui); font-size: 0.82rem; letter-spacing: 0.03em; text-transform: uppercase; }
+  .tracker tbody.mine tr.fam th { background: var(--accent); color: var(--accent-ink); }
+  .fcount { margin-left: 8px; font-weight: 400; opacity: 0.8; }
+  .tracker td.has { background: color-mix(in srgb, var(--stage-comp) 10%, transparent); }
+  .tracker td.none { color: var(--ink-3); }
+  .cell > summary { list-style: none; cursor: pointer; display: grid; gap: 2px; }
+  .cell > summary::-webkit-details-marker { display: none; }
+  .cell b { font-size: 1.05rem; }
+  .cmt { display: block; font-size: 0.78rem; color: var(--ink-2); max-width: 220px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .cstate { font-family: var(--face-ui); font-size: 0.74rem; color: var(--ink-3); }
+  .dash { color: var(--ink-3); }
+  .cform { display: grid; gap: 6px; margin-top: 6px; min-width: 200px; }
+  .cform label { display: grid; gap: 2px; font-family: var(--face-ui); font-size: 0.78rem; }
+  .cell.read { display: grid; gap: 2px; }
+</style>

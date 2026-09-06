@@ -1,0 +1,54 @@
+---
+/**
+ * THE COVER OF A PROJECT PAGE.
+ *
+ * The block in the school's hue at the top of the project's two pages: the
+ * program it is in, the title, who is on it, and the one or two ways to
+ * act from here. The participation page and the notebook page each had a
+ * header of their own and the two had drifted, so a project read as two
+ * different things depending on which of its pages was open. One
+ * component, so they are one thing.
+ *
+ * `people` is a short list of label and value; the labels are the
+ * program's own words (Elder, Officer). Anything under the title that is
+ * not a person (a rename control) goes in the `under` slot; the buttons go
+ * in the default slot and sit at the right.
+ */
+
+interface Props {
+  kick: string;
+  title: string;
+  people: { label: string; value: string }[];
+}
+
+const { kick, title, people } = Astro.props;
+---
+
+<section class="cover pcover">
+  <p class="kick">{kick}</p>
+  <h1>{title}</h1>
+  <slot name="under" />
+
+  <div class="cover-who">
+    <ul class="people">
+      {people.map((p) => (
+        <li>
+          <b>{p.label}</b>
+          <span>{p.value}</span>
+        </li>
+      ))}
+    </ul>
+    <p class="cover-do"><slot /></p>
+  </div>
+</section>
+
+<style>
+  /* A project title is a subject line, not a poster: fourteen words at
+     poster size was a screen of purple before anything to do appeared. */
+  .pcover h1 { max-width: 40ch; font-size: clamp(1.4rem, 2.6vw, 1.9rem); font-weight: 700; line-height: 1.15; }
+  .pcover .kick { font-size: 0.7rem; }
+  .cover-who { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 10px 24px; margin-top: 14px; }
+  .cover-who .people { flex: 1 1 30ch; margin: 0; }
+  .cover-do { display: flex; flex-wrap: wrap; gap: 8px; margin: 0; }
+  .cover-do:empty { display: none; }
+</style>

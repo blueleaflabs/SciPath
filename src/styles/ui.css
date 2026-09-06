@@ -130,27 +130,44 @@
   justify-content: space-between;
   align-items: baseline;
   gap: 14px;
-  border-bottom: 2px solid var(--brand);
-  padding-bottom: 8px;
-  margin: 0 0 16px;
+  border-bottom: 3px solid var(--brand-deep);
+  padding-bottom: 10px;
+  margin: 0 0 18px;
 }
 
+/* **The title at the size of a title.** It was small caps at 0.86rem, which
+   is the weight of a column heading, so a page of six sections read as one
+   long table. A heading in the interface face at heading size separates the
+   sections by shape before anybody reads them. The number keeps the numeric
+   face and takes the accent, which is what makes it a folio rather than a
+   word. */
 .sec-h b {
   display: flex;
   align-items: baseline;
-  gap: 10px;
+  gap: 12px;
+  font-family: var(--face-ui);
+  font-weight: 700;
+  font-size: 1.45rem;
+  line-height: 1.15;
+  letter-spacing: -0.01em;
+  color: var(--ink);
+}
+
+.sec-h .sec-n {
   font-family: var(--face-num);
   font-weight: 700;
-  font-size: 0.86rem;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  color: var(--ink);
+  font-size: 0.9rem;
+  letter-spacing: 0.1em;
+  color: var(--accent-deep);
 }
 
 .sec-h span {
   font-family: var(--face-num);
-  font-size: 0.84rem;
+  font-size: 0.8rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
   color: var(--ink-3);
+  text-align: right;
 }
 
 /* ── MASTHEAD, THE ORG LOCKUP SLOT ─────────────────────────── */
@@ -169,7 +186,9 @@
   display: flex;
   align-items: center;
   gap: 18px;
-  padding: 14px 0;
+  /* Compressed: the bar is chrome, and every pixel it holds is a pixel
+     the working page does not. */
+  padding: 8px 0;
   flex-wrap: wrap;
 }
 
@@ -196,9 +215,9 @@
 .lockup .badge {
   /* min-width rather than width. A mark can be two, three, or four
      characters, and a fixed square clips the four character case. */
-  min-width: 36px;
+  min-width: 32px;
   padding-inline: 5px;
-  height: 36px;
+  height: 32px;
   box-sizing: border-box;
   background: var(--masthead-ink);
   color: var(--masthead-bg);
@@ -937,8 +956,13 @@ select {
 .tbl th,
 .tbl td {
   min-width: 0;
-  overflow-wrap: anywhere;
+  /* Between words, never inside one: "summa / ry" in a narrow column is
+     the floor under a wide table, and a wide table is the better failure.
+     A long unbroken token (an address) still breaks, by `.tbl .breakable`. */
+  overflow-wrap: normal;
+  word-break: keep-all;
 }
+.tbl .breakable { overflow-wrap: anywhere; }
 
 .tbl th {
   text-align: left;
@@ -951,6 +975,7 @@ select {
   background: var(--sunk);
   padding: 11px 12px;
   border-bottom: 2px solid var(--brand);
+  hyphens: none;
 }
 
 .tbl td {
@@ -1408,3 +1433,956 @@ mark {
   margin-top: 32px;
 }
 .cta .row { margin-top: 18px; }
+
+/* ── STAT CARDS ────────────────────────────────────────────────
+ *
+ * **One row of figures, the same one everywhere, and each one goes
+ * somewhere.**
+ *
+ * A label, a figure, a line underneath, and a verb. The verb is the change:
+ * a card that says *6 overdue* and offers nothing is a card somebody reads
+ * and closes, and the whole page exists so they do the next thing instead.
+ * Every card carries the one link that acts on its figure.
+ *
+ * Four grid rows shared across the row, so a label that wraps does not push
+ * its own figure down while the three beside it stay put. Light, on white,
+ * so the cover above them is the one dark thing on the page; they hang off
+ * its bottom edge when they follow one.
+ */
+.stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-rows: auto auto auto auto;
+  gap: 14px;
+  margin: 26px 0 0;
+}
+
+.stats.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+
+.cover + .stats {
+  margin-top: -30px;
+  position: relative;
+  z-index: 1;
+}
+
+.stats .stat {
+  display: grid;
+  grid-row: span 4;
+  grid-template-rows: subgrid;
+  gap: 8px;
+  padding: 16px 18px 16px;
+  background: var(--card);
+  border: 1px solid var(--rule);
+  border-top: var(--edge) solid var(--rule);
+  box-shadow: var(--lift-2);
+}
+
+/* The edge says what the figure means before the figure is read. */
+.stats .stat.is-late { border-top-color: var(--alert); }
+.stats .stat.is-ok { border-top-color: var(--stage-comp); }
+.stats .stat.is-lead { border-top-color: var(--accent); }
+
+.stats .k {
+  margin: 0;
+  align-self: start;
+  font-family: var(--face-num);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+.stats .v {
+  margin: 0;
+  align-self: center;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-family: var(--face-num);
+  line-height: 0.95;
+}
+
+.stats .v .n {
+  font-size: clamp(2.4rem, 4.6vw, 3.6rem);
+  font-weight: 700;
+  letter-spacing: -0.04em;
+  color: var(--ink);
+}
+
+.stats .v .n.late { color: var(--alert); }
+.stats .v .n.quiet { color: var(--ink-3); }
+.stats .v .n.lead { color: var(--accent-deep); }
+.stats .v .of { font-size: 1rem; color: var(--ink-3); }
+
+.stats .u {
+  margin: 0;
+  align-self: start;
+  font-family: var(--face-ui);
+  font-size: 0.88rem;
+  line-height: 1.35;
+  color: var(--ink-2);
+}
+
+.stats .u.late { color: var(--alert); }
+
+/* The verb, on the floor of the card. A link in the label voice with an
+   arrow, so it reads as the way out of the card rather than as a caption. */
+.stats .go {
+  align-self: end;
+  margin: 4px 0 0;
+  padding-top: 10px;
+  border-top: 1px solid var(--rule-fine);
+  font-family: var(--face-num);
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.stats .go a { color: var(--brand); text-decoration: none; }
+.stats .go a:hover,
+.stats .go a:focus-visible { color: var(--ink); text-decoration: underline; }
+.stats .go a::after { content: ' \2192'; }
+.stats .is-late .go a { color: var(--alert); }
+
+/* Two wide cards, or one. A wide card carries a strip of secondary
+   figures between the line and the verb, so it has five rows. */
+.stats.wide.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.stats.wide.one { grid-template-columns: minmax(0, 1fr); }
+.stats.wide { grid-template-rows: auto auto auto auto auto; gap: 18px; }
+.stats.wide .stat { grid-row: span 5; padding: 20px 24px 18px; }
+.stats.wide .v .n { font-size: clamp(3rem, 6vw, 4.6rem); }
+.stats.wide .v .of { font-size: 1.05rem; }
+.stats.wide .u { font-size: 0.98rem; }
+
+.strip-f {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 10px 0 0;
+  border-top: 1px solid var(--rule-fine);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 22px;
+  font-family: var(--face-ui);
+  font-size: 0.9rem;
+  color: var(--ink-2);
+}
+
+.strip-f b {
+  font-family: var(--face-num);
+  font-size: 1.15rem;
+  font-weight: 700;
+  color: var(--ink);
+  margin-right: 2px;
+}
+
+.strip-f li.late,
+.strip-f li.late b { color: var(--alert); }
+.strip-f a { color: var(--brand); }
+
+@media (max-width: 860px) {
+  .stats,
+  .stats.three { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .stats.wide.two { grid-template-columns: minmax(0, 1fr); }
+}
+
+@media (max-width: 460px) {
+  .stats,
+  .stats.three { grid-template-columns: minmax(0, 1fr); }
+  .stats .stat { grid-row: auto; grid-template-rows: none; }
+  .cover + .stats { margin-top: 14px; }
+}
+
+/* ── A PROJECT, AS AN OBJECT ───────────────────────────────────
+ *
+ * A student's own work was a list of links with a grey sentence under
+ * each: nothing to aim at, and the most important thing on the page
+ * rendered lighter than the table below it. A card gives the title a
+ * surface, puts the class and the next obligation where the eye lands
+ * after it, and makes the row of them scan as a shelf.
+ */
+.projects {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 14px;
+}
+
+.projects > li {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 190px;
+  padding: 20px 20px 18px 26px;
+  background: var(--card);
+  border: 1px solid var(--rule);
+  box-shadow: var(--lift-2);
+}
+
+/* The spine. A folder has one, and it is what makes a row of these read
+   as objects on a shelf rather than as boxes with text in them. Twice the
+   ordinary edge on purpose: this is the one card on the page that is the
+   reader's own. */
+.projects > li::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 8px;
+  background: var(--brand);
+}
+
+.projects > li.is-late::before { background: var(--alert); }
+
+.projects .ord {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 0;
+  font-family: var(--face-num);
+  font-size: 0.72rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+.projects .ord b { color: var(--accent-deep); font-weight: 700; }
+
+.projects .t {
+  font-family: var(--face-ui);
+  font-weight: 700;
+  font-size: 1.22rem;
+  line-height: 1.2;
+  text-wrap: balance;
+  text-decoration: none;
+  color: var(--ink);
+}
+
+.projects .t:hover { text-decoration: underline; }
+
+.projects .where {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+}
+
+.projects .meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin: auto 0 0;
+  padding-top: 12px;
+  border-top: 1px solid var(--rule-fine);
+  font-family: var(--face-ui);
+  font-size: 0.88rem;
+  color: var(--ink-2);
+}
+
+.projects .meta .n { font-family: var(--face-num); }
+
+/* A pill in a card wraps rather than running off the card's edge: the
+   obligation name is the class's own and can be six words long. */
+.projects .meta .pill { white-space: normal; max-width: 100%; line-height: 1.4; }
+
+/* ── A HALF OF A PAGE ──────────────────────────────────────────
+ *
+ * The overview does several jobs and the reader has to know which one
+ * they are looking at when the second list starts. Heavier than a
+ * section header and quieter than the page title, with the count
+ * beside it rather than under it. */
+.half {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  margin: 40px 0 2px;
+  font-family: var(--face-ui);
+  font-size: 1.3rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.half::before {
+  content: '';
+  width: var(--edge);
+  align-self: stretch;
+  background: var(--brand);
+  flex: none;
+}
+
+.half-n {
+  font-family: var(--face-num);
+  font-size: 0.92rem;
+  font-weight: 400;
+  color: var(--ink-3);
+}
+
+.half-none {
+  margin: 0 0 16px;
+  padding-left: calc(var(--edge) + 12px);
+  color: var(--ink-3);
+}
+
+/* ── THE JUMP ROW ──────────────────────────────────────────────
+ *
+ * A map of the page, drawn as a tab bar hanging off whatever is above it.
+ * Chips read as filters; a ruled row of labels reads as the page's own
+ * table of contents, which is what this is. The count sits in a small
+ * block after the label so a reader can see which sections have anything
+ * in them before scrolling. */
+.jumps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0;
+  margin: 30px 0 0;
+  padding: 0;
+  border-bottom: 2px solid var(--brand);
+}
+
+.jumps a {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 22px 12px;
+  margin-bottom: -2px;
+  border-bottom: 4px solid transparent;
+  font-family: var(--face-num);
+  font-size: 1rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  text-decoration: none;
+}
+
+.jumps a:hover,
+.jumps a:focus-visible {
+  color: var(--brand-deep);
+  border-bottom-color: var(--accent);
+  text-decoration: none;
+}
+
+.jumps a .n {
+  padding: 2px 8px;
+  background: var(--brand-deep);
+  color: var(--brand-contrast);
+  font-size: 0.8rem;
+}
+
+.jumps a .n.late { background: var(--alert); }
+
+/* ── THE COVER ─────────────────────────────────────────────────
+ *
+ * **The signature.** A working page opens with a block in the school's
+ * hue that carries the person's name, their standing, and the season, at
+ * a size the eye lands on from across the room. Everything after it is
+ * light, which is the point: one dark thing, and it says whose page this
+ * is. It bleeds to the edges of the shell and the stat cards hang off its
+ * bottom edge.
+ *
+ * The ring in the corner is the accent at low opacity, and it is the only
+ * ornament in the kit. */
+.cover {
+  position: relative;
+  overflow: hidden;
+  margin: 0 calc(-1 * var(--shell-pad));
+  padding: 28px var(--shell-pad) 56px;
+  background: var(--cover);
+  color: var(--cover-ink);
+  border-bottom: 4px solid var(--accent);
+}
+
+.cover::after {
+  content: '';
+  position: absolute;
+  right: -90px;
+  top: -110px;
+  width: 360px;
+  height: 360px;
+  border: 26px solid var(--accent);
+  border-radius: 50%;
+  opacity: 0.16;
+  pointer-events: none;
+}
+
+.cover > * { position: relative; z-index: 1; }
+
+.cover .kick {
+  margin: 0 0 8px;
+  font-family: var(--face-num);
+  font-size: 0.76rem;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+.cover h1 {
+  margin: 0;
+  font-family: var(--face-ui);
+  font-weight: 800;
+  font-size: clamp(1.9rem, 4.2vw, 2.8rem);
+  line-height: 1.02;
+  letter-spacing: -0.025em;
+  color: var(--cover-ink);
+  text-wrap: balance;
+  max-width: 22ch;
+}
+
+.cover .sub {
+  margin: 12px 0 0;
+  max-width: 70ch;
+  font-size: 1.12rem;
+  line-height: 1.5;
+  color: var(--cover-ink-2);
+}
+
+.cover .sub b { color: var(--cover-ink); font-weight: 600; }
+.cover .sub a { color: var(--cover-ink); }
+
+/* Who is on a project, under its title on the cover. */
+.cover .people {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 32px;
+  margin: 14px 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: 1rem;
+  color: var(--cover-ink);
+}
+
+.cover .people b {
+  display: block;
+  margin-bottom: 2px;
+  font-family: var(--face-num);
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+.cover .people a { color: var(--cover-ink); }
+.cover .people .p-none { color: var(--cover-ink-2); font-style: italic; }
+
+.cover .row { margin-top: 20px; }
+
+@media (max-width: 640px) {
+  .cover { padding-top: 28px; padding-bottom: 40px; }
+  .cover::after { display: none; }
+}
+
+/* ── PILLS ─────────────────────────────────────────────────────
+ *
+ * A state, in one word, on a fill. Three states worth a fill: late,
+ * close, and in order. Anything else is text. */
+.pill {
+  display: inline-block;
+  padding: 5px 9px;
+  font-family: var(--face-num);
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.pill.late { background: var(--alert); color: var(--brand-contrast); }
+.pill.soon { background: var(--accent-pale); color: var(--accent-deep); }
+.pill.ok { background: var(--ok-bg); color: var(--stage-comp); }
+.pill.quiet { background: var(--sunk); color: var(--ink-3); }
+
+/* ── THE VERDICT ───────────────────────────────────────────────
+ *
+ * The first thing in a row, before the title: a number and what it is a
+ * number of, on a fill. Red for late, the accent for soon, the done tone
+ * for in order. It is deliberately the loudest thing in any row that has
+ * it, because the row exists to be sorted by it. */
+.verdict {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-width: 84px;
+  min-height: 64px;
+  padding: 8px 6px;
+  background: var(--sunk);
+  color: var(--ink-3);
+  font-family: var(--face-num);
+  font-weight: 700;
+  font-size: 1.7rem;
+  line-height: 1;
+  text-align: center;
+}
+
+.verdict small {
+  display: block;
+  margin-top: 5px;
+  font-size: 0.58rem;
+  font-weight: 400;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.verdict.late { background: var(--alert); color: var(--brand-contrast); }
+.verdict.soon { background: var(--accent); color: var(--accent-ink); }
+.verdict.ok { background: var(--stage-comp); color: var(--brand-contrast); }
+.verdict.ok small { color: var(--brand-contrast); }
+
+.tbl td.v { width: 84px; padding: 0; vertical-align: stretch; }
+.tbl td.v .verdict { height: 100%; }
+
+/* ── THE LEDGER ────────────────────────────────────────────────
+ *
+ * What is owed, one line each: a verdict, the obligation with its project
+ * and how to meet it, and the way to record it. This is the working list a
+ * student and an Elder both live in for the fortnight before a deadline.
+ *
+ * Optionally headed by a phase block in the deep hue, which is how the
+ * deadlines page groups the same rows. */
+.ledger {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  background: var(--card);
+  border: 1px solid var(--rule);
+  box-shadow: var(--lift);
+}
+
+.ledger > li {
+  display: grid;
+  grid-template-columns: 84px minmax(0, 1fr) auto;
+  gap: 0 18px;
+  align-items: stretch;
+  border-bottom: 1px solid var(--rule-fine);
+}
+
+.ledger > li:last-child { border-bottom: 0; }
+.ledger > li.is-late { background: var(--alert-bg); }
+.ledger > li.is-waiting { background: var(--sunk); color: var(--ink-3); }
+.ledger > li.is-waiting .what .t { color: var(--ink-2); }
+
+.ledger .what {
+  padding: 14px 0;
+  min-width: 0;
+}
+
+.ledger .what .t {
+  display: block;
+  font-family: var(--face-ui);
+  font-weight: 700;
+  font-size: 1.05rem;
+  line-height: 1.25;
+  color: var(--ink);
+}
+
+.ledger .what .t a { color: inherit; text-decoration: none; }
+.ledger .what .t a:hover { text-decoration: underline; }
+
+.ledger .what .s {
+  display: block;
+  margin-top: 3px;
+  font-family: var(--face-ui);
+  font-size: 0.86rem;
+  color: var(--ink-3);
+}
+
+.ledger .what .s b {
+  font-family: var(--face-num);
+  font-size: 0.68rem;
+  font-weight: 400;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  margin-right: 5px;
+}
+
+/* How to meet it: what to hand in and the one line of guidance the
+   template carries. Under the obligation, in the reading face, because it
+   is advice rather than a fact about the row. */
+.ledger .how {
+  display: block;
+  margin-top: 6px;
+  font-size: 0.92rem;
+  line-height: 1.45;
+  color: var(--ink-2);
+  max-width: 64ch;
+}
+
+.ledger .how b {
+  font-family: var(--face-num);
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--accent-deep);
+  margin-right: 6px;
+}
+
+.ledger .do {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 16px 12px 0;
+  white-space: nowrap;
+}
+
+.ledger .do .btn { font-size: 0.8rem; padding: 8px 14px; }
+
+@media (max-width: 640px) {
+  .ledger > li { grid-template-columns: 72px minmax(0, 1fr); }
+  .ledger .do { grid-column: 2; padding: 0 0 12px; }
+  .verdict { min-width: 72px; }
+}
+
+/* The phase head over a ledger, on the deadlines page. */
+.ledger-phase {
+  display: grid;
+  grid-template-columns: 240px minmax(0, 1fr);
+  margin: 0 0 14px;
+  border: 1px solid var(--rule);
+  background: var(--card);
+  box-shadow: var(--lift);
+}
+
+.ledger-phase > .ledger { border: 0; box-shadow: none; }
+
+.ledger-phase .head {
+  padding: 20px 22px;
+  background: var(--brand-deep);
+  color: var(--brand-contrast);
+}
+
+.ledger-phase .head .n {
+  font-family: var(--face-num);
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+.ledger-phase .head h4 {
+  margin: 4px 0 2px;
+  font-family: var(--face-ui);
+  font-size: 1.25rem;
+  line-height: 1.15;
+  color: var(--brand-contrast);
+}
+
+.ledger-phase .head .w { font-size: 0.88rem; color: var(--cover-ink-2); }
+
+.ledger-phase .head .p {
+  margin-top: 16px;
+  font-family: var(--face-num);
+  font-size: 1.9rem;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--accent);
+}
+
+.ledger-phase .head .p small {
+  font-size: 0.72rem;
+  letter-spacing: 0.1em;
+  color: var(--cover-ink-2);
+}
+
+.ledger-phase.is-now .head { background: var(--brand); }
+
+@media (max-width: 760px) {
+  .ledger-phase { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* ── THE TRACK ─────────────────────────────────────────────────
+ *
+ * A program's phases as a line with a stop for each. Done stops fill with
+ * the hue, the current stop is the accent with a halo, and the stops ahead
+ * are hollow. Where somebody is, in one glance, which *0 of 29* never
+ * said. */
+.track {
+  --stops: 6;
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(var(--stops), minmax(0, 1fr));
+  gap: 0;
+  margin: 28px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.track::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 11px;
+  height: 4px;
+  background: var(--rule);
+}
+
+.track li {
+  position: relative;
+  padding: 36px 12px 0 0;
+  min-width: 0;
+}
+
+.track li::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 2px;
+  width: 22px;
+  height: 22px;
+  box-sizing: border-box;
+  border-radius: 50%;
+  background: var(--card);
+  border: 4px solid var(--rule);
+  z-index: 1;
+}
+
+.track li.done::before { background: var(--brand); border-color: var(--brand); }
+
+.track li.done::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 11px;
+  height: 4px;
+  background: var(--brand);
+}
+
+.track li.now::before {
+  background: var(--accent);
+  border-color: var(--brand-deep);
+  box-shadow: 0 0 0 6px var(--accent-pale);
+}
+
+.track li .n {
+  display: block;
+  font-family: var(--face-num);
+  font-size: 0.66rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+.track li .t {
+  display: block;
+  margin-top: 2px;
+  font-family: var(--face-ui);
+  font-weight: 700;
+  font-size: 0.98rem;
+  line-height: 1.2;
+  color: var(--ink-2);
+}
+
+.track li.now .t { color: var(--brand-deep); }
+
+.track li .w {
+  display: block;
+  margin-top: 2px;
+  font-size: 0.82rem;
+  color: var(--ink-3);
+}
+
+.track li .c {
+  display: block;
+  margin-top: 4px;
+  font-family: var(--face-num);
+  font-size: 0.82rem;
+  color: var(--brand);
+}
+
+.track a { text-decoration: none; }
+.track a:hover .t { text-decoration: underline; }
+
+@media (max-width: 760px) {
+  .track { grid-template-columns: repeat(2, minmax(0, 1fr)); row-gap: 18px; }
+  .track::before { display: none; }
+  .track li.done::after { display: none; }
+}
+
+/* ── THE ALARM ─────────────────────────────────────────────────
+ *
+ * One flag on a page, loud: the number of days on a red block, what it is
+ * about, and the verb. A page with three warnings has none; this is the
+ * one that matters today, and the rest are in the ledger. */
+.alarm {
+  display: grid;
+  grid-template-columns: 180px minmax(0, 1fr) auto;
+  align-items: center;
+  margin: 28px 0 0;
+  background: var(--brand-deep);
+  color: var(--brand-contrast);
+  box-shadow: var(--lift-2);
+}
+
+.alarm .big {
+  align-self: stretch;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 20px 16px;
+  background: var(--alert);
+  font-family: var(--face-num);
+  font-weight: 700;
+  font-size: 3.2rem;
+  line-height: 0.9;
+  text-align: center;
+}
+
+.alarm.soon .big { background: var(--accent); color: var(--accent-ink); }
+
+.alarm .big small {
+  display: block;
+  margin-top: 8px;
+  font-size: 0.64rem;
+  font-weight: 400;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.alarm .body { padding: 18px 24px; min-width: 0; }
+
+.alarm .body h3 {
+  margin: 0 0 4px;
+  font-family: var(--face-ui);
+  font-size: 1.3rem;
+  line-height: 1.2;
+  color: var(--brand-contrast);
+}
+
+.alarm .body p { margin: 0; color: var(--cover-ink-2); font-size: 0.98rem; }
+.alarm .body p b { color: var(--brand-contrast); font-weight: 600; }
+.alarm .body a { color: var(--brand-contrast); }
+
+.alarm .act { display: flex; flex-wrap: wrap; gap: 10px; padding: 18px 24px; white-space: nowrap; }
+
+/* The plate: the alarm as a short list. Each row keeps the bar's three
+   cells; rows after the first are quieter and ruled off. */
+.alarm.plate { display: block; }
+.alarm.plate .plate-row {
+  display: grid;
+  grid-template-columns: 180px minmax(0, 1fr) auto;
+  align-items: center;
+}
+.alarm.plate .plate-row:not(.first) { border-top: 1px solid var(--cover-rule); }
+.alarm.plate .plate-row:not(.first) .big { font-size: 2rem; padding: 12px 16px; background: transparent; color: var(--brand-contrast); }
+.alarm.plate .plate-row:not(.first) .body h3 { font-size: 1.05rem; }
+.alarm.plate .plate-row.is-late .big { background: var(--alert); color: var(--brand-contrast); }
+.alarm.plate .plate-row.first.is-late .big { background: var(--alert); }
+.alarm.plate.soon .plate-row.first .big { background: var(--accent); color: var(--accent-ink); }
+/* The project's title, once, over the rows that belong to it. */
+.alarm.plate .plate-group {
+  margin: 0; padding: 10px 24px 6px;
+  font-family: var(--face-ui); font-size: 0.78rem; letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--brand-contrast); opacity: 0.85;
+  border-top: 1px solid var(--cover-rule);
+}
+.alarm.plate .plate-group:first-child { border-top: 0; }
+.alarm.plate .plate-group + .plate-row { border-top: 0; }
+/* One verb per row (2.8): the button column is as wide as its widest
+   button and no wider, the button never wraps, and the body takes the
+   rest. A percentage max-width on an auto track had let the column
+   shrink under its content and spill past the row's edge. */
+.alarm.plate .plate-row { grid-template-columns: 180px minmax(0, 1fr) max-content; }
+.alarm.plate .plate-row > .act {
+  flex-direction: column;
+  align-items: stretch;
+  flex-wrap: nowrap;
+  white-space: nowrap;
+  max-width: none;
+  justify-self: end;
+}
+.alarm.plate .plate-row > .act .btn { text-align: center; white-space: nowrap; }
+@media (max-width: 720px) {
+  .alarm.plate .plate-row { grid-template-columns: minmax(0, 1fr); }
+  .alarm.plate .plate-row > .act { justify-self: stretch; }
+}
+
+/* A ghost on a dark surface takes the surface's ink; the brand outline it
+   wears on paper would vanish into the bar it sits on. */
+.alarm a.btn.ghost,
+.alarm a.btn.ghost:link,
+.alarm a.btn.ghost:visited { border-color: var(--brand-contrast); color: var(--brand-contrast); background: transparent; }
+.alarm a.btn.ghost:hover,
+.alarm a.btn.ghost:focus { background: var(--brand-contrast); color: var(--brand-deep); }
+.cover a.btn.ghost,
+.cover a.btn.ghost:link,
+.cover a.btn.ghost:visited { border-color: var(--cover-ink-2); color: var(--cover-ink); background: transparent; }
+.cover a.btn.ghost:hover,
+.cover a.btn.ghost:focus { background: var(--cover-ink); color: var(--cover); border-color: var(--cover-ink); }
+
+@media (max-width: 720px) {
+  .alarm { grid-template-columns: minmax(0, 1fr); }
+  .alarm .big { padding: 14px; font-size: 2.4rem; }
+  .alarm .act { padding-top: 0; }
+}
+
+/* ── ACCENT AND GHOST BUTTONS ──────────────────────────────────
+ *
+ * The verb on a dark surface is the accent; the second verb beside a
+ * primary one is an outline. Both in the kit so no page mixes its own. */
+.btn.accent,
+a.btn.accent,
+a.btn.accent:link,
+a.btn.accent:visited {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+}
+
+.btn.accent:hover,
+a.btn.accent:hover,
+a.btn.accent:focus {
+  background: var(--accent-pale);
+  border-color: var(--accent-pale);
+  color: var(--accent-ink);
+}
+
+.btn.ghost,
+a.btn.ghost,
+a.btn.ghost:link,
+a.btn.ghost:visited {
+  background: transparent;
+  border-color: var(--brand-deep);
+  color: var(--brand-deep);
+}
+
+.btn.ghost:hover,
+a.btn.ghost:hover,
+a.btn.ghost:focus {
+  background: var(--brand-deep);
+  border-color: var(--brand-deep);
+  color: var(--brand-contrast);
+}
+
+/* The good news, said as a panel rather than as a grey line. */
+.allclear {
+  padding: 18px 22px;
+  background: var(--ok-bg);
+  border-left: 8px solid var(--stage-comp);
+  font-size: 1.05rem;
+}
+
+.allclear b {
+  display: block;
+  margin-bottom: 3px;
+  font-family: var(--face-num);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--stage-comp);
+}

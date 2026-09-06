@@ -1,0 +1,106 @@
+# The IRPD literature review, from the class's own template ("Literature
+# Review IRPD", 2026-27). Three parts as the handout has them: the
+# researcher's, the family Elder's, and the researcher's record of the
+# oral feedback. The rubric the student self-evaluates against is the
+# step's rubric in irpd-mvhs-2027.yaml, which is also what the teacher
+# grades with.
+#
+# The resource links are placeholders until the addresses are pasted in.
+
+id: literature-review
+name: Literature review
+version: 2
+guidance: >-
+  Synthesize and summarize what is known about your question and what it
+  is worth to your research. Cite your sources in the text. Define any
+  terms your reader may not know.
+sections:
+  - id: resources
+    name: Resources
+    fields:
+      - id: resources
+        kind: note
+        text: >-
+          **MVHS Library Databases with Passwords** (ask your teacher for the
+          link) · **What is an annotated bibliography?** · **IRPD sample
+          literature reviews from 2025-26** (five, in the class folder).
+  - id: part1
+    name: "Part I: to be filled by the researcher"
+    fields:
+      - id: introduction
+        kind: long
+        prompt: "I. Introduction"
+        tip: Introduce your reader to your research question and topic, explain the importance of your topic and any gaps in the research, and introduce your research question. Cite your sources using in-text citations.
+        min_words: 150
+        required: true
+      - id: sources
+        kind: table
+        prompt: "II. Literature review: the organizer"
+        tip: One column per source. Use it if it helps your organization, or adapt it to your liking.
+        rows:
+          - Methods, or why is this source relevant to your research?
+          - Findings
+          - Limitations
+          - Other notes (link the article)
+        columns: [Source 1, Source 2, Source 3, Source 4, Source 5]
+      - id: beginning
+        kind: long
+        prompt: The beginning of your literature review
+        tip: At least three paragraphs. You may provide a detailed outline of the rest of your content. Define any terms your reader may not know, and cite your sources using in-text citations.
+        min_words: 300
+        required: true
+      - id: references
+        kind: long
+        prompt: "III. References"
+        tip: Properly format your references page and include a minimum of five solid sources. Alphabetize. Notice the spacing and the indentation. A citation generator helps.
+        min_words: 40
+        required: true
+  - id: self
+    name: "IV. Self-evaluate on your rubric"
+    fields:
+      - id: self_eval
+        kind: rubric
+        prompt: Mark the level you believe you reached on each row
+        tip: The same rubric your teacher grades with.
+        required: true
+      - id: self_score
+        kind: number
+        prompt: "a) Give yourself an overall score out of 4"
+        tip: You can give yourself a score between numbers, such as 3.5.
+        required: true
+      - id: proud
+        kind: long
+        prompt: "b) What are you most proud of in terms of the independent research you are conducting?"
+        max_words: 200
+        required: true
+      - id: growth
+        kind: long
+        prompt: "c) What are the areas of growth?"
+        max_words: 200
+        required: true
+  - id: part2
+    name: "Part II: to be filled by the family Elder"
+    fields:
+      - id: elder_note
+        kind: note
+        text: >-
+          **Family Elder score.** What score would you assign, as a researcher,
+          in the categories above? Make a few bullet points to help you explain
+          the rationale for your score through oral feedback to the researcher.
+      - id: elder_score
+        kind: choice
+        owner: staff
+        prompt: Rating
+        options: ["4", "3.5", "3", "2.5", "2", "1.5", "1"]
+      - id: elder_rationale
+        kind: long
+        owner: staff
+        prompt: Rationale with evidence
+        tip: Bullet points are fine. This is what you say to the researcher in the family; the written line is the record of it.
+  - id: part3
+    name: "Part III: to be filled by the researcher during the oral feedback"
+    fields:
+      - id: oral_feedback
+        kind: long
+        prompt: Record the feedback you received
+        tip: In your words, as it was said. This is not required to submit; it is filled in during the family session.

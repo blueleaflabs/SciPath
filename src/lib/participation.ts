@@ -27,6 +27,8 @@ export interface ResolvedParticipation {
   isCohort: boolean;
   projectId: string;
   programId: string;
+  /** The program's template, for what the template says about the place. */
+  templateId: string | null;
   viaId: string | null;
   row: any;
 }
@@ -49,7 +51,7 @@ export const PARTICIPATION_COLUMNS = [
   'via_id',
   'selection_state',
   'projects(id, title, started_on, facts, video_url, process_id, project_authors(role, users(id)))',
-  'programs(id, name, season_year, kind, program_role, process_id, phases, roles, template_id, fair_date, advances_to_fairs)',
+  'programs(id, name, season_year, kind, program_role, process_id, phases, roles, template_id, fair_date, advances_to_fairs, showcase)',
 ].join(', ');
 
 /**
@@ -117,6 +119,7 @@ function shape(data: any): ResolvedParticipation {
     isCohort: kind === 'cohort',
     projectId: data.project_id,
     programId: data.program_id,
+    templateId: (data.programs as any)?.template_id ?? null,
     viaId: data.via_id ?? null,
     row: data,
   };
@@ -138,7 +141,7 @@ export async function participationsForProject(
 
   const { data } = await supabase
     .from('participations')
-    .select('id, project_id, program_id, via_id, programs(id, name, season_year, kind, program_role)')
+    .select('id, project_id, program_id, via_id, programs(id, name, season_year, kind, program_role, template_id)')
     .eq('project_id', projectId);
 
   return (data ?? []).map(shape);

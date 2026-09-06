@@ -1,0 +1,485 @@
+---
+export const prerender = false;
+
+/**
+ * GRADE A DEADLINE (6.13, 6.16).
+ *
+ * One obligation across the class: one row per student, with what they
+ * submitted inline (the document's submitted version, or the link), the
+ * Elders' comments beside it, the rubric as one choice per criterion or a
+ * score and an out-of, a feedback box, save per row, and release all at
+ * the top. The teacher's evening in one page, which used to be
+ * thirty-eight project pages.
+ *
+ * The same function the project page's grade row calls (`grade_milestone`),
+ * with the rubric read from the template and never from the form, so a
+ * submitted field cannot claim points the rubric does not offer.
+ */
+
+import Base from '../../../../layouts/Base.astro';
+import AppShell from '../../../../components/AppShell.astro';
+import { activeOrg } from '../../../../lib/tenant';
+import { serverClient } from '../../../../lib/supabase';
+import { standing } from '../../../../lib/roles';
+import { programTitle, staffWord } from '../../../../lib/program-names';
+import { formatDate, todayIn } from '../../../../lib/dates';
+import { daysUntil } from '../../../../lib/attention';
+import { afterPost, outcomeFrom } from '../../../../lib/post-redirect';
+import { signInWith } from '../../../../lib/next-path';
+import { allRows } from '../../../../lib/all-rows';
+import { resolveProgram, shape as shapeOf, scoreRubric } from '../../../../lib/templates';
+import { sectionsOf, textOf, isFilled, documentPath } from '../../../../lib/documents';
+import { renderMarkdown } from '../../../../lib/notes';
+import { drivePreviewUrl, driveKind } from '../../../../lib/gdrive';
+
+const { session, account, roles } = Astro.locals;
+const org = activeOrg(Astro);
+const { id } = Astro.params;
+
+if (!session) return Astro.redirect(signInWith(Astro.url));
+if (!account) return Astro.redirect('/app/welcome/');
+
+const me = standing(roles, account?.population);
+const runsThis = ((Astro.locals as any).classes ?? []).some((c: any) => c.program_id === id);
+if (!me.isAdvisor || !runsThis) return Astro.redirect('/app/');
+
+const supabase = serverClient(Astro.request, Astro.cookies, (Astro.locals as any).runtime?.env);
+const today = todayIn(org.timezone);
+
+let { error, note } = outcomeFrom(Astro.url);
+
+const { data: program } = await supabase
+  .from('programs')
+  .select('id, name, short_name, season_year, kind, program_role, roles, template_id')
+  .eq('id', id)
+  .maybeSingle();
+if (!program) return Astro.redirect('/app/');
+
+const template = (() => {
+  try {
+    return program.template_id ? resolveProgram(program.template_id, null) : null;
+  } catch {
+    return null;
+  }
+})();
+
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData();
+  const action = String(form.get('action') ?? '');
+
+  if (action === 'grade') {
+    const stepName = String(form.get('step_name') ?? '');
+    const rubric = template?.steps.find((st: any) => st.name === stepName)?.rubric ?? null;
+    const scoreRaw = String(form.get('score') ?? '').trim();
+    const outOfRaw = String(form.get('out_of') ?? '').trim();
+    let score: number | null = scoreRaw === '' ? null : Number(scoreRaw);
+    let outOf: number | null = outOfRaw === '' ? null : Number(outOfRaw);
+    let chosen: any = null;
+    if (rubric) {
+      /* The score is the rubric's: a sum, or for a class rubric out of 4,
+         the mean of the rows chosen (scoreRubric). Read from the template,
+         never from the form. */
+      const scored = scoreRubric(rubric, rubric.criteria.map((c: any) => ({ id: c.id, level: String(form.get(`rubric:${c.id}`) ?? '') })));
+      chosen = { criteria: scored.picks };
+      score = scored.score;
+      outOf = scored.outOf;
+    }
+    const { error: e } = await supabase.rpc('grade_milestone', {
+      p_milestone_id: String(form.get('milestone_id') ?? ''),
+      p_student_id: String(form.get('student_id') ?? ''),
+      p_score: score,
+      p_out_of: outOf,
+      p_feedback_md: String(form.get('feedback') ?? ''),
+      p_rubric: chosen,
+      p_release: String(form.get('release') ?? '') === '1',
+    });
+    if (e) error = e.message;
+    else note = `${String(form.get('student_name') ?? 'Graded')}: ${String(form.get('release') ?? '') === '1' ? 'graded and released.' : 'graded, not released yet.'}`;
+  } else if (action === 'release') {
+    const { data, error: e } = await supabase.rpc('release_grades', { p_program_id: id });
+    if (e) error = e.message;
+    else note = `${data ?? 0} ${data === 1 ? 'grade' : 'grades'} released. The students have been told.`;
+  }
+
+  return afterPost(Astro.url, { error, note });
+}
+
+/* ── The class, and the deadline ─────────────────────────────────────── */
+
+const { data: parts } = await supabase
+  .from('participations')
+  .select('id, project_id, projects(id, title, project_authors(role, participation_id, self_managed_at, users(id, display_name)))')
+  .eq('program_id', id)
+  .in('status', ['entered', 'competed']);
+const partIds = (parts ?? []).map((p: any) => p.id);
+const projectIds = (parts ?? []).map((p: any) => p.project_id);
+
+const { data: allMilestones } = partIds.length
+  ? await allRows(() =>
+      supabase
+        .from('entry_milestones')
+        .select('id, participation_id, name, due_on, completed_on, kind, owner')
+        .in('participation_id', partIds)
+        .eq('owner', 'student')
+        .neq('kind', 'event')
+        .order('due_on', { ascending: true, nullsFirst: false })
+        .order('id')
+    )
+  : { data: [] as any[] };
+
+type Deadline = { key: string; name: string; dueOn: string | null; days: number | null; rows: any[] };
+const byDeadline = new Map<string, Deadline>();
+for (const m of allMilestones ?? []) {
+  const key = `${m.name}|${m.due_on ?? ''}`;
+  const held: Deadline = byDeadline.get(key) ?? { key, name: m.name, dueOn: m.due_on, days: daysUntil(m.due_on, today), rows: [] as any[] };
+  held.rows.push(m);
+  byDeadline.set(key, held);
+}
+const deadlines = [...byDeadline.values()].sort((a, b) => (a.dueOn ?? '9999').localeCompare(b.dueOn ?? '9999'));
+const wanted = Astro.url.searchParams.get('call');
+const called =
+  deadlines.find((d) => d.key === wanted) ??
+  [...deadlines].reverse().find((d) => d.days !== null && d.days <= 0) ??
+  deadlines[0] ??
+  null;
+
+const step = called ? template?.steps.find((st: any) => st.name === called.name) ?? null : null;
+const rubric = step?.rubric ?? null;
+const wantsDocs = step
+  ? (step.deliverables ?? []).map((d: any) => template!.deliverables.get(d.ref ?? d.id)).filter((d: any) => d && d.shape)
+  : [];
+const docDeliverable = wantsDocs[0] ?? null;
+const docShape = docDeliverable ? shapeOf(docDeliverable.shape) : null;
+
+/* What each place submitted for it: the current deliverable rows on the
+   milestone, and for a document, the submitted version's content. */
+const milestoneIds = called ? called.rows.map((m: any) => m.id) : [];
+const { data: deliverables } = milestoneIds.length
+  ? await supabase
+      .from('deliverables')
+      .select('id, participation_id, milestone_id, type, label, signed_on, external_url, storage_path, verified_at, document_version_id, versions:document_version_id(id, content, version_no, document_id)')
+      .in('milestone_id', milestoneIds)
+      .is('superseded_at', null)
+  : { data: [] as any[] };
+
+/* And the in-progress document where nothing was submitted, so the row
+   can say "in progress" rather than "nothing". */
+const { data: docs } = docDeliverable && projectIds.length
+  ? await supabase.from('documents').select('id, project_id, status, version_no, updated_at').in('project_id', projectIds).eq('deliverable', docDeliverable.id)
+  : { data: [] as any[] };
+const docIds = (docs ?? []).map((d: any) => d.id);
+const { data: comments } = docIds.length
+  ? await supabase
+      .from('deliverable_feedback')
+      .select('id, document_id, field_id, body_md, needs_revision, resolved_at, created_at, author:author_id(display_name)')
+      .in('document_id', docIds)
+      .order('created_at', { ascending: true })
+  : { data: [] as any[] };
+
+const { data: allGrades } = milestoneIds.length
+  ? await supabase
+      .from('assessments')
+      .select('id, milestone_id, student_id, score, out_of, feedback_md, rubric, released_at, created_at, kind, grader:grader_id(display_name)')
+      .in('milestone_id', milestoneIds)
+      .is('superseded_by', null)
+  : { data: [] as any[] };
+const grades = (allGrades ?? []).filter((g: any) => g.kind !== 'elder');
+const gradeFor = new Map<string, any>(grades.map((g: any) => [`${g.milestone_id}:${g.student_id}`, g]));
+/* The family's score, beside the teacher's form: what the Elder gave and said. */
+const scoreFor = new Map<string, any>((allGrades ?? []).filter((g: any) => g.kind === 'elder').map((g: any) => [`${g.milestone_id}:${g.student_id}`, g]));
+
+const rows = (called ? called.rows : []).flatMap((m: any) => {
+  const part = (parts ?? []).find((p: any) => p.id === m.participation_id);
+  if (!part) return [];
+  const project = part.projects as any;
+  const students = (project?.project_authors ?? []).filter((a: any) => a.role === 'author' && a.users);
+  const elders = (project?.project_authors ?? []).filter((a: any) => a.role === 'officer' && a.participation_id === part.id && !a.self_managed_at && a.users);
+  const submitted = (deliverables ?? []).filter((d: any) => d.milestone_id === m.id);
+  const doc = (docs ?? []).find((d: any) => d.project_id === part.project_id) ?? null;
+  const docComments = doc ? (comments ?? []).filter((c: any) => c.document_id === doc.id) : [];
+  const version = submitted.find((d: any) => d.versions)?.versions ?? null;
+  return students.map((s: any) => ({
+    milestone: m,
+    part,
+    project,
+    student: s.users,
+    elders,
+    submitted,
+    doc,
+    version,
+    docComments,
+    grade: gradeFor.get(`${m.id}:${s.users.id}`) ?? null,
+    score: scoreFor.get(`${m.id}:${s.users.id}`) ?? null,
+    changedSinceGrade: Boolean(gradeFor.get(`${m.id}:${s.users.id}`) && version && submitted.some((d: any) => d.signed_on && gradeFor.get(`${m.id}:${s.users.id}`).created_at.slice(0, 10) < d.signed_on)),
+  }));
+});
+
+const state = (r: any) =>
+  r.grade ? (r.grade.released_at ? 'released' : 'graded') : r.milestone.completed_on ? 'submitted' : r.doc ? 'in_progress' : 'nothing';
+const ORDER = ['submitted', 'in_progress', 'nothing', 'graded', 'released'];
+rows.sort((a, b) => ORDER.indexOf(state(a)) - ORDER.indexOf(state(b)) || String(a.student.display_name).localeCompare(String(b.student.display_name)));
+
+const unreleased = (grades ?? []).filter((g: any) => !g.released_at).length;
+const label = program.short_name ?? program.name;
+const outOfRubric = rubric ? scoreRubric(rubric, []).outOf : null;
+const fmt = (d: string | null) => (d ? formatDate(String(d).slice(0, 10), 'short') : '');
+const counts = {
+  submitted: rows.filter((r) => state(r) === 'submitted').length,
+  graded: rows.filter((r) => state(r) === 'graded' || state(r) === 'released').length,
+  waiting: rows.filter((r) => state(r) === 'in_progress' || state(r) === 'nothing').length,
+};
+---
+
+<Base title={`Grade · ${called?.name ?? label}`} noindex={true}>
+  <div class="wrap">
+    <AppShell org={org} account={account} roles={roles} here={`/app/program/${id}/class/`} />
+
+    <section class="cover">
+      <p class="kick">{programTitle(program)} · grading</p>
+      <h1>{called ? called.name : 'Nothing to grade'}</h1>
+      {called && (
+        <p class="sub">
+          Due {fmt(called.dueOn)} · {counts.submitted} to grade · {counts.graded} graded · {counts.waiting} not in yet
+        </p>
+      )}
+    </section>
+
+    <div id="outcome" tabindex="-1">
+      {error && <p class="note flash" role="alert">{error}</p>}
+      {note && !error && <p class="note flash" role="status">{note}</p>}
+    </div>
+
+    <div class="gbar">
+      <form method="GET" class="inline gpick">
+        <label><span class="sr">Deadline</span>
+          <select class="se" name="call" onchange="this.form.submit()">
+            {deadlines.map((d) => (
+              <option value={d.key} selected={called?.key === d.key}>{d.name}{d.dueOn ? ` · ${fmt(d.dueOn)}` : ''}</option>
+            ))}
+          </select>
+        </label>
+        <noscript><button class="btn btn-sm btn-2" type="submit">Go</button></noscript>
+      </form>
+      <span class="gfacts">
+        {rubric ? `Rubric: ${rubric.criteria.length} criteria, out of ${outOfRubric}` : 'No rubric on this step: a score and an out-of'}
+        {docDeliverable ? ` · ${docDeliverable.name}, written in SciPath` : ''}
+      </span>
+      <form method="POST" action="#outcome" class="inline">
+        <input type="hidden" name="action" value="release" />
+        <button class="btn btn-sm accent" type="submit" disabled={unreleased === 0}>{unreleased ? `Release all (${unreleased})` : 'Nothing to release'}</button>
+      </form>
+      <a class="btn btn-sm ghost" href={`/app/program/${id}/class/`}>Class page</a>
+    </div>
+
+    {rows.length === 0 ? (
+      <div class="allclear"><b>Nobody yet</b>No student in the class carries this obligation.</div>
+    ) : (
+      <ol class="grows">
+        {rows.map((r) => {
+          const st = state(r);
+          const grade = r.grade;
+          return (
+            <li class:list={['grow', st]} id={`g-${r.milestone.id}-${r.student.id}`}>
+              <div class="g-head">
+                <span class="g-name"><a href={`/app/project/${r.project.id}/in/${id}/#m-${r.milestone.id}`}>{r.student.display_name}</a><span class="sub">{r.project.title}{r.elders.length ? ` · ${staffWord(program)}: ${r.elders.map((e: any) => e.users.display_name.split(' ')[0]).join(', ')}` : ''}</span></span>
+                <span class:list={['pill', st === 'released' ? 'ok' : st === 'graded' ? 'soon' : st === 'submitted' ? 'soon' : 'late']}>
+                  {st === 'released' ? `${grade.score ?? 'feedback'}${grade.out_of ? ` / ${grade.out_of}` : ''} · released` : st === 'graded' ? `${grade.score ?? 'feedback'}${grade.out_of ? ` / ${grade.out_of}` : ''} · not released` : st === 'submitted' ? `Submitted ${fmt(r.milestone.completed_on)}` : st === 'in_progress' ? `In progress${r.doc?.updated_at ? ` · last edit ${fmt(r.doc.updated_at)}` : ''}` : 'Nothing yet'}
+                </span>
+                {r.changedSinceGrade && <span class="pill late">Submitted again since graded</span>}
+              </div>
+
+              <div class="g-body">
+                <div class="g-work">
+                  {r.version && docShape ? (
+                    <details class="g-doc" open={st === 'submitted'}>
+                      <summary>The document as submitted{r.version.version_no > 1 ? ` (version ${r.version.version_no})` : ''} · <a href={documentPath(r.project.id, docDeliverable?.id ?? '')}>open the page</a> · <a href={`${documentPath(r.project.id, docDeliverable?.id ?? '')}print/?version=${r.version.version_no}&go=1`} target="_blank" rel="noopener noreferrer">PDF</a></summary>
+                      {r.version.content?._doc_link && (
+                        <>
+                          <p class="g-link">Written in a linked {driveKind(String(r.version.content._doc_link))}: <a href={String(r.version.content._doc_link)} target="_blank" rel="noopener noreferrer">{String(r.version.content._doc_link)}</a></p>
+                          {drivePreviewUrl(String(r.version.content._doc_link)) && (
+                            <details class="g-preview">
+                              <summary>Show it here</summary>
+                              <iframe src={drivePreviewUrl(String(r.version.content._doc_link))!} title={`Linked document, ${r.student.display_name}`} loading="lazy" referrerpolicy="no-referrer" sandbox="allow-scripts allow-same-origin allow-popups"></iframe>
+                            </details>
+                          )}
+                        </>
+                      )}
+                      {sectionsOf(docShape).map((section) => (
+                        <div class="g-sec">
+                          {section.name && <h4>{section.name}</h4>}
+                          {section.fields.filter((f) => f.kind !== 'note').map((f) => {
+                            const v = r.version.content?.[f.id];
+                            const fieldComments = r.docComments.filter((c: any) => c.field_id === f.id);
+                            return (
+                              <div class:list={['g-field', rubric?.criteria?.some((c: any) => c.field === f.id) && 'judged']}>
+                                <p class="g-prompt">{f.prompt}{f.owner === 'staff' && <span class="g-owner"> · {staffWord(program)}'s part</span>}</p>
+                                {f.kind === 'table' && Array.isArray(v) ? (
+                                  <div class="g-tablewrap">
+                                    <table class="g-table">
+                                      <thead><tr><th></th>{(f.columns ?? []).map((c) => <th>{c}</th>)}</tr></thead>
+                                      <tbody>{(f.rows ?? []).map((row, ri) => <tr><th>{row}</th>{(f.columns ?? []).map((_, ci) => <td>{Array.isArray(v[ri]) ? v[ri][ci] ?? '' : ''}</td>)}</tr>)}</tbody>
+                                    </table>
+                                  </div>
+                                ) : f.kind === 'rubric' && rubric && v && typeof v === 'object' ? (
+                                  <ul class="g-self">
+                                    {rubric.criteria.map((c: any) => {
+                                      const level = c.levels.find((l: any) => l.id === v[c.id]);
+                                      return <li><b>{c.name}</b> {level ? `${level.label} · ${level.points}` : 'not marked'}</li>;
+                                    })}
+                                  </ul>
+                                ) : f.kind === 'long' && isFilled(f, v) ? (
+                                  <div class="g-prose" set:html={renderMarkdown(String(v))} />
+                                ) : f.kind === 'file' && v?.path ? (
+                                  <p><a href={`/app/media/${v.path}`} target="_blank" rel="noopener noreferrer">{v.name ?? 'the file'}</a></p>
+                                ) : isFilled(f, v) ? (
+                                  <p>{textOf(f, v)}</p>
+                                ) : (
+                                  <p class="g-empty">Not answered</p>
+                                )}
+                                {fieldComments.length > 0 && (
+                                  <ul class="g-comments">
+                                    {fieldComments.map((c: any) => (
+                                      <li class:list={[c.needs_revision && !c.resolved_at && 'asks']}><b>{c.author?.display_name}</b> {c.body_md}</li>
+                                    ))}
+                                  </ul>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      ))}
+                      {r.docComments.filter((c: any) => !c.field_id).length > 0 && (
+                        <div class="g-sec">
+                          <h4>On the whole document</h4>
+                          <ul class="g-comments">
+                            {r.docComments.filter((c: any) => !c.field_id).map((c: any) => (
+                              <li class:list={[c.needs_revision && !c.resolved_at && 'asks']}><b>{c.author?.display_name}</b> {c.body_md}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                    </details>
+                  ) : r.submitted.length > 0 ? (
+                    <ul class="plain">
+                      {r.submitted.map((d: any) => (
+                        <li>
+                          {d.label} · submitted {fmt(d.signed_on)}
+                          {d.external_url && <> · <a href={d.external_url} target="_blank" rel="noopener noreferrer">open</a></>}
+                          {d.storage_path && <> · <a href={`/app/media/${d.storage_path}`}>the file</a></>}
+                          {d.verified_at && <span class="pill ok">Checked</span>}
+                          {d.external_url && drivePreviewUrl(d.external_url) && (
+                            <details class="g-preview">
+                              <summary>Show the {driveKind(d.external_url)} here</summary>
+                              <iframe src={drivePreviewUrl(d.external_url)!} title={`${d.label}, ${r.student.display_name}`} loading="lazy" referrerpolicy="no-referrer" sandbox="allow-scripts allow-same-origin allow-popups"></iframe>
+                            </details>
+                          )}
+                        </li>
+                      ))}
+                    </ul>
+                  ) : r.doc ? (
+                    <p class="t-sm">In progress, not submitted. <a href={documentPath(r.project.id, docDeliverable?.id ?? '')}>Read it as it stands</a>.</p>
+                  ) : (
+                    <p class="t-sm">Nothing submitted.</p>
+                  )}
+                </div>
+
+                <form method="POST" action={`#g-${r.milestone.id}-${r.student.id}`} class="gform">
+                  {r.score && (
+                    <p class="g-family">
+                      <b>Family score {r.score.score ?? '—'}{r.score.out_of ? ` / ${r.score.out_of}` : ''}</b>
+                      {r.score.grader?.display_name ? ` · ${r.score.grader.display_name}` : ''}
+                      {r.score.feedback_md && <span class="g-family-c">{r.score.feedback_md}</span>}
+                    </p>
+                  )}
+                  <input type="hidden" name="action" value="grade" />
+                  <input type="hidden" name="milestone_id" value={r.milestone.id} />
+                  <input type="hidden" name="student_id" value={r.student.id} />
+                  <input type="hidden" name="student_name" value={r.student.display_name} />
+                  <input type="hidden" name="step_name" value={r.milestone.name} />
+                  {rubric ? (
+                    <div class="g-rubric">
+                      {rubric.criteria.map((c: any) => {
+                        const picked = grade?.rubric?.criteria?.find((x: any) => x.id === c.id)?.level ?? '';
+                        return (
+                          <label class="g-crit">
+                            <span>{c.name}{c.guidance ? <small> · {c.guidance}</small> : null}</span>
+                            <select class="se" name={`rubric:${c.id}`}>
+                              <option value="" selected={!picked}>Not judged</option>
+                              {c.levels.map((l: any) => (
+                                <option value={l.id} selected={picked === l.id}>{l.label} · {l.points}</option>
+                              ))}
+                            </select>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <div class="g-score">
+                      <label><span>Score</span><input class="in" type="number" step="0.5" min="0" name="score" value={grade?.score ?? ''} /></label>
+                      <label><span>Out of</span><input class="in" type="number" step="0.5" min="0" name="out_of" value={grade?.out_of ?? 10} /></label>
+                    </div>
+                  )}
+                  <label class="g-fb"><span>Feedback</span><textarea class="ta" name="feedback" rows="3">{grade?.feedback_md ?? ''}</textarea></label>
+                  <div class="g-do">
+                    <label class="g-rel"><input type="checkbox" name="release" value="1" checked={Boolean(grade?.released_at)} /> <span>Visible to {String(r.student.display_name).split(' ')[0]}</span></label>
+                    <button class="btn btn-sm" type="submit">{grade ? 'Save grade' : 'Grade'}</button>
+                  </div>
+                </form>
+              </div>
+            </li>
+          );
+        })}
+      </ol>
+    )}
+  </div>
+</Base>
+
+<style>
+  .gbar { display: flex; flex-wrap: wrap; gap: 12px 18px; align-items: center; margin: 0 0 20px; padding: 12px 16px; background: var(--card); border: 1px solid var(--rule-fine); }
+  .gfacts { font-family: var(--face-ui); font-size: 0.86rem; color: var(--ink-3); margin-right: auto; }
+  .grows { list-style: none; margin: 0; padding: 0; display: grid; gap: 16px; }
+  .grow { border: 1px solid var(--rule-fine); border-left: 4px solid var(--rule); background: var(--card); }
+  .grow.submitted { border-left-color: var(--accent); }
+  .grow.released { border-left-color: var(--stage-comp); }
+  .grow.graded { border-left-color: var(--accent-deep); }
+  .grow.nothing, .grow.in_progress { border-left-color: var(--alert); }
+  .g-head { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; padding: 12px 16px; border-bottom: 1px solid var(--rule-fine); }
+  .g-name { display: flex; flex-direction: column; margin-right: auto; }
+  .g-name a { font-weight: 600; }
+  .g-body { display: grid; grid-template-columns: minmax(0, 3fr) minmax(280px, 2fr); gap: 0; }
+  .g-work { padding: 12px 16px; border-right: 1px solid var(--rule-fine); min-width: 0; }
+  .g-doc > summary { cursor: pointer; font-family: var(--face-ui); font-size: 0.88rem; color: var(--ink-2); }
+  .g-sec { margin-top: 12px; }
+  .g-sec h4 { margin: 0 0 6px; font-size: 0.95rem; }
+  .g-field { padding: 6px 0 8px; border-bottom: 1px dashed var(--rule-fine); }
+  .g-field.judged { background: var(--accent-pale); padding-left: 8px; }
+  .g-prompt { margin: 0 0 4px; font-weight: 600; font-size: 0.92rem; }
+  .g-prose :global(p) { margin: 0 0 6px; }
+  .g-prose :global(img) { max-width: 100%; }
+  .g-empty { color: var(--ink-3); font-style: italic; margin: 0; }
+  .g-owner { color: var(--accent-deep); font-weight: 400; }
+  .g-family { margin: 0; padding: 8px 10px; background: var(--accent-pale); border-left: 3px solid var(--accent); font-size: 0.88rem; }
+  .g-family-c { display: block; margin-top: 4px; color: var(--ink-2); }
+  .g-link { margin: 8px 0; font-size: 0.9rem; }
+  .g-preview { margin: 6px 0; }
+  .g-preview summary { cursor: pointer; font-family: var(--face-ui); font-size: 0.84rem; }
+  .g-preview iframe { width: 100%; height: 60vh; min-height: 420px; border: 1px solid var(--rule-fine); margin-top: 6px; background: var(--card); }
+  .g-tablewrap { overflow-x: auto; }
+  .g-table { border-collapse: collapse; font-size: 0.82rem; min-width: 600px; }
+  .g-table th, .g-table td { border: 1px solid var(--rule-fine); padding: 4px 6px; vertical-align: top; text-align: left; }
+  .g-self { list-style: none; margin: 0; padding: 0; font-size: 0.88rem; display: grid; gap: 2px; }
+  .g-comments { list-style: none; margin: 6px 0 0; padding: 0; display: grid; gap: 4px; font-size: 0.88rem; }
+  .g-comments li { padding: 4px 8px; border-left: 3px solid var(--rule); background: var(--sunk); }
+  .g-comments li.asks { border-left-color: var(--alert); }
+  .gform { padding: 12px 16px; display: grid; gap: 10px; align-content: start; }
+  .gform label { display: grid; gap: 4px; font-family: var(--face-ui); font-size: 0.86rem; }
+  .g-rubric { display: grid; gap: 8px; }
+  .g-crit small { color: var(--ink-3); }
+  .g-score { display: flex; gap: 12px; }
+  .g-do { display: flex; gap: 12px; align-items: center; justify-content: space-between; }
+  .g-rel { display: flex !important; gap: 8px; align-items: center; }
+  @media (max-width: 760px) {
+    .g-body { grid-template-columns: minmax(0, 1fr); }
+    .g-work { border-right: 0; border-bottom: 1px solid var(--rule-fine); }
+  }
+</style>

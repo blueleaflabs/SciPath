@@ -18,6 +18,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { migrationSql } from './migrations.mjs';
+import { refuseAgainstPilot } from '../scripts/pilot-guard.mjs';
 
 let passed = 0;
 function test(name, fn) {
@@ -1148,6 +1149,18 @@ test('the Worker has somewhere for a cron trigger to arrive', () => {
   assert.match(worker, /context\.waitUntil\(/, 'the work has to outlive the handler');
 });
 
+test('every npm script is documented in COMMANDS.md', () => {
+  /* A script nobody wrote down is a script only its author runs. The file
+     is the reference for the whole collection, so a name added to
+     package.json has to be added there in the same commit. */
+  const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+  const doc = fs.readFileSync('COMMANDS.md', 'utf8');
+  const missing = Object.keys(pkg.scripts).filter(
+    (name) => !doc.includes(`npm run ${name}`) && !doc.includes(`\`${name}\``) && !(name === 'test' && doc.includes('`npm test`'))
+  );
+  assert.deepEqual(missing, [], 'add these to COMMANDS.md');
+});
+
 test('the cron schedule is one somebody chose', () => {
   /* Nothing in the outbox has ever been sent. A trigger firing on deploy
      would make the first real send an unattended one, so the schedule is a
@@ -1243,6 +1256,99 @@ test('nothing compares a column against a value it cannot hold', () => {
 
   const impossible = [...new Set(compared)].filter((v) => !allowed.has(v));
   assert.deepEqual(impossible, [], 'compared against values the column cannot hold');
+});
+
+/* ── The project that holds real students ───────────────────────────────── */
+
+/**
+ * **A guard whose subject can be absent is a guard that opens when the
+ * configuration is incomplete.**
+ *
+ * 19.9 records the tenancy guard that failed exactly this way: `account &&
+ * accountSlug && accountSlug !== slug` admitted the account whenever the slug
+ * was missing. So the unset case is asserted first and separately, because it
+ * is the one that would otherwise pass by doing nothing.
+ */
+test('a destructive command is refused when nothing says which project is production', () => {
+  const before = process.env.PILOT_PROJECT_REF;
+  delete process.env.PILOT_PROJECT_REF;
+
+  try {
+    let refused = null;
+    const fail = (message) => {
+      refused = message;
+      throw new Error('refused');
+    };
+
+    assert.throws(() => refuseAgainstPilot('somedevproject', 'drop everything', fail));
+    assert.match(refused, /PILOT_PROJECT_REF is not set/);
+  } finally {
+    if (before === undefined) delete process.env.PILOT_PROJECT_REF;
+    else process.env.PILOT_PROJECT_REF = before;
+  }
+});
+
+test('and refused outright against the pilot, with no flag that permits it', () => {
+  const before = process.env.PILOT_PROJECT_REF;
+  process.env.PILOT_PROJECT_REF = 'thepilotproject';
+
+  try {
+    let refused = null;
+    const fail = (message) => {
+      refused = message;
+      throw new Error('refused');
+    };
+
+    assert.throws(() => refuseAgainstPilot('thepilotproject', 'drop everything', fail));
+    assert.match(refused, /holds a class's real work/);
+    assert.match(refused, /no flag that permits it/);
+
+    /* The guard's own source, because a flag added later would make the
+       sentence above a lie without failing anything. */
+    const guard = fs.readFileSync('scripts/pilot-guard.mjs', 'utf8');
+    assert.ok(!/process\.argv/.test(guard), 'the guard reads arguments, so it can be argued with');
+  } finally {
+    if (before === undefined) delete process.env.PILOT_PROJECT_REF;
+    else process.env.PILOT_PROJECT_REF = before;
+  }
+});
+
+test('a development project still resets, or the rule above proves nothing', () => {
+  const before = process.env.PILOT_PROJECT_REF;
+  process.env.PILOT_PROJECT_REF = 'thepilotproject';
+
+  try {
+    const fail = () => {
+      throw new Error('refused a development project');
+    };
+    assert.doesNotThrow(() => refuseAgainstPilot('somedevproject', 'drop everything', fail));
+  } finally {
+    if (before === undefined) delete process.env.PILOT_PROJECT_REF;
+    else process.env.PILOT_PROJECT_REF = before;
+  }
+});
+
+/**
+ * Ahead of the truncate, and ahead of the prompt.
+ *
+ * The answer somebody types at a confirmation should be an answer about a run
+ * that is going to happen. `reset-cloud` already places its link check above
+ * the prompt for that reason; this belongs in the same place.
+ */
+test('the refusal comes before reset-cloud drops anything', () => {
+  const source = fs.readFileSync('scripts/reset-cloud.mjs', 'utf8');
+
+  const guard = source.indexOf('refuseAgainstPilot(ref,');
+  assert.notEqual(guard, -1, 'reset-cloud does not ask whether the target is the pilot');
+  assert.equal(source.indexOf('refuseAgainstPilot(ref,', guard + 1), -1, 'the anchor is not unique');
+
+  const prompt = source.indexOf('Proceed? (y/n)');
+  const truncate = source.indexOf('const TABLES = [');
+
+  assert.notEqual(prompt, -1, 'the confirmation prompt moved');
+  assert.notEqual(truncate, -1, 'the truncate list moved');
+  assert.ok(guard < prompt, 'the prompt asks about a run the guard has not vetted');
+  assert.ok(guard < truncate, 'the guard runs after the tables are named');
 });
 
 console.log(`${passed} script assertions passed. ${files.length} scripts read.`);

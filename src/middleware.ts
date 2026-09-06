@@ -12,7 +12,7 @@
  */
 
 import { defineMiddleware } from 'astro:middleware';
-import { serverClient, isConfigured } from './lib/supabase';
+import { serverClient, isConfigured, meterFor } from './lib/supabase';
 import { resolveOrg } from './lib/tenant';
 import { orgs } from './config/orgs';
 import { originForOrg } from './lib/deployment';
@@ -62,8 +62,10 @@ const POLICY = [
   "font-src 'self' https://fonts.gstatic.com",
   "img-src 'self' data: blob:",
   "connect-src 'self' https://*.supabase.co",
-  /* Video embeds are click to load and only ever these two. */
-  'frame-src https://www.youtube-nocookie.com https://player.vimeo.com',
+  /* Video embeds are click to load and only ever these two; a Google
+     Doc, Sheet, Slides deck or Drive file linked to a document renders
+     as Google's own read-only preview (src/lib/gdrive.ts). */
+  'frame-src https://www.youtube-nocookie.com https://player.vimeo.com https://docs.google.com https://drive.google.com',
   "object-src 'none'",
   "base-uri 'self'",
   "form-action 'self'",
@@ -118,17 +120,58 @@ function stamp(response: Response): void {
   }
 }
 
+/**
+ * WHERE THE TIME WENT, ON EVERY RESPONSE.
+ *
+ * `Server-Timing` is read by the browser's network panel and by
+ * `scripts/load-test.mjs`, and it says three things per request: how long
+ * the whole thing took, how much of that was waiting on Supabase, and how
+ * many round trips that was. At the pilot's scale the risk is not
+ * throughput; it is one page making eight sequential calls, and until this
+ * existed nothing could name the page.
+ *
+ * Always on. It costs a header, and a measurement that has to be switched
+ * on is one that is off on the day it is needed. The per-call trace is
+ * printed to the log only when `TIMING_LOG` is set, because forty lines per
+ * request is a bill on Cloudflare and noise everywhere else.
+ */
+function timing(context: Parameters<typeof handle>[0], response: Response, started: number): void {
+  const meter = meterFor(context.request);
+  const total = Date.now() - started;
+  response.headers.set(
+    'Server-Timing',
+    `db;dur=${meter.ms};desc="${meter.calls} calls", total;dur=${total}`
+  );
+
+  const runtime = (context.locals as Record<string, any>).runtime?.env ?? {};
+  const wanted = String(runtime.TIMING_LOG ?? import.meta.env.TIMING_LOG ?? '');
+  if (wanted === '1' && meter.calls > 0) {
+    console.log(
+      JSON.stringify({
+        timing: context.url.pathname,
+        total,
+        db: meter.ms,
+        calls: meter.calls,
+        trace: meter.trace.map((t) => `${t.path} ${t.ms}`),
+      })
+    );
+  }
+}
+
 export const onRequest = defineMiddleware(async (context, next) => {
+  const started = Date.now();
   const response = await handle(context, next);
 
   try {
     stamp(response);
+    timing(context, response, started);
     return response;
   } catch {
     /* Immutable. Rebuild it, which is the only way to carry both the body
        somebody asked for and the headers every response here promises. */
     const copy = new Response(response.body, response);
     stamp(copy);
+    timing(context, copy, started);
     return copy;
   }
 });
@@ -352,6 +395,10 @@ const handle = async (context: any, next: any) => {
   locals.session = null;
   locals.account = null;
   locals.roles = [];
+  locals.showcases = [];
+  locals.classes = [];
+  locals.projects = [];
+  locals.families = [];
 
   if (!isConfigured(runtime)) {
     locals.configured = false;
@@ -362,11 +409,29 @@ const handle = async (context: any, next: any) => {
   const supabase = serverClient(request, cookies, runtime);
   locals.supabase = supabase;
 
-  /* getUser revalidates against the auth server. getSession only decodes a
-     cookie the browser sent, which is not evidence of anything. */
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  /* **The token is checked, and checked here rather than at the auth server.**
+
+     `getSession` only decodes a cookie the browser sent, which is not
+     evidence of anything. `getUser` is evidence, and it was what ran here:
+     a round trip to Supabase Auth on every page load, in front of every
+     other call the page would make. `getClaims` verifies the token's
+     signature against the project's public keys, fetched once and cached,
+     so a request carrying a forged or expired token is refused without
+     leaving the Worker.
+
+     The trade is that a session revoked at the server stays valid until the
+     token expires, an hour at most. For a product where signing out is the
+     revocation that happens, that is the right trade; the alternative is a
+     network hop on every request for every person.
+
+     Only where the project signs with an asymmetric key. On a project still
+     on the legacy shared secret the library cannot verify locally and asks
+     the server instead, which is `getUser` under another name and costs the
+     same. Turning the key on is a dashboard setting (12.15). */
+  const { data: claims } = await supabase.auth.getClaims();
+  const user = claims?.claims
+    ? { id: String(claims.claims.sub), email: (claims.claims.email as string | undefined) ?? null }
+    : null;
 
   if (!user) {
     /* An expired session leaves the hint behind, and the archive goes on
@@ -479,6 +544,10 @@ const handle = async (context: any, next: any) => {
   if (account && accountSlug !== slug) {
     locals.account = null;
     locals.roles = [];
+    locals.showcases = [];
+    locals.classes = [];
+    locals.projects = [];
+    locals.families = [];
 
     /* The hint is a greeting on prerendered pages and it is drawn from the
        account. Cleared, or the archive greets somebody by name at a school
@@ -534,6 +603,31 @@ const handle = async (context: any, next: any) => {
   }
 
   if (!account) {
+    /* **A session with no row is either a new person or a stale token, and
+       the two look identical from here.**
+
+       `getClaims` verifies the signature locally and never asks the auth
+       server whether the user still exists. Ordinarily that is the point.
+       It is wrong in exactly one case: a token issued before the accounts
+       were rebuilt underneath it. `npm run reset` drops `auth.users`, the
+       browser keeps a cookie that is signed correctly and an hour from
+       expiring, and the first page after the reset met a valid session for
+       a person who is not there, sent them to the signup screen, and
+       `complete_signup` read a null email off a row that did not exist.
+
+       So the no-row case, and only that case, pays the round trip that
+       `getUser` used to pay on every request. A new person passes it and
+       goes to signup as before; a ghost fails it, is signed out, and lands
+       on the door with the reason named. */
+    const { data: live } = await supabase.auth.getUser();
+    if (!live?.user) {
+      await supabase.auth.signOut();
+      clearSessionHint(context.cookies);
+      locals.session = null;
+      if (url.pathname.startsWith(GUARDED)) return context.redirect('/app/?signin=stale');
+      return next();
+    }
+
     /* Session without an account row. Signup is the only reachable page. */
     if (url.pathname.startsWith(GUARDED) && url.pathname !== SIGNUP) {
       return context.redirect(SIGNUP);
@@ -553,6 +647,72 @@ const handle = async (context: any, next: any) => {
     .is('revoked_at', null);
 
   locals.roles = roles ?? [];
+
+  /* The class showcases this person may open, for the tab beside the
+     Workbench. One definer call; empty for almost everybody, since only a
+     program flagged `private` has one. Read here rather than in the nav
+     component because the nav renders on every page and a component cannot
+     hold a query the middleware has not already paid for. */
+  const [{ data: showcases }, { data: classes }] = await Promise.all([
+    supabase.rpc('my_showcases'),
+    supabase.rpc('my_classes'),
+  ]);
+  locals.showcases = showcases ?? [];
+  locals.classes = classes ?? [];
+
+  /* The classes this person is an Elder in: an officer role scoped to a
+     cohort program. For the tracker tab, which is theirs to fill in. */
+  locals.families = [];
+  const officerScopes = (roles ?? []).filter((r: any) => r.role === 'officer' && r.scope_id).map((r: any) => r.scope_id);
+  if (officerScopes.length > 0 && url.pathname.startsWith('/app/')) {
+    const { data: fams } = await supabase
+      .from('programs')
+      .select('id, name, short_name')
+      .in('id', officerScopes)
+      .eq('program_role', 'cohort')
+      .eq('status', 'open');
+    locals.families = (fams ?? []).map((g: any) => ({ program_id: g.id, name: g.name, short_name: g.short_name ?? null }));
+  }
+
+  /* The reader's own projects and where each one is, for the tab bar and
+     for where a bare /app/ lands them. A student with one project in one
+     class gets that project's pages as tabs rather than two abstract
+     nouns, and the model is untouched: the notebook belongs to the
+     project, the calendar to the place, and a second place is a third
+     tab. Only on the working surface, where the bar renders; two small
+     reads under the policies. */
+  locals.projects = [];
+  if (url.pathname.startsWith('/app/')) {
+    const { data: authored } = await supabase
+      .from('project_authors')
+      .select('project_id, projects:project_id(id, title, archived_at)')
+      .eq('user_id', user.id)
+      .eq('role', 'author');
+    const own = (authored ?? [])
+      .map((a: any) => a.projects)
+      .filter((p: any) => p && !p.archived_at);
+    if (own.length > 0) {
+      const { data: places } = await supabase
+        .from('participations')
+        .select('id, project_id, program_id, status, programs:program_id(id, name, short_name, program_role, status)')
+        .in('project_id', own.map((p: any) => p.id))
+        .in('status', ['entered', 'competed']);
+      locals.projects = own.map((p: any) => ({
+        project_id: p.id,
+        title: p.title,
+        places: (places ?? [])
+          .filter((r: any) => r.project_id === p.id && r.programs?.status === 'open')
+          .map((r: any) => ({
+            participation_id: r.id,
+            program_id: r.program_id,
+            name: r.programs.name,
+            short_name: r.programs.short_name ?? null,
+            cohort: r.programs.program_role === 'cohort',
+          }))
+          .sort((a: any, b: any) => Number(b.cohort) - Number(a.cohort) || a.name.localeCompare(b.name)),
+      }));
+    }
+  }
 
   return next();
 };

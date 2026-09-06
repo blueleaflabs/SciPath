@@ -5,7 +5,7 @@ import Base from '../../../layouts/Base.astro';
 import AppShell from '../../../components/AppShell.astro';
 import { serverClient } from '../../../lib/supabase';
 import { standing } from '../../../lib/roles';
-import { formatDate } from '../../../lib/dates';
+import { formatDate, todayIn } from '../../../lib/dates';
 import { slugify } from '../../../lib/publish';
 import { blobStore } from '../../../lib/blob';
 import { shape } from '../../../lib/templates';
@@ -300,7 +300,7 @@ const waiting = (queue ?? []).filter((s: any) => s.state !== 'exported');
 const exported = (queue ?? []).filter((s: any) => s.state === 'exported');
 const live = (records ?? []).filter((r: any) => r.confirmed_at);
 
-const today = new Date().toISOString().slice(0, 10);
+const today = todayIn(org.timezone);
 ---
 
 <Base title="Publishing" noindex={true}>

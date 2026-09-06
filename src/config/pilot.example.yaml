@@ -1,0 +1,80 @@
+# A CLASS, LOADED BEFORE ITS FIRST SIGN-IN.
+#
+# Copy to `local-data/pilot-irpd.yaml`, which is gitignored, and fill in.
+# The real file names minors; it is never committed.
+#
+# What this describes is a class on the day it starts using the software:
+# every student has an account, is a member of the class, has a project in
+# it with the class's deadlines copied on, and has their Elders assigned.
+# The teachers hold the advisor role for the class. Nobody has signed in.
+#
+# ── The first sign-in, and why it needs nothing from the student ──────────
+#
+# Each account is created on the person's school address with no password.
+# When the student first presses "Sign in with Google", Google returns a
+# verified `student.fuhsd.org` address, and Supabase links that identity to
+# the account that already carries it (6.3 records this platform behaviour).
+# The session then meets a `users` row that already exists, so the signup
+# screen never appears: the middleware sends them straight to `/app/`, where
+# their project and their Elders are already waiting. No form, no code, no
+# second setup.
+#
+# ── Consent ────────────────────────────────────────────────────────────────
+#
+# `consent: school` means the class runs under the school and its teachers
+# stand as the adults. Every student is written `consent_state: active`
+# with an audit line saying the school provided it, and no guardian is ever
+# mailed. This is the pilot's arrangement, decided by the school; a program
+# run outside one uses the ordinary guardian flow instead.
+#
+# Run, against the local stack, into a demonstration tenant to rehearse:
+#
+#   node scripts/pilot-load.mjs --org demo
+#
+# and against the pilot project, which `.cloud.vars` must name:
+#
+#   node scripts/pilot-load.mjs --cloud
+#
+# Safe to run twice. People are matched by address, projects by title and
+# first author, and a row already there is left alone and said so.
+
+org: montavista
+cohort: irpd-mvhs-2027
+student_domain: student.fuhsd.org
+staff_domain: fuhsd.org
+consent: school
+
+# The school year the grades are read against: grade 12 graduates in June
+# of this year.
+graduating_year: 2027
+
+# The class's first day, written as the start date of every project loaded
+# here. A project already carrying a date keeps it.
+started_on: 2026-08-17
+
+teachers:
+  - key: first-teacher
+    name: First Teacher
+    email: first_teacher@fuhsd.org
+  - key: second-teacher
+    name: Second Teacher
+    email: second_teacher@fuhsd.org
+
+# Groups are the class's own sections. Each has two Elders, who are students
+# in the same group and oversee every project in it, their own included.
+groups:
+  - name: Health and Humanities
+    elders: [a-student, b-student]
+    students:
+      - { key: a-student, name: A Student, grade: 11, email: astudent123@student.fuhsd.org }
+      - { key: b-student, name: B Student, grade: 12, email: bstudent456@student.fuhsd.org }
+      - { key: c-student, name: C Student, grade: 10, email: cstudent789@student.fuhsd.org }
+
+# One row per project. Two keys on one project is two co-authors, both
+# accepted, which is how partners start the year without an invitation to
+# answer.
+projects:
+  - title: A working title, in the student's own words
+    authors: [a-student]
+  - title: A project two people share
+    authors: [b-student, c-student]

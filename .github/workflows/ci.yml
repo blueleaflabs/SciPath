@@ -20,48 +20,12 @@ jobs:
 
       - run: npm ci
 
-      # Every shipped theme is contrast checked. A theme nobody exercises
-      # rots silently and fails on the day it is needed.
-      - name: Contrast floor
-        run: npm run test:contrast
-
-      # No prerendered route may import the database client.
-      - name: Archive independence
-        run: npm run test:static
-
-      # A const is hoisted uninitialised, so a read above it is a run time
-      # error and not a parse error. One reached a seed and cost a full
-      # rebuild; an earlier one shipped in page frontmatter.
-      - name: Nothing is used before it is declared
-        run: npm run test:tdz
-
-      # The date ordering check, tested on its own before anything around it.
-      - name: Date ordering
-        run: npm run test:dates
-
-      # A rename that lands in the migration and not in the code, or the
-      # reverse, builds cleanly and fails at runtime.
-      - name: Code and schema agree on names
-        run: npm run test:drift
-
-      # No hex literal outside tokens.css, no organization named in a component.
-      - name: Structural rules
-        run: npm run test:tokens
-
-      # config.toml is committed and is only safe because every secret in it
-      # is an env(...) reference.
-      - name: No secret literals in committed config
-        run: npm run test:config
-
-      # A layout reading the org singleton renders one school at every
-      # hostname. Invisible until a second tenant exists.
-      - name: Tenancy is resolved per request
-        run: npm run test:tenant
-
-      # Every public route prerendered once per tenant. A page left outside
-      # [org]/ shows one school's name to every other school.
-      - name: Public routes are tenant scoped
-        run: npm run test:routes
+      # The whole suite, not a list of its parts. This file once named
+      # fourteen checks while `npm test` carried forty-odd, so a suite
+      # outside the list failed on every laptop and CI stayed green (19.9).
+      # One step, the same command a developer runs, so the two cannot drift.
+      - name: The suite
+        run: npm test
 
       # The proof, not the promise: the public surface has to build with the
       # database environment variables absent entirely.

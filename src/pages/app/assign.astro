@@ -1,6 +1,7 @@
 ---
 export const prerender = false;
 
+import { todayIn } from '../../lib/dates';
 import Base from '../../layouts/Base.astro';
 import AppShell from '../../components/AppShell.astro';
 import { activeOrg } from '../../lib/tenant';
@@ -10,6 +11,7 @@ import { sharedStaffWord } from '../../lib/program-names';
 import { checkDateOrder, worstFinding } from '../../lib/dateOrder';
 import { afterPost, outcomeFrom } from '../../lib/post-redirect';
 import { signInWith } from '../../lib/next-path';
+import { allRows } from '../../lib/all-rows';
 
 const { session, account, roles } = Astro.locals;
 const org = activeOrg(Astro);
@@ -84,7 +86,7 @@ if (Astro.request.method === 'POST') {
   return afterPost(Astro.url, { error: error });
 }
 
-const today = new Date().toISOString().slice(0, 10);
+const today = todayIn(org.timezone);
 
 const { data: projects } = await supabase
   .from('projects')
@@ -169,10 +171,14 @@ const entryIds = [
 ];
 
 const { data: milestones } = entryIds.length
-  ? await supabase
-      .from('entry_milestones')
-      .select('id, participation_id, name, due_on, required, blocks_experimentation, completed_on')
-      .in('participation_id', entryIds)
+  ? await allRows(() =>
+      supabase
+        .from('entry_milestones')
+        .select('id, participation_id, name, due_on, required, blocks_experimentation, completed_on')
+        .in('participation_id', entryIds)
+        .order('due_on', { ascending: true, nullsFirst: false })
+            .order('id')
+    )
   : { data: [] as any[] };
 
 const { data: sponsors } = ids.length
@@ -400,9 +406,17 @@ const rows = (projects ?? [])
 
   /* **Oversight, per place.** A project in the class and the club has two,
      and which one answers depends on which place is being asked about. */
-  const overseerOf = new Map<string, any>();
+  const overseerOf = new Map<string, any[]>();
+  /* **Every officer on a place, not the last one written.** A class pairs
+     two Elders with a project, and the row used to keep whichever officer
+     row the query returned last, so the second Elder existed in the
+     database and nowhere on this screen. A place holds a list. */
   for (const a of p.project_authors ?? []) {
-    if (a.role === 'officer' && a.participation_id) overseerOf.set(a.participation_id, a);
+    if (a.role === 'officer' && a.participation_id) {
+      const held = overseerOf.get(a.participation_id) ?? [];
+      held.push(a);
+      overseerOf.set(a.participation_id, held);
+    }
   }
 
   return {
@@ -475,16 +489,34 @@ const assignedRows = rows.filter(looked);
 const mineToSee = (h: any) =>
   runsEverything || h.anywhere || myPrograms.some((id: string) => h.scopes.has(id));
 
+/**
+ * **Counted past the visibility rule, in the database.**
+ *
+ * This counted from `assignedRows`, which is the projects the reader can
+ * see. For an advisor that is everything; for an Elder it is their own
+ * places and the unattached ones (6.9), so every other Elder read as
+ * holding nothing, and the one question this list exists to answer, who
+ * is free to take more, could not be answered by the people who assign.
+ * `officer_load` counts every place in the programs the reader runs and
+ * returns numbers and ids only, which is not a project and reveals none.
+ */
+const { data: loadRows } = await supabase.rpc('officer_load');
+const heldBy = new Map<string, number>();
+let placesRun = 0;
+let placesOpen = 0;
+for (const row of (loadRows ?? []) as any[]) {
+  if (row.user_id) heldBy.set(row.user_id, row.held);
+  placesRun = row.places ?? placesRun;
+  placesOpen = row.unassigned ?? placesOpen;
+}
+
 const load = holders.filter(mineToSee).map((h: any) => ({
   id: h.id,
   name: h.name,
   role: h.role,
   scopes: h.scopes,
   anywhere: h.anywhere,
-  count: assignedRows.filter((r) =>
-    r.officers.some((o: any) => o.users?.id === h.id) ||
-    r.selfManaged.some((o: any) => o.users?.id === h.id)
-  ).length,
+  count: heldBy.get(h.id) ?? 0,
 })).sort((a, b) => a.count - b.count);
 
 /**
@@ -618,10 +650,13 @@ const fmt = (d: string | null) =>
     </section>
 
     <section class="sec">
-      <div class="sec-h"><b>Current load</b><span>{assignedRows.length} of {rows.length} assigned</span></div>
+      {/* Places, not projects, and all of them: a project in two programs
+          is two jobs, and an Elder reading this sees the whole class's
+          count even though the queue below shows only what they may take. */}
+      <div class="sec-h"><b>Current load</b><span>{placesRun - placesOpen} of {placesRun} assigned</span></div>
       <ul class="load">
         <li class="gap">
-          <b class="n">{unassigned.length}</b>
+          <b class="n">{placesOpen}</b>
           <span class="who">Unassigned</span>
         </li>
         {load.map((h) => (
@@ -633,7 +668,8 @@ const fmt = (d: string | null) =>
       </ul>
     </section>
 
-    <section class="sec">
+    {/* Anchored: the overview counts these and sends a reader here. */}
+    <section class="sec" id="waiting">
       <div class="sec-h"><b>Waiting for an officer</b><span>{unassigned.length}</span></div>
 
       {/* A list, not a table. **A table is for comparing across rows; a
@@ -726,7 +762,13 @@ const fmt = (d: string | null) =>
                 naming its own program and its own person. */}
             {assignedRows.flatMap((r) =>
               (r.places ?? []).map((place: any) => {
-                const held = r.overseerOf.get(place.id);
+                const held: any[] = r.overseerOf.get(place.id) ?? [];
+                const heldIds = new Set(held.map((h: any) => h.users?.id));
+                /* Who could still be added: runs this program, and is not
+                   already on it. */
+                const more = load.filter(
+                  (h) => canTake(h, r.id, place.program_id) && !heldIds.has(h.id)
+                );
                 return (
               <tr>
                 <td>
@@ -734,39 +776,53 @@ const fmt = (d: string | null) =>
                   <span class="place">{(place.programs as any)?.name}</span>
                 </td>
                 <td class="who">
-                  {held?.users?.display_name}
-                  {held?.self_managed_at && <span class="self">self-managed</span>}
+                  {/* One line per person, each with its own way off the
+                      project. A place can hold two Elders, and "Move" was
+                      the wrong verb for that: it added the new name and
+                      left the old one, which is how a project ended up with
+                      two officers before anybody had asked for two. Now
+                      adding and removing are said as what they are. */}
+                  <ul class="held">
+                    {held.map((h: any) => (
+                      <li>
+                        <span>
+                          {h.users?.display_name}
+                          {h.self_managed_at && <span class="self">self-managed</span>}
+                        </span>
+                        <form method="POST" action="#outcome" class="inline">
+                          <input type="hidden" name="place_id" value={place.id} />
+                          <input type="hidden" name="current_id" value={h.users?.id ?? ''} />
+                          <input type="hidden" name="user_id" value="" />
+                          <button
+                            class="linkish"
+                            type="submit"
+                            aria-label={`Remove ${h.users?.display_name ?? 'this person'} from ${r.title}`}
+                          >Remove</button>
+                        </form>
+                      </li>
+                    ))}
+                  </ul>
                 </td>
                 <td class="spon">{r.sponsor ? r.sponsor.teacher_name : <span class="miss">none named</span>}</td>
                 <td>{r.total ? `${r.done} of ${r.total}` : '—'}</td>
                 <td>
-                  <form method="POST" action="#outcome" class="inline">
-                    <input type="hidden" name="place_id" value={place.id} />
-                    <input type="hidden" name="current_id" value={held?.users?.id ?? ''} />
-                    <select name="user_id" aria-label="Move to another officer">
-                      {/* The same rule as assigning, which this did not
-                          apply: it listed every officer at the school, so
-                          the fair's officers could be moved onto a class
-                          project through the reassign column while the
-                          assign column correctly refused them.
-
-                          Whoever holds it now is always listed, whatever
-                          their scope, because a select that cannot show its
-                          own current value silently proposes a change. */}
-                      {load
-                        .filter(
-                          (h) =>
-                            canTake(h, r.id, place.program_id) || h.id === held?.users?.id
-                        )
-                        .map((h) => (
-                          <option value={h.id} selected={h.id === held?.users?.id}>
-                            {h.name} ({h.count})
-                          </option>
+                  {more.length > 0 ? (
+                    <form method="POST" action="#outcome" class="inline">
+                      <input type="hidden" name="place_id" value={place.id} />
+                      <select name="user_id" aria-label={`Add another ${staffHeader.toLowerCase()} to ${r.title}`}>
+                        {/* The same rule as assigning: only the people who
+                            run this program are offered, so the fair's
+                            officers cannot be added to a class project
+                            through this column. */}
+                        {more.map((h) => (
+                          <option value={h.id}>{h.name} ({h.count})</option>
                         ))}
-                      <option value="">Unassign</option>
-                    </select>
-                    <button class="btn btn-sm" type="submit">Move</button>
-                  </form>
+                      </select>
+                      <button class="btn btn-sm" type="submit">Add</button>
+                    </form>
+                  ) : (
+                    <span class="t-sm">Everyone who runs this is on it</span>
+                  )}
                 </td>
               </tr>
                 );
@@ -924,9 +980,13 @@ const fmt = (d: string | null) =>
     white-space: nowrap;
   }
   .row-bad td { background: var(--alert-bg); }
+  /* The people on one place, one per line, each with its own Remove. */
+  .held { list-style: none; margin: 0; padding: 0; }
+  .held li { display: flex; gap: 10px; align-items: baseline; }
+  .held li + li { margin-top: 4px; }
   .inline { display: flex; gap: 8px; align-items: center; }
   .inline select { padding: 6px 9px; border: 1px solid var(--rule); background: var(--card); color: var(--ink); font: inherit; font-size: 0.9rem; }
-  .inline button { padding: 7px 14px; border: 1px solid var(--ink); background: var(--ink); color: var(--paper); font-family: var(--face-ui); font-size: 0.86rem; cursor: pointer; }
+  .inline button.btn { padding: 7px 14px; border: 1px solid var(--ink); background: var(--ink); color: var(--paper); font-family: var(--face-ui); font-size: 0.86rem; cursor: pointer; }
   /* Three controls on one line, all the same height.
    
      `align-items: center` centres boxes of different heights, which still

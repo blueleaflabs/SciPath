@@ -37,6 +37,59 @@ export function isConfigured(runtime?: Record<string, unknown>): boolean {
  * Server client. Carries the caller's session, so every query it makes is
  * subject to row level security. This is the client almost everything uses.
  */
+/**
+ * HOW MANY TIMES A REQUEST WENT TO THE DATABASE, AND FOR HOW LONG.
+ *
+ * From a Worker every Supabase call is a full HTTPS request to PostgREST,
+ * and they add serially: a page that makes eight in a row is eight round
+ * trips before the first byte. Nothing measured that, so nothing could
+ * say which page it was. This counts and times every call a request makes,
+ * and the middleware reports it in a `Server-Timing` header the browser's
+ * network panel shows and `scripts/load-test.mjs` reads.
+ *
+ * Keyed on the Request object rather than passed as a parameter, because
+ * fourteen pages build their own client from `Astro.request` and the
+ * middleware builds one from the same object. A WeakMap on the request is
+ * the one thing both sides already hold.
+ */
+export interface Meter {
+  /** Calls to Supabase, PostgREST and Auth alike. */
+  calls: number;
+  /** Milliseconds spent waiting on them, summed; overlapping calls count twice. */
+  ms: number;
+  /** Where the time went, one entry per call: path and milliseconds. */
+  trace: { path: string; ms: number }[];
+}
+
+const meters = new WeakMap<Request, Meter>();
+
+export function meterFor(request: Request): Meter {
+  let m = meters.get(request);
+  if (!m) {
+    m = { calls: 0, ms: 0, trace: [] };
+    meters.set(request, m);
+  }
+  return m;
+}
+
+/** A fetch that adds each call to the request's meter, and nothing else. */
+function meteredFetch(meter: Meter): typeof fetch {
+  return async (input, init) => {
+    const started = Date.now();
+    try {
+      return await fetch(input, init);
+    } finally {
+      const ms = Date.now() - started;
+      meter.calls += 1;
+      meter.ms += ms;
+      if (meter.trace.length < 40) {
+        const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+        meter.trace.push({ path: url.replace(/^https?:\/\/[^/]+/, '').replace(/\?.*$/, ''), ms });
+      }
+    }
+  };
+}
+
 export function serverClient(
   request: Request,
   cookies: AstroCookies,
@@ -46,6 +99,7 @@ export function serverClient(
     env('PUBLIC_SUPABASE_URL', runtime),
     env('PUBLIC_SUPABASE_PUBLISHABLE_KEY', runtime),
     {
+      global: { fetch: meteredFetch(meterFor(request)) },
       cookies: {
         getAll: () =>
           parseCookieHeader(request.headers.get('Cookie') ?? '').map((c) => ({

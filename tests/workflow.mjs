@@ -356,9 +356,12 @@ test('the entry page derives doneness rather than reading it', () => {
   const page = fs.readFileSync('src/pages/app/project/[id]/in/[program].astro', 'utf8');
 
   assert.match(page, /const satisfied = /, 'the derivation is gone');
+  /* `students` rather than `rows` since 2.1: a phase's rows include the
+     Elders' tasks, and the count is of the student's obligations. The
+     derivation is the same. */
   assert.match(
     page,
-    /done: rows\.filter\(\(m: any\) => satisfied\(m\)\)\.length/,
+    /done: students\.filter\(\(m: any\) => satisfied\(m\)\)\.length/,
     'the phase count reads the row again'
   );
   assert.doesNotMatch(

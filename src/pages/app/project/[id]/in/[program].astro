@@ -1,19 +1,22 @@
 ---
 export const prerender = false;
 
-import Authority from '../../../../../components/Authority.astro';
 import { identify } from '../../../../../lib/filetype';
 import Base from '../../../../../layouts/Base.astro';
-import { formatDate, daysFrom } from '../../../../../lib/dates';
+import { formatDate, daysFrom, todayIn } from '../../../../../lib/dates';
 import AppShell from '../../../../../components/AppShell.astro';
+import ProjectCover from '../../../../../components/ProjectCover.astro';
+import Plate from '../../../../../components/Plate.astro';
 import { activeOrg } from '../../../../../lib/tenant';
-import { resolveProgram, deliverablesFor, stepApplies, shape } from '../../../../../lib/templates';
+import { resolveProgram, deliverablesFor, stepApplies, shape, scoreRubric } from '../../../../../lib/templates';
 import { programTitle, staffWord } from '../../../../../lib/program-names';
 import { one, serverClient } from '../../../../../lib/supabase';
 import { checkDateOrder, worstFinding } from '../../../../../lib/dateOrder';
 import { standing, isAuthorOf, reachesProgram } from '../../../../../lib/roles';
 import { afterPost, outcomeFrom } from '../../../../../lib/post-redirect';
-import { linkDomain } from '../../../../../lib/notes';
+import { nextUpNote } from '../../../../../lib/next-up';
+import { documentPath, progressOf } from '../../../../../lib/documents';
+import { linkDomain, renderNote } from '../../../../../lib/notes';
 import { blobStore, projectImagePath, MAX_UPLOAD_BYTES } from '../../../../../lib/blob';
 import { parseVideo } from '../../../../../lib/video';
 import { signInWith } from '../../../../../lib/next-path';
@@ -211,18 +214,18 @@ if (Astro.request.method === 'POST') {
       p_milestone_id: String(form.get('milestone') ?? '') || null,
       p_type: String(form.get('deliverable') ?? 'other'),
       p_label: String(form.get('label') ?? 'Deliverable'),
-      p_signed_on: String(form.get('signed_on') ?? '') || new Date().toISOString().slice(0, 10),
+      p_signed_on: String(form.get('signed_on') ?? '') || todayIn(org.timezone),
       p_external_url: String(form.get('external_url') ?? '').trim() || null,
       p_storage_path: null,
     });
     if (e) error = e.message;
-    else recordedNote = 'Recorded.';
+    else recordedNote = await nextUpNote(supabase, id);
   }
 
   if (action === 'status') {
     const milestoneId = String(form.get('milestone_id') ?? '');
     const status = String(form.get('status') ?? 'open');
-    const on = String(form.get('on') ?? '') || new Date().toISOString().slice(0, 10);
+    const on = String(form.get('on') ?? '') || todayIn(org.timezone);
     const url = String(form.get('external_url') ?? '').trim();
 
     if (status === 'complete') {
@@ -239,6 +242,7 @@ if (Astro.request.method === 'POST') {
         p_storage_path: null,
       });
       if (e) error = e.message;
+      else recordedNote = await nextUpNote(supabase, id, 'Done');
     } else {
       const { error: e } = await supabase.rpc('set_milestone_done', {
         p_milestone_id: milestoneId,
@@ -248,11 +252,123 @@ if (Astro.request.method === 'POST') {
     }
   }
 
+  /* The two answers to a nudge, from the plate. `acknowledge_nudge` and
+     `nudge_reply` both hard-code the recipient to the caller, so whoever
+     was asked may answer and nobody may answer for them; the Workbench
+     posts the same two. */
+  if (action === 'ack') {
+    const { error: e } = await supabase.rpc('acknowledge_nudge', {
+      p_milestone_id: String(form.get('milestone_id') ?? ''),
+    });
+    if (e) error = e.message;
+    else recordedNote = 'Noted. Whoever asked can see you have it.';
+  }
+
+  if (action === 'reply') {
+    const { data, error: e } = await supabase.rpc('nudge_reply', {
+      p_milestone_id: String(form.get('milestone_id') ?? ''),
+      p_note: String(form.get('note') ?? ''),
+    });
+    if (e) error = e.message;
+    else if (data === 'empty') error = 'Write a line first.';
+    else if (data === 'nobody') error = 'Nobody has asked you about this one.';
+    else recordedNote = 'Sent to whoever asked.';
+  }
+
+  /* A notebook entry, written here (2.8): the notebook is a section of
+     the project page for the pilot, so a line about the week is one box on
+     the page a student already has open. The same function the notebook
+     page calls; the notebook page keeps images and the export. */
+  if (action === 'note') {
+    const { error: e } = await supabase.rpc('add_field_note', {
+      p_project_id: participation.projectId,
+      p_body_md: String(form.get('body_md') ?? ''),
+      p_occurred_on: String(form.get('occurred_on') ?? '') || null,
+      p_corrects_id: null,
+    });
+    if (e) error = e.message;
+    else recordedNote = 'Written in the notebook.';
+  }
+
   if (action === 'verify') {
     const { error: e } = await supabase.rpc('verify_deliverable', {
       p_id: String(form.get('deliverable_id') ?? ''),
     });
     if (e) error = e.message;
+  }
+
+  /* An Elder's feedback on a deliverable. The function checks that the
+     caller looks after this place, completes the task that was waiting to
+     give it, and writes the notebook's line. */
+  if (action === 'feedback') {
+    const { error: e } = await supabase.rpc('give_feedback', {
+      p_deliverable_id: String(form.get('deliverable_id') ?? ''),
+      p_body_md: String(form.get('body') ?? ''),
+      p_needs_revision: String(form.get('needs_revision') ?? '') === '1',
+    });
+    if (e) error = e.message;
+    else recordedNote = 'Feedback given. The student sees it on the row, and the notebook has the line.';
+  }
+
+  /* An Elder's task with nothing to write on, completed with a note. */
+  if (action === 'task') {
+    const { error: e } = await supabase.rpc('complete_staff_task', {
+      p_milestone_id: String(form.get('milestone_id') ?? ''),
+      p_body_md: String(form.get('body') ?? '') || null,
+    });
+    if (e) error = e.message;
+    else recordedNote = 'Done.';
+  }
+
+  /* A grade, with feedback, for one student on one obligation. The function
+     checks that the caller is an advisor and that the student is an author
+     here; the page only carries the fields. */
+  if (action === 'grade') {
+    const scoreRaw = String(form.get('score') ?? '').trim();
+    const outOfRaw = String(form.get('out_of') ?? '').trim();
+
+    /* A rubric grade arrives as one choice per criterion, `rubric:<criterion>`
+       = level id. The score is the sum of the points chosen and the out-of
+       the sum of each criterion's best, both read from the template rather
+       than from the form, so a form field cannot claim points the rubric
+       does not offer. */
+    const stepName = String(form.get('step_name') ?? '');
+    /* Resolved here rather than read from `template`, which is declared
+       further down with the process it depends on; the rubric does not
+       vary by process, so the program's own resolution is the right one. */
+    const rubric = (() => {
+      try {
+        const templateId = (participation.row?.programs as any)?.template_id;
+        return templateId ? resolveProgram(templateId, null).steps.find((st) => st.name === stepName)?.rubric ?? null : null;
+      } catch {
+        return null;
+      }
+    })();
+    let score: number | null = scoreRaw === '' ? null : Number(scoreRaw);
+    let outOf: number | null = outOfRaw === '' ? null : Number(outOfRaw);
+    let chosen: any = null;
+
+    if (rubric) {
+      /* The score is the rubric's: a sum, or for a class rubric out of 4,
+         the mean of the rows chosen (scoreRubric). Read from the template,
+         never from the form. */
+      const scored = scoreRubric(rubric, rubric.criteria.map((c: any) => ({ id: c.id, level: String(form.get(`rubric:${c.id}`) ?? '') })));
+      chosen = { criteria: scored.picks };
+      score = scored.score;
+      outOf = scored.outOf;
+    }
+
+    const { error: e } = await supabase.rpc('grade_milestone', {
+      p_milestone_id: String(form.get('milestone_id') ?? ''),
+      p_student_id: String(form.get('student_id') ?? ''),
+      p_score: score,
+      p_out_of: outOf,
+      p_feedback_md: String(form.get('feedback') ?? ''),
+      p_rubric: chosen,
+      p_release: String(form.get('release') ?? '') === '1',
+    });
+    if (e) error = e.message;
+    else recordedNote = String(form.get('release') ?? '') === '1' ? 'Graded and released.' : 'Graded. Not released yet.';
   }
 
   if (action === 'result') {
@@ -400,9 +516,9 @@ const processFor =
   (entry.projects as any)?.process_id ??
   null;
 
-const { data: milestones } = await supabase
+const { data: allMilestones } = await supabase
   .from('entry_milestones')
-  .select('id, name, kind, due_on, required, blocks_experimentation, completed_on, satisfied_by, sort_order, source, phase')
+  .select('id, name, kind, due_on, required, blocks_experimentation, completed_on, completed_by, satisfied_by, sort_order, source, phase, owner, step_id, requires_step, feedback_on')
   .eq('participation_id', id)
   /* By date, not by the template's sequence.
    
@@ -418,24 +534,60 @@ const { data: milestones } = await supabase
   .order('due_on', { ascending: true, nullsFirst: false })
   .order('sort_order', { ascending: true });
 
+/**
+ * **The student's obligations, and the Elder's tasks, told apart.**
+ *
+ * `owner` says whose a row is. Everything the page counts, sorts and warns
+ * about reads the student's rows: what is next, what is late, the phase
+ * counts, the date-order findings. The Elder's tasks are shown on the same
+ * calendar so the student can see feedback is coming, and are counted
+ * against nobody but the Elder.
+ */
+const milestones = (allMilestones ?? []).filter((m: any) => m.owner !== 'staff');
+const staffTasks = (allMilestones ?? []).filter((m: any) => m.owner === 'staff');
+
+/* Whether a staff task may be done yet: the student step it requires is
+   met. Resolved here by step id, the same way the function does. */
+const taskReady = (t: any) =>
+  !t.requires_step || (allMilestones ?? []).some((m: any) => m.step_id === t.requires_step && m.completed_on);
+
+/* Feedback on this place: on a deliverable, or on a task with none. */
+const { data: feedbackRows } = await supabase
+  .from('deliverable_feedback')
+  .select('id, deliverable_id, milestone_id, body_md, needs_revision, created_at, resolved_at, author:author_id(display_name)')
+  .eq('participation_id', id)
+  .order('created_at', { ascending: false });
+
+const feedbackOnDeliverable = (deliverableId: string) => (feedbackRows ?? []).filter((f: any) => f.deliverable_id === deliverableId);
+const feedbackOnTask = (milestoneId: string) => (feedbackRows ?? []).filter((f: any) => f.milestone_id === milestoneId && !f.deliverable_id);
+const openRevision = (deliverableId: string) => feedbackOnDeliverable(deliverableId).some((f: any) => f.needs_revision && !f.resolved_at);
+
 /* Current ones only. A superseded row is the version somebody replaced, and
    reading it back would answer "what has been recorded" with a document that
    is no longer the one. */
 const { data: deliverables } = await supabase
   .from('deliverables')
-  .select('id, milestone_id, label, type, signed_on, external_url, verified_at')
+  .select('id, milestone_id, label, type, signed_on, external_url, verified_at, verified_by, document_version_id')
   .eq('participation_id', id)
   .is('superseded_at', null);
 
-/* This participation's sponsor, not the project's. A teacher who signed for
-   the class did not thereby sign for the fair, and the approval obligation
-   this satisfies is on this calendar. */
-const { data: sponsor } = await supabase
+/* This participation's sponsors, not the project's. A teacher who signed
+   for the class did not thereby sign for the fair, and the approval
+   obligation this satisfies is on this calendar.
+
+   **A list, and `maybeSingle` is why.** A class taught by two teachers has
+   two current sponsors, and `maybeSingle` answers more than one row with an
+   error and no data — so the page read *no sponsor named* on a project that
+   had two, and offered *Name one* beside them. A read that cannot survive
+   the second row is a read that reports the opposite of what is there. */
+const { data: sponsorRows } = await supabase
   .from('project_sponsors')
   .select('teacher_name, signed_on, recorded_at')
   .eq('participation_id', id)
   .is('superseded_at', null)
-  .maybeSingle();
+  .order('recorded_at');
+const sponsors = sponsorRows ?? [];
+const sponsor = sponsors[0] ?? null;
 
 /**
  * Whoever sponsors this project **somewhere else**.
@@ -499,6 +651,19 @@ const { count: notes } = projectId
       .eq('project_id', projectId)
   : { count: 0 };
 
+/* When it was last written in. The count says whether a notebook exists;
+   the date says whether it is being kept, which is the obligation a class
+   actually chases and the one number a student can change today. */
+const { data: lastNote } = projectId
+  ? await supabase
+      .from('field_notes')
+      .select('occurred_on, created_at')
+      .eq('project_id', projectId)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+  : { data: null };
+
 /* The stored address, parsed once. A facade rather than an iframe: the page
    shows a still and contacts the host only when somebody clicks. */
 const savedVideo = parseVideo((entry?.projects as any)?.video_url);
@@ -506,7 +671,10 @@ const savedVideo = parseVideo((entry?.projects as any)?.video_url);
 
 const { data: overseers } = await supabase
   .from('project_authors')
-  .select('user_id, role, participation_id, self_managed_at, accepted_at, users(display_name)')
+  /* `id` on the join: two readers below compare or key on `users.id`, and
+     without it both read undefined (an Elder could not complete a task; a
+     grade row never found its grade). */
+  .select('user_id, role, participation_id, self_managed_at, accepted_at, users(id, display_name)')
   .eq('project_id', entry.project_id);
 
 /**
@@ -529,6 +697,52 @@ const officer = (overseers ?? []).find(
 
 /* Accepted authors only. An invitation nobody answered is not a byline, and
    showing one here would name somebody who has not agreed to be named. */
+/* Grades on this place: the current row per obligation and student. An
+   advisor sees all of them; a student sees their own once released; the
+   policy decides and the page only keys what it gets. */
+const { data: assessmentRows } = await supabase
+  .from('assessments')
+  .select('id, milestone_id, student_id, score, out_of, rubric, feedback_md, released_at, created_at, kind, grader:grader_id(display_name)')
+  .eq('participation_id', entry.id)
+  .is('superseded_by', null);
+
+/* Two judgments per student per obligation: the teacher's grade and the
+   family's score (the Elder's, out of 4 with a comment, the class tracker
+   brought in). Keyed apart. */
+const gradeFor = new Map<string, any>((assessmentRows ?? []).filter((a: any) => a.kind !== 'elder').map((a: any) => [`${a.milestone_id}:${a.student_id}`, a]));
+const scoreFor = new Map<string, any>((assessmentRows ?? []).filter((a: any) => a.kind === 'elder').map((a: any) => [`${a.milestone_id}:${a.student_id}`, a]));
+
+/* The reader's own released grades, for the roll-up. The policy returns
+   only these to a student; an advisor sees everything and has the Class
+   page for the roll-up, so theirs is empty here on purpose. */
+const myGrades = me.isAdvisor
+  ? []
+  : (assessmentRows ?? []).filter((a: any) => a.student_id === account.id && a.released_at && a.kind !== 'elder');
+const gradeTotal = myGrades.reduce((n: number, a: any) => n + Number(a.score ?? 0), 0);
+const gradeOutOf = myGrades.reduce((n: number, a: any) => n + Number(a.out_of ?? 0), 0);
+const milestoneName = (milestoneId: string) => (allMilestones ?? []).find((m: any) => m.id === milestoneId)?.name ?? 'An obligation';
+
+/* Whether the reader looks after this place: attached as an officer to it,
+   or an advisor. The same rule the functions apply. */
+/* The Elders of this place: officer rows on it that are not the author
+   looking after their own work. */
+const eldersHere = (overseers ?? []).filter(
+  (a: any) => a.role === 'officer' && a.participation_id === entry.id && !a.self_managed_at
+);
+/* `user_id` off the row. This compared `users.id` off a join that selects
+   only `display_name`, so it was undefined for everybody and no Elder
+   could ever complete a task: the row read *Open* with nothing to press.
+   The advisor stands in only where the place has no Elder, which is the
+   rule `app.looks_after` applies to the verbs below. */
+const oversees =
+  eldersHere.some((a: any) => a.user_id === account.id) ||
+  (me.isAdvisor && eldersHere.length === 0);
+
+/* Names for the people who completed things, read off the overseers and
+   the sponsor rather than another query. */
+const nameOf = (userId: string | null | undefined): string | null =>
+  userId ? ((overseers ?? []).find((a: any) => a.user_id === userId)?.users as any)?.display_name ?? null : null;
+
 const authors = (overseers ?? []).filter(
   (a: any) => a.role === 'author' && a.accepted_at
 );
@@ -546,7 +760,7 @@ const iAuthor = isAuthorOf(project?.project_authors ?? [], account.id);
 
 const findings = checkDateOrder({
   startedOn: project?.started_on ?? null,
-  today: new Date().toISOString().slice(0, 10),
+  today: todayIn(org.timezone),
   obligations: (milestones ?? []).map((m: any) => ({
     id: m.id,
     name: m.name,
@@ -700,8 +914,12 @@ const expected = (() => {
  * also the honest reading of 11.8b either way: doneness is derived from the
  * artifact existing, and only one form writes it.
  */
-const sharedDeliverable = expected.some((d: any) => d.steps.length > 1);
-const inline = !sharedDeliverable;
+/* One list (2.8): the row carries the form whether or not the deliverable
+   is shared between steps. Recording on either step records the one
+   artifact, and `satisfied()` reads it on both. The separate Deliverables
+   section is gone; the branch below that sent a reader there is unreachable
+   and kept only until the next pass through this file. */
+const inline = true as boolean;
 
 /**
  * What this deadline owes, resolved through the step it came from.
@@ -755,6 +973,27 @@ const warningsFor = (stepId: string) =>
 /* What has been recorded, keyed by the deliverable's id. */
 const recorded = new Map<string, any>();
 for (const d of deliverables ?? []) recorded.set(d.type, d);
+
+/* The documents written in SciPath for this project (6.16), keyed by the
+   deliverable's id, with how far along each is. A deliverable with a
+   shape is written on its own page; the row here says where it stands
+   and opens it. */
+const { data: docRows } = await supabase
+  .from('documents')
+  .select('id, deliverable, status, version_no, updated_at, submitted_at, document_fields(field_id, value)')
+  .eq('project_id', project?.id ?? '');
+const docFor = (deliverableId: string) => (docRows ?? []).find((d: any) => d.deliverable === deliverableId) ?? null;
+const docState = (d: any): { label: string; verb: string; state: string } => {
+  const doc = docFor(d.id);
+  const sh = shape(d.shape);
+  if (!doc) return { label: 'Not started', verb: 'Submit', state: 'not_started' };
+  const values: Record<string, any> = {};
+  for (const f of doc.document_fields ?? []) values[f.field_id] = f.value;
+  const p = sh ? progressOf(sh, values) : { asked: 0, filled: 0, missing: [], over: [] };
+  if (doc.status === 'submitted') return { label: `Submitted${doc.version_no > 1 ? ` (version ${doc.version_no})` : ''}`, verb: 'Open', state: 'submitted' };
+  if (doc.status === 'revising') return { label: `Revising · ${p.filled} of ${p.asked} answered`, verb: 'Continue', state: 'revising' };
+  return { label: `In progress · ${p.filled} of ${p.asked} answered`, verb: p.filled ? 'Continue' : 'Submit', state: 'in_progress' };
+};
 
 /**
  * The phases, from the resolved template rather than from the seeded row.
@@ -841,7 +1080,7 @@ const grouped = (() => {
   const order = new Map(phaseList.map((p: any, i: number) => [p.id, i]));
   const buckets = new Map<string, any[]>();
 
-  for (const m of milestones ?? []) {
+  for (const m of allMilestones ?? []) {
     const key = m.phase && order.has(m.phase) ? m.phase : '';
     const list = buckets.get(key) ?? [];
     list.push(m);
@@ -851,12 +1090,15 @@ const grouped = (() => {
   const out = [...buckets.entries()]
     .map(([id, rows]) => {
       const phase = phaseList.find((p: any) => p.id === id);
+      const students = rows.filter((m: any) => m.owner !== 'staff');
       return {
         id,
         name: phase?.name ?? 'Everything else',
         window: phase?.window ?? null,
-        rows,
-        done: rows.filter((m: any) => satisfied(m)).length,
+        /* Every row, for the table; the student's rows, for the counts. */
+        rows: rows.sort((a: any, b: any) => (a.due_on ?? '9999').localeCompare(b.due_on ?? '9999') || a.sort_order - b.sort_order),
+        students,
+        done: students.filter((m: any) => satisfied(m)).length,
       };
     })
     /* In the program's own order, with the leftovers last. */
@@ -897,12 +1139,12 @@ const money = (amount: number | string) =>
 const derived = (m: any) => {
   if (m.satisfied_by === 'sponsor') {
     return {
-      met: Boolean(sponsor),
-      says: sponsor ? sponsor.teacher_name : 'No sponsor named',
+      met: sponsors.length > 0,
+      says: sponsors.map((x: any) => x.teacher_name).join(', ') || 'No sponsor named',
       /* Scoped, so naming a sponsor from the class's page records the
          class's teacher rather than asking again which place was meant. */
       href: `/app/project/${project?.id}/team/?in=${programId}`,
-      verb: sponsor ? 'Change' : 'Name one',
+      verb: sponsors.length > 0 ? 'Change' : 'Name one',
     };
   }
   if (m.satisfied_by === 'officer') {
@@ -938,16 +1180,11 @@ const total = milestones?.length ?? 0;
 const openCount = total - done;
 
 const now = new Date();
-const todayIso = now.toISOString().slice(0, 10);
-const weekday = now.toLocaleDateString('en-US', { weekday: 'long' });
-const dateLabel = now.toLocaleDateString('en-US', {
-  month: 'long', day: 'numeric', year: 'numeric',
-});
+const todayIso = todayIn(org.timezone, now);
 
 const daysUntil = (iso: string | null) =>
   iso ? daysFrom(iso) : null;
 
-const toFair = daysUntil(program?.fair_date ?? null);
 
 /**
  * The next thing that needs doing.
@@ -970,6 +1207,147 @@ const nextOpen =
   outstanding.filter((m: any) => m.kind !== 'event').sort(byDate)[0] ??
   outstanding.sort(byDate)[0];
 const toNext = daysUntil(nextOpen?.due_on ?? null);
+
+/**
+ * **How much is late, not only what is next.**
+ *
+ * The row said one obligation was fifteen days overdue and gave no way to
+ * know whether it was the only one or the first of five. That is the
+ * difference between being a little behind and having lost the thread, and
+ * it is what somebody looking after this project is chasing.
+ *
+ * Read off the same list the table below prints, and `satisfied` rather
+ * than `completed_on`, so a step met by a shared deliverable is not counted
+ * as late (the phase headings already learned that lesson).
+ */
+const overdue = (milestones ?? [])
+  .filter((m: any) => !satisfied(m) && m.due_on && m.kind !== 'event' && m.due_on < todayIso)
+  .sort(byDate);
+const oldestLate = overdue[0] ?? null;
+
+/**
+ * **The plate: what is on it today, at most three lines.**
+ *
+ * Everything late, then everything due inside a week, by date; and the
+ * notebook when it has gone a week quiet, because that is the obligation a
+ * class chases weekly and the one a student can meet in two minutes. One
+ * line is a bar; two or three are a short list. Never more than three, so
+ * the top of the page says what to do and not what the season holds. The
+ * rest of what is late is in the ledger.
+ */
+/* The notebook's recent entries, for the section on this page. Newest
+   first, ten of them; the notebook page has the rest and the images. */
+const { data: recentNotes } = projectId
+  ? await supabase
+      .from('field_notes')
+      .select('id, body_md, occurred_on, created_at, users:author_id(display_name)')
+      .eq('project_id', projectId)
+      .order('occurred_on', { ascending: false })
+      .order('seq', { ascending: false })
+      .limit(10)
+  : { data: [] as any[] };
+const { count: noteCount } = projectId
+  ? await supabase.from('field_notes').select('id', { count: 'exact', head: true }).eq('project_id', projectId)
+  : { count: 0 };
+
+const notebookAge = lastNote
+  ? daysUntil(String(lastNote.occurred_on ?? lastNote.created_at).slice(0, 10))
+  : null;
+const notebookQuiet = notebookAge === null || notebookAge <= -7;
+
+const plate = (() => {
+  const soon = (milestones ?? [])
+    .filter((m: any) => !satisfied(m) && m.due_on && m.kind !== 'event' && m.due_on >= todayIso)
+    .sort(byDate)
+    .filter((m: any) => (daysUntil(m.due_on) ?? 99) <= 7);
+  /* One thing next (2.8): the latest of the late, else the nearest due.
+     Three rows of "next up" read as a list of chores, not a next step. */
+  const rows = [...overdue, ...soon].slice(0, 1).map((m: any) => {
+    const days = daysUntil(m.due_on);
+    return { kind: 'step' as const, m, days, late: days !== null && days < 0 };
+  });
+  if (rows.length === 0 && nextOpen) {
+    rows.push({ kind: 'step' as const, m: nextOpen, days: toNext, late: false });
+  }
+  return rows;
+})();
+const alarm = plate[0] ?? null;
+
+/**
+ * The form a plate row folds open, so the student records the thing where
+ * they read that it is due rather than being sent down to the ledger for
+ * it. A step with deliverables gets one short form per deliverable still
+ * missing (the ledger's own fields); a step with nothing to hand in gets
+ * *Done* with a date. The same two actions the ledger posts.
+ */
+/**
+ * What has been asked of the reader about this project. `my_nudges()` is
+ * the recipient's own list (the outbox is closed to sessions), one row per
+ * open obligation somebody nudged them about; here it is the rows on this
+ * project, keyed by obligation, so the plate can put the ask on the row
+ * it is about. A student who lands here rather than on the Workbench
+ * still meets every nudge addressed to them.
+ */
+const asksFor = new Map<string, any>();
+if (iAuthor) {
+  const { data: nudgeRows, error: nudgeError } = await supabase.rpc('my_nudges');
+  if (nudgeError) console.error(`my_nudges: ${nudgeError.message}`);
+  for (const n of nudgeRows ?? []) {
+    if (n.project_id === project?.id && n.milestone_id) asksFor.set(n.milestone_id, n);
+  }
+}
+const askOn = (milestoneId: string) => {
+  const n = asksFor.get(milestoneId);
+  if (!n) return undefined;
+  return { milestoneId, askedBy: n.asked_by ?? null, times: Number(n.times ?? 1), acknowledged: Boolean(n.acknowledged_at) };
+};
+/* Asks about obligations the plate does not already carry (due more than
+   a week out), as rows of their own, so an ask is never below the fold. */
+const askedRows = [...asksFor.values()]
+  .filter((n: any) => !plate.some((row: any) => row.m.id === n.milestone_id))
+  .map((n: any) => (milestones ?? []).find((m: any) => m.id === n.milestone_id))
+  .filter(Boolean)
+  .map((m: any) => {
+    const days = daysUntil(m.due_on);
+    return { kind: 'step' as const, m, days, late: days !== null && days < 0 };
+  });
+
+const recordFormFor = (m: any) => {
+  const wants = wantedBy(m).filter((d: any) => !recorded.has(d.id));
+  if (wantedBy(m).length > 0) {
+    if (wants.length === 0) return undefined;
+    /* Written in SciPath: the plate opens the document rather than
+       folding a form, and the row's action says so. */
+    if (wants.some((d: any) => d.shape)) return undefined;
+    return {
+      kind: 'record' as const,
+      participationId: entry.id as string,
+      milestoneId: m.id as string,
+      today: todayIso,
+      items: wants.map((d: any) => ({ id: d.id as string, name: d.name as string, templateUrl: (d.template_url as string | null) ?? null })),
+    };
+  }
+  return {
+    kind: 'done' as const,
+    participationId: entry.id as string,
+    milestoneId: m.id as string,
+    name: m.name as string,
+    milestoneKind: (m.kind as string) ?? 'other',
+    today: todayIso,
+  };
+};
+
+/**
+ * The phase this program is in, and how much of it is done.
+ *
+ * *0 of 29* across a year is discouraging and says nothing about what this
+ * month asks for. A class runs in phases and the template declares them, so
+ * the useful figure is the phase and the count inside it. Which phase is
+ * current: the first with anything open, since a class works forward and
+ * the thing not yet done is where somebody is.
+ */
+const herePhase =
+  grouped.find((g: any) => g.students.some((m: any) => !satisfied(m))) ?? grouped[grouped.length - 1] ?? null;
 
 /**
  * The warnings for the step somebody is on right now.
@@ -1014,14 +1392,17 @@ const nowWarnings = (() => {
  * nothing has no deliverables.
  */
 const sections = [
-  { id: 'start', label: 'Start date', show: true },
-  { id: 'project', label: 'The project', show: true },
+  /* A class has no approvals to check a start date against; a fair does
+     (2.8). The date still exists on the project for the fair's page. */
+  { id: 'start', label: 'Project Start Date', show: !isCourse },
   { id: 'deadlines', label: 'Deadlines', show: true },
-  { id: 'deliverables', label: 'Deliverables', show: expected.length > 0 },
+  { id: 'notebook', label: 'Notebook', show: true },
   { id: 'showcase', label: 'Showcase', show: true },
   { id: 'documents', label: 'Documents', show: true },
   { id: 'money', label: 'The money', show: isGrant },
   { id: 'result', label: 'Result', show: hasResult },
+  { id: 'grades', label: 'Grades', show: myGrades.length > 0 },
+  { id: 'manuscript', label: 'Manuscript', show: true },
 ].filter((section) => section.show);
 
 /* The number a heading shows, looked up rather than written out. Four of
@@ -1033,100 +1414,47 @@ const sectionNo = new Map(sections.map((section, i) => [section.id, String(i + 1
 
 <Base title={project?.title ?? 'Entry'} noindex={true}>
   <div class="wrap">
-    <AppShell org={org} account={account} roles={roles} here="/app/" />
+    <AppShell org={org} account={account} roles={roles} here={`/app/project/${project?.id}/in/${programId}/`} />
 
-    <section class="hero">
-      <p class="t-lbl">{programTitle(program)}</p>
-      <h1 class="t-big">{project?.title}</h1>
-
-      {/* Who is looking after it. Two names, or the way to get them: an
-          unassigned project with nobody named is the state that quietly
-          persists, and the fix is one click from where somebody notices. */}
-      {/* The same two facts the deadlines table reports further down, and
-          the same links: `derived` already knows where to go and what to
-          call it, and a second copy would drift. */}
-      <ul class="people">
-        {[
-          { key: 'sponsor', label: 'Sponsor', of: derived({ satisfied_by: 'sponsor' }) },
-          /* The program's own word. A class calls this person an elder and
-             a journal calls them an editor, and reading "officer" on a
-             class page is the software describing something the student is
-             not in.
-          
-             `key` is what the self managed note keys off, because the label
-             is now a word from a template and comparing against a literal
-             would silently stop matching the moment somebody renamed it. */
-          { key: 'officer', label: staffWord(program), of: derived({ satisfied_by: 'officer' }) },
-        ].map(({ key, label, of }) => (
-          <li>
-            <span class="p-lbl">{label}</span>
-            {of?.met ? (
-              <span>
-                {of.says}
-                {key === 'officer' && officer?.self_managed_at
-                  ? ', self managed'
-                  : ''}
-              </span>
-            ) : of?.href ? (
-              <a class="linkish" href={of.href}>{of.verb}</a>
-            ) : (
-              <span class="p-none">{of?.instead ?? 'Nobody yet'}</span>
-            )}
-          </li>
-        ))}
-      </ul>
-      {/* Four cards, one skeleton: label, value, footnote. Each row is its
-          own grid track shared across the row, so the numbers sit on one
-          line and the footnotes on another whether a label wraps or not.
-          Before this, every card was a flex column of its own content and
-          nothing lined up with anything. */}
-      <div class="cards">
-        <div class="card">
-          <p class="kicker">Today</p>
-          <p class="val"><span class="weekday">{weekday}</span></p>
-          <p class="under">{dateLabel}</p>
-        </div>
-
-        <div class="card">
-          {/* A class has no judging day. Where the kind is known, the word
-              is the kind's: "days to fair" in front of an IRPD student is
-              the software describing something they are not doing. */}
-          <p class="kicker">
-            {isCohort ? 'Days to the end' : isGrant ? 'Days to close' : 'Days to fair'}
-          </p>
-          <p class="val"><span class="num">{toFair !== null ? (toFair >= 0 ? toFair : 0) : '—'}</span></p>
-          <p class="under">{fmt(program?.fair_date)}</p>
-        </div>
-
-        <div class="card">
-          <p class="kicker">Days to next milestone</p>
-          <p class="val">
-            {nextOpen && toNext !== null ? (
-              <span class={toNext < 0 ? 'num late' : 'num'}>{Math.abs(toNext)}</span>
-            ) : (
-              <span class="none">—</span>
-            )}
-          </p>
-          <p class:list={['under', toNext !== null && toNext < 0 && 'late']}>
-            {nextOpen && toNext !== null
-              ? toNext < 0
-                ? `${nextOpen.name}, overdue`
-                : nextOpen.name
-              : 'Nothing open'}
-          </p>
-        </div>
-
-        <div class="card">
-          <p class="kicker">Task counter</p>
-          <p class="val">
-            <span class="num">{done}</span><span class="of">of {total}</span>
-          </p>
-          <p class="under">complete</p>
-        </div>
-      </div>
-
-    </section>
-
+    {/* **The cover.** The program and the title on one block in the
+        school's hue, and nothing else: the one bar under it says what to
+        do today, and the track says where the season is. */}
+    <ProjectCover
+      kick={programTitle(program)}
+      title={project?.title ?? ''}
+      people={[
+        { label: authors.length === 1 ? 'Author' : 'Authors', value: authors.length > 0 ? authors.map((a: any) => a.users?.display_name).join(', ') : 'None yet' },
+        /* Every Elder on the place. This read `officer`, the first
+           oversight row found, and a class pairs two Elders with a
+           project: the second was on the notebook's cover and the roll
+           call and missing here. */
+        {
+          label: eldersHere.length > 1 ? staffWord(program, 'plural') : staffWord(program),
+          value: eldersHere.length > 0
+            ? eldersHere.map((a: any) => one(a.users)?.display_name ?? '').filter(Boolean).join(', ')
+            : officer?.self_managed_at
+              ? `${one(officer.users)?.display_name ?? ''}, self managed`
+              : 'None assigned',
+        },
+        { label: 'Sponsor', value: sponsor ? sponsor.teacher_name : 'None named' },
+      ]}
+    >
+      <a class="btn btn-sm ghost" href="#notebook">Notebook</a>
+      {/* The student's own card on the class showcase: summary, video,
+          shown or hidden. It was reachable only from the showcase page. */}
+      {program?.showcase && program.showcase !== 'none' && (
+        <a class="btn btn-sm ghost" href={`/app/project/${project?.id}/showcase/`}>Showcase card</a>
+      )}
+      {/* A class whose template says `people: staff` sets the sponsor and
+          the roster itself; the students see the names and have nothing to
+          update. Staff always can. */}
+      {/* The team page is locked for the pilot (2.8): the roster came
+          from the class list and changes go through the teachers. The page
+          still answers at its address. */}
+      {template?.program?.people !== 'staff' && !me.runsTheClub && (
+        <a class="btn btn-sm ghost" href={`/app/project/${project?.id}/team/?in=${programId}`}>Update</a>
+      )}
+    </ProjectCover>
     {/* Anchored, and every form on this page posts to it. These pages
         run to several screens, and an outcome rendered at the top after
         a click three screens down reads as nothing having happened. */}
@@ -1134,6 +1462,87 @@ const sectionNo = new Map(sections.map((section, i) => [section.id, String(i + 1
       {error && <p class="note" role="alert">{error}</p>}
       {recordedNote && !error && <p class="note" role="status">{recordedNote}</p>}
     </div>
+
+    {/* **The plate.** What is on it today, under the cover and before the
+        season's track: the one thing, or two or three, each with its verb.
+        The same component the Workbench uses; the track is the map of the
+        year, this is today. */}
+    <Plate
+      rows={[
+        ...[...plate, ...askedRows].flatMap((row: any, i: number) => {
+          const docs = wantedBy(row.m).filter((d: any) => d.shape && !recorded.has(d.id));
+          const one = {
+          id: `p-${row.m.id}`,
+          n: row.days,
+          unit: row.days === null ? 'no date' : row.late ? 'days late' : row.days === 0 ? 'due today' : 'days left',
+          late: row.late,
+          kick: row.late ? 'Overdue' : i < plate.length ? 'Next up' : 'Asked of you',
+          ask: askOn(row.m.id),
+          title: row.m.name,
+          sub:
+            (row.m.due_on ? `Due ${fmt(row.m.due_on)}.` : '') +
+            (i === 0 && overdue.length > plate.filter((r: any) => r.late).length
+              ? ` ${overdue.length - plate.filter((r: any) => r.late).length} more late in the ledger.`
+              : ''),
+          /* The author records it here, on the row, and the page comes
+             back with the next thing on top. Anybody else is sent to the
+             ledger row, which is where the record is read. */
+          form: iAuthor ? recordFormFor(row.m) : undefined,
+          actions: docs.length === 1
+            ? [{ href: documentPath(project?.id ?? '', docs[0].id), label: iAuthor ? docState(docs[0]).verb : 'Read', accent: iAuthor }]
+            : iAuthor ? [{ href: `#m-${row.m.id}`, label: 'In the ledger' }] : [{ href: `#m-${row.m.id}`, label: 'See the row', accent: row.late }],
+          };
+          /* A step that wants two documents is two rows, one verb each,
+             titled by the document (2.8). The ask, if any, stays on the
+             first. */
+          if (docs.length > 1) {
+            /* A step that wants two documents shows the first not yet
+               submitted; the next appears when that one is in. */
+            const d = docs[0];
+            return [{
+              ...one,
+              title: d.name,
+              actions: [{ href: documentPath(project?.id ?? '', d.id), label: iAuthor ? docState(d).verb : 'Read', accent: iAuthor }],
+            }];
+          }
+          return [one];
+        }),
+        ...(iAuthor && notebookQuiet
+          ? [{
+              n: notebookAge,
+              unit: notebookAge === null ? 'no entries' : 'days quiet',
+              kick: 'Notebook',
+              title: notebookAge === null ? 'not started' : 'a week without an entry',
+              sub: 'A line about what happened this week is enough.',
+              actions: [{ href: '#observe', label: 'Write an entry', accent: true }],
+            }]
+          : []),
+      ]}
+    />
+
+    {/* **The season as a track.** A program's phases as stops on a line:
+        the ones behind filled in the hue, the one somebody is on in the
+        accent with a halo, the ones ahead hollow. Where a project is, in
+        one glance, which *0 of 29* never said. Only where the program
+        declares phases; a fair with none has a calendar instead. */}
+    {grouped.length > 1 && (
+      <ol class="track" style={`--stops:${grouped.length}`}>
+        {grouped.map((g: any, i: number) => {
+          const at = herePhase ? grouped.indexOf(herePhase) : -1;
+          const state = i < at ? 'done' : i === at ? 'now' : '';
+          return (
+            <li class={state}>
+              <a href={`#phase-${g.id || 'rest'}`}>
+                <span class="n">Phase {i + 1}{state === 'now' ? ' · now' : ''}</span>
+                <span class="t">{g.name}</span>
+                {g.window && <span class="w">{g.window.from} to {g.window.to}</span>}
+                <span class="c">{g.done} of {g.students.length}</span>
+              </a>
+            </li>
+          );
+        })}
+      </ol>
+    )}
 
     {/* Where the place stands.
      
@@ -1164,7 +1573,10 @@ const sectionNo = new Map(sections.map((section, i) => [section.id, String(i + 1
       </div>
     )}
 
-    {worst && (
+    {/* Only a finding the plate does not already say: a disqualifying
+        date order, a missing approval. "X is due in 5 days" under a bar
+        reading "Next up: X · 5 days left" was the bar again in prose. */}
+    {worst && !['due', 'urgent'].includes(worst.severity) && (
       <div class={worst.severity === 'disqualifying' ? 'flag bad' : 'flag warn'} role="alert">
         <h4>{worst.severity === 'disqualifying' ? 'This will disqualify the entry' : 'Needs attention'}</h4>
         <p>{worst.message}</p>
@@ -1187,16 +1599,16 @@ const sectionNo = new Map(sections.map((section, i) => [section.id, String(i + 1
           </p>
         ))}
         <p class="t-sm">
-          <a href="#deliverables">All deliverables can be recorded below</a>.
+          <a href="#deadlines">Every deliverable is submitted on its row below</a>.
         </p>
       </div>
     )}
 
     {!iAuthor && (
-      <p class="note">
-        You are watching this entry rather than working on it. Recording forms,
-        marking obligations, and setting the start date belong to the authors.
-        Verifying a deliverable is yours.
+      <p class="note watching">
+        You are watching this project rather than working on it. You can read
+        everything, add observations, nudge your students and complete
+        supervisory tasks.
       </p>
     )}
 
@@ -1222,21 +1634,13 @@ const sectionNo = new Map(sections.map((section, i) => [section.id, String(i + 1
         as a menu, which is what the season is. The numbers repeat above
         each heading, so arriving somewhere shows where it sits in the
         whole. */}
-    <nav class="rail" aria-label="Sections of this entry">
-      <ol>
-        {sections.map((section, i) => (
-          <li>
-            <a href={`#${section.id}`}>
-              <span class="rail-n">{String(i + 1).padStart(2, '0')}</span>
-              <span class="rail-l">{section.label}</span>
-            </a>
-          </li>
-        ))}
-      </ol>
-    </nav>
+    {/* The numbered rail that stood here is off (2.8): the plate says what
+        is next, the cover's buttons reach the notebook and the showcase,
+        and the deadlines are the first thing under the track. */}
 
+    {!isCourse && (
     <section class="sec" id="start">
-      <div class="sec-h"><b><span class="sec-n">{sectionNo.get('start')}</span>Start date</b><span>Checked against all approvals</span></div>
+      <div class="sec-h"><b><span class="sec-n">{sectionNo.get('start')}</span>Project Start Date</b><span>Checked against all approvals</span></div>
       {iAuthor ? (
         <form method="POST" action="#outcome" class="inline">
           <input type="hidden" name="action" value="started" />
@@ -1248,81 +1652,12 @@ const sectionNo = new Map(sections.map((section, i) => [section.id, String(i + 1
         <p><b>{project?.started_on ? fmt(project.started_on) : 'Not set'}</b></p>
       )}
     </section>
+    )}
 
-    {/* The project, rather than this participation.
-    
-        Everything here belongs to the work and not to the program it was
-        entered in, and it used to be spread across the notebook page, where
-        a student looking for their authors found a print stylesheet. This
-        page controls the project, so the ways into it live here. */}
-    <section class="sec" id="project">
-      <div class="sec-h"><b><span class="sec-n">{sectionNo.get('project')}</span>The project</b><span>Everything about the work</span></div>
-
-      {/* Buttons rather than links in a list.
-      
-          These are the actions somebody takes on this page, and a text link
-          at the end of a row reads as a footnote to the fact beside it. The
-          export sits with the notebook because it is the notebook, printed:
-          a row of its own implied a fourth thing to keep track of. */}
-      <ul class="facts">
-        {/* All three names, because they are one question — who is on this
-            and who is answerable for it — and they are all changed on the
-            same screen. Three rows with three buttons pointing at one page
-            would be three ways of saying the same thing. */}
-        <li>
-          <span class="f-lbl">People</span>
-          <span class="f-val f-people">
-            <span>
-              <i>{authors.length === 1 ? 'Author' : 'Authors'}</i>
-              <em>
-                {authors.length > 0
-                  ? authors.map((a: any) => a.users?.display_name).join(', ')
-                  : 'None yet'}
-              </em>
-            </span>
-            <span>
-              <i>{staffWord(program)}</i>
-              <em>{officer ? one(officer.users)?.display_name : 'None assigned'}</em>
-            </span>
-            <span>
-              <i>Sponsor</i>
-              <em>{sponsor ? sponsor.teacher_name : 'None named'}</em>
-              {!sponsor && (elsewhere ?? []).length > 0 && (
-                <em class="t-sm">
-                  {(elsewhere ?? [])
-                    .map((e: any) => `${e.teacher_name} sponsors this in ${(e.participations as any)?.programs?.name}`)
-                    .join('. ')}
-                </em>
-              )}
-            </span>
-          </span>
-          <span class="f-do">
-            {/* Carries the program, so recording a sponsor from here records
-                it for this class or fair rather than asking again. */}
-            <a class="btn btn-sm" href={`/app/project/${project?.id}/team/?in=${programId}`}>Update</a>
-          </span>
-        </li>
-        <li>
-          <span class="f-lbl">Notebook</span>
-          <span class="f-val">
-            {notes} {notes === 1 ? 'entry' : 'entries'}, append only and attributed
-          </span>
-          <span class="f-do">
-            <a class="btn btn-sm" href={`/app/project/${project?.id}/`}>Append</a>
-            <a class="btn btn-sm" href={`/app/project/${project?.id}/notebook/`}>Export</a>
-          </span>
-        </li>
-        <li>
-          <span class="f-lbl">Manuscript</span>
-          <span class="f-val">{manuscript ? manuscript.title || 'Started' : 'Not started'}</span>
-          <span class="f-do">
-            <a class="btn btn-sm" href={`/app/project/${project?.id}/manuscript/`}>
-              {manuscript ? 'Open' : 'Start'}
-            </a>
-          </span>
-        </li>
-      </ul>
-    </section>
+    {/* *The project* section that stood here (people, notebook,
+        manuscript) is gone: the people are on the cover, the notebook is a
+        button there and on the bar, and the manuscript is the last
+        section. */}
 
     <section class="sec" id="deadlines">
       <div class="sec-h"><b><span class="sec-n">{sectionNo.get('deadlines')}</span>Deadlines</b><span>{total - done} of {total} remaining</span></div>
@@ -1343,16 +1678,15 @@ const sectionNo = new Map(sections.map((section, i) => [section.id, String(i + 1
                 wide screen, where an empty track costs nothing, and part of
                 why this would not fit on a narrow one. */}
             <th scope="col">Due</th>
-            <th scope="col">Obligation</th>
-            <th scope="col">Set by</th>
+            <th scope="col">Deliverable</th>
             <th scope="col">Status</th>
           </tr>
         </thead>
         <tbody>
           {grouped.map((group) => (
             <>
-              <tr class="phase-row">
-                <th colspan="4" scope="colgroup">
+              <tr class="phase-row" id={`phase-${group.id || 'rest'}`}>
+                <th colspan="3" scope="colgroup">
                   <span class="phase-name">{group.name}</span>
                   {group.window && (
                     <span class="phase-when">{group.window.from} to {group.window.to}</span>
@@ -1361,30 +1695,142 @@ const sectionNo = new Map(sections.map((section, i) => [section.id, String(i + 1
                     {/* The same sentence whether or not it is finished.
                         "All done" makes somebody scanning five phases read
                         two different shapes to compare them. */}
-                    {`${group.done} of ${group.rows.length} done`}
+                    {`${group.done} of ${group.students.length} done`}
                   </span>
                 </th>
               </tr>
 
           {group.rows.map((m: any) => {
+            /* **An Elder's task, on the calendar and nobody's debt but the
+               Elder's.** Shown to everyone so the student can see feedback
+               is coming; completed only by an Elder on the place or the
+               advisor, and only once the student step it waits on is met. */
+            if (m.owner === 'staff') {
+              const ready = taskReady(m);
+              const target = m.feedback_on ? recorded.get(m.feedback_on) ?? null : null;
+              const requiredName = m.requires_step
+                ? (allMilestones ?? []).find((x: any) => x.step_id === m.requires_step)?.name ?? 'the step before it'
+                : null;
+              const notes = feedbackOnTask(m.id);
+              const canDo = oversees && ready && !m.completed_on;
+              return (
+                <tr id={`m-${m.id}`} class:list={['staff-row', m.completed_on && 'is-done', !ready && 'is-waiting']}>
+                  <td data-label="Due">
+                    {fmt(m.due_on)}
+                    {!m.completed_on && ready && m.due_on && m.due_on < todayIso && (
+                      <span class="pill late">{Math.abs(daysUntil(m.due_on) ?? 0)} late</span>
+                    )}
+                  </td>
+                  <td data-label="Deliverable">
+                    <span class="staff-tag">{staffWord(program)}'s task</span>
+                    {m.name}
+                    {!ready && requiredName && <span class="staff-wait">waiting on {requiredName}</span>}
+                    {notes.length > 0 && (
+                      <ul class="fb-list">
+                        {notes.map((n: any) => (
+                          <li><b>{n.author?.display_name ?? staffWord(program)}</b> {n.body_md}</li>
+                        ))}
+                      </ul>
+                    )}
+                  </td>
+                  <td class="act" data-label="Status">
+                    {m.completed_on ? (
+                      <span class="rec-ok">Done {fmt(m.completed_on)}{nameOf(m.completed_by) ? ` by ${nameOf(m.completed_by)}` : ''}</span>
+                    ) : canDo ? (
+                      m.feedback_on && target ? (
+                        <details class="rec">
+                          <summary class="btn btn-sm accent">Give feedback</summary>
+                          <form method="POST" action="#outcome" class="recf fbf">
+                            <input type="hidden" name="action" value="feedback" />
+                            <input type="hidden" name="deliverable_id" value={target.id} />
+                            <p class="recf-n">
+                              On <a href={target.external_url ?? `#d-${m.feedback_on}`} target="_blank" rel="noopener noreferrer">{target.label}</a>
+                              {target.signed_on ? `, dated ${fmt(target.signed_on)}` : ''}
+                            </p>
+                            <label><span>What to change, or what was good</span><textarea class="ta" name="body" rows="4" required></textarea></label>
+                            <label class="fb-rev"><input type="checkbox" name="needs_revision" value="1" /> <span>Ask for a revision</span></label>
+                            <button class="btn btn-sm" type="submit">Send feedback</button>
+                          </form>
+                        </details>
+                      ) : (
+                        <details class="rec">
+                          <summary class="btn btn-sm accent">{m.feedback_on ? 'Nothing recorded yet · mark done' : 'Mark done'}</summary>
+                          <form method="POST" action="#outcome" class="recf fbf">
+                            <input type="hidden" name="action" value="task" />
+                            <input type="hidden" name="milestone_id" value={m.id} />
+                            <label><span>A line of feedback, if there is one</span><textarea class="ta" name="body" rows="3"></textarea></label>
+                            <button class="btn btn-sm" type="submit">Done</button>
+                          </form>
+                        </details>
+                      )
+                    ) : !ready ? (
+                      <span class="p-none">Waiting</span>
+                    ) : (
+                      <span class="p-none">Open</span>
+                    )}
+                  </td>
+                </tr>
+              );
+            }
+
             const f = byId.get(m.id);
+            /* The grade rows under this obligation: one per author for an
+               advisor, and the reader's own released one for an author. */
+            /* Who sees what under the row: the advisor every student with
+               the grade form and the family's score; the Elder on the
+               place every student with the score form; the author their
+               own released grade and their own score. */
+            const gradeRows = me.isAdvisor || oversees
+              ? authors.map((a: any) => ({ student: one(a.users), grade: gradeFor.get(`${m.id}:${one(a.users)?.id}`) ?? null, score: scoreFor.get(`${m.id}:${one(a.users)?.id}`) ?? null }))
+              : iAuthor && (gradeFor.get(`${m.id}:${account.id}`) || scoreFor.get(`${m.id}:${account.id}`))
+                ? [{ student: { id: account.id, display_name: account.display_name }, grade: gradeFor.get(`${m.id}:${account.id}`) ?? null, score: scoreFor.get(`${m.id}:${account.id}`) ?? null }]
+                : [];
             return (
-              <tr class={f?.severity === 'disqualifying' ? 'row-bad' : f?.severity === 'urgent' ? 'row-warn' : ''}>
+              <>
+              <tr
+                id={`m-${m.id}`}
+                class={f?.severity === 'disqualifying' ? 'row-bad' : f?.severity === 'urgent' ? 'row-warn' : ''}
+              >
                 {/* `data-label` is what the narrow layout prints in place of
                     the heading it can no longer show. On the cell rather
                     than in the stylesheet so one place says what a column
                     is called. */}
-                <td data-label="Due">{fmt(m.due_on)}</td>
-                <td data-label="Obligation">
+                <td data-label="Due">
+                  {fmt(m.due_on)}
+                  {/* How late, on a fill, where the date is. A date alone
+                      reads the same six days out and six days late. */}
+                  {m.due_on && !satisfied(m) && m.kind !== 'event' && m.due_on < todayIso && (
+                    <span class="pill late">{Math.abs(daysUntil(m.due_on) ?? 0)} late</span>
+                  )}
+                </td>
+                <td data-label="Deliverable">
                   {m.name}
                   {m.blocks_experimentation && <span class="gate">must precede work</span>}
-                </td>
-                <td data-label="Set by">
-                  {/* Whose deadline this is. A student who cannot tell a
-                      club deadline from a fair rule starts treating real
-                      deadlines as advisory, and the fair's November date is
-                      one where that ends a season. */}
-                  <span class:list={['whose', m.source]}>{whose[m.source] ?? 'The program'}</span>
+                  {/* What the row owes, folded in from the section that
+                      listed it separately: the artifact's name where it
+                      differs from the step's, whether it is optional, the
+                      class's one line of guidance, the form itself, and the
+                      common mistakes written against the step. */}
+                  {wantedBy(m).map((d: any) => (
+                    <div class="owe">
+                      {d.name !== m.name && <span class="owe-name">{d.name}</span>}
+                      {d.requirement !== 'required' && (
+                        <span class:list={['dl-need', d.requirement]}>{d.requirement === 'conditional' ? 'required for this project' : 'optional'}</span>
+                      )}
+                      {d.guidance && <p class="owe-guide">{d.guidance}</p>}
+                      {d.url && <p class="owe-guide"><a href={d.url} target="_blank" rel="noopener noreferrer">The form itself</a></p>}
+                    </div>
+                  ))}
+                  {(() => {
+                    const st = stepFor(m.name);
+                    const risks = [st?.risk, ...(st ? warningsFor(st.id).map((w: any) => w.body) : [])].filter(Boolean);
+                    return risks.length > 0 ? (
+                      <details class="owe-wrong">
+                        <summary>Where this usually goes wrong</summary>
+                        {risks.map((r: any) => <p class="dl-risk">{r}</p>)}
+                      </details>
+                    ) : null;
+                  })()}
                 </td>
                 <td class="act" data-label="Status">
                   {m.satisfied_by ? (
@@ -1394,13 +1840,38 @@ const sectionNo = new Map(sections.map((section, i) => [section.id, String(i + 1
                       <span class="p-none">{derived(m)?.instead ?? derived(m)?.says}</span>
                     )
                   ) : !iAuthor ? (
-                    deliverableFor.get(m.id) && !deliverableFor.get(m.id).verified_at && me.runsTheClub ? (
-                      <form method="POST" action="#outcome" class="inline">
-                        <input type="hidden" name="action" value="verify" />
-                        <input type="hidden" name="deliverable_id" value={deliverableFor.get(m.id).id} />
-                        <button type="submit" class="linkish">Verify</button>
-                      </form>
-                    ) : null
+                    /* **What was recorded, for whoever is looking after it.**
+                       The cell used to offer *Verify* and otherwise stay
+                       blank, so an Elder opening a project could not see
+                       the date anything was done. The record itself, read
+                       only, and the verb where there is one. */
+                    <div class="rec-done">
+                      {wantedBy(m).filter((d: any) => recorded.has(d.id)).map((d: any) => {
+                        const have = recorded.get(d.id);
+                        return (
+                          <p class="rec-one">
+                            {wantedBy(m).length > 1 && <span class="rec-n">{d.name}</span>}
+                            <a class="linkish" href={`#d-${d.id}`}>Submitted {have?.signed_on ? fmt(have.signed_on) : ''}</a>
+                            {have?.external_url && (
+                              <a class="rec-at" href={have.external_url} target="_blank" rel="noopener noreferrer">{linkDomain(have.external_url)}</a>
+                            )}
+                            {have?.verified_at ? (
+                              <span class="rec-ok">Checked{nameOf(have.verified_by) ? ` by ${nameOf(have.verified_by)}` : ''}</span>
+                            ) : oversees ? (
+                              <form method="POST" action="#outcome" class="inline">
+                                <input type="hidden" name="action" value="verify" />
+                                <input type="hidden" name="deliverable_id" value={have.id} />
+                                <button type="submit" class="linkish">Verify</button>
+                              </form>
+                            ) : null}
+                            {have && openRevision(have.id) && <span class="pill late">Revision asked</span>}
+                          </p>
+                        );
+                      })}
+                      {wantedBy(m).every((d: any) => !recorded.has(d.id)) && m.completed_on && (
+                        <span class="rec-ok">Done {fmt(m.completed_on)}</span>
+                      )}
+                    </div>
                   ) : (stepFor(m.name)?.deliverables ?? []).length > 0 ? (
                     inline ? (
                       /* **Where it is owed.**
@@ -1440,8 +1911,11 @@ const sectionNo = new Map(sections.map((section, i) => [section.id, String(i + 1
                               <p class="rec-one">
                                 {wantedBy(m).length > 1 && <span class="rec-n">{d.name}</span>}
                                 <a class="linkish" href={`#d-${d.id}`}>
-                                  Recorded {have?.signed_on ? fmt(have.signed_on) : ''}
+                                  Submitted {have?.signed_on ? fmt(have.signed_on) : ''}
                                 </a>
+                                {have?.document_version_id && (
+                                  <a class="rec-at" href={documentPath(project?.id ?? '', d.id)}>Open the document</a>
+                                )}
                                 {have?.external_url && (
                                   <a
                                     class="rec-at"
@@ -1450,17 +1924,75 @@ const sectionNo = new Map(sections.map((section, i) => [section.id, String(i + 1
                                     rel="noopener noreferrer"
                                   >{linkDomain(have.external_url)}</a>
                                 )}
-                                {have?.verified_at && <span class="rec-ok">Checked</span>}
+                                {have?.verified_at && <span class="rec-ok">Checked{nameOf(have.verified_by) ? ` by ${nameOf(have.verified_by)}` : ''}</span>}
+                                {have && openRevision(have.id) && <span class="pill late">Revision asked</span>}
                               </p>
                             );
                           })}
+                          {/* **Feedback, beside the artifact.** What an Elder
+                              said about what was recorded, newest first,
+                              with the way to answer it: a new version, which
+                              supersedes the old row and resolves the ask. */}
+                          {wantedBy(m).flatMap((d: any) => feedbackOnDeliverable(recorded.get(d.id)?.id ?? '')).length > 0 && (
+                            <ul class="fb-list">
+                              {wantedBy(m).flatMap((d: any) => feedbackOnDeliverable(recorded.get(d.id)?.id ?? '')).map((n: any) => (
+                                <li class:list={[n.needs_revision && !n.resolved_at && 'asks']}>
+                                  <b>{n.author?.display_name ?? staffWord(program)}</b> {n.body_md}
+                                  <span class="fb-when">{fmt(String(n.created_at).slice(0, 10))}{n.resolved_at ? ' · answered' : n.needs_revision ? ' · revision asked' : ''}</span>
+                                </li>
+                              ))}
+                            </ul>
+                          )}
+                          {iAuthor && wantedBy(m).some((d: any) => recorded.get(d.id) && openRevision(recorded.get(d.id).id)) && (
+                            <details class="rec">
+                              <summary class="btn btn-sm accent">Submit a new version</summary>
+                              {wantedBy(m)
+                                .filter((d: any) => recorded.get(d.id) && openRevision(recorded.get(d.id).id))
+                                .map((d: any) => d.shape ? (
+                                  <p class="rec-doc"><a class="btn btn-sm btn-2" href={documentPath(project?.id ?? '', d.id)}>Revise the document{wantedBy(m).length > 1 ? `: ${d.name}` : ''}</a></p>
+                                ) : (
+                                  <form method="POST" action="#outcome" class="recf">
+                                    <input type="hidden" name="action" value="deliverable" />
+                                    <input type="hidden" name="deliverable" value={d.id} />
+                                    <input type="hidden" name="label" value={d.name} />
+                                    <input type="hidden" name="milestone" value={m.id} />
+                                    {wantedBy(m).length > 1 && <p class="recf-n">{d.name}</p>}
+                                    <label><span>Date on it</span><input class="in" type="date" name="signed_on" value={todayIso} /></label>
+                                    <label><span>Google Drive or other URL</span><input class="in" type="url" name="external_url" /></label>
+                                    <button class="btn btn-sm" type="submit">Save the new version</button>
+                                  </form>
+                                ))}
+                            </details>
+                          )}
                         </div>
                       ) : (
+                        wantedBy(m).filter((d: any) => !recorded.has(d.id)).every((d: any) => d.shape) ? (
+                          /* Written in SciPath (6.16): the row opens the
+                             document and says where it stands; Submit is
+                             on the document itself. */
+                          <div class="rec-docs">
+                            {wantedBy(m).filter((d: any) => !recorded.has(d.id)).map((d: any) => (
+                              <p class="rec-doc">
+                                <a class="btn btn-sm btn-2" href={documentPath(project?.id ?? '', d.id)}>{docState(d).verb}{wantedBy(m).length > 1 ? `: ${d.name}` : ''}</a>
+                                <span class:list={['rec-docstate', docState(d).state]}>{docState(d).label}</span>
+                              </p>
+                            ))}
+                          </div>
+                        ) : (
                         <details class="rec">
-                          <summary>Record it</summary>
+                          {/* A button rather than a quiet link, because it
+                              is the one action on the row. Opening it shows
+                              the two fields and a *Save*, so the verb is not
+                              said twice: the row asks, the form saves. */}
+                          <summary class="btn btn-sm btn-2">Submit</summary>
                           {wantedBy(m)
                             .filter((d: any) => !recorded.has(d.id))
-                            .map((d: any) => (
+                            .map((d: any) => d.shape ? (
+                              <p class="rec-doc">
+                                <a class="btn btn-sm btn-2" href={documentPath(project?.id ?? '', d.id)}>{docState(d).verb}: {d.name}</a>
+                                <span class:list={['rec-docstate', docState(d).state]}>{docState(d).label}</span>
+                              </p>
+                            ) : (
                               <form method="POST" action="#outcome" class="recf">
                                 <input type="hidden" name="action" value="deliverable" />
                                 <input type="hidden" name="deliverable" value={d.id} />
@@ -1469,18 +2001,29 @@ const sectionNo = new Map(sections.map((section, i) => [section.id, String(i + 1
 
                                 {wantedBy(m).length > 1 && <p class="recf-n">{d.name}</p>}
 
+                                {/* The class's own template, as a copy
+                                    link. Start there, and the address of
+                                    the copy is what gets recorded below. */}
+                                {d.template_url && (
+                                  <p class="recf-tpl">
+                                    <a class="btn btn-sm accent" href={d.template_url} target="_blank" rel="noopener noreferrer">Start from the class template</a>
+                                    <span class="t-sm">Makes your own copy in your Drive. Paste its address below when you are done.</span>
+                                  </p>
+                                )}
+
                                 <label>
                                   <span>Date on it</span>
-                                  <input class="in" type="date" name="signed_on" />
+                                  <input class="in" type="date" name="signed_on" value={todayIso} />
                                 </label>
                                 <label>
                                   <span>Google Drive or other URL</span>
                                   <input class="in" type="url" name="external_url" />
                                 </label>
-                                <button class="btn btn-sm" type="submit">Record it</button>
+                                <button class="btn btn-sm" type="submit">Save</button>
                               </form>
                             ))}
                         </details>
+                        )
                       )
                     ) : (
                       /* Shared between steps, so it has one home below. Two
@@ -1503,7 +2046,7 @@ const sectionNo = new Map(sections.map((section, i) => [section.id, String(i + 1
                               return (
                                 <p class="rec-one">
                                   <a class="linkish" href={`#d-${d.id}`}>
-                                    Recorded {have?.signed_on ? fmt(have.signed_on) : ''}
+                                    Submitted {have?.signed_on ? fmt(have.signed_on) : ''}
                                   </a>
                                   {have?.external_url && (
                                     <a
@@ -1535,12 +2078,10 @@ const sectionNo = new Map(sections.map((section, i) => [section.id, String(i + 1
                                row cannot name one document. It always exists
                                here, because this branch only runs when the
                                step has deliverables. */
-                            wantedBy(m)[0]?.id
-                              ? `#d-${wantedBy(m)[0].id}`
-                              : '#deliverables'
+                            '#deadlines'
                           }
                         >
-                          Record it below
+                          Submit it below
                         </a>
                       )
                     )
@@ -1561,7 +2102,7 @@ const sectionNo = new Map(sections.map((section, i) => [section.id, String(i + 1
                       <input
                         type="date"
                         name="on"
-                        value={m.completed_on ?? ''}
+                        value={m.completed_on ?? todayIso}
                         aria-label="Date completed"
                       />
 
@@ -1570,6 +2111,115 @@ const sectionNo = new Map(sections.map((section, i) => [section.id, String(i + 1
                   )}
                 </td>
               </tr>
+              {gradeRows.length > 0 && m.kind !== 'event' && (
+                <tr class="grade-row">
+                  <td colspan="3">
+                    {gradeRows.map(({ student, grade, score }: any) => (
+                      <div class="g-student">
+                      {/* The family's score: written by the Elder on the
+                          place, read by every Elder of the class, the
+                          teachers and the student. */}
+                      {oversees && !me.isAdvisor ? (
+                        <details class="grade" open={false}>
+                          <summary>
+                            <span class="g-who">{student?.display_name}</span>
+                            {score ? (
+                              <span class="pill ok">Family score {score.score ?? '—'}{score.out_of ? ` / ${score.out_of}` : ''}</span>
+                            ) : (
+                              <span class="pill quiet">not scored</span>
+                            )}
+                          </summary>
+                          <form method="POST" action="#outcome" class="gform">
+                            <input type="hidden" name="action" value="grade" />
+                            <input type="hidden" name="milestone_id" value={m.id} />
+                            <input type="hidden" name="student_id" value={student?.id} />
+                            <input type="hidden" name="step_name" value="" />
+                            <label><span>Score out of 4</span><input class="in" type="number" step="0.5" min="0" max="4" name="score" value={score?.score ?? ''} /></label>
+                            <input type="hidden" name="out_of" value="4" />
+                            <label class="g-fb"><span>Comment</span><textarea class="ta" name="feedback" rows="2">{score?.feedback_md ?? ''}</textarea></label>
+                            <button class="btn btn-sm" type="submit">{score ? 'Save score' : 'Score'}</button>
+                          </form>
+                        </details>
+                      ) : score && (me.isAdvisor || iAuthor) ? (
+                        <div class="grade shown family">
+                          <span class="g-who">Family score</span>
+                          <span class="pill ok">{score.score ?? '—'}{score.out_of ? ` / ${score.out_of}` : ''}</span>
+                          {score.feedback_md && <p class="g-text">{score.feedback_md}</p>}
+                          <span class="g-by">{score.grader?.display_name ? `${score.grader.display_name}, ` : ''}{fmt(String(score.created_at).slice(0, 10))}</span>
+                        </div>
+                      ) : null}
+                      {me.isAdvisor ? (
+                        <details class="grade" open={false}>
+                          <summary>
+                            <span class="g-who">{student?.display_name}</span>
+                            {grade ? (
+                              <span class:list={['pill', grade.released_at ? 'ok' : 'soon']}>
+                                {grade.score !== null && grade.score !== undefined ? `${grade.score}${grade.out_of ? ` / ${grade.out_of}` : ''}` : 'feedback'}
+                                {grade.released_at ? ' · released' : ' · not released'}
+                              </span>
+                            ) : (
+                              <span class="pill quiet">not graded</span>
+                            )}
+                          </summary>
+                          <form method="POST" action="#outcome" class="gform">
+                            <input type="hidden" name="action" value="grade" />
+                            <input type="hidden" name="milestone_id" value={m.id} />
+                            <input type="hidden" name="student_id" value={student?.id} />
+                            <input type="hidden" name="step_name" value={m.name} />
+                            {stepFor(m.name)?.rubric ? (
+                              <div class="g-rubric">
+                                {stepFor(m.name)!.rubric!.criteria.map((c: any) => {
+                                  const picked = grade?.rubric?.criteria?.find((x: any) => x.id === c.id)?.level ?? '';
+                                  return (
+                                    <label class="g-crit">
+                                      <span>{c.name}{c.guidance ? <small> · {c.guidance}</small> : null}</span>
+                                      <select class="se" name={`rubric:${c.id}`}>
+                                        <option value="" selected={!picked}>Not judged</option>
+                                        {c.levels.map((l: any) => (
+                                          <option value={l.id} selected={picked === l.id}>{l.label} · {l.points}</option>
+                                        ))}
+                                      </select>
+                                    </label>
+                                  );
+                                })}
+                                <p class="t-sm g-sum">
+                                  {grade?.score !== null && grade?.score !== undefined ? `Current: ${grade.score} of ${grade.out_of}` : `Out of ${scoreRubric(stepFor(m.name)!.rubric!, []).outOf}`}. {stepFor(m.name)!.rubric!.scoring === 'average' ? 'The score is the average of the rows you choose.' : 'The score is the sum of what you choose.'}
+                                </p>
+                              </div>
+                            ) : (
+                              <>
+                                <label><span>Score</span><input class="in" type="number" step="0.5" min="0" name="score" value={grade?.score ?? ''} /></label>
+                                <label><span>Out of</span><input class="in" type="number" step="0.5" min="0" name="out_of" value={grade?.out_of ?? 10} /></label>
+                              </>
+                            )}
+                            <label class="g-fb"><span>Feedback</span><textarea class="ta" name="feedback" rows="3">{grade?.feedback_md ?? ''}</textarea></label>
+                            <label class="g-rel"><input type="checkbox" name="release" value="1" checked={Boolean(grade?.released_at)} /> <span>Visible to {String(student?.display_name ?? '').split(' ')[0]}</span></label>
+                            <button class="btn btn-sm" type="submit">Save grade</button>
+                          </form>
+                        </details>
+                      ) : grade && grade.released_at && iAuthor ? (
+                        <div class="grade shown">
+                          <span class="g-who">Grade</span>
+                          <span class="pill ok">{grade.score !== null && grade.score !== undefined ? `${grade.score}${grade.out_of ? ` / ${grade.out_of}` : ''}` : 'feedback'}</span>
+                          {grade.rubric?.criteria?.length > 0 && stepFor(m.name)?.rubric && (
+                            <ul class="g-levels">
+                              {stepFor(m.name)!.rubric!.criteria.map((c: any) => {
+                                const pick = grade.rubric.criteria.find((x: any) => x.id === c.id);
+                                const level = pick ? c.levels.find((l: any) => l.id === pick.level) : null;
+                                return level ? <li><b>{c.name}</b> {level.label} · {level.points}</li> : null;
+                              })}
+                            </ul>
+                          )}
+                          {grade.feedback_md && <p class="g-text">{grade.feedback_md}</p>}
+                          <span class="g-by">{grade.grader?.display_name ? `${grade.grader.display_name}, ` : ''}{fmt(String(grade.created_at).slice(0, 10))}</span>
+                        </div>
+                      ) : null}
+                      </div>
+                    ))}
+                  </td>
+                </tr>
+              )}
+              </>
             );
           })}
             </>
@@ -1579,206 +2229,51 @@ const sectionNo = new Map(sections.map((section, i) => [section.id, String(i + 1
     </section>
 
 
-    <!-- ── Deliverables ─────────────────────────────────────────────────── -->
-    {expected.length > 0 && (
-      <section class="sec" id="deliverables">
-        <div class="sec-h">
-          <b><span class="sec-n">{sectionNo.get('deliverables')}</span>Deliverables</b>
-          <span>{expected.filter((d) => recorded.has(d.id)).length} of {expected.length} recorded</span>
-        </div>
+    {/* The Deliverables section that stood here is folded into the list
+        above (2.8): a deliverable has a deadline, and the row is where it
+        is submitted, read and commented on. */}
 
-        <p class="aside">
-          {inline
-            ? 'Everything this program asks for, with the guidance and anything the club has learned about each. Recording happens on the deadline it belongs to.'
-            : 'Everything this program asks for, in one place. Several deadlines want the same document here, so it is recorded once and completes all of them.'}
-        </p>
+    {/* ── The notebook, on the project page (2.8) ───────────────────
+        For the pilot the project is one page: what is owed, the notebook,
+        the showcase. An entry is one box here; the full notebook, with
+        images and the export, is one link away and unchanged. */}
+    <section class="sec" id="notebook">
+      <div class="sec-h">
+        <b><span class="sec-n">{sectionNo.get('notebook')}</span>Notebook</b>
+        <span>{noteCount ?? 0} {noteCount === 1 ? 'entry' : 'entries'}{notebookAge !== null && notebookAge < 0 ? ` · last ${Math.abs(notebookAge)} ${Math.abs(notebookAge) === 1 ? 'day' : 'days'} ago` : ''}</span>
+      </div>
 
-        {/* The list above is worked out from a rulebook and a set of answers,
-            which is exactly the surface where somebody could take "nothing
-            further required" as permission. */}
-        <Authority compact />
+      {iAuthor && (
+        <form method="POST" action="#outcome" class="nbform" id="observe">
+          <input type="hidden" name="action" value="note" />
+          <label class="nb-body">
+            <span>What happened, in a line or a paragraph</span>
+            <textarea class="ta" name="body_md" rows="3" required></textarea>
+          </label>
+          <div class="nb-row">
+            <label class="nb-date"><span>On</span><input class="in" type="date" name="occurred_on" value={todayIso} /></label>
+            <button class="btn btn-sm" type="submit">Save entry</button>
+            <a class="linkish" href={`/app/project/${project?.id}/`}>Full notebook, images and export</a>
+          </div>
+        </form>
+      )}
 
-        <ul class="dlist">
-          {expected.map((d) => {
-            const have = recorded.get(d.id);
-            return (
-              <li class:list={['dl', have && 'have']} id={`d-${d.id}`}>
-                <div class="dl-what">
-                  <p class="dl-name">
-                    {d.name}
-                    <span class:list={['dl-need', d.requirement]}>
-                      {d.requirement === 'required'
-                        ? 'required'
-                        : d.requirement === 'conditional'
-                          ? 'required for this project'
-                          : 'optional'}
-                    </span>
-                  </p>
-
-                  <p class="dl-where">
-                    {d.steps.length === 1
-                      ? d.steps[0].name
-                      : `${d.steps[0].name}, and ${d.steps.length - 1} more`}
-                  </p>
-
-                  {d.guidance && <p class="dl-guide">{d.guidance}</p>}
-
-                  {/* What goes wrong here. Written where somebody is about
-                      to do the thing, which is the only moment it is worth
-                      reading: the same sentence on a page of tips in August
-                      is a sentence nobody opens. */}
-                  {d.steps.some((st: any) => st.risk || warningsFor(st.id).length > 0) && (
-                    <div class="dl-wrong">
-                      <p class="dl-wrong-h">Common mistakes</p>
-
-                      {d.steps
-                        .filter((st: any) => st.risk)
-                        .map((st: any) => <p class="dl-risk">{st.risk}</p>)}
-
-                      {d.steps.flatMap((st: any) => warningsFor(st.id)).map((w: any) => (
-                        <p class="dl-risk local">
-                          {w.body}
-                          <span class="dl-who">
-                            {w.users?.display_name ?? `A ${staffWord(program).toLowerCase()}`}, {fmt(w.created_at)}
-                            {!w.confirmed_at && ', not confirmed this season'}
-                          </span>
-
-                          {/* Only the people who run it, and only here: the
-                              judgment about whether advice still holds is
-                              made looking at the advice, not down a list. */}
-                          {me.runsTheClub && (
-                            <span class="dl-keep">
-                              {!w.confirmed_at && (
-                                <form method="POST" action="#outcome" class="inline">
-                                  <input type="hidden" name="action" value="warning_state" />
-                                  <input type="hidden" name="what" value="confirm" />
-                                  <input type="hidden" name="warning_id" value={w.id} />
-                                  <button class="btn btn-2 btn-sm" type="submit">
-                                    Still true
-                                  </button>
-                                </form>
-                              )}
-                              <form method="POST" action="#outcome" class="inline">
-                                <input type="hidden" name="action" value="warning_state" />
-                                <input type="hidden" name="what" value="retire" />
-                                <input type="hidden" name="warning_id" value={w.id} />
-                                <button class="btn btn-2 btn-sm" type="submit">Retire</button>
-                              </form>
-                            </span>
-                          )}
-                        </p>
-                      ))}
-                    </div>
-                  )}
-
-                  {me.runsTheClub && d.steps.length > 0 && (
-                    <details class="dl-add">
-                      <summary>Add a warning</summary>
-                      {/* Written here rather than in an administration
-                          screen. An officer who has just watched somebody's
-                          plan come back from the SRC writes it on the row
-                          where it would have helped, in October, about a
-                          specific thing. A screen filled in once in August
-                          produces advice nobody needed. */}
-                      <form method="POST" action="#outcome">
-                        <input type="hidden" name="action" value="warn" />
-                        <input type="hidden" name="step_id" value={d.steps[0].id} />
-                        <label>
-                          <span>What goes wrong, and what to do instead</span>
-                          <textarea class="ta" name="body" rows="3" required></textarea>
-                        </label>
-                        <button class="btn btn-sm" type="submit">
-                          Everybody here sees this
-                        </button>
-                      </form>
-                    </details>
-                  )}
-
-                  {d.constraints && (
-                    <p class="dl-limit">
-                      {Object.entries(d.constraints).map(([what, rule]: any) => (
-                        <span>
-                          {what.replace(/_/g, ' ')}: {rule.max ? `at most ${rule.max}` : ''}
-                          {rule.counting ? ` (${String(rule.counting).replace(/_/g, ' ')})` : ''}
-                        </span>
-                      ))}
-                    </p>
-                  )}
-
-                  {d.shape && shape(d.shape) && (
-                    <details class="dl-shape">
-                      <summary>What goes in it</summary>
-                      <ol>
-                        {(shape(d.shape)?.parts ?? []).map((part: any) => (
-                          <li>
-                            <b>{part.name}</b>
-                            {part.guidance && <span> — {part.guidance}</span>}
-                          </li>
-                        ))}
-                        {(shape(d.shape)?.answers ?? []).map((q: string) => <li>{q}</li>)}
-                      </ol>
-                    </details>
-                  )}
-
-                  {d.url && (
-                    <p class="dl-form">
-                      <a href={d.url} target="_blank" rel="noopener noreferrer">The form itself</a>
-                    </p>
-                  )}
-                </div>
-
-                <div class="dl-do">
-                  {have ? (
-                    <>
-                      <p class="dl-done">Recorded {fmt(have.signed_on)}</p>
-                      {have.external_url && (
-                        <p><a href={have.external_url} target="_blank" rel="noopener noreferrer">Where it lives</a></p>
-                      )}
-                      {have.verified_at && <p class="dl-ver">Checked by a {staffWord(program).toLowerCase()}</p>}
-                    </>
-                  ) : iAuthor && !inline ? (
-                    <form method="POST" action="#outcome" class="dl-form-in">
-                      <input type="hidden" name="action" value="deliverable" />
-                      <input type="hidden" name="deliverable" value={d.id} />
-                      <input type="hidden" name="label" value={d.name} />
-                      <input type="hidden" name="milestone" value={milestoneIdFor(d.step.id) ?? ''} />
-
-                      <label>
-                        <span>Date on it</span>
-                        <input class="in" type="date" name="signed_on" />
-                      </label>
-
-                      {/* Named for what it is rather than for where it
-                          sits. The field takes a URL and refuses anything
-                          else, and "where it lives" reads as a place to
-                          describe rather than an address to paste, so
-                          people typed a folder name and were refused with
-                          no explanation. We store the address and never
-                          fetch it (7.4). */}
-                      <label>
-                        <span>Google Drive or other URL</span>
-                        <input class="in" type="url" name="external_url" />
-                      </label>
-
-                      <button class="btn btn-sm" type="submit">Record it</button>
-                    </form>
-                  ) : iAuthor ? (
-                    /* The form is on the deadline this belongs to. Two copies
-                       of one form on one page is how the two drift, and the
-                       row is where somebody is when they think of it. */
-                    <p class="dl-none">
-                      Record it on <a href="#deadlines">{d.steps[0]?.name ?? 'its deadline'}</a>
-                    </p>
-                  ) : (
-                    <p class="dl-none">Not recorded</p>
-                  )}
-                </div>
-              </li>
-            );
-          })}
-        </ul>
-      </section>
-    )}
+      {(recentNotes ?? []).length === 0 ? (
+        <p class="t-sm">Nothing written yet. The notebook is the record of the year; a line a week is enough.</p>
+      ) : (
+        <ol class="nblist">
+          {(recentNotes ?? []).map((n: any) => (
+            <li>
+              <span class="nb-when">{fmt(n.occurred_on)}<span class="nb-who">{n.users?.display_name ? ` · ${n.users.display_name}` : ''}</span></span>
+              <div class="nb-text" set:html={renderNote(n.body_md)} />
+            </li>
+          ))}
+          {(noteCount ?? 0) > (recentNotes ?? []).length && (
+            <li class="nb-more"><a href={`/app/project/${project?.id}/`}>{(noteCount ?? 0) - (recentNotes ?? []).length} earlier {((noteCount ?? 0) - (recentNotes ?? []).length) === 1 ? 'entry' : 'entries'} in the full notebook</a></li>
+          )}
+        </ol>
+      )}
+    </section>
 
     {/* What the work produced, and where the rest of it lives.
     
@@ -2068,69 +2563,71 @@ const sectionNo = new Map(sections.map((section, i) => [section.id, String(i + 1
       </form>
     </section>
     )}
+
+    {/* ── Grades, rolled up ─────────────────────────────────────────
+        Everything released to this reader, newest first, with the total.
+        Each row is also under its obligation in the deadlines table; this
+        is the place to read them together. */}
+    {myGrades.length > 0 && (
+      <section class="sec" id="grades">
+        <div class="sec-h">
+          <b><span class="sec-n">{sectionNo.get('grades')}</span>Grades</b>
+          <span>{myGrades.length} released · {gradeTotal} of {gradeOutOf}</span>
+        </div>
+        <ul class="ledger">
+          {[...myGrades]
+            .sort((a: any, b: any) => String(b.created_at).localeCompare(String(a.created_at)))
+            .map((g: any) => (
+              <li>
+                <span class:list={['verdict', g.out_of && g.score !== null && Number(g.score) / Number(g.out_of) >= 0.7 ? 'ok' : 'soon']}>
+                  {g.score ?? '—'}
+                  <small>{g.out_of ? `of ${g.out_of}` : 'feedback'}</small>
+                </span>
+                <span class="what">
+                  <span class="t"><a href={`#m-${g.milestone_id}`}>{milestoneName(g.milestone_id)}</a></span>
+                  <span class="s"><b>By</b>{g.grader?.display_name ?? 'your advisor'} · {fmt(String(g.created_at).slice(0, 10))}</span>
+                  {g.feedback_md && <span class="how">{g.feedback_md}</span>}
+                </span>
+                <span class="do"></span>
+              </li>
+            ))}
+        </ul>
+      </section>
+    )}
+
+    {/* Last, because it is last: the write-up comes after everything above
+        it has happened. It used to sit with the people and the notebook as
+        a third fact about the work, where a student in September read
+        "Not started" as one more thing owed. */}
+    <section class="sec" id="manuscript">
+      <div class="sec-h">
+        <b><span class="sec-n">{sectionNo.get('manuscript')}</span>Manuscript</b>
+        <span>{manuscript ? manuscript.title || 'Started' : 'Not started'}</span>
+      </div>
+      <p>
+        <a class="btn btn-sm" href={`/app/project/${project?.id}/manuscript/`}>
+          {manuscript ? 'Open' : 'Start'}
+        </a>
+      </p>
+    </section>
   </div>
 </Base>
 
 <style>
-  .hero { padding: 44px 0 28px; max-width: 74ch; }
-  .hero .t-lbl { margin-bottom: 14px; }
-  /* Four cards, one line. Each answers one question: what day is it, how
-     long to the fair, what is next, and how much is left. */
-  /* Equal columns. The uneven fractions were sized to the content that
-     happened to be in each card, which is why nothing lined up the moment a
-     label ran to two lines. */
-  /* **The row owns the rows. The card only borrows them.**
-  
-     The comment below used to say subgrid and the code did not use it: each
-     card was its own `auto 1fr auto` grid, so the three tracks were sized
-     from that card's own content and nothing was shared. One label wrapping
-     to two lines — "Days to next milestone" is the one that does — pushed
-     that card's number up while its neighbours stayed put, and the four
-     figures sat at three different heights.
-  
-     Real subgrid now. `.cards` declares the three tracks once, each card
-     spans all three and adopts them, so every label occupies the tallest
-     label's height and every number sits on one line across the row. */
-  .cards {
-    display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-    grid-template-rows: auto auto auto;
-    gap: 12px;
-    margin-top: 28px;
-  }
+  /* **The hero is the page's width, not a reading measure.**
 
-  @media (max-width: 1020px) {
-    .cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  }
-  @media (max-width: 560px) {
-    .cards { grid-template-columns: 1fr; }
-  }
+     `74ch` is right for prose and wrong for a title: a project named
+     *Acoustic aversions and impact on oral care* broke across three lines
+     at half the width of a laptop, with the rest of the row empty beside
+     it. A title is scanned rather than read, and the measure that keeps a
+     paragraph legible is the thing making this one hard to take in.
 
-  .card {
-    border: 1px solid var(--rule);
-    border-radius: var(--radius);
-    background: var(--card);
-    padding: 16px 18px 18px;
-    grid-row: span 3;
-    display: grid;
-    grid-template-rows: subgrid;
-    row-gap: 10px;
-  }
-
-  .card .kicker { margin: 0; align-self: start; }
-
-  /* Bottom of its own track, so the figures share a baseline even where one
-     is a word and the others are numerals. */
-  .card .val {
-    margin: 0;
-    display: flex;
-    align-items: baseline;
-    gap: 8px;
-    align-self: end;
-  }
-
-  .card .under { margin: 0; align-self: start; }
-
+     The line under it keeps a measure of its own, because the sponsor,
+     the Elder and the facts beside them are a sentence. */
+  /* Wider than the ordinary cover title: a project title is the page's
+     subject and it may run to fourteen words. */
+  /* A project title is a subject line, not a poster: fourteen words at
+     poster size was a screen of purple before anything to do appeared. */
   .resultf {
     display: grid;
     gap: 18px;
@@ -2176,53 +2673,30 @@ const sectionNo = new Map(sections.map((section, i) => [section.id, String(i + 1
     .rgrid { grid-template-columns: 1fr; }
   }
 
-  .kicker {
-    margin: 0 0 10px;
-    font-family: var(--face-ui);
-    font-size: 0.76rem;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    color: var(--ink-3);
-  }
 
-  .num {
-    margin: 0;
-    font-family: var(--face-num);
-    font-size: 2.5rem;
-    line-height: 1;
-    font-weight: 600;
-    font-variant-numeric: tabular-nums;
-  }
-  .num.late { color: var(--alert); }
-  .of {
-    font-family: var(--face-ed);
-    font-size: 1.1rem;
-    font-weight: 400;
-    color: var(--ink-3);
-  }
-  .none {
-    font-family: var(--face-num);
-    font-size: 2.5rem;
-    line-height: 1;
-    color: var(--ink-3);
-  }
 
   .under { color: var(--ink-3); font-size: 0.95rem; line-height: 1.35; }
   .under.late { color: var(--alert); }
-
-  /* Set to the numerals' cap height rather than to its own size, so the day
-     name and the figures beside it sit on one line. */
-  .weekday {
-    font-family: var(--face-ed);
-    font-size: 1.6rem;
-    line-height: 1;
-    font-weight: 600;
-  }
 
   .flag { border-left: 3px solid var(--alert); padding: 16px 20px; background: var(--alert-bg); margin-bottom: 26px; }
   .flag.warn { border-left-color: var(--stage-ready); background: var(--ready-bg); }
   .flag h4 { margin: 0 0 6px; }
   .flag p { margin: 0; }
+  .nbform { display: grid; gap: 8px; max-width: var(--measure-text); margin-bottom: 16px; }
+  .nbform label { display: grid; gap: 4px; font-family: var(--face-ui); font-size: 0.86rem; color: var(--ink-3); }
+  .nbform .ta { width: 100%; box-sizing: border-box; }
+  .nb-row { display: flex; flex-wrap: wrap; gap: 12px; align-items: end; }
+  .nblist { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; max-width: var(--measure-text); }
+  .nblist li { padding: 8px 12px; background: var(--card); border-left: 3px solid var(--rule); }
+  .nb-when { display: block; font-family: var(--face-ui); font-size: 0.8rem; color: var(--ink-3); margin-bottom: 2px; }
+  .nb-text :global(p) { margin: 0 0 6px; }
+  .nb-text :global(img) { max-width: 100%; }
+  .nb-more { border-left-color: transparent !important; background: transparent !important; }
+  .owe { margin-top: 4px; }
+  .owe-name { display: block; font-size: 0.9rem; color: var(--ink-2); }
+  .owe-guide { margin: 2px 0 0; font-size: 0.86rem; color: var(--ink-3); }
+  .owe-wrong { margin-top: 4px; }
+  .owe-wrong summary { cursor: pointer; font-family: var(--face-ui); font-size: 0.8rem; color: var(--ink-3); }
   .gate { display: inline-block; margin-left: 8px; font-family: var(--face-ui); font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--ink-3); }
   .row-bad td { background: var(--alert-bg); }
   .row-warn td { background: var(--ready-bg); }
@@ -2240,7 +2714,6 @@ const sectionNo = new Map(sections.map((section, i) => [section.id, String(i + 1
     cursor: pointer;
   }
   .sub { display: block; margin-top: 2px; font-family: var(--face-ui); font-size: 0.82rem; color: var(--ink-3); }
-  .rec summary { cursor: pointer; font-family: var(--face-ui); font-size: 0.86rem; color: var(--ink-3); }
   .recf { margin-top: 10px; min-width: 24ch; }
   .recf label { display: block; margin-bottom: 8px; }
   .recf label > span { display: block; margin-bottom: 3px; font-family: var(--face-ui); font-size: 0.82rem; }
@@ -2255,30 +2728,7 @@ const sectionNo = new Map(sections.map((section, i) => [section.id, String(i + 1
      button out. */
   /* Whose deadline it is. Quiet by default; the institution's is the one
      that carries a consequence, so it is the one with weight. */
-  .people {
-    list-style: none;
-    margin: 18px 0 0;
-    padding: 0;
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px 28px;
-  }
-
-  .people li {
-    display: flex;
-    align-items: baseline;
-    gap: 8px;
-    font-size: 0.98rem;
-  }
-
-  .p-lbl {
-    font-family: var(--face-ui);
-    font-size: 0.76rem;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    color: var(--ink-3);
-  }
-
+  .note.watching { max-width: none; }
   .p-none { color: var(--ink-3); }
 
   .whose {
@@ -2306,15 +2756,27 @@ const sectionNo = new Map(sections.map((section, i) => [section.id, String(i + 1
        the phase divisions to be visible from the corner of the eye, and a
        rule under a bold line still reads as a row: the wash and the mark
        coloured left edge are what make it a division. */
-    padding: 14px 12px 12px;
-    background: var(--sunk);
-    border-top: 1px solid var(--rule);
-    border-bottom: 2px solid var(--brand);
-    border-left: var(--edge) solid var(--brand-mark);
+    padding: 16px 14px 14px;
+    background: var(--brand-deep);
+    color: var(--brand-contrast);
+    border-top: 0;
+    border-bottom: 0;
+    border-left: 8px solid var(--accent);
     text-align: left;
     font-family: var(--face-ui);
-    font-weight: 600;
+    font-weight: 700;
   }
+
+  .phased .phase-row .phase-when,
+  .phased .phase-row .phase-count { color: var(--cover-ink-2); }
+  .phased .phase-row .phase-count { color: var(--accent); font-weight: 700; }
+
+  /* The row a link landed on. */
+  .phased tr:target td { background: var(--accent-pale); }
+
+  /* Its own line, always. Inline, it followed a short date and wrapped
+     under a long one, so two rows apart read as two different layouts. */
+  td .pill { display: block; width: max-content; margin: 6px 0 0; }
 
   /* The zebra in ui.css counts every row, phase headings included, which put
      a wash on half the data rows out of step with their own group. Each
@@ -2404,7 +2866,7 @@ const sectionNo = new Map(sections.map((section, i) => [section.id, String(i + 1
   }
 
   .phase-name {
-    font-size: 1.02rem;
+    font-size: 1.12rem;
     letter-spacing: -0.01em;
   }
 
@@ -2424,6 +2886,55 @@ const sectionNo = new Map(sections.map((section, i) => [section.id, String(i + 1
   .phase-count { float: right; }
 
   /* ── Deliverables ─────────────────────────────────────────────────────── */
+
+  /* Grades under an obligation. Folded for the advisor, who has forty of
+     them; open for the student, who has one. */
+  .phased tbody tr.grade-row td { background: var(--sunk); padding: 8px 12px 8px 20px; }
+  .g-student { display: grid; gap: 6px; }
+  .g-student + .g-student { margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--rule-fine); }
+  .grade.shown.family { border-left: 3px solid var(--accent); padding-left: 8px; }
+  .grade { margin: 0; }
+  .grade + .grade { margin-top: 6px; }
+  .grade summary { cursor: pointer; display: flex; align-items: center; gap: 10px; list-style: none; font-family: var(--face-ui); font-size: 0.9rem; }
+  .grade summary::-webkit-details-marker { display: none; }
+  .grade summary::before { content: '\25B8'; color: var(--ink-3); }
+  .grade[open] summary::before { content: '\25BE'; }
+  .g-who { font-weight: 600; }
+  .gform { display: grid; grid-template-columns: 8rem 8rem; gap: 10px 14px; align-items: end; margin: 10px 0 4px; max-width: var(--measure-form); }
+  .gform label > span { display: block; font-family: var(--face-ui); font-size: 0.8rem; color: var(--ink-3); margin-bottom: 4px; }
+  .gform .g-fb { grid-column: 1 / -1; }
+  .gform .g-fb .ta { width: 100%; resize: vertical; }
+  .gform .g-rel { grid-column: 1 / -1; display: flex; align-items: center; gap: 8px; }
+  .gform .g-rel span { display: inline; margin: 0; font-size: 0.9rem; color: var(--ink); }
+  .grade.shown { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; font-family: var(--face-ui); font-size: 0.9rem; }
+  .grade.shown .g-text { flex-basis: 100%; margin: 0; font-family: var(--face-ed); font-size: 0.98rem; }
+  .grade.shown .g-by { color: var(--ink-3); font-size: 0.82rem; }
+  .g-rubric { grid-column: 1 / -1; display: grid; gap: 8px; }
+  .g-crit > span { display: block; font-family: var(--face-ui); font-size: 0.86rem; margin-bottom: 4px; }
+  .g-crit > span small { color: var(--ink-3); }
+  .g-crit .se { width: 100%; max-width: 32rem; padding: 6px 9px; }
+  .g-sum { margin: 2px 0 0; }
+  .g-levels { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 4px 16px; flex-basis: 100%; font-size: 0.88rem; }
+  .g-levels b { font-family: var(--face-ui); font-weight: 600; margin-right: 4px; }
+
+  /* An Elder's task on the student's calendar: the school's hue on the
+     edge, the tag, and quiet while it waits. */
+  .phased tbody tr.staff-row td { background: var(--sunk); }
+  .phased tbody tr.staff-row.is-waiting td { color: var(--ink-3); }
+  .staff-tag { display: block; font-family: var(--face-num); font-size: 0.66rem; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; color: var(--brand); margin-bottom: 2px; }
+  .staff-wait { display: block; margin-top: 3px; font-family: var(--face-ui); font-size: 0.82rem; color: var(--ink-3); font-style: italic; }
+  .fb-list { list-style: none; margin: 8px 0 0; padding: 8px 0 0 12px; border-left: 3px solid var(--accent); font-size: 0.92rem; }
+  .fb-list li + li { margin-top: 6px; }
+  .fb-list li.asks { color: var(--ink); }
+  .fb-list b { font-family: var(--face-ui); font-weight: 600; margin-right: 4px; }
+  .fb-when { display: block; font-family: var(--face-num); font-size: 0.72rem; color: var(--ink-3); }
+  .fbf label { display: block; margin-bottom: 10px; }
+  .fbf label > span { display: block; font-family: var(--face-ui); font-size: 0.86rem; margin-bottom: 4px; }
+  .fbf .ta { width: 100%; max-width: 40rem; resize: vertical; }
+  .fbf .fb-rev { display: flex; align-items: center; gap: 8px; }
+  .fbf .fb-rev span { display: inline; margin: 0; }
+
+  .recf-tpl { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; margin: 0 0 12px; }
 
   .dlist { list-style: none; margin: 0; padding: 0; }
 
@@ -2604,18 +3115,15 @@ const sectionNo = new Map(sections.map((section, i) => [section.id, String(i + 1
      the size of the other controls in this column, so the row reads as one
      thing rather than as a link with a widget stuck to it. */
   .rec > summary {
-    font-family: var(--face-ui);
-    font-size: 0.9rem;
-    cursor: pointer;
-    /* `--link` is not a token and never was, so this summary took the
-       inherited ink rather than the quieter color it was asking for.
-       `--ink-3` is what `.linkish` uses for the same job. */
-    color: var(--ink-3);
     list-style: none;
+    /* Sized like the *Save* beside the status controls on the same table,
+       so the two read as the same kind of thing. */
+    display: inline-flex;
+    padding: 5px 12px;
+    font-size: 0.86rem;
   }
   .rec > summary::-webkit-details-marker { display: none; }
-  .rec > summary::after { content: ' +'; color: var(--ink-3); }
-  .rec[open] > summary::after { content: ' \2212'; }
+  .rec[open] > summary { background: var(--sunk); }
 
   .recf { margin-top: 10px; max-width: 26rem; }
 
@@ -2623,6 +3131,11 @@ const sectionNo = new Map(sections.map((section, i) => [section.id, String(i + 1
      one line, because the status column is the narrowest in the table and a
      date plus an address wrapping mid-word reads as damage. */
   .rec-done { display: flex; flex-direction: column; gap: 4px; }
+  .rec-docs { display: flex; flex-direction: column; gap: 6px; }
+  .rec-doc { margin: 0; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .rec-docstate { font-family: var(--face-ui); font-size: 0.8rem; color: var(--ink-3); }
+  .rec-docstate.in_progress, .rec-docstate.revising { color: var(--accent-deep); }
+  .rec-docstate.submitted { color: var(--stage-comp); }
   .rec-one { margin: 0; display: flex; flex-direction: column; gap: 2px; }
   .rec-n {
     font-family: var(--face-ui);

@@ -827,4 +827,64 @@ test('the stale warning goes to somebody who can act on it', () => {
   assert.match(page, /STALE_AFTER_DAYS = 365/, 'one year from the day it was last verified');
 });
 
+/**
+ * **A case that competed carries an abstract.**
+ *
+ * `generate_project_record` reads the abstract off `public.manuscripts` and
+ * refuses when it is empty, so a case with a recorded result and no
+ * manuscript sits in the publish queue offering an action that can only
+ * fail. That is the same defect 7.14 argues about nudge buttons: a control
+ * which cannot succeed reads as a permission somebody has, right up until
+ * they use it.
+ *
+ * Read off the source rather than by importing it, because `seed-cases.mjs`
+ * exits without a database the moment it is loaded.
+ */
+test('every case that competed has an abstract to publish', () => {
+  const source = fs.readFileSync('scripts/seed-cases.mjs', 'utf8');
+
+  const start = source.indexOf('const CASES = [');
+  assert.notEqual(start, -1, 'the case list was not found');
+  assert.equal(source.indexOf('const CASES = [', start + 1), -1, 'the anchor is not unique');
+
+  /* Sliced on the `n:` that opens each case, because the list carries
+     section comments between entries and splitting on the brace missed
+     every case that followed one. Splitting on the thing every case has
+     rather than on the punctuation around it. */
+  const list = source.slice(start, source.indexOf('\n];', start));
+  const marks = [...list.matchAll(/\n    n: \d+,/g)].map((m) => m.index);
+  const blocks = marks.map((at, i) => list.slice(at, marks[i + 1] ?? list.length));
+
+  /* Nine, not fourteen: the list is numbered 1-4 and 8-12, because the gap
+     is where cases were merged into the scenarios pass. Pinned so a parser
+     that silently reads half of them fails rather than passing on the half
+     it found. */
+  assert.equal(blocks.length, 9, `${blocks.length} cases parsed`);
+
+  const wanting = [];
+  for (const block of blocks) {
+    const n = block.match(/n:\s*(\d+)/)?.[1] ?? '?';
+    const competed = /result:\s*'(competed|advanced)'/.test(block);
+    if (competed && !/abstract:/.test(block)) wanting.push(n);
+  }
+
+  assert.deepEqual(wanting, [], 'a case records a result and has no abstract to publish');
+});
+
+/* And the mirror, or the rule above is satisfied by giving every case an
+   abstract, which would fill the publish queue with work nobody finished. */
+test('a case with no result is not given one', () => {
+  const source = fs.readFileSync('scripts/seed-cases.mjs', 'utf8');
+  const start = source.indexOf('const CASES = [');
+  const list = source.slice(start, source.indexOf('\n];', start));
+  const marks = [...list.matchAll(/\n    n: \d+,/g)].map((m) => m.index);
+  const blocks = marks.map((at, i) => list.slice(at, marks[i + 1] ?? list.length));
+
+  const spare = blocks
+    .filter((b) => /abstract:/.test(b) && !/result:\s*'(competed|advanced)'/.test(b))
+    .map((b) => b.match(/n:\s*(\d+)/)?.[1] ?? '?');
+
+  assert.deepEqual(spare, [], 'a case has an abstract and nothing to publish it against');
+});
+
 console.log(`${passed} fixture assertions passed. ${scenarios.length} scenarios read.`);

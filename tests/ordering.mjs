@@ -190,9 +190,12 @@ test('a copied milestone keeps the layer it came from', () => {
   assert.deepEqual(missing, [], 'these copies drop the source');
 });
 
-test('the entry page shows it', () => {
+test('the entry page reads it', () => {
+  /* The *Set by* column came off the deadlines table (2.8): one list, and
+     the column was space the pilot did not have. The source is still read
+     (the row's class carries it), so a fair's row can be told from the
+     class's by eye and by a rule later. */
   const entry = fs.readFileSync('src/pages/app/project/[id]/in/[program].astro', 'utf8');
-  assert.match(entry, /Set by/);
   assert.match(entry, /source/, 'and reads the column');
 });
 
@@ -552,6 +555,7 @@ const DELIBERATE = new Set([
   'mnav-go',  // the magnifying glass, which is the search field's own edge
   'play',     // the video facade's play control
   'linkish',  // a secondary action inside a table row
+  'mdx-btn',  // a formatting control on the notebook toolbar, styled as a key rather than a button
 ]);
 
 test('every button carries a class', () => {
@@ -665,18 +669,14 @@ test('a page that reports an outcome anchors it, and its forms post to it', () =
 });
 
 test('deliverables are recorded in one place', () => {
-  /* They were recorded in the deadlines table, which meant a deadline could
-     be ticked complete with nothing behind it and a deliverable could exist
-     against a deadline still reading open. One list, and the deadline is
-     complete because the thing exists. */
+  /* One list (2.8). A deliverable has a deadline, and the row is where it
+     is submitted; the separate Deliverables section is gone. The deadline
+     is complete because the thing exists: `satisfied()` reads the artifact,
+     and a step with nothing to hand in keeps its own control. */
   const entry = fs.readFileSync('src/pages/app/project/[id]/in/[program].astro', 'utf8');
 
-  assert.match(entry, /id="deliverables"/, 'there should be a deliverables section');
-  assert.match(entry, /action" value="deliverable"/, 'and it records them');
-
-  /* The deadlines table sends you there for anything with something to hand
-     in, and keeps a control only for steps with nothing. */
-  assert.match(entry, /href="#deliverables"/);
+  assert.doesNotMatch(entry, /id="deliverables"/, 'the section is folded into the rows');
+  assert.match(entry, /action" value="deliverable"/, 'and the rows record them');
   assert.match(entry, /statusf simple/, 'a step with no deliverable stays markable');
 });
 
@@ -1544,9 +1544,23 @@ test('a student with a project can start another', () => {
   /* Offered from a cohort that does not already hold their work, because a
      class keeps one place per student and the server refuses the second. */
   assert.match(overview, /startableCohorts/);
+
+  /* **The picker, not the file.** This forbade `myMemberships.map` anywhere
+     in the page, which was right about the picker and wrong about the case
+     the moment the overview grew a *Programs* section listing the classes
+     somebody is already in — a list that is supposed to read every
+     membership. 19.9 collects this shape. So the assertion is scoped to the
+     `select` the rule is about: whatever fills the cohort picker is read
+     from the startable list. */
+  const picker = overview.slice(
+    overview.indexOf('<select name="cohort_id">'),
+    overview.indexOf('</select>', overview.indexOf('<select name="cohort_id">'))
+  );
+  assert.ok(picker.length > 0, 'the cohort picker was not found, so this read nothing');
+  assert.match(picker, /startableCohorts\.map\(/);
   assert.doesNotMatch(
-    overview,
-    /\{myMemberships\.map\(/,
+    picker,
+    /myMemberships\.map\(/,
     'the picker should read the startable cohorts rather than every membership'
   );
 });
@@ -1697,7 +1711,7 @@ test('the deadlines table has as many cells as it has headings', () => {
   const cells = [...row.slice(0, row.indexOf('</tr>')).matchAll(/<td[ >]/g)];
 
   assert.equal(cells.length, headings.length, 'a heading with no cell is an empty column');
-  assert.match(head, /colspan="4"/, 'and the phase heading spans what is actually there');
+  assert.match(head, new RegExp(`colspan="${headings.length}"`), 'and the phase heading spans what is actually there');
 });
 
 test('the deadlines table stops being a table on a phone', () => {
@@ -1709,8 +1723,7 @@ test('the deadlines table stops being a table on a phone', () => {
   const entry = fs.readFileSync('src/pages/app/project/[id]/in/[program].astro', 'utf8');
 
   assert.match(entry, /data-label="Due"/, 'each cell carries its own heading');
-  assert.match(entry, /data-label="Obligation"/);
-  assert.match(entry, /data-label="Set by"/);
+  assert.match(entry, /data-label="Deliverable"/);
   assert.match(entry, /data-label="Status"/);
 
   assert.match(entry, /content: attr\(data-label\)/, 'and the narrow layout prints it');
@@ -1735,9 +1748,14 @@ test('every compliance surface says who is actually authoritative', () => {
      One component, so the wording is the same three authorities everywhere.
      The printed notebook restates it in its own styles, because that
      document carries no shared stylesheet and a component's CSS would print
-     as nothing. */
+     as nothing.
+
+     The participation page carried it under its deliverables until the
+     pilot's friction pass took it off (September 2026): a student reads
+     that page daily and the sentence had become furniture there. It stays
+     on the program page, which is where the rulebook is described, and on
+     the printed record; where it goes next is an open item. */
   const surfaces = [
-    'src/pages/app/project/[id]/in/[program].astro',
     'src/pages/app/program/[id].astro',
   ];
 

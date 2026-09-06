@@ -1,0 +1,56 @@
+# The interview protocol, due September 15, completed in class after
+# "Interview Like a Pro". The questions were read by an Elder a week
+# before; this is the plan for actually doing the interviews.
+
+id: interview-protocol
+name: Interview protocol
+version: 1
+guidance: >-
+  Everything you will do from the moment you sit down to the moment you
+  say thank you, so that every interview is done the same way.
+sections:
+  - id: setup
+    name: Before the interview
+    fields:
+      - id: intro
+        kind: long
+        prompt: How you will introduce yourself and the project, in the words you will say
+        max_words: 120
+        required: true
+      - id: consent
+        kind: choice
+        prompt: How consent is obtained
+        options: [Signed consent form before we start, Verbal consent recorded at the start, Guardian's signed consent before we start]
+        required: true
+      - id: recording
+        kind: choice
+        prompt: How you will keep the record
+        options: [Notes by hand, Audio recording with permission, Both]
+        required: true
+  - id: during
+    name: During the interview
+    fields:
+      - id: questions
+        kind: long
+        prompt: The final questions, in order, after the Elder's feedback
+        min_words: 80
+        required: true
+      - id: probes
+        kind: long
+        prompt: Follow-up probes you will use when an answer is short
+        tip: 'Can you tell me more about that? What happened next?'
+        max_words: 120
+        required: true
+  - id: after
+    name: After
+    fields:
+      - id: closing
+        kind: text
+        prompt: How you will close, and what you will tell them happens next
+        required: true
+      - id: synthesis
+        kind: long
+        prompt: How you will write up what you heard, the same day
+        tip: What goes in the notebook, what goes in the family folder.
+        max_words: 120
+        required: true

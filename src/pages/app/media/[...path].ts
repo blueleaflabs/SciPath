@@ -46,10 +46,16 @@ export const GET: APIRoute = async ({ params, request, cookies, locals }) => {
     supabase.from('deliverables').select('id').eq('storage_path', path).maybeSingle(),
     supabase.from('manuscript_figures').select('id').eq('storage_path', path).maybeSingle(),
     supabase.from('manuscripts').select('id').eq('pdf_path', path).maybeSingle(),
+    supabase.from('document_media').select('id').eq('storage_path', path).maybeSingle(),
   ]);
 
+  /* A classmate's image on a class showcase. The policies above say no to
+     a member reading another member's project, deliberately; the showcase
+     is the one place that is allowed, and the function checks exactly that
+     and nothing wider. Asked only after the policies have said no. */
   if (!references.some((r) => r.data)) {
-    return new Response('Not found', { status: 404 });
+    const { data: onShowcase } = await supabase.rpc('may_see_showcase_media', { p_path: path });
+    if (onShowcase !== true) return new Response('Not found', { status: 404 });
   }
 
   const object = await blobStore(locals).get(path);

@@ -43,6 +43,7 @@ import fs from 'node:fs';
 import readline from 'node:readline/promises';
 import { createClient } from '@supabase/supabase-js';
 import { loadCloudVars } from './dev-vars.mjs';
+import { refuseAgainstPilot } from './pilot-guard.mjs';
 import { loadOrgs } from './orgs-library.mjs';
 import { originFor, apexOrigin } from '../src/lib/deployment.ts';
 
@@ -93,6 +94,24 @@ if (/^https?:\/\/(127\.0\.0\.1|localhost)(:|\/|$)/.test(URL)) {
 
 const ref = URL.match(/^https?:\/\/([a-z0-9]+)\.supabase\.co/i)?.[1];
 if (!ref) fail(`Could not read a project ref out of ${URL}.`);
+
+/**
+ * **Before anything else, and before the confirmation prompt.**
+ *
+ * Every other guard in this file asks *which* project: not the local one, not
+ * one the CLI link disagrees with, not one reached from a checkout that
+ * thinks it is a laptop. None of them asked whether that project holds real
+ * students, and from the IRPD pilot one of them does.
+ *
+ * This file truncates by table. `org_id` does not enter into it, so a run
+ * aimed at refreshing the demonstration tenant empties the pilot's students,
+ * projects, notebooks, participations and records in the same statement. The
+ * confirmation prompt would have said so in a sentence about `demo`.
+ *
+ * Placed above the prompt for the reason the link check is: the answer
+ * somebody types should be an answer about a run that is going to happen.
+ */
+refuseAgainstPilot(ref, 'drop and reseed every table', fail);
 
 const args = process.argv.slice(2);
 const verifyOnly = args.includes('--verify');
@@ -276,6 +295,13 @@ if (!verifyOnly) {
 const TABLES = [
   'org_domains',
   'audit_log',
+  'feedback',
+  'assessments',
+  'deliverable_feedback',
+  'document_media',
+  'document_versions',
+  'document_fields',
+  'documents',
   'identities',
   'user_roles',
   'guardian_consents',

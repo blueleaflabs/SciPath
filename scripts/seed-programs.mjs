@@ -19,7 +19,7 @@
  */
 
 import { createClient } from '@supabase/supabase-js';
-import { loadDevVars } from './dev-vars.mjs';
+import { loadDevVars, loadCloudVars } from './dev-vars.mjs';
 import { fixtureAddress } from '../src/config/demo-accounts.mjs';
 import { loadLibrary } from './template-library.mjs';
 import { loadOrgs } from './orgs-library.mjs';
@@ -27,6 +27,32 @@ import { resolveProgram, datesFor } from '../src/lib/template-resolve.ts';
 
 const ORG_RECORDS = loadOrgs();
 
+/**
+ * Two ways to run this.
+ *
+ * Plain, it seeds every program every school lists, and refuses if any
+ * already exist: that is `npm run reset`'s step, for an empty database.
+ *
+ * `--add <template-id>` is the production path: insert that one program
+ * (for every school that lists it, layering school dates on a shared fair)
+ * and touch nothing that is already there. A program is added to a live
+ * project this way, never by a reseed. `--cloud` reads `.cloud.vars` and
+ * checks the target against `PILOT_PROJECT_REF`, like every other script
+ * that can reach the hosted project.
+ */
+const args = process.argv.slice(2);
+const cloud = args.includes('--cloud');
+const ADD = args.includes('--add') ? args[args.indexOf('--add') + 1] : null;
+if (args.includes('--add') && !ADD) {
+  console.error('--add wants a template id, for example --add mvhs-scvsefa-2027.');
+  process.exit(1);
+}
+if (cloud && !ADD) {
+  console.error('Against the hosted project this only adds: say which program with --add <template-id>.');
+  process.exit(1);
+}
+
+if (cloud) loadCloudVars();
 loadDevVars();
 
 const URL = process.env.PUBLIC_SUPABASE_URL;
@@ -37,7 +63,32 @@ if (!URL || !KEY) {
   process.exit(1);
 }
 
+if (cloud) {
+  const ref = URL.match(/^https?:\/\/([a-z0-9]+)\.supabase\.co/i)?.[1] ?? null;
+  const pilot = (process.env.PILOT_PROJECT_REF ?? '').trim();
+  if (!ref) { console.error(`--cloud, and ${URL} is not a Supabase project address.`); process.exit(1); }
+  if (!pilot || ref !== pilot) {
+    console.error(`${ref} is not the project named by PILOT_PROJECT_REF in .cloud.vars. Nothing has been written.`);
+    process.exit(1);
+  }
+}
+
 const db = createClient(URL, KEY, { auth: { persistSession: false } });
+
+/* Whether a school keeps a program out of sight for now (org file,
+   `hidden_until.programs`): seeded as `draft`, opened later by
+   `programs:status`. */
+const hiddenNow = (orgSlug, template) => {
+  const h = ORG_RECORDS[orgSlug]?.hiddenUntil;
+  if (!h || !h.programs?.includes(template)) return false;
+  return new Date().toISOString().slice(0, 10) < h.date;
+};
+
+/* A shared program is one row for every school, so it is drafted only when
+   every school that lists it hides it; otherwise it is open and the pages
+   hide it per school (src/lib/hidden-programs.ts). */
+const hiddenEverywhere = (template) =>
+  SEASONS.filter((s) => s.template === template).every((s) => hiddenNow(s.org, template));
 
 /**
  * Which template each school runs.
@@ -246,7 +297,7 @@ async function main() {
    */
   const { data: existing, error: existingError } = await db
     .from('programs')
-    .select('id')
+    .select('id, template_id, org_id')
     .not('template_id', 'is', null);
 
   if (existingError) {
@@ -254,7 +305,13 @@ async function main() {
     process.exit(1);
   }
 
-  if (existing?.length) {
+  /* Adding leaves everything that exists alone, so the guard below, which
+     is about rewriting, does not apply. What it must not do is write the
+     same program twice; the loop checks per school. */
+  const already = (template, orgId) =>
+    (existing ?? []).some((p) => p.template_id === template && (p.org_id === orgId || p.org_id === null));
+
+  if (existing?.length && !ADD) {
     const ids = existing.map((p) => p.id);
 
     /* Said first, because it is the more serious of the two: a program with
@@ -322,6 +379,10 @@ async function main() {
         satisfied_by:
           d.step.id === 'club_sponsor' || d.step.id === 'sponsor' ? 'sponsor' : null,
         deliverable_ref: deliverableRef(d.step),
+        owner: d.step.owner === 'staff' ? 'staff' : 'student',
+        step_id: d.step.id ?? null,
+        requires_step: d.step.owner === 'staff' ? (d.step.requires?.[0] ?? null) : null,
+        feedback_on: d.step.owner === 'staff' ? (d.step.feedback_on ?? null) : null,
       }));
 
     if (!rows.length) return 0;
@@ -407,7 +468,17 @@ async function main() {
     return granted;
   };
 
-  for (const season of orderedSeasons(library)) {
+  const seasons = orderedSeasons(library).filter((season) => !ADD || season.template === ADD);
+  if (ADD && seasons.length === 0) {
+    console.error(`No school lists ${ADD} in src/config/orgs/*.yaml. Add it to the school's programs first.`);
+    process.exit(1);
+  }
+  if (ADD && !library.programs.get(ADD)) {
+    console.error(`There is no template ${ADD} in src/config/programs/.`);
+    process.exit(1);
+  }
+
+  for (const season of seasons) {
     const org = bySlug.get(season.org);
     if (!org) {
       console.log(
@@ -450,6 +521,15 @@ async function main() {
     const dates = datesFor(resolved);
     const file = library.programs.get(season.template);
     const shared = isShared(file);
+
+    /* Already there for this school (or shared and there for everybody):
+       an add leaves it alone and says so. */
+    if (ADD && already(season.template, org.id) && !(shared && sharedPrograms.has(season.template))) {
+      const row = (existing ?? []).find((p) => p.template_id === season.template && (p.org_id === org.id || p.org_id === null));
+      if (shared && row) sharedPrograms.set(season.template, row.id);
+      console.log(`  ${org.lockup_name}: ${resolved.name} is already seeded · left alone`);
+      continue;
+    }
 
     /* Seeded once. A second school listing the same fair layers its own
        dates onto the row that is already there rather than forking it. */
@@ -512,9 +592,18 @@ async function main() {
         publishes_to: file.publishes_to ?? null,
         current: true,
         joining: file.joining ?? 'open',
+        /* Where the work is shown. A class that says `private` gets its own
+           page and can never publish a public record; nothing else changes.
+           The resolver does not merge this: it is the program's own choice,
+           never inherited from a process. */
+        showcase: file.showcase ?? 'public',
         places: file.limits?.places ?? file.places ?? null,
         source: 'external',
-        status: 'open',
+        /* A school can keep a listed program out of sight for now (org
+           file, `hidden_until.programs`): everything that lists programs
+           reads `status = 'open'`, so `draft` is invisible without a row
+           being deleted. */
+        status: (shared ? hiddenEverywhere(season.template) : hiddenNow(org.slug, season.template)) ? 'draft' : 'open',
         description: file.description ?? null,
         website_url: file.url ?? null,
         fair_date: resolved.anchors.fair ?? null,
@@ -567,6 +656,12 @@ async function main() {
         phase: d.step.phase ?? null,
         satisfied_by: d.step.id === 'club_sponsor' || d.step.id === 'sponsor' ? 'sponsor' : null,
         deliverable_ref: deliverableRef(d.step),
+        /* Whose obligation it is, which step it came from, and for an
+           Elder's task what it waits on and what the feedback goes on. */
+        owner: d.step.owner === 'staff' ? 'staff' : 'student',
+        step_id: d.step.id ?? null,
+        requires_step: d.step.owner === 'staff' ? (d.step.requires?.[0] ?? null) : null,
+        feedback_on: d.step.owner === 'staff' ? (d.step.feedback_on ?? null) : null,
       }));
 
     if (rows.length) {

@@ -324,6 +324,10 @@ const state = (membership as any)?.state ?? null;
   .facts {
     display: grid;
     grid-template-columns: max-content 1fr;
+    /* Baseline on the row, not on the label alone: the label is small
+       caps and the value is a link in the reading face, and aligning only
+       one of them left the label floating above the address. */
+    align-items: baseline;
     gap: 6px 20px;
     margin: 20px 0 0;
   }
@@ -333,7 +337,6 @@ const state = (membership as any)?.state ?? null;
     letter-spacing: 0.06em;
     text-transform: uppercase;
     color: var(--ink-3);
-    align-self: baseline;
   }
   .facts dd { margin: 0; }
 

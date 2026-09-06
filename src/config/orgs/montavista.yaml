@@ -17,6 +17,8 @@ slug: montavista
 # Omitted where it equals the id, which is the ordinary case.
 
 name: Monta Vista High School
+# What the masthead shows. The full name split the bar into two lines.
+short_name: Monta Vista
 mark: MVHS
 theme: proceedings
 record_prefix: MVRJ
@@ -36,6 +38,20 @@ phone: 408.366.7600
 
 contact_email: hello@blueleaflabs.org
 editorial_review: true
+
+# **The pilot.** The class is the only thing live, and nothing else has
+# been approved. Until the date: the editorial desk, publishing, role
+# administration, the assign queue and the public showcase are off the
+# bars (the pages still answer at their addresses), and the five programs
+# below are seeded as `draft`, so a student sees IRPD and nothing to join.
+# The reminder is `tests/orgs.mjs`, which fails the day this date is
+# reached; move the date on purpose, or delete a line to open that thing.
+# Opening a program on the hosted project is `npm run programs:status --
+# <template> open --cloud`, not a reseed (COMMANDS.md).
+hidden_until:
+  date: 2027-01-15
+  surfaces: [editorial, publish, roles, assign, showcase]
+  programs: [scvsefa-2027, csef-2027, mvhs-scvsefa-2027, grant-mvhs-micro-2027, mvrj-2027]
 showcase_note: >-
   Work by students at this school, published as a permanent, citable record.
 

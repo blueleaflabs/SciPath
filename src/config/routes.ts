@@ -65,6 +65,12 @@ export const NON_TENANT_TREES = [
      link would be the page that 404s. The token names the organization; the
      URL does not have to. */
   'consent',
+  /* **Feedback has to work when nothing else does.** Signed out, on a page
+     that has just failed, on a tenant the reader is not a member of. So it
+     is one address on every host, outside the working surface's sign-in
+     wall, and it resolves the organization from the hostname only to say
+     which school the note came from. */
+  'feedback',
 ] as const;
 
 export type NonTenantTree = (typeof NON_TENANT_TREES)[number];

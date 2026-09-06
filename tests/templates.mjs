@@ -228,8 +228,12 @@ test('a form that must precede the work says so', () => {
 });
 
 test('every shape names its parts', () => {
+  /* Three ways to write one: parts, answers, or sections of fields (6.16).
+     tests/shapes.mjs checks the fields; this checks that a shape written
+     the older way still names every part. */
   for (const shape of shapes) {
     if (shape.id === 'abstract') continue;   // questions rather than parts
+    if (shape.sections?.length > 0) continue; // fields, checked in shapes.mjs
     assert.ok(shape.parts?.length > 0, `${shape.id} has no parts`);
     for (const part of shape.parts) assert.ok(part.id && part.name, shape.id);
   }

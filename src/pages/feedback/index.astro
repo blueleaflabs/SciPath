@@ -1,0 +1,284 @@
+---
+export const prerender = false;
+
+/**
+ * FEEDBACK, FROM ANYWHERE, TO THE PEOPLE RUNNING THE PILOT.
+ *
+ * One form, reachable from the masthead on every page, signed in or not.
+ * It asks for two things in the person's words, what they were doing and
+ * what happened, and gathers everything else itself: who they are where a
+ * session says so, which school, which page sent them here, and what the
+ * browser and the server can see. The note is written to `feedback` and
+ * mailed at once to `FEEDBACK_TO`, because during a pilot the value of a
+ * report decays by the hour.
+ *
+ * **It has to work when nothing else does.** So it is outside `/app/`, it
+ * calls one `security definer` function that `anon` may run, and a failure
+ * to mail is recorded on the row rather than shown as a failure to send:
+ * the note is kept either way.
+ */
+
+import Base from '../../layouts/Base.astro';
+import { activeOrg } from '../../lib/tenant';
+import { serverClient } from '../../lib/supabase';
+import { standing } from '../../lib/roles';
+import { transportFor, refuse, type MailEnv } from '../../lib/notify/transport';
+
+const org = activeOrg(Astro);
+const { account, roles, session } = Astro.locals as any;
+const runtime = (Astro.locals as any).runtime?.env ?? {};
+
+const me = standing(roles ?? [], account?.population);
+
+/* Where they came from, carried in the link rather than trusted from the
+   referrer alone: a masthead link on the failed page knows the address. */
+const from = Astro.url.searchParams.get('from') ?? '';
+
+const supabase = serverClient(Astro.request, Astro.cookies, runtime);
+
+const KINDS: [string, string][] = [
+  ['bug', 'Something is broken'],
+  ['confusing', 'Something is confusing'],
+  ['signin', 'I could not sign in'],
+  ['idea', 'An idea'],
+  ['other', 'Something else'],
+];
+
+let sent = false;
+let mailNote: string | null = null;
+let error: string | null = null;
+let kept = { kind: 'bug', doing: '', happened: '', reply_to: '' };
+
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData();
+  const kind = String(form.get('kind') ?? 'other');
+  const doing = String(form.get('doing') ?? '').trim();
+  const happened = String(form.get('happened') ?? '').trim();
+  const replyTo = String(form.get('reply_to') ?? '').trim();
+  const page = String(form.get('page') ?? '').trim();
+  kept = { kind, doing, happened, reply_to: replyTo };
+
+  /* What the browser wrote into the hidden field, as data. Parsed
+     defensively: a form posted without script has none. */
+  let client: Record<string, unknown> = {};
+  try {
+    client = JSON.parse(String(form.get('client') ?? '{}'));
+  } catch {
+    client = {};
+  }
+
+  const headers = Astro.request.headers;
+  const diagnostics = {
+    org: org.slug,
+    host: Astro.url.host,
+    account: account
+      ? {
+          id: account.id,
+          name: account.display_name,
+          email: session?.email ?? null,
+          population: account.population,
+          roles: me.names,
+        }
+      : null,
+    signed_in: Boolean(session),
+    page,
+    referrer: headers.get('referer'),
+    user_agent: headers.get('user-agent'),
+    accept_language: headers.get('accept-language'),
+    cf_ray: headers.get('cf-ray'),
+    cf_country: headers.get('cf-ipcountry'),
+    server_time: new Date().toISOString(),
+    client,
+  };
+
+  if (!happened) {
+    error = 'Say what happened. One line is fine.';
+  } else if (!KINDS.some(([k]) => k === kind)) {
+    error = 'Pick what kind of note this is.';
+  } else {
+    const { data: id, error: e } = await supabase.rpc('send_feedback', {
+      p_org_slug: org.slug,
+      p_kind: kind,
+      p_doing: doing,
+      p_happened: happened,
+      p_reply_to: replyTo || null,
+      p_page: page || null,
+      p_diagnostics: diagnostics,
+    });
+
+    if (e) {
+      error = `The note could not be saved: ${e.message}`;
+    } else {
+      sent = true;
+
+      /**
+       * Mailed now, from the request, rather than queued for the drain.
+       * The drain runs on a cron measured in hours and a pilot report is
+       * worth most in the first ten minutes. `FEEDBACK_TO` may hold several
+       * addresses; each gets its own message, as the transport requires.
+       */
+      const env: MailEnv = {
+        MAIL_TRANSPORT: runtime.MAIL_TRANSPORT ?? import.meta.env.MAIL_TRANSPORT,
+        MAIL_FROM: runtime.MAIL_FROM ?? import.meta.env.MAIL_FROM,
+        MAIL_ALLOWLIST: runtime.MAIL_ALLOWLIST ?? import.meta.env.MAIL_ALLOWLIST,
+        RESEND_API_KEY: runtime.RESEND_API_KEY ?? import.meta.env.RESEND_API_KEY,
+        MAIL_FIXTURES: runtime.MAIL_FIXTURES ?? import.meta.env.MAIL_FIXTURES,
+      };
+      const to = String(runtime.FEEDBACK_TO ?? import.meta.env.FEEDBACK_TO ?? '')
+        .split(',')
+        .map((a) => a.trim())
+        .filter(Boolean);
+
+      const who = account ? `${account.display_name} (${me.names.join(', ') || account.population})` : 'somebody signed out';
+      const label = KINDS.find(([k]) => k === kind)?.[1] ?? kind;
+      const text = [
+        `${label} · ${org.name} · ${who}`,
+        '',
+        'WHAT THEY WERE DOING',
+        doing || '(not said)',
+        '',
+        'WHAT HAPPENED',
+        happened,
+        '',
+        replyTo ? `Reply to: ${replyTo}` : session?.email ? `Reply to: ${session.email}` : 'No reply address given.',
+        page ? `Page: ${page}` : '',
+        '',
+        'DIAGNOSTICS',
+        JSON.stringify(diagnostics, null, 2),
+        '',
+        `Row: feedback/${id}`,
+      ]
+        .filter((line) => line !== null)
+        .join('\n');
+
+      const failures: string[] = [];
+      if (to.length === 0) {
+        failures.push('FEEDBACK_TO is not set');
+      } else {
+        const transport = transportFor(env);
+        for (const address of to) {
+          const why = refuse(address, env);
+          if (why) {
+            failures.push(`${address}: ${why}`);
+            continue;
+          }
+          const result = await transport.send({
+            to: address,
+            subject: `[SciPath feedback] ${label} · ${org.name} · ${who}`,
+            text,
+          });
+          if (!result.ok) failures.push(`${address}: ${result.error ?? 'not sent'}`);
+        }
+      }
+
+      const mailError = failures.length ? failures.join('; ').slice(0, 500) : null;
+      await supabase.rpc('feedback_mailed', { p_id: id, p_error: mailError });
+      mailNote = mailError;
+      kept = { kind: 'bug', doing: '', happened: '', reply_to: '' };
+    }
+  }
+}
+
+Astro.response.headers.set('X-Robots-Tag', 'noindex, nofollow');
+---
+
+<Base title="Feedback" noindex={true}>
+  <div class="wrap">
+    <section class="cover">
+      <p class="kick">{org.name} · the pilot</p>
+      <h1>Tell us what happened</h1>
+      <p class="sub">
+        Anything at all: something broken, something confusing, something you
+        wish it did. It goes straight to the people running the pilot, with
+        enough detail about this page and this browser for them to find it.
+      </p>
+    </section>
+
+    <div id="outcome" tabindex="-1">
+    {sent && (
+      <div class="allclear" role="status" style="margin-top:28px">
+        <b>Sent</b>
+        Thank you. It has been recorded{mailNote ? ', and will be read from the record: mail did not go' : ' and mailed'}.
+        {mailNote && <span class="t-sm" style="display:block;margin-top:4px">({mailNote})</span>}
+        {' '}<a href={from || '/app/'}>Go back</a>.
+      </div>
+    )}
+
+    {error && <p class="note" role="alert" style="margin-top:28px">{error}</p>}
+    </div>
+
+    <section class="sec">
+      <form method="POST" action="#outcome" class="fb">
+        <input type="hidden" name="page" value={from} />
+        <input type="hidden" name="client" value="" data-client />
+
+        <div class="f">
+          <label for="fb-kind">What kind of note is this?</label>
+          <select class="se" id="fb-kind" name="kind">
+            {KINDS.map(([k, label]) => (
+              <option value={k} selected={kept.kind === k}>{label}</option>
+            ))}
+          </select>
+        </div>
+
+        <div class="f">
+          <label for="fb-doing">What were you trying to do?</label>
+          <textarea class="ta" id="fb-doing" name="doing" rows="3">{kept.doing}</textarea>
+          <p class="help">Where you were and what you clicked. One line is plenty.</p>
+        </div>
+
+        <div class="f">
+          <label for="fb-happened">What happened? <i class="req">*</i></label>
+          <textarea class="ta" id="fb-happened" name="happened" rows="5" required>{kept.happened}</textarea>
+          <p class="help">What you saw, what you expected instead, any message on the screen.</p>
+        </div>
+
+        {!account && (
+          <div class="f">
+            <label for="fb-reply">Your email, if you want a reply</label>
+            <input class="in" id="fb-reply" name="reply_to" type="email" value={kept.reply_to} />
+          </div>
+        )}
+
+        <p class="t-sm" style="max-width:var(--measure-text)">
+          Sent with:
+          {account ? ` your name (${account.display_name}), ` : ' '}
+          the school, the page you came from, the time, and what the browser
+          reports about itself. Nothing from your notebook or your project.
+        </p>
+
+        <p><button class="btn accent" type="submit">Send it</button></p>
+      </form>
+    </section>
+  </div>
+</Base>
+
+{/* What the browser can say about itself, gathered into one hidden field.
+    Read on the server as data, never as instructions. A form posted with
+    script off simply sends the field empty. */}
+<script is:inline>
+  (function () {
+    var field = document.querySelector('[data-client]');
+    if (!field) return;
+    var d = {
+      viewport: window.innerWidth + 'x' + window.innerHeight,
+      screen: (screen && screen.width) + 'x' + (screen && screen.height),
+      pixel_ratio: window.devicePixelRatio,
+      timezone: (Intl.DateTimeFormat().resolvedOptions() || {}).timeZone,
+      local_time: new Date().toString(),
+      language: navigator.language,
+      platform: navigator.platform,
+      online: navigator.onLine,
+      cookies: navigator.cookieEnabled,
+      touch: 'ontouchstart' in window,
+      referrer: document.referrer,
+      url: location.href,
+    };
+    field.value = JSON.stringify(d);
+  })();
+</script>
+
+<style>
+  .fb { max-width: var(--measure-form); }
+  .fb .ta { resize: vertical; }
+</style>

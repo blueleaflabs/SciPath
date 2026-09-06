@@ -21,6 +21,15 @@ declare namespace App {
       author_slug: string | null;
     } | null;
     roles: { role: string; scope_id: string | null }[];
+    /** Programs with a private showcase this person may open. */
+    showcases: { program_id: string; name: string; short_name: string | null }[];
+    /** Cohort programs this advisor runs. */
+    classes: { program_id: string; name: string; short_name: string | null }[];
+    /** Cohort programs this person is an Elder (officer) in, for the tracker. */
+    families: { program_id: string; name: string; short_name: string | null }[];
+    /** The reader's own projects and the places each is in, for the tab
+     *  bar: one project in one class is two tabs, My project and Notebook. */
+    projects: { project_id: string; title: string; places: { participation_id: string; program_id: string; name: string; short_name: string | null; cohort: boolean }[] }[];
     supabase?: unknown;
     runtime?: { env: Record<string, string> };
   }

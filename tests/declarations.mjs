@@ -62,6 +62,29 @@ const sql = files.map((f) => fs.readFileSync(path.join(dir, f), 'utf8')).join('\
 const lineOf = (index) => sql.slice(0, index).split('\n').length;
 
 /**
+ * Which file a position in the joined text belongs to.
+ *
+ * `0001` is frozen (decision 71), so a change to a function it declares is
+ * now a `create or replace` in a later file -- which is a second declaration
+ * of the same name, and the one kind this check must not report. The rule
+ * survives with one word changed: a name is declared once **per file**. Two
+ * copies in one file are still the appending habit this exists to stop; a
+ * copy in a later file is how an additive migration changes behavior, and
+ * the first such file will say so at its top.
+ */
+const starts = [];
+let at = 0;
+for (const f of files) {
+  starts.push({ file: f, from: at });
+  at += fs.readFileSync(path.join(dir, f), 'utf8').length + 1;
+}
+const fileOf = (index) => {
+  let name = files[0];
+  for (const s of starts) if (index >= s.from) name = s.file;
+  return name;
+};
+
+/**
  * What counts as a declaration.
  *
  * Anchored at the start of a line, because the same words appear inside
@@ -117,7 +140,7 @@ for (const { what, pattern } of kinds) {
           : `${what} ${m[1]}`;
 
     if (!declarations.has(key)) declarations.set(key, []);
-    declarations.get(key).push(lineOf(m.index));
+    declarations.get(key).push({ line: lineOf(m.index), file: fileOf(m.index) });
     counted += 1;
   }
 }
@@ -161,16 +184,41 @@ test('every declaration in the file was read', () => {
   assert.deepEqual(problems, [], 'widen the pattern; do not lower the count');
 });
 
-test('nothing is declared twice', () => {
+test('nothing is declared twice in one file', () => {
   const problems = [];
 
-  for (const [key, lines] of declarations) {
-    if (lines.length > 1) {
-      problems.push(`${key} at lines ${lines.join(', ')} — the last one wins and the rest are read as if they did not`);
+  for (const [key, places] of declarations) {
+    const byFile = new Map();
+    for (const p of places) {
+      if (!byFile.has(p.file)) byFile.set(p.file, []);
+      byFile.get(p.file).push(p.line);
+    }
+    for (const [file, lines] of byFile) {
+      if (lines.length > 1) {
+        problems.push(`${key} in ${file} at lines ${lines.join(', ')} — the last one wins and the rest are read as if they did not`);
+      }
     }
   }
 
   assert.deepEqual(problems, [], 'edit the declaration where it is');
+});
+
+test('a later migration only redeclares functions, never tables, policies, triggers or indexes', () => {
+  /* Redefining a function in `0002` is the additive change decision 72
+     permits. Redeclaring a table or an index is not additive at all: the
+     second `create table` fails on apply, and a second `create index` with
+     the same name does too. Those are caught here rather than by the
+     pilot's `migration up`. */
+  const problems = [];
+
+  for (const [key, places] of declarations) {
+    const filesSeen = new Set(places.map((p) => p.file));
+    if (filesSeen.size > 1 && !key.startsWith('function ')) {
+      problems.push(`${key} in ${[...filesSeen].join(' and ')}`);
+    }
+  }
+
+  assert.deepEqual(problems, [], 'a table, policy, trigger or index is declared in one migration only');
 });
 
 test('no policy is dropped and recreated', () => {

@@ -129,6 +129,23 @@
   --masthead-ink-2: #b8b5ad;
   --masthead-rule: var(--ink);
 
+  /* THE COVER, AND THE ACCENT ON IT.
+
+     A working page opens with a block in the school's deep hue that carries
+     the person's name and the season, and the accent is the one bright
+     thing on it. The entry theme has no hue, so the cover is ink and the
+     accent is the ready tone, which is the warmest thing the stage palette
+     has. `--accent-ink` is the text that sits on `--accent` and on
+     `--accent-pale`; both pairs are in tests/contrast.mjs. */
+  --cover: var(--ink);
+  --cover-ink: #edece8;
+  --cover-ink-2: #b8b5ad;
+  --cover-rule: #3a3833;
+  --accent: #c9932a;
+  --accent-ink: #1b1a17;
+  --accent-pale: #f6eede;
+  --accent-deep: #8a5a12;
+
   --face-ed: 'Literata', Georgia, serif;
   --face-ui: 'Schibsted Grotesk', system-ui, sans-serif;
   --face-num: 'Spline Sans Mono', ui-monospace, monospace;
@@ -190,6 +207,20 @@
   --masthead-ink: #ede6f5;
   --masthead-ink-2: #c3b3d6;
   --masthead-rule: var(--brand-mark);
+
+  /* The cover is the brand itself, one step lighter than the masthead so
+     the two read as a lockup and a page rather than one tall band. The
+     accent is the mark, brightened for a fill: `--brand-mark` stays an edge
+     color (the rule above) and `--accent` is what a button and a pill wear.
+     Ink on it is the deep hue, 7.4:1. */
+  --cover: var(--brand);
+  --cover-ink: #ffffff;
+  --cover-ink-2: #d9cbe8;
+  --cover-rule: #5f4287;
+  --accent: #d9b14e;
+  --accent-ink: #2c1849;
+  --accent-pale: #f4ead0;
+  --accent-deep: #8a5a12;
 
   --face-ed: 'Spectral', Georgia, serif;
   --face-ui: 'Spectral', Georgia, serif;

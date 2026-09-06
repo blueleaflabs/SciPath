@@ -1,0 +1,1097 @@
+---
+export const prerender = false;
+
+/**
+ * THE CLASS PAGE: A TEACHER'S DAY.
+ *
+ * A project list answers none of the four questions a teacher opens the
+ * software with: what is due this week and how far behind is the class,
+ * what has come in that needs me, who has gone quiet, and how are my
+ * Elders doing. This page is those four, in that order, and every row ends
+ * in the verb that acts on it.
+ *
+ * The roll call is the heart of it. A deadline with 12 of 38 recorded is a
+ * number; the twenty-six names still missing, grouped by Elder, with a
+ * nudge beside each and one for all of them, is the thing a teacher reads
+ * out in class.
+ *
+ * Per-student detail is not here. A student's own project page already
+ * carries their dates, notebook cadence and nudges, and the teacher sees
+ * the same page; every name on this page links to it.
+ */
+
+import Base from '../../../../layouts/Base.astro';
+import AppShell from '../../../../components/AppShell.astro';
+import { activeOrg } from '../../../../lib/tenant';
+import { serverClient } from '../../../../lib/supabase';
+import { standing } from '../../../../lib/roles';
+import { programTitle, staffWord } from '../../../../lib/program-names';
+import { formatDate, todayIn } from '../../../../lib/dates';
+import { daysUntil } from '../../../../lib/attention';
+import { afterPost, outcomeFrom } from '../../../../lib/post-redirect';
+import { signInWith } from '../../../../lib/next-path';
+import { allRows } from '../../../../lib/all-rows';
+import { resolveProgram, shape as shapeOf } from '../../../../lib/templates';
+import { progressOf, documentPath } from '../../../../lib/documents';
+
+const { session, account, roles } = Astro.locals;
+const org = activeOrg(Astro);
+const { id } = Astro.params;
+
+if (!session) return Astro.redirect(signInWith(Astro.url));
+if (!account) return Astro.redirect('/app/welcome/');
+
+const me = standing(roles, account?.population);
+const runsThis = ((Astro.locals as any).classes ?? []).some((c: any) => c.program_id === id);
+if (!me.isAdvisor || !runsThis) return Astro.redirect('/app/');
+
+const supabase = serverClient(Astro.request, Astro.cookies, (Astro.locals as any).runtime?.env);
+const today = todayIn(org.timezone);
+
+let { error, note } = outcomeFrom(Astro.url);
+
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData();
+  const action = String(form.get('action') ?? '');
+
+  if (action === 'verify') {
+    const { error: e } = await supabase.rpc('verify_deliverable', { p_id: String(form.get('deliverable_id') ?? '') });
+    if (e) error = e.message;
+    else note = 'Verified.';
+  } else if (action === 'nudge') {
+    const { data, error: e } = await supabase.rpc('nudge', {
+      p_milestone_id: String(form.get('milestone_id') ?? ''),
+      p_recipient_id: String(form.get('recipient_id') ?? ''),
+    });
+    if (e) error = e.message;
+    else note = data === 'already' ? 'Already nudged this week.' : data === 'sent' ? 'Nudged.' : 'Nothing to send.';
+  } else if (action === 'release') {
+    const { data, error: e } = await supabase.rpc('release_grades', { p_program_id: id });
+    if (e) error = e.message;
+    else note = `${data ?? 0} ${data === 1 ? 'grade' : 'grades'} released.`;
+  } else if (action === 'nudge_all') {
+    /* One pair per line: milestone id and recipient id, built by the page
+       from the same routing the single button uses. The function decides
+       each one; a pair it refuses is counted rather than stopping the rest. */
+    const pairs = String(form.get('pairs') ?? '')
+      .split(',')
+      .map((p) => p.trim())
+      .filter(Boolean)
+      .map((p) => p.split(':'));
+    let sent = 0;
+    let already = 0;
+    let refused = 0;
+    for (const [milestoneId, recipientId] of pairs) {
+      const { data, error: e } = await supabase.rpc('nudge', { p_milestone_id: milestoneId, p_recipient_id: recipientId });
+      if (e) refused += 1;
+      else if (data === 'sent') sent += 1;
+      else if (data === 'already') already += 1;
+    }
+    note = `Nudged ${sent}${already ? `, ${already} already this week` : ''}${refused ? `, ${refused} refused` : ''}.`;
+  }
+
+  return afterPost(Astro.url, { error, note });
+}
+
+const { data: program } = await supabase
+  .from('programs')
+  .select('id, name, short_name, season_year, kind, program_role, roles, template_id')
+  .eq('id', id)
+  .maybeSingle();
+if (!program) return Astro.redirect('/app/');
+
+/* ── The class ───────────────────────────────────────────────────────── */
+
+const { data: memberRows } = await supabase
+  .from('memberships')
+  .select('user_id, users:user_id(id, display_name)')
+  .eq('cohort_id', id)
+  .eq('state', 'member');
+
+const { data: parts } = await supabase
+  .from('participations')
+  .select('id, project_id, status, projects(id, title, project_authors(role, participation_id, self_managed_at, users(id, display_name)))')
+  .eq('program_id', id)
+  .in('status', ['entered', 'competed']);
+
+const partIds = (parts ?? []).map((p: any) => p.id);
+const projectIds = (parts ?? []).map((p: any) => p.project_id);
+
+/* Paged: a class is more than a thousand of these rows (src/lib/all-rows.ts). */
+const { data: allMilestones } = partIds.length
+  ? await allRows(() =>
+      supabase
+        .from('entry_milestones')
+        .select('id, participation_id, name, due_on, completed_on, completed_by, kind, phase, owner, requires_step, step_id')
+        .in('participation_id', partIds)
+        .neq('kind', 'event')
+        .order('due_on', { ascending: true, nullsFirst: false })
+            .order('id')
+    )
+  : { data: [] as any[] };
+
+/* The students' obligations drive the week, the roll call and the quiet
+   list. The Elders' tasks are their own section below. */
+const milestones = (allMilestones ?? []).filter((m: any) => m.owner !== 'staff');
+const staffRows = (allMilestones ?? []).filter((m: any) => m.owner === 'staff');
+const taskReady = (t: any) =>
+  !t.requires_step ||
+  (allMilestones ?? []).some((m: any) => m.participation_id === t.participation_id && m.step_id === t.requires_step && m.completed_on);
+
+const { data: waiting } = partIds.length
+  ? await supabase
+      .from('deliverables')
+      .select('id, participation_id, label, type, external_url, storage_path, signed_on, submitted_at, milestone_id')
+      .in('participation_id', partIds)
+      .is('verified_at', null)
+      .is('superseded_at', null)
+      .order('submitted_at', { ascending: true })
+  : { data: [] as any[] };
+
+const { data: noteRows } = projectIds.length
+  ? await allRows(() => supabase.from('field_notes').select('project_id, occurred_on').in('project_id', projectIds).order('id'))
+  : { data: [] as any[] };
+
+const { data: signins } = await supabase.rpc('class_signins', { p_program_id: id });
+
+/* Every nudge track in the class, keyed by obligation and recipient, and
+   what has come back. Without these the roll call rendered the same bare
+   button before and after a nudge, and nothing the Elder did in answer
+   reached this page at all. */
+const { data: trackRows, error: trackError } = await supabase.rpc('program_nudge_state', { p_program_id: id });
+if (trackError) console.error(`program_nudge_state: ${trackError.message}`);
+const track = new Map<string, any>((trackRows ?? []).map((r: any) => [`${r.milestone_id}:${r.recipient_id}`, r]));
+
+const { data: answerRows, error: answerError } = await supabase.rpc('class_answers', { p_program_id: id });
+if (answerError) console.error(`class_answers: ${answerError.message}`);
+const answers = (answerRows ?? []) as any[];
+const replies = answers.filter((a) => a.kind === 'reply');
+
+/* The database allows one nudge per obligation per recipient per ISO week,
+   so the page offers the button on the same calendar and says so instead
+   of offering a click the function will answer with "already". */
+const isoWeek = (d: Date) => {
+  const t = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
+  const day = t.getUTCDay() || 7;
+  t.setUTCDate(t.getUTCDate() + 4 - day);
+  const start = new Date(Date.UTC(t.getUTCFullYear(), 0, 1));
+  return `${t.getUTCFullYear()}-W${String(Math.ceil(((t.getTime() - start.getTime()) / 86400000 + 1) / 7)).padStart(2, '0')}`;
+};
+const week = isoWeek(new Date());
+const nudgeView = (milestoneId: string, recipientId: string) => {
+  const st = track.get(`${milestoneId}:${recipientId}`) ?? null;
+  if (!st) return { st: null, thisWeek: false, line: '' };
+  const thisWeek = isoWeek(new Date(st.last_sent_at)) === week;
+  const line = [
+    `Nudged ${formatDate(String(st.last_sent_at).slice(0, 10), 'short')}${st.nudges > 1 ? ` (${st.nudges}×)` : ''}`,
+    st.acknowledged_at ? 'seen' : 'not seen',
+    st.relayed_at ? `passed to ${st.relayed_to}` : null,
+    st.met_after ? 'met since' : null,
+    st.reply ? `"${st.reply}"` : null,
+  ].filter(Boolean).join(' · ');
+  return { st, thisWeek, line };
+};
+
+/* Grades written and not yet released, for the release-all control. */
+const { data: unreleased } = partIds.length
+  ? await supabase
+      .from('assessments')
+      .select('id')
+      .in('participation_id', partIds)
+      .is('released_at', null)
+      .is('superseded_by', null)
+  : { data: [] as any[] };
+
+/* ── Shapes the sections read ────────────────────────────────────────── */
+
+const lastSignin = new Map<string, string | null>((signins ?? []).map((r: any) => [r.user_id, r.last_sign_in_at]));
+
+const lastNote = new Map<string, string>();
+const noteCount = new Map<string, number>();
+for (const n of noteRows ?? []) {
+  noteCount.set(n.project_id, (noteCount.get(n.project_id) ?? 0) + 1);
+  if (!lastNote.has(n.project_id) || n.occurred_on > lastNote.get(n.project_id)!) lastNote.set(n.project_id, n.occurred_on);
+}
+
+/* Per participation: the project, its authors, its Elders. */
+type Place = {
+  id: string;
+  projectId: string;
+  title: string;
+  authors: { id: string; name: string }[];
+  elders: { id: string; name: string }[];
+  selfManaged: boolean;
+};
+
+const places: Place[] = (parts ?? []).map((p: any) => {
+  const all = p.projects?.project_authors ?? [];
+  return {
+    id: p.id,
+    projectId: p.project_id,
+    title: p.projects?.title ?? 'Untitled',
+    authors: all.filter((a: any) => a.role === 'author' && a.users).map((a: any) => ({ id: a.users.id, name: a.users.display_name })),
+    elders: all
+      .filter((a: any) => a.role === 'officer' && a.participation_id === p.id && !a.self_managed_at && a.users)
+      .map((a: any) => ({ id: a.users.id, name: a.users.display_name })),
+    selfManaged: all.some((a: any) => a.role === 'officer' && a.participation_id === p.id && a.self_managed_at),
+  };
+});
+
+const placeById = new Map(places.map((p) => [p.id, p]));
+
+/* Who a nudge about a place goes to: the Elders, else the student. The same
+   rule the Workbench applies for an advisor. */
+const nudgeTargets = (place: Place) => (place.elders.length ? place.elders : place.authors);
+
+/* ── 01 The week: every deadline, with how many have met it ──────────── */
+
+type Deadline = { key: string; name: string; dueOn: string; days: number | null; done: number; total: number; missing: { place: Place; milestoneId: string }[] };
+
+const byDeadline = new Map<string, Deadline>();
+for (const m of milestones ?? []) {
+  if (!m.due_on) continue;
+  const key = `${m.name}|${m.due_on}`;
+  const held: Deadline = byDeadline.get(key) ?? { key, name: m.name, dueOn: m.due_on, days: daysUntil(m.due_on, today), done: 0, total: 0, missing: [] };
+  held.total += 1;
+  if (m.completed_on) held.done += 1;
+  else {
+    const place = placeById.get(m.participation_id);
+    if (place) held.missing.push({ place, milestoneId: m.id });
+  }
+  byDeadline.set(key, held);
+}
+
+const deadlines = [...byDeadline.values()].sort((a, b) => a.dueOn.localeCompare(b.dueOn));
+
+/* ── Documents written in SciPath, per deadline (6.16) ─────────────────
+   Where every student is on a deliverable, whether or not it has been
+   submitted: not started, in progress with how much is answered, or
+   submitted. Read once for the class; the week table, the roll call and
+   the board below all read this. */
+const template = (() => {
+  try {
+    return program.template_id ? resolveProgram(program.template_id, null) : null;
+  } catch {
+    return null;
+  }
+})();
+const shapedFor = (stepName: string) => {
+  const step = template?.steps.find((st: any) => st.name === stepName);
+  if (!step) return [] as any[];
+  return (step.deliverables ?? [])
+    .map((d: any) => template!.deliverables.get(d.ref ?? d.id))
+    .filter((d: any) => d && d.shape);
+};
+const { data: docRows } = projectIds.length
+  ? await allRows(() =>
+      supabase
+        .from('documents')
+        .select('id, project_id, deliverable, status, version_no, updated_at, submitted_at, document_fields(field_id, value)')
+        .in('project_id', projectIds)
+        .order('id')
+    )
+  : { data: [] as any[] };
+const docOf = new Map<string, any>((docRows ?? []).map((d: any) => [`${d.project_id}:${d.deliverable}`, d]));
+/* Comments and open asks per document, for the board. */
+const { data: commentRows } = (docRows ?? []).length
+  ? await allRows(() =>
+      supabase
+        .from('deliverable_feedback')
+        .select('id, document_id, needs_revision, resolved_at, author_id')
+        .in('document_id', (docRows ?? []).map((d: any) => d.id))
+        .order('id')
+    )
+  : { data: [] as any[] };
+const commentsOn = new Map<string, { n: number; asks: number }>();
+for (const c of commentRows ?? []) {
+  const held = commentsOn.get(c.document_id) ?? { n: 0, asks: 0 };
+  held.n += 1;
+  if (c.needs_revision && !c.resolved_at) held.asks += 1;
+  commentsOn.set(c.document_id, held);
+}
+type DocCell = { state: 'not_started' | 'in_progress' | 'submitted' | 'revising'; label: string; filled: number; asked: number; updatedAt: string | null; comments: number; asks: number; href: string; version: number };
+const docCell = (place: Place, deliverable: any, completed: boolean): DocCell => {
+  const doc = docOf.get(`${place.projectId}:${deliverable.id}`) ?? null;
+  const href = documentPath(place.projectId, deliverable.id);
+  const sh = shapeOf(deliverable.shape);
+  if (!doc) return { state: 'not_started', label: 'Not started', filled: 0, asked: sh ? progressOf(sh, {}).asked : 0, updatedAt: null, comments: 0, asks: 0, href, version: 0 };
+  const values: Record<string, any> = {};
+  for (const f of doc.document_fields ?? []) values[f.field_id] = f.value;
+  const p = sh ? progressOf(sh, values) : { asked: 0, filled: 0, missing: [], over: [] };
+  const c = commentsOn.get(doc.id) ?? { n: 0, asks: 0 };
+  const base = { filled: p.filled, asked: p.asked, updatedAt: doc.updated_at, comments: c.n, asks: c.asks, href, version: doc.version_no };
+  if (doc.status === 'submitted' || completed) return { ...base, state: 'submitted', label: `Submitted${doc.version_no > 1 ? ` · v${doc.version_no}` : ''}` };
+  if (doc.status === 'revising') return { ...base, state: 'revising', label: `Revising · ${p.filled} of ${p.asked}` };
+  return { ...base, state: 'in_progress', label: `In progress · ${p.filled} of ${p.asked}` };
+};
+/* Per deadline: the shaped deliverables and the counts by state. */
+const boardFor = (d: Deadline) => {
+  const docs = shapedFor(d.name);
+  if (docs.length === 0) return null;
+  const deliverable = docs[0];
+  const rows = places.map((place) => {
+    const m = (milestones ?? []).find((x: any) => x.participation_id === place.id && `${x.name}|${x.due_on}` === d.key);
+    return { place, milestoneId: m?.id ?? null, cell: docCell(place, deliverable, Boolean(m?.completed_on)) };
+  });
+  const count = (state: string) => rows.filter((r) => r.cell.state === state).length;
+  return {
+    deliverable,
+    rows: rows.sort((a, b) => ['not_started', 'in_progress', 'revising', 'submitted'].indexOf(a.cell.state) - ['not_started', 'in_progress', 'revising', 'submitted'].indexOf(b.cell.state) || (a.place.authors[0]?.name ?? '').localeCompare(b.place.authors[0]?.name ?? '')),
+    notStarted: count('not_started'),
+    inProgress: count('in_progress') + count('revising'),
+    submitted: count('submitted'),
+    asks: rows.reduce((n, r) => n + r.cell.asks, 0),
+    comments: rows.reduce((n, r) => n + r.cell.comments, 0),
+  };
+};
+const overdueDeadlines = deadlines.filter((d) => d.days !== null && d.days < 0 && d.done < d.total);
+const weekDeadlines = deadlines.filter((d) => d.days !== null && d.days >= 0 && d.days <= 7);
+const upcoming = deadlines.filter((d) => d.days !== null && d.days > 7).slice(0, 5);
+
+/* The roll call: the deadline named in the address, else the oldest one
+   still open, else the nearest. */
+const wanted = Astro.url.searchParams.get('call');
+const called =
+  deadlines.find((d) => d.key === wanted) ??
+  overdueDeadlines[0] ??
+  weekDeadlines[0] ??
+  deadlines.find((d) => d.done < d.total) ??
+  null;
+
+/* Missing names grouped by Elder, with the nudge pairs ready. */
+const callGroups = (() => {
+  if (!called) return [] as { elder: string; rows: { place: Place; milestoneId: string; to: { id: string; name: string }[] }[] }[];
+  const by = new Map<string, { elder: string; rows: any[] }>();
+  for (const miss of called.missing) {
+    /* Keyed on the sorted ids, not on the names as they came back. The
+       query returns a project's two Elders in no particular order, and a
+       key built from that order split one pair into two cards. */
+    const elders = [...miss.place.elders].sort((a, b) => a.name.localeCompare(b.name));
+    const key = elders.map((e) => e.id).sort().join('|') || (miss.place.selfManaged ? 'self' : 'none');
+    const who = elders.map((e) => e.name).join(', ') || (miss.place.selfManaged ? 'Self managed' : 'No Elder');
+    const held = by.get(key) ?? { elder: who, rows: [] };
+    held.rows.push({ ...miss, to: nudgeTargets(miss.place) });
+    by.set(key, held);
+  }
+  return [...by.values()].sort((a, b) => a.elder.localeCompare(b.elder));
+})();
+
+const board = called ? boardFor(called) : null;
+
+const allPairs = callGroups
+  .flatMap((g) => g.rows)
+  .flatMap((r) => r.to.map((t: any) => `${r.milestoneId}:${t.id}`))
+  .filter((pair) => {
+    const [m, u] = pair.split(':');
+    return !nudgeView(m, u).thisWeek;
+  })
+  .join(',');
+const stillToNudge = allPairs ? allPairs.split(',').length : 0;
+
+/* ── 03 Who has gone quiet: per student ──────────────────────────────── */
+
+type Student = {
+  id: string;
+  name: string;
+  place: Place | null;
+  overdue: number;
+  next: { name: string; days: number | null; milestoneId: string } | null;
+  lastNote: string | null;
+  notes: number;
+  lastSignin: string | null;
+  quietDays: number | null;
+};
+
+const students: Student[] = (memberRows ?? [])
+  .filter((m: any) => m.users)
+  .map((m: any) => {
+    const place = places.find((p) => p.authors.some((a) => a.id === m.users.id)) ?? null;
+    const mine = place ? (milestones ?? []).filter((x: any) => x.participation_id === place.id && !x.completed_on && x.due_on) : [];
+    const overdue = mine.filter((x: any) => x.due_on < today).length;
+    const nextRow = mine.sort((a: any, b: any) => a.due_on.localeCompare(b.due_on))[0] ?? null;
+    const noteOn = place ? lastNote.get(place.projectId) ?? null : null;
+    const signin = lastSignin.get(m.users.id) ?? null;
+    const signinDay = signin ? signin.slice(0, 10) : null;
+    const lastAny = [noteOn, signinDay].filter(Boolean).sort().pop() ?? null;
+    return {
+      id: m.users.id,
+      name: m.users.display_name,
+      place,
+      overdue,
+      next: nextRow ? { name: nextRow.name, days: daysUntil(nextRow.due_on, today), milestoneId: nextRow.id } : null,
+      lastNote: noteOn,
+      notes: place ? noteCount.get(place.projectId) ?? 0 : 0,
+      lastSignin: signin,
+      quietDays: lastAny ? Math.abs(daysUntil(lastAny, today) ?? 0) : null,
+    };
+  })
+  .sort((a, b) => b.overdue - a.overdue || (b.quietDays ?? 999) - (a.quietDays ?? 999) || a.name.localeCompare(b.name));
+
+const neverSignedIn = students.filter((s) => !s.lastSignin);
+const quiet = students.filter((s) => s.overdue > 0 || s.quietDays === null || s.quietDays >= 7);
+
+/* Who the Elders are, for the count in the summary. The list by single
+   Elder that used to stand here was the roll call over again, by a
+   different grouping, and it is gone. */
+const elderGroups = (() => {
+  const by = new Map<string, { id: string; name: string }>();
+  for (const place of places) for (const e of place.elders) by.set(e.id, { id: e.id, name: e.name });
+  return [...by.values()];
+})();
+
+/* ── 05 The Elders' work ─────────────────────────────────────────────── */
+
+type StaffDeadline = { key: string; name: string; dueOn: string; days: number | null; done: number; ready: number; waiting: number; late: number; missing: { place: Place; milestoneId: string; ready: boolean }[] };
+
+const staffDeadlines: StaffDeadline[] = (() => {
+  const by = new Map<string, StaffDeadline>();
+  for (const t of staffRows) {
+    if (!t.due_on) continue;
+    const key = `${t.name}|${t.due_on}`;
+    const held: StaffDeadline = by.get(key) ?? { key, name: t.name, dueOn: t.due_on, days: daysUntil(t.due_on, today), done: 0, ready: 0, waiting: 0, late: 0, missing: [] };
+    const ready = taskReady(t);
+    if (t.completed_on) held.done += 1;
+    else {
+      if (ready) {
+        held.ready += 1;
+        if (held.days !== null && held.days < 0) held.late += 1;
+      } else held.waiting += 1;
+      const place = placeById.get(t.participation_id);
+      if (place) held.missing.push({ place, milestoneId: t.id, ready });
+    }
+    by.set(key, held);
+  }
+  return [...by.values()].sort((a, b) => a.dueOn.localeCompare(b.dueOn));
+})();
+
+/* Per Elder: how many of their tasks are done, open and ready, waiting, late. */
+const elderWork = (() => {
+  const by = new Map<string, { id: string; name: string; done: number; ready: number; waiting: number; late: number; next: { name: string; days: number | null; place: Place; milestoneId: string } | null }>();
+  for (const t of staffRows) {
+    const place = placeById.get(t.participation_id);
+    if (!place) continue;
+    for (const e of place.elders) {
+      const held = by.get(e.id) ?? { id: e.id, name: e.name, done: 0, ready: 0, waiting: 0, late: 0, next: null };
+      const ready = taskReady(t);
+      const days = daysUntil(t.due_on, today);
+      if (t.completed_on) held.done += 1;
+      else if (ready) {
+        held.ready += 1;
+        if (days !== null && days < 0) held.late += 1;
+        if (!held.next || (t.due_on ?? '9999') < (held.next as any).dueOn) held.next = { name: t.name, days, place, milestoneId: t.id, dueOn: t.due_on } as any;
+      } else held.waiting += 1;
+      by.set(e.id, held);
+    }
+  }
+  return [...by.values()].sort((a, b) => b.late - a.late || b.ready - a.ready || a.name.localeCompare(b.name));
+})();
+
+const eldersLate = elderWork.filter((e) => e.late > 0).length;
+
+const label = program.short_name ?? program.name;
+const elderWord = staffWord(program, 'plural');
+const fmtWhen = (iso: string | null) => (iso ? formatDate(iso.slice(0, 10), 'short') : 'never');
+const dayWord = (d: number | null) =>
+  d === null ? 'no date' : d < 0 ? `${Math.abs(d)} ${Math.abs(d) === 1 ? 'day' : 'days'} late` : d === 0 ? 'today' : `in ${d} ${d === 1 ? 'day' : 'days'}`;
+---
+
+<Base title={`${label} Class`} noindex={true}>
+  <div class="wrap">
+    <AppShell org={org} account={account} roles={roles} here={`/app/program/${id}/class/`} />
+
+    <section class="cover">
+      <p class="kick">{programTitle(program)} · {formatDate(today, 'long')}</p>
+      <h1>{label} Class</h1>
+    </section>
+
+    <div class="stats wide two">
+      <div class:list={['stat', overdueDeadlines.length > 0 ? 'is-late' : 'is-lead']}>
+        <p class="k">This week</p>
+        <p class="v">
+          <span class:list={['n', overdueDeadlines.length > 0 ? 'late' : 'lead']}>{overdueDeadlines.length}</span>
+          <span class="of">{overdueDeadlines.length === 1 ? 'deadline' : 'deadlines'} past due · {weekDeadlines.length} due in 7 days</span>
+        </p>
+        <p class:list={['u', overdueDeadlines.length > 0 && 'late']}>
+          {overdueDeadlines[0]
+            ? `oldest: ${overdueDeadlines[0].name}, ${overdueDeadlines[0].done} of ${overdueDeadlines[0].total} recorded`
+            : weekDeadlines[0]
+              ? `next: ${weekDeadlines[0].name}, ${dayWord(weekDeadlines[0].days)}`
+              : 'nothing due this week'}
+        </p>
+        <ul class="strip-f">
+          <li><b>{students.length}</b> students · <b>{places.length}</b> projects</li>
+          <li class:list={[neverSignedIn.length > 0 && 'late']}><b>{neverSignedIn.length}</b> never signed in</li>
+        </ul>
+        <p class="go"><a href="#call">Roll call</a></p>
+      </div>
+
+      <div class:list={['stat', (waiting ?? []).length > 0 ? 'is-late' : 'is-ok']}>
+        <p class="k">Inbox</p>
+        <p class="v">
+          <span class:list={['n', (waiting ?? []).length > 0 ? 'late' : 'lead']}>{(waiting ?? []).length}</span>
+          <span class="of">not yet checked</span>
+        </p>
+        <p class="u">{(waiting ?? []).length > 0 ? `recorded by students, waiting on their ${elderWord.toLowerCase()}` : 'nothing recorded is waiting'}</p>
+        <ul class="strip-f">
+          <li class:list={[quiet.length > 0 && 'late']}><b>{quiet.length}</b> behind or quiet</li>
+          <li class:list={[eldersLate > 0 && 'late']}><b>{eldersLate}</b> of {elderGroups.length} {elderWord.toLowerCase()} behind on their own tasks</li>
+        </ul>
+        <p class="go"><a href="#inbox">Open the inbox</a></p>
+      </div>
+    </div>
+
+    <nav class="jumps" aria-label="On this page">
+      <a href="#answers">Answers{answers.length ? <span class:list={['n', replies.length > 0 && 'late']}>{answers.length}</span> : null}</a>
+      <a href="#week">The week</a>
+      <a href="#call">Roll call{called ? <span class:list={['n', called.days !== null && called.days < 0 && 'late']}>{called.missing.length}</span> : null}</a>
+      {board && <a href="#board">The class on it{board.notStarted ? <span class="n late">{board.notStarted}</span> : null}</a>}
+      <a href="#inbox">Inbox{(waiting ?? []).length ? <span class="n late">{(waiting ?? []).length}</span> : null}</a>
+      <a href="#quiet">Behind or quiet{quiet.length ? <span class="n">{quiet.length}</span> : null}</a>
+      {staffRows.length > 0 && (
+        <a href="#elderwork">{elderWord}' work{eldersLate ? <span class="n late">{eldersLate}</span> : null}</a>
+      )}
+    </nav>
+
+    <div id="outcome" tabindex="-1">
+      {error && <p class="note flash" role="alert">{error}</p>}
+      {note && !error && <p class="note flash" role="status">{note}</p>}
+    </div>
+
+    {/* ── 01 Answers ──────────────────────────────────────────────── */}
+    <section class="sec" id="answers">
+      <div class="sec-h"><b><span class="sec-n">01</span>Answers</b><span>{answers.length ? `${replies.length} ${replies.length === 1 ? 'reply' : 'replies'} · last 14 days` : 'last 14 days'}</span></div>
+
+      {/* What came back on the nudges this teacher sent: replies written to
+          her, nudges seen, nudges passed on to the student, obligations met
+          since. Newest first, so the day starts with what changed. */}
+      {answers.length === 0 ? (
+        <div class="allclear"><b>Nothing yet</b>When somebody you nudged replies, reads it, passes it on, or records the thing, it shows here.</div>
+      ) : (
+        <ul class="answers">
+          {answers.map((a) => (
+            <li class:list={[a.kind]}>
+              <span class="a-when">{fmtWhen(a.at)}</span>
+              <span class="a-what">
+                <b>{a.who}</b>
+                {a.kind === 'reply' ? ' replied on ' : a.kind === 'seen' ? ' saw your nudge on ' : a.kind === 'relayed' ? ` passed your nudge to ${a.to_name} on ` : ' recorded '}
+                <a href={`/app/project/${a.project_id}/in/${id}/#m-${a.milestone_id}`}>{a.obligation}</a>
+                <span class="sub">{a.project_title}</span>
+                {a.kind === 'reply' && a.note && <span class="a-note">{a.note}</span>}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+
+    {/* ── 02 The week ─────────────────────────────────────────────── */}
+    <section class="sec" id="week">
+      <div class="sec-h"><b><span class="sec-n">02</span>The week</b><span>{overdueDeadlines.length} past due · {weekDeadlines.length} this week</span></div>
+
+      {overdueDeadlines.length + weekDeadlines.length + upcoming.length === 0 ? (
+        <div class="allclear"><b>All clear</b>Nothing is due and nothing is late.</div>
+      ) : (
+        <table class="tbl week">
+          <thead>
+            <tr><th scope="col"><span class="sr">Days</span></th><th scope="col">Deadline</th><th scope="col">Recorded</th><th scope="col"></th></tr>
+          </thead>
+          <tbody>
+            {[...overdueDeadlines, ...weekDeadlines, ...upcoming].map((d) => (
+              <tr class:list={[called?.key === d.key && 'is-called']}>
+                <td class="v">
+                  <span class:list={['verdict', d.days !== null && d.days < 0 ? 'late' : d.days !== null && d.days <= 7 ? 'soon' : '']}>
+                    {d.days === null ? '—' : Math.abs(d.days)}
+                    <small>{d.days === null ? '' : d.days < 0 ? (Math.abs(d.days) === 1 ? 'day late' : 'days late') : d.days === 0 ? 'today' : d.days === 1 ? 'day left' : 'days left'}</small>
+                  </span>
+                </td>
+                <td>
+                  <span class="dname">{d.name}</span>
+                  <span class="sub">due {formatDate(d.dueOn, 'short')}</span>
+                </td>
+                <td class="bar-cell">
+                  <span class="bar"><i style={`width:${d.total ? Math.round((d.done / d.total) * 100) : 0}%`}></i></span>
+                  <span class="sub"><b>{d.done}</b> of {d.total}</span>
+                  {(() => {
+                    const b = boardFor(d);
+                    return b ? (
+                      <span class="sub docstates">
+                        <span class="st prog">{b.inProgress} in progress</span> · <span class:list={['st', b.notStarted > 0 && 'none']}>{b.notStarted} not started</span>
+                        {b.asks > 0 ? <> · <span class="st late">{b.asks} {b.asks === 1 ? 'ask' : 'asks'} open</span></> : null}
+                      </span>
+                    ) : null;
+                  })()}
+                </td>
+                <td>
+                  {d.done < d.total ? (
+                    <a class="btn btn-sm ghost" href={`?call=${encodeURIComponent(d.key)}#call`}>Roll call</a>
+                  ) : (
+                    <span class="pill ok">All in</span>
+                  )}
+                  {d.done > 0 && <a class="btn btn-sm ghost" href={`/app/program/${id}/grade/?call=${encodeURIComponent(d.key)}`}>Grade</a>}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </section>
+
+    {/* ── 03 Roll call ───────────────────────────────────────────── */}
+    <section class="sec" id="call">
+      <div class="sec-h">
+        <b><span class="sec-n">03</span>Roll call{called ? `: ${called.name}` : ''}</b>
+        <span>{called ? `due ${formatDate(called.dueOn, 'short')} · ${called.missing.length} still to record` : 'nothing to call'}</span>
+      </div>
+
+      {called && called.missing.length > 0 ? (
+        <>
+          <div class="callbar">
+            <p class="t-sm">
+              {called.missing.length} {called.missing.length === 1 ? 'student has' : 'students have'} not recorded this, by {elderWord.toLowerCase()}.
+              A nudge goes to the {staffWord(program, 'singular').toLowerCase()} where there is one, else to the student.
+            </p>
+            <form method="POST" action="#outcome">
+              <input type="hidden" name="action" value="nudge_all" />
+              <input type="hidden" name="pairs" value={allPairs} />
+              <button class="btn accent" type="submit" disabled={stillToNudge === 0}>{stillToNudge === 0 ? 'Everyone nudged this week' : `Nudge everyone missing (${stillToNudge})`}</button>
+            </form>
+          </div>
+
+          <div class="callgrid">
+            {callGroups.map((g) => (
+              <div class="callgroup">
+                <p class="callelder"><span class="role">{staffWord(program, g.rows.length === 1 && g.elder.indexOf(',') < 0 ? 'singular' : 'plural')}</span> {g.elder}<span class="callcount">{g.rows.length}</span></p>
+                <ul>
+                  {g.rows.map((r) => (
+                    <li>
+                      <span>
+                        {(() => {
+                          const cell = board ? board.rows.find((row) => row.place.id === r.place.id)?.cell ?? null : null;
+                          return (
+                            <>
+                              <a href={cell ? cell.href : `/app/project/${r.place.projectId}/in/${id}/#m-${r.milestoneId}`}>{r.place.authors.map((a: any) => a.name).join(', ') || 'No author'}</a>
+                              <span class="sub">{r.place.title}</span>
+                              {cell && <span class:list={['sub', 'docstate', cell.state]}>{cell.label}{cell.updatedAt ? ` · last edit ${fmtWhen(cell.updatedAt)}` : ''}</span>}
+                            </>
+                          );
+                        })()}
+                      </span>
+                      <span class="calldo">
+                        {r.to.map((t: any) => {
+                          const v = nudgeView(r.milestoneId, t.id);
+                          return v.thisWeek ? (
+                            <span class:list={['ntrack', v.st.acknowledged_at && 'seen', v.st.relayed_at && 'relayed']}>{String(t.name).split(' ')[0]}: {v.line}</span>
+                          ) : (
+                            <form method="POST" action="#outcome" class="inline">
+                              <input type="hidden" name="action" value="nudge" />
+                              <input type="hidden" name="milestone_id" value={r.milestoneId} />
+                              <input type="hidden" name="recipient_id" value={t.id} />
+                              <button class="btn btn-sm btn-2" type="submit">Nudge {String(t.name).split(' ')[0]}{v.st ? ' again' : ''}</button>
+                              {v.st && <span class="ntrack">{v.line}</span>}
+                            </form>
+                          );
+                        })}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ))}
+          </div>
+        </>
+      ) : (
+        <div class="allclear"><b>All in</b>{called ? 'Everybody has recorded this one.' : 'There is nothing to call.'}</div>
+      )}
+    </section>
+
+    {/* ── The class on one document (6.16) ─────────────────────────── */}
+    {board && called && (
+      <section class="sec" id="board">
+        <div class="sec-h">
+          <b>The class on {called.name}</b>
+          <span>{board.submitted} submitted · {board.inProgress} in progress · {board.notStarted} not started{board.asks ? ` · ${board.asks} ${board.asks === 1 ? 'ask' : 'asks'} open` : ''}</span>
+        </div>
+        <p class="t-sm" style="max-width:var(--measure-text); margin-bottom:12px">
+          Every student on <b>{board.deliverable.name}</b>, written in SciPath, whether or not it has been submitted.
+          Open any one to read it as it stands and comment on a field; the author is told.
+        </p>
+        <table class="tbl board">
+          <thead>
+            <tr>
+              <th scope="col">Student</th>
+              <th scope="col">State</th>
+              <th scope="col">Answered</th>
+              <th scope="col">Last edit</th>
+              <th scope="col">Comments</th>
+              <th scope="col"><span class="sr">Open</span></th>
+            </tr>
+          </thead>
+          <tbody>
+            {board.rows.map((r) => (
+              <tr class:list={[r.cell.state]}>
+                <td>
+                  <a href={r.cell.href}>{r.place.authors.map((a) => a.name).join(', ') || 'No author'}</a>
+                  <span class="sub">{r.place.title}{r.place.elders.length ? ` · ${r.place.elders.map((e) => e.name.split(' ')[0]).join(', ')}` : ''}</span>
+                </td>
+                <td><span class:list={['pill', r.cell.state === 'submitted' ? 'ok' : r.cell.state === 'not_started' ? 'late' : 'soon']}>{r.cell.label}</span></td>
+                <td>{r.cell.asked ? `${r.cell.filled} of ${r.cell.asked}` : '—'}</td>
+                <td>{r.cell.updatedAt ? fmtWhen(r.cell.updatedAt) : <span class="none">never</span>}</td>
+                <td>{r.cell.comments}{r.cell.asks ? <span class="pill late" style="margin-left:6px">{r.cell.asks} open</span> : null}</td>
+                <td><a class="btn btn-sm ghost" href={r.cell.href}>{r.cell.state === 'not_started' ? 'Open' : 'Read'}</a></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </section>
+    )}
+
+    {/* ── 04 Inbox ───────────────────────────────────────────────── */}
+    <section class="sec" id="inbox">
+      <div class="sec-h"><b><span class="sec-n">04</span>Inbox</b><span>{(waiting ?? []).length} recorded, not yet checked</span></div>
+
+      {/* Grades are written on each project's deadlines table, one row per
+          student under the obligation, and released here together or one
+          at a time there. The CSV is shaped for the district's gradebook,
+          which is the record; this is not. */}
+      <div class="callbar gradesbar">
+        <p class="t-sm">
+          <b>{(unreleased ?? []).length}</b> {(unreleased ?? []).length === 1 ? 'grade' : 'grades'} written and not yet visible to students.
+          Grades are written on each project's deadlines, under the obligation.
+        </p>
+        <span class="inline">
+          <a class="btn btn-sm btn-2" href={`/app/program/${id}/grade/`}>Grade a deadline</a>
+          <a class="btn btn-sm btn-2" href={`/app/program/${id}/grades.csv`}>Download grades (CSV)</a>
+          {(unreleased ?? []).length > 0 && (
+            <form method="POST" action="#outcome" class="inline">
+              <input type="hidden" name="action" value="release" />
+              <button class="btn btn-sm accent" type="submit">Release all</button>
+            </form>
+          )}
+        </span>
+      </div>
+
+      {(waiting ?? []).length === 0 ? (
+        <div class="allclear"><b>Empty</b>Everything recorded has been checked.</div>
+      ) : (
+        <ul class="ledger">
+          {(waiting ?? []).map((d: any) => {
+            const place = placeById.get(d.participation_id);
+            const age = d.submitted_at ? Math.abs(daysUntil(d.submitted_at.slice(0, 10), today) ?? 0) : null;
+            return (
+              <li>
+                <span class:list={['verdict', age !== null && age >= 7 ? 'soon' : '']}>
+                  {age === null ? '—' : age}
+                  <small>{age === null ? '' : age === 1 ? 'day waiting' : 'days waiting'}</small>
+                </span>
+                <span class="what">
+                  <span class="t">{d.label}</span>
+                  <span class="s">
+                    <b>From</b>{place?.authors.map((a) => a.name).join(', ') ?? 'unknown'} · {place?.title ?? ''}
+                    {d.signed_on ? ` · signed ${formatDate(d.signed_on, 'short')}` : ''}
+                  </span>
+                  {d.external_url && (
+                    <span class="how"><a href={d.external_url} target="_blank" rel="noopener noreferrer">{d.external_url.replace(/^https?:\/\//, '').slice(0, 60)}</a></span>
+                  )}
+                  {d.storage_path && (
+                    <span class="how"><a href={`/app/media/${d.storage_path}`}>Open the file</a></span>
+                  )}
+                </span>
+                <span class="do">
+                  {place && <a class="btn btn-sm btn-2" href={`/app/project/${place.projectId}/in/${id}/#m-${d.milestone_id ?? ''}`}>Open</a>}
+                  {/* Verifying is the Elder's; the teacher sees what is
+                      waiting and on whom, and verifies herself only where
+                      the place has no Elder. A nudge to the Elder about the
+                      student's obligation is the way to move it. */}
+                  {place && place.elders.length > 0 ? (
+                    <span class="sub">waiting on {place.elders.map((e) => e.name.split(' ')[0]).join(', ')}</span>
+                  ) : (
+                    <form method="POST" action="#outcome" class="inline">
+                      <input type="hidden" name="action" value="verify" />
+                      <input type="hidden" name="deliverable_id" value={d.id} />
+                      <button class="btn btn-sm accent" type="submit">Verify</button>
+                    </form>
+                  )}
+                </span>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </section>
+
+    {/* ── 05 Behind or quiet ─────────────────────────────────────── */}
+    <section class="sec" id="quiet">
+      <div class="sec-h"><b><span class="sec-n">05</span>Behind or quiet</b><span>{quiet.length} of {students.length}</span></div>
+
+      {quiet.length === 0 ? (
+        <div class="allclear"><b>All clear</b>Everybody is current and has been here in the last week.</div>
+      ) : (
+        <table class="tbl">
+          <thead>
+            <tr>
+              <th scope="col"><span class="sr">Overdue</span></th>
+              <th scope="col">Student</th>
+              <th scope="col">Next</th>
+              <th scope="col">Last seen</th>
+              <th scope="col">Notebook</th>
+              <th scope="col">Nudge</th>
+            </tr>
+          </thead>
+          <tbody>
+            {quiet.map((s) => (
+              <tr>
+                <td class="v">
+                  <span class:list={['verdict', s.overdue > 0 ? 'late' : s.quietDays === null ? 'soon' : '']}>
+                    {s.overdue}
+                    <small>overdue</small>
+                  </span>
+                </td>
+                <td>
+                  {s.place ? (
+                    <a href={`/app/project/${s.place.projectId}/in/${id}/`}>{s.name}</a>
+                  ) : (
+                    <span>{s.name}</span>
+                  )}
+                  <span class="sub">{s.place?.title ?? 'no project yet'}</span>
+                </td>
+                <td>
+                  {s.next ? (
+                    <>
+                      <span class="next">{s.next.name}</span>
+                      <span class:list={['sub', s.next.days !== null && s.next.days < 0 && 'late']}>{dayWord(s.next.days)}</span>
+                    </>
+                  ) : (
+                    <span class="none">Nothing outstanding</span>
+                  )}
+                </td>
+                <td>
+                  <span class:list={[!s.lastSignin && 'late']}>{s.lastSignin ? fmtWhen(s.lastSignin) : 'never signed in'}</span>
+                </td>
+                <td>
+                  {s.notes > 0 ? <>{s.notes} · last {fmtWhen(s.lastNote)}</> : <span class="none">not started</span>}
+                </td>
+                <td class="nudge-cell">
+                  {s.next && s.place ? nudgeTargets(s.place).map((t) => {
+                    const v = nudgeView(s.next!.milestoneId, t.id);
+                    return v.thisWeek ? (
+                      <span class:list={['ntrack', v.st.acknowledged_at && 'seen', v.st.relayed_at && 'relayed']}>{t.name.split(' ')[0]}: {v.line}</span>
+                    ) : (
+                      <form method="POST" action="#outcome" class="inline">
+                        <input type="hidden" name="action" value="nudge" />
+                        <input type="hidden" name="milestone_id" value={s.next!.milestoneId} />
+                        <input type="hidden" name="recipient_id" value={t.id} />
+                        <button class="btn btn-sm btn-2" type="submit">Nudge {t.name.split(' ')[0]}{v.st ? ' again' : ''}</button>
+                      </form>
+                    );
+                  }) : <span class="none">—</span>}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </section>
+
+    {/* ── 06 The Elders' work ────────────────────────────────────── */}
+    {staffRows.length > 0 && (
+      <section class="sec" id="elderwork">
+        <div class="sec-h"><b><span class="sec-n">06</span>{elderWord}' work</b><span>{staffDeadlines.length} {staffDeadlines.length === 1 ? 'task' : 'tasks'} on the calendar</span></div>
+
+        <p class="t-sm" style="max-width:var(--measure-text); margin-bottom:16px">
+          What the class asks of its {elderWord.toLowerCase()}: read this, say what to change, help with that.
+          A task is ready once the student step it waits on is met; until then it counts against nobody.
+          A nudge here goes to the {staffWord(program, 'singular').toLowerCase()}.
+        </p>
+
+        <div class="callgrid" style="margin-bottom:22px">
+          {elderWork.map((e) => (
+            <div class="callgroup">
+              <p class="callelder">
+                {e.name}
+                <span class="callcount">{e.done} done</span>
+                {e.late > 0 ? <span class="pill late">{e.late} late</span> : e.ready > 0 ? <span class="pill soon">{e.ready} to do</span> : <span class="pill ok">current</span>}
+              </p>
+              <ul>
+                <li>
+                  <span>
+                    {e.next ? (
+                      <>
+                        <a href={`/app/project/${e.next.place.projectId}/in/${id}/#m-${e.next.milestoneId}`}>{e.next.name}</a>
+                        <span class="sub">{e.next.place.authors.map((a) => a.name).join(', ')} · {dayWord(e.next.days)}</span>
+                      </>
+                    ) : (
+                      <span class="none">{e.waiting > 0 ? `${e.waiting} waiting on students` : 'nothing open'}</span>
+                    )}
+                  </span>
+                  {e.next && (
+                    <form method="POST" action="#outcome" class="inline">
+                      <input type="hidden" name="action" value="nudge" />
+                      <input type="hidden" name="milestone_id" value={e.next.milestoneId} />
+                      <input type="hidden" name="recipient_id" value={e.id} />
+                      <button class="btn btn-sm btn-2" type="submit">Nudge {e.name.split(' ')[0]}</button>
+                    </form>
+                  )}
+                </li>
+              </ul>
+            </div>
+          ))}
+        </div>
+
+        <table class="tbl">
+          <thead>
+            <tr><th scope="col"><span class="sr">Days</span></th><th scope="col">Task</th><th scope="col">Done</th><th scope="col">Ready</th><th scope="col">Waiting</th></tr>
+          </thead>
+          <tbody>
+            {staffDeadlines.map((d) => (
+              <tr>
+                <td class="v">
+                  <span class:list={['verdict', d.late > 0 ? 'late' : d.days !== null && d.days <= 7 && d.ready > 0 ? 'soon' : d.ready === 0 && d.waiting === 0 ? 'ok' : '']}>
+                    {d.days === null ? '—' : Math.abs(d.days)}
+                    <small>{d.days === null ? '' : d.days < 0 ? (Math.abs(d.days) === 1 ? 'day ago' : 'days ago') : d.days === 0 ? 'today' : d.days === 1 ? 'day left' : 'days left'}</small>
+                  </span>
+                </td>
+                <td><span class="dname">{d.name}</span><span class="sub">due {formatDate(d.dueOn, 'short')}</span></td>
+                <td><b class="t-num">{d.done}</b></td>
+                <td><span class:list={[d.late > 0 && 'late']}>{d.ready}{d.late > 0 ? ` (${d.late} late)` : ''}</span></td>
+                <td><span class="none">{d.waiting}</span></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </section>
+    )}
+  </div>
+</Base>
+
+<style>
+  .docstates { display: block; margin-top: 4px; }
+  .docstates .st { color: var(--ink-3); }
+  .docstates .st.prog { color: var(--accent-deep); }
+  .docstates .st.none { color: var(--alert); }
+  .docstates .st.late { color: var(--alert); }
+  .docstate { display: block; }
+  .docstate.not_started { color: var(--alert); }
+  .docstate.in_progress, .docstate.revising { color: var(--accent-deep); }
+  .docstate.submitted { color: var(--stage-comp); }
+  .board tr.not_started td:first-child a { font-weight: 600; }
+  .sub { display: block; margin-top: 3px; font-family: var(--face-ui); font-size: 0.82rem; color: var(--ink-3); }
+  .sub.late { color: var(--alert); font-weight: 600; }
+  .late { color: var(--alert); }
+  .none { color: var(--ink-3); font-size: 0.92rem; }
+  .next { font-size: 0.94rem; }
+  .inline { display: inline-flex; gap: 6px; align-items: center; }
+  /* One button per line, all the same width, left edges on one line: the
+     cell had them inline, so a second button dropped under the first
+     with its own indent and the column read as a staircase. */
+  .nudge-cell { white-space: nowrap; }
+  .nudge-cell form { display: block; margin: 0; }
+  .nudge-cell form + form { margin-top: 6px; }
+  .nudge-cell .btn { display: inline-block; min-width: 9.5em; text-align: center; font-size: 0.86rem; padding: 5px 10px; }
+  .nudge-cell .ntrack { text-align: left; }
+
+  .dname { font-family: var(--face-ui); font-weight: 600; font-size: 1rem; }
+  .week tr.is-called td { background: var(--accent-pale); }
+
+  .bar-cell { min-width: 160px; }
+  .bar {
+    display: block;
+    height: 10px;
+    background: var(--sunk);
+    border: 1px solid var(--rule);
+    overflow: hidden;
+  }
+  .bar i { display: block; height: 100%; background: var(--brand); }
+  .bar-cell .sub b { font-family: var(--face-num); color: var(--ink); }
+
+  .callbar {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px 24px;
+    margin: 0 0 18px;
+  }
+  .callbar p { max-width: 60ch; }
+  .callbar form { margin: 0; }
+  .gradesbar { padding: 12px 16px; background: var(--card); border: 1px solid var(--rule); }
+
+  .callgrid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+    gap: 16px;
+  }
+  .callgroup {
+    background: var(--card);
+    border: 1px solid var(--rule);
+    border-top: var(--edge) solid var(--brand);
+    box-shadow: var(--lift);
+  }
+  /* One shape for every card: the role on its own line, the names beside
+     the count, and every row a two-column grid with the buttons in a
+     column of one width, so the names start on one line and the buttons
+     stack under each other down the page instead of drifting with the
+     length of the name beside them. */
+  .callelder {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    column-gap: 8px;
+    margin: 0;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--rule-fine);
+    font-family: var(--face-ui);
+    font-weight: 700;
+    line-height: 1.25;
+  }
+  .callelder .role {
+    grid-column: 1 / -1;
+    margin-bottom: 2px;
+    font-family: var(--face-num);
+    font-size: 0.68rem;
+    font-weight: 400;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+  }
+  .callcount {
+    margin-left: auto;
+    font-family: var(--face-num);
+    font-size: 0.8rem;
+    font-weight: 700;
+    padding: 1px 8px;
+    background: var(--brand-deep);
+    color: var(--brand-contrast);
+  }
+  .callgroup ul { list-style: none; margin: 0; padding: 0; }
+  .callgroup li {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: start;
+    gap: 10px;
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--rule-fine);
+  }
+  .callgroup li > span:first-child { min-width: 0; }
+  .callgroup li:last-child { border-bottom: 0; }
+  .calldo { display: flex; flex-direction: column; align-items: stretch; gap: 6px; min-width: 9.5em; }
+  .calldo form { margin: 0; display: flex; flex-direction: column; gap: 3px; }
+  /* `.ntrack`, not `.track`: the kit's `.track` is the season's phase line. */
+  .ntrack {
+    display: block;
+    font-family: var(--face-ui);
+    font-size: 0.78rem;
+    line-height: 1.35;
+    color: var(--ink-3);
+    text-align: right;
+  }
+  .ntrack.seen { color: var(--ink-2); }
+  .ntrack.relayed { color: var(--stage-comp); }
+
+  .answers { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--rule-fine); }
+  .answers li { display: grid; grid-template-columns: 9em minmax(0, 1fr); gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--rule-fine); }
+  .answers li.reply { background: var(--accent-pale); padding-left: 10px; padding-right: 10px; }
+  .a-when { font-family: var(--face-num); font-size: 0.78rem; color: var(--ink-3); padding-top: 3px; }
+  .a-what .sub { display: block; font-size: 0.86rem; color: var(--ink-3); }
+  .a-note { display: block; margin-top: 4px; font-style: italic; }
+  .calldo .btn { flex: 1; text-align: center; white-space: nowrap; }
+</style>

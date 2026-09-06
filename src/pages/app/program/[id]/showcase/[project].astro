@@ -1,0 +1,167 @@
+---
+export const prerender = false;
+
+/**
+ * ONE PROJECT ON THE CLASS SHOWCASE.
+ *
+ * The card, opened: the same shape as a published record's page (title,
+ * authors, the pictures with their captions, the video, the summary as
+ * prose, the links), for the class's members and staff and nobody else.
+ * Nothing here is a record: it is the project as it stands, and it changes
+ * when the authors change it.
+ *
+ * Read through the same definer function as the gallery, so the two can
+ * never disagree about who may see what; the row is picked out by id.
+ */
+
+import Base from '../../../../../layouts/Base.astro';
+import AppShell from '../../../../../components/AppShell.astro';
+import { activeOrg } from '../../../../../lib/tenant';
+import { serverClient } from '../../../../../lib/supabase';
+import { resolveProgram } from '../../../../../lib/templates';
+import { programTitle, staffWord } from '../../../../../lib/program-names';
+import { parseVideo } from '../../../../../lib/video';
+import { formatDate } from '../../../../../lib/dates';
+import { signInWith } from '../../../../../lib/next-path';
+
+const { session, account, roles } = Astro.locals;
+const org = activeOrg(Astro);
+const { id, project: projectId } = Astro.params;
+
+if (!session) return Astro.redirect(signInWith(Astro.url));
+if (!account) return Astro.redirect('/app/welcome/');
+
+const mayRead = ((Astro.locals as any).showcases ?? []).some((s: any) => s.program_id === id);
+if (!mayRead) return Astro.redirect('/app/');
+
+const supabase = serverClient(Astro.request, Astro.cookies, (Astro.locals as any).runtime?.env);
+
+const { data: program } = await supabase
+  .from('programs')
+  .select('id, name, short_name, season_year, kind, program_role, roles, template_id, showcase')
+  .eq('id', id)
+  .maybeSingle();
+if (!program || program.showcase !== 'private') return Astro.redirect('/app/');
+
+const { data: cards } = await supabase.rpc('program_showcase', { p_program_id: id });
+const card = (cards ?? []).find((c: any) => c.project_id === projectId) ?? null;
+
+/* Hidden, archived, not in this class, or not this reader's to see: all the
+   same answer, back to the gallery. */
+if (!card) return Astro.redirect(`/app/program/${id}/showcase/`);
+
+const template = program.template_id
+  ? (() => {
+      try {
+        return resolveProgram(program.template_id, null);
+      } catch {
+        return null;
+      }
+    })()
+  : null;
+const phases = (template?.phases ?? []) as any[];
+const at = phases.findIndex((p: any) => p.id === card.next_phase);
+
+const video = parseVideo(card.video_url);
+const images = (card.images ?? []) as any[];
+const links = (card.links ?? []) as any[];
+const mediaUrl = (path: string) => `/app/media/${path}`;
+const label = program.short_name ?? program.name;
+---
+
+<Base title={card.title} noindex={true}>
+  <div class="wrap">
+    <AppShell org={org} account={account} roles={roles} here={`/app/program/${id}/showcase/`} />
+
+    <p class="back"><a href={`/app/program/${id}/showcase/`}>← {label} Showcase</a></p>
+
+    <section class="cover">
+      <p class="kick">{programTitle(program)} · {phases[at]?.name ?? (card.total > 0 && card.done === card.total ? 'Complete' : 'In progress')}</p>
+      <h1>{card.title}</h1>
+      <ul class="people">
+        <li><b>{(card.authors ?? []).length === 1 ? 'Author' : 'Authors'}</b><span>{(card.authors ?? []).join(', ') || 'Nobody yet'}</span></li>
+        {(card.elders ?? []).length > 0 && (
+          <li><b>{staffWord(program, (card.elders ?? []).length === 1 ? 'singular' : 'plural')}</b><span>{(card.elders ?? []).join(', ')}</span></li>
+        )}
+        <li><b>Updated</b><span>{formatDate(card.updated_at, 'long')}</span></li>
+      </ul>
+    </section>
+
+    {images.length > 0 && (
+      <ul class:list={['shots', images.length === 1 && 'one']}>
+        {images.map((img: any) => (
+          <li>
+            <img src={mediaUrl(img.path)} alt={img.alt ?? ''} loading="lazy" />
+            {img.caption && <p>{img.caption}</p>}
+          </li>
+        ))}
+      </ul>
+    )}
+
+    {video && (
+      <div class="vsaved">
+        <a href={video.watch} target="_blank" rel="noopener noreferrer">
+          {video.poster ? <img src={video.poster} alt="" loading="lazy" /> : <span class="vblank"></span>}
+        </a>
+        <p class="t-sm">Video on {video.host === 'vimeo' ? 'Vimeo' : 'YouTube'}. <a href={video.watch} target="_blank" rel="noopener noreferrer">Watch it there</a>.</p>
+      </div>
+    )}
+
+    <div class="two">
+      <section class="sec">
+        <div class="sec-h"><b><span class="sec-n">01</span>About the project</b><span>in the {(card.authors ?? []).length === 1 ? "author's" : "authors'"} words</span></div>
+        {card.summary ? (
+          <div class="prose"><p style="white-space: pre-line">{card.summary}</p></div>
+        ) : (
+          <p class="t-sm">No summary yet.{card.mine ? ' Write one on My showcase.' : ''}</p>
+        )}
+        {links.length > 0 && (
+          <>
+            <h3 class="group-h" style="margin-top:22px">Links</h3>
+            <ul class="linklist">
+              {links.map((l: any) => (
+                <li><a href={l.url} target="_blank" rel="noopener noreferrer">{l.label}</a></li>
+              ))}
+            </ul>
+          </>
+        )}
+      </section>
+
+      <section class="sec">
+        <div class="sec-h"><b><span class="sec-n">02</span>Where it is</b><span>{card.done} of {card.total} met</span></div>
+        {phases.length > 0 ? (
+          <ol class="track" style={`--stops:${phases.length}`}>
+            {phases.map((p: any, i: number) => (
+              <li class={i < at ? 'done' : i === at ? 'now' : ''}>
+                <span class="n">Phase {i + 1}{i === at ? ' · now' : ''}</span>
+                <span class="t">{p.name}</span>
+                {p.window && <span class="w">{p.window.from} to {p.window.to}</span>}
+              </li>
+            ))}
+          </ol>
+        ) : null}
+        <p class="t-sm" style="margin-top:18px">
+          {card.next_name ? <>Next: <b>{card.next_name}</b>.</> : 'Nothing outstanding.'}
+        </p>
+        {card.mine && (
+          <p style="margin-top:14px"><a class="btn btn-sm btn-2" href={`/app/project/${card.project_id}/showcase/`}>Change my card</a></p>
+        )}
+      </section>
+    </div>
+  </div>
+</Base>
+
+<style>
+  .back { margin: 0 0 18px; font-family: var(--face-ui); font-size: 0.9rem; }
+  .shots { list-style: none; margin: 28px 0 0; padding: 0; display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; }
+  .shots.one { grid-template-columns: 1fr; }
+  .shots img { display: block; width: 100%; aspect-ratio: 16 / 10; object-fit: cover; border: 1px solid var(--rule); box-shadow: var(--lift); }
+  .shots.one img { aspect-ratio: auto; max-height: 60vh; object-fit: contain; background: var(--card); }
+  .shots p { margin: 6px 0 0; font-size: 0.9rem; color: var(--ink-2); }
+  .vsaved { margin: 28px 0 0; }
+  .vsaved img { display: block; width: 100%; max-width: 640px; border: 1px solid var(--rule); }
+  .vblank { display: block; width: 100%; max-width: 640px; aspect-ratio: 16 / 9; background: var(--sunk); }
+  .two { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 0 32px; }
+  .two .track { grid-template-columns: repeat(2, minmax(0, 1fr)); row-gap: 14px; }
+  .two .track::before, .two .track li.done::after { display: none; }
+</style>

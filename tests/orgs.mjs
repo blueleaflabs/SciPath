@@ -255,6 +255,53 @@ test('the fixture seed reads the flag rather than naming a school', () => {
   );
 });
 
+test('every provisioned tenant is allowed back from Google on the local stack', () => {
+  /* `additional_redirect_urls` in config.toml is an exact allowlist. A
+     tenant missing from it is not refused: Supabase drops the redirect and
+     lands the person on `site_url` with an unexchanged `?code=` in the
+     address bar, which looks like nothing happened. `demo` was missing,
+     and the first Google sign-in of the pilot rehearsal did exactly that.
+     The list is checked against the organization files so the next tenant
+     cannot be forgotten the same way. */
+  const toml = fs.readFileSync('supabase/config.toml', 'utf8');
+  const line = toml.match(/^additional_redirect_urls\s*=\s*\[(.*)\]/m)?.[1] ?? '';
+  const allowed = [...line.matchAll(/"([^"]+)"/g)].map((m) => m[1]);
+  const missing = [];
+  for (const file of files) {
+    const doc = yaml.load(fs.readFileSync(path.join(dir, file), 'utf8'));
+    if (doc.provisioned === false) continue;
+    const want = `http://${doc.slug}.localhost:4321/**`;
+    if (!allowed.includes(want)) missing.push(want);
+  }
+  assert.deepEqual(missing, [], 'add it to additional_redirect_urls in supabase/config.toml');
+});
+
+test('a tab hidden for a pilot has a date, and the date has not passed', () => {
+  /* `hidden_until` takes a surface off the bar for a pilot. The whole point
+     of writing the date down is this check: the day it is reached, the
+     suite goes red and somebody decides, on that day, whether the tab comes
+     back or the date moves. Nothing hidden by an org file is ever hidden
+     with no end. */
+  const known = ['editorial', 'publish', 'assign', 'roles', 'showcase', 'guides'];
+  const today = new Date().toISOString().slice(0, 10);
+  for (const file of files) {
+    const doc = yaml.load(fs.readFileSync(path.join(dir, file), 'utf8'));
+    const h = doc.hidden_until;
+    if (!h) continue;
+    const date = h.date instanceof Date ? h.date.toISOString().slice(0, 10) : String(h.date);
+    assert.match(date, /^\d{4}-\d{2}-\d{2}$/, `${file}: hidden_until.date must be a date`);
+    assert.ok(Array.isArray(h.surfaces) && h.surfaces.length > 0, `${file}: hidden_until.surfaces is empty`);
+    for (const sName of h.surfaces) assert.ok(known.includes(sName), `${file}: no tab called ${sName}`);
+    for (const t of h.programs ?? []) {
+      assert.ok((doc.programs ?? []).includes(t), `${file}: hidden_until.programs names ${t}, which the school does not list`);
+    }
+    assert.ok(
+      date > today,
+      `${file}: hidden_until.date ${date} has arrived. Reinstate the hidden tabs (${h.surfaces.join(', ')}) by deleting the block, or move the date on purpose.`
+    );
+  }
+});
+
 console.log(
   `\n${passed} organization assertions passed. ` +
     `${files.length} files read, mark ${markLimits.min}-${markLimits.max} from the migration.`

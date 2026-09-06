@@ -99,6 +99,18 @@ const PAIRS = [
   ['--alert', '--card'],
   ['--alert', '--alert-bg'],
   ['--focus', '--card'],
+
+  /* The cover block and the accent. Text on the cover, the second ink on
+     the cover, the accent's own ink on its fill and on its pale wash, and
+     the deep accent as text on a card, which is how a "3 days left" reads
+     without being red. */
+  ['--cover-ink', '--cover'],
+  ['--cover-ink-2', '--cover'],
+  ['--accent-ink', '--accent'],
+  ['--accent-ink', '--accent-pale'],
+  ['--accent-deep', '--card'],
+  ['--accent-deep', '--accent-pale'],
+  ['--brand-contrast', '--alert'],
 ];
 
 const themes = parseThemes(css);

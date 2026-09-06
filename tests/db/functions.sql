@@ -18,6 +18,7 @@ select id as project  from public.projects where title like 'Last year%' \gset
 select id as advisor  from public.users where display_name = 'Advisor' \gset
 select id as officer  from public.users where display_name = 'Fair officer' \gset
 select id as elder    from public.users where display_name = 'Elder' \gset
+select id as another  from public.users where display_name = 'Another student' \gset
 \set QUIET off
 
 /*
@@ -800,7 +801,7 @@ begin
 
   /* Evidence is refused rather than destroyed. A sponsor is a teacher's
      signature and leaving must not silently take it with it. */
-  perform public.record_sponsor(v_place, 'K. Gupta', 'kgupta@fuhsd.org', '2026-09-01');
+  perform public.record_sponsor(v_place, 'A. Teacher', 'teacher@fuhsd.org', '2026-09-01');
 
   begin
     perform public.set_project_cohort(v_project, %L::uuid, false);
@@ -812,9 +813,35 @@ begin
     end if;
     raise notice '  ok   and refuses while a sponsor is recorded, in words';
   end;
+
+  /* And a recorded document refuses the same way. The milestone copies
+     went before the row and outside the handler, so a class with anything
+     recorded failed on the milestone delete with the constraint's name. */
+  delete from public.project_sponsors where participation_id = v_place;
+  declare
+    v_ms uuid;
+  begin
+    select em.id into v_ms from public.entry_milestones em where em.participation_id = v_place limit 1;
+    insert into public.deliverables (org_id, participation_id, milestone_id, type, label, external_url, created_by)
+    select pa.org_id, v_place, v_ms, 'test_doc', 'A recorded document', 'https://example.org/doc', auth.uid()
+      from public.participations pa where pa.id = v_place;
+    begin
+      perform public.set_project_cohort(v_project, %L::uuid, false);
+      raise exception 'FAIL leaving deleted a recorded document';
+    exception when others then
+      if sqlerrm like 'FAIL%%' then raise; end if;
+      if sqlerrm not like '%%documents recorded against this class%%' then
+        raise exception 'FAIL refused for the wrong reason: %%', sqlerrm;
+      end if;
+      raise notice '  ok   and refuses while a document is recorded, in words';
+    end;
+    /* Test furniture, cleared so the blocks after this see the place as
+       the earlier ones left it. */
+    delete from public.deliverables where participation_id = v_place and type = 'test_doc';
+  end;
 end $body$;
 $fmt$, :'a_cohort', :'a_cohort', :'a_cohort', :'author', :'a_cohort',
-      :'a_cohort', :'a_cohort', :'a_cohort', :'a_cohort', :'a_cohort') \gexec
+      :'a_cohort', :'a_cohort', :'a_cohort', :'a_cohort', :'a_cohort', :'a_cohort') \gexec
 
 -- ── An entry records the cohort it went through ────────────────────────────
 --
@@ -856,6 +883,28 @@ begin
   /* The class prepares for nothing; it is the other cohort that does. */
   update public.programs set prepares_for = %L::uuid where id = %L::uuid;
 
+  /* One project per person per cohort at a time: this author already has
+     one in the class from the block above, so a second is refused... */
+  begin
+    perform public.start_project('A second one for the same class', null, %L::uuid);
+    raise exception 'FAIL a second project was accepted into a class that already holds one of this author''s';
+  exception when others then
+    if sqlerrm not like 'you already have a project in this class%%' then raise; end if;
+  end;
+  raise notice '  ok   a second project in the same cohort is refused';
+
+  /* ...and the way in is to leave with the first. The sponsor the block
+     above left recorded is what the leave refuses on, so it goes first. */
+  delete from public.project_sponsors sp
+   using public.participations pa, public.project_authors a
+   where pa.id = sp.participation_id and pa.program_id = %L::uuid
+     and a.project_id = pa.project_id and a.user_id = auth.uid() and a.role = 'author';
+  perform public.set_project_cohort(pa.project_id, pa.program_id, false)
+     from public.participations pa
+     join public.project_authors a on a.project_id = pa.project_id
+    where pa.program_id = %L::uuid and a.user_id = auth.uid() and a.role = 'author';
+  raise notice '  ok   leaving with the first makes room';
+
   v_project := public.start_project('Entered through the club', null, %L::uuid);
 
   select pa.id into v_place from public.participations pa
@@ -893,7 +942,7 @@ begin
 
   raise notice '  ok   and leaves it unanswered where two cohorts prepare for it';
 end $body$;
-$fmt$, :'author', :'a_fair', :'a_cohort', :'a_cohort', :'a_cohort', :'a_fair',
+$fmt$, :'author', :'a_fair', :'a_cohort', :'a_cohort', :'a_cohort', :'a_cohort', :'a_cohort', :'a_cohort', :'a_fair',
       :'a_fair', :'second_cohort', :'second_cohort', :'a_fair') \gexec
 
 -- ── A deliverable recorded twice replaces the first ────────────────────────
@@ -979,6 +1028,13 @@ declare
   v_club    uuid;
 begin
   perform set_config('request.jwt.claim.sub', %L, true);
+
+  /* One project per person per cohort, and the first author's is in the
+     class from the blocks above, so this one is another student's. */
+  insert into public.memberships (org_id, user_id, cohort_id)
+  select org_id, auth.uid(), %L::uuid from public.programs where id = %L::uuid
+  on conflict do nothing;
+
   v_project := public.start_project('Looked after in two places', null, %L::uuid);
 
   select pa.id into v_class from public.participations pa
@@ -1033,7 +1089,7 @@ begin
 
   raise notice '  ok   and detaching from one leaves the other';
 end $body$;
-$fmt$, :'author', :'a_cohort', :'a_cohort', :'second_cohort',
+$fmt$, :'another', :'a_cohort', :'a_cohort', :'a_cohort', :'a_cohort', :'second_cohort',
       :'advisor', :'officer', :'officer', :'officer') \gexec
 
 -- ── A class's showcase is for the class ────────────────────────────────────
@@ -1127,7 +1183,7 @@ begin
     (v_org, v_fair,   'Adult sponsor form', 'approval', '2027-02-01', 'sponsor');
 
   perform set_config('request.jwt.claim.sub', %L, true);
-  perform public.record_sponsor(v_course, 'K. Gupta', 'kgupta@fuhsd.org', '2026-09-01');
+  perform public.record_sponsor(v_course, 'A. Teacher', 'teacher@fuhsd.org', '2026-09-01');
 
   select completed_on into v_here  from public.entry_milestones
    where participation_id = v_course and satisfied_by = 'sponsor';
@@ -1561,6 +1617,547 @@ end $body$;
 
 
 \echo ''
+\echo '── A private showcase keeps its projects off the public record'
+
+select format($fmt$
+do $body$
+declare
+  v_org     uuid := '11111111-1111-1111-1111-111111111111';
+  v_project uuid;
+  v_class   uuid;
+  v_ok      boolean := false;
+begin
+  /* As the advisor, who is an editor, on a project that already publishes,
+     so the only thing that changes is the program it is put into. */
+  perform set_config('request.jwt.claim.sub',
+    'a0000000-0000-0000-0000-000000000004', true);
+
+  select r.project_id into v_project from public.records r where r.id = 'TEST-2027-0001';
+
+  insert into public.programs
+    (org_id, slug, name, short_name, season_year, kind, status, program_role, showcase)
+  values
+    (v_org, 'private-class', 'A private class', 'APC', 2027, 'course', 'open', 'cohort', 'private')
+  returning id into v_class;
+
+  insert into public.participations (org_id, project_id, program_id, status)
+  values (v_org, v_project, v_class, 'entered');
+
+  if not app.showcase_private(v_project) then
+    raise exception 'FAIL the project is in a private class and the function says otherwise';
+  end if;
+
+  begin
+    perform public.generate_project_record(v_project, 'private', 'TEST', null, null);
+    raise exception 'FAIL a public record was minted for a project in a private class';
+  exception when others then
+    if sqlerrm like 'FAIL%%' then raise; end if;
+    if sqlerrm not like '%%private showcase%%' then
+      raise exception 'FAIL refused for the wrong reason: %%', sqlerrm;
+    end if;
+    v_ok := true;
+  end;
+
+  if not v_ok then raise exception 'FAIL no refusal at all'; end if;
+  raise notice '  ok   a project in a private class cannot become a public record';
+
+  /* The advisor reads the class showcase; the project is on it, and comes
+     off it when its author hides it. */
+  if not app.showcase_viewer(v_class) then
+    raise exception 'FAIL the advisor cannot read the class showcase';
+  end if;
+  if not exists (select 1 from public.program_showcase(v_class) where project_id = v_project) then
+    raise exception 'FAIL the project is not on the class showcase';
+  end if;
+  raise notice '  ok   the advisor reads the class showcase and the project is on it';
+
+  update public.projects set showcase_hidden = true where id = v_project;
+  if exists (select 1 from public.program_showcase(v_class) where project_id = v_project) then
+    raise exception 'FAIL a hidden project is still on the class showcase';
+  end if;
+  raise notice '  ok   a hidden project leaves the page';
+  update public.projects set showcase_hidden = false where id = v_project;
+
+  /* Somebody at the other school reads nothing. */
+  perform set_config('request.jwt.claim.sub', %L, true);
+  if app.showcase_viewer(v_class) then
+    raise exception 'FAIL a student at another school may read the class showcase';
+  end if;
+  raise notice '  ok   an outsider reads nothing';
+
+  perform set_config('request.jwt.claim.sub',
+    'a0000000-0000-0000-0000-000000000004', true);
+  delete from public.participations where project_id = v_project and program_id = v_class;
+  delete from public.programs where id = v_class;
+exception when others then
+  perform set_config('role', 'postgres', true);
+  raise;
+end $body$;
+$fmt$, :'outsider') \gexec
+
+\echo ''
+\echo '── An Elder''s task waits on the student and is nobody else''s debt'
+
+select format($fmt$
+do $body$
+declare
+  v_org     uuid := '11111111-1111-1111-1111-111111111111';
+  v_project uuid;
+  v_part    uuid;
+  v_student uuid;
+  v_gate    uuid;
+  v_task    uuid;
+  v_author  uuid;
+  v_ok      boolean := false;
+begin
+  perform set_config('request.jwt.claim.sub', 'a0000000-0000-0000-0000-000000000004', true);
+
+  select r.project_id into v_project from public.records r where r.id = 'TEST-2027-0001';
+  select e.id into v_part from public.participations e where e.project_id = v_project limit 1;
+  if v_part is null then
+    raise exception 'FAIL the test project has no participation';
+  end if;
+
+  insert into public.entry_milestones (org_id, participation_id, name, kind, due_on, owner, step_id)
+  values (v_org, v_part, 'A student step', 'local', current_date - 1, 'student', 'the_step')
+  returning id into v_gate;
+
+  insert into public.entry_milestones (org_id, participation_id, name, kind, due_on, owner, step_id, requires_step)
+  values (v_org, v_part, 'Read it and say what to change', 'local', current_date - 1, 'staff', 'elder_step', 'the_step')
+  returning id into v_task;
+
+  -- Not ready: the student step is open.
+  begin
+    perform public.complete_staff_task(v_task, 'fine');
+    raise exception 'FAIL a task was completed while the step it waits on is open';
+  exception when others then
+    if sqlerrm like 'FAIL%%' then raise; end if;
+    if sqlerrm not like '%%waiting on the student%%' then
+      raise exception 'FAIL refused for the wrong reason: %%', sqlerrm;
+    end if;
+    v_ok := true;
+  end;
+  if not v_ok then raise exception 'FAIL no refusal'; end if;
+  raise notice '  ok   a task waits on the student step';
+
+  -- The student meets the step; the task is ready.
+  update public.entry_milestones set completed_on = current_date where id = v_gate;
+  if not app.staff_task_ready(v_task) then
+    raise exception 'FAIL the task is not ready after the step was met';
+  end if;
+
+  -- The author may not complete an Elder's task.
+  select a.user_id into v_author from public.project_authors a
+   where a.project_id = v_project and a.role = 'author' limit 1;
+  perform set_config('request.jwt.claim.sub', v_author::text, true);
+  v_ok := false;
+  begin
+    perform public.complete_staff_task(v_task, 'done by me');
+    raise exception 'FAIL the student completed the Elder''s task';
+  exception when others then
+    if sqlerrm like 'FAIL%%' then raise; end if;
+    v_ok := true;
+  end;
+  if not v_ok then raise exception 'FAIL no refusal for the student'; end if;
+  raise notice '  ok   the student cannot complete the Elder''s task';
+
+  -- The advisor completes it, with a line of feedback, and the notebook has the line.
+  perform set_config('request.jwt.claim.sub', 'a0000000-0000-0000-0000-000000000004', true);
+  perform public.complete_staff_task(v_task, 'Tighten the question.');
+  if not exists (select 1 from public.entry_milestones where id = v_task and completed_on is not null) then
+    raise exception 'FAIL the task is not marked done';
+  end if;
+  if not exists (select 1 from public.deliverable_feedback where milestone_id = v_task and body_md = 'Tighten the question.') then
+    raise exception 'FAIL the feedback was not kept';
+  end if;
+  if not exists (select 1 from public.field_notes where project_id = v_project and body_md like 'Feedback on **Read it and say what to change**%%') then
+    raise exception 'FAIL the notebook did not get its line';
+  end if;
+  raise notice '  ok   the advisor completes it with feedback, and the notebook says so';
+
+  -- And the showcase counts never included it.
+  delete from public.deliverable_feedback where milestone_id = v_task;
+  delete from public.entry_milestones where id in (v_task, v_gate);
+exception when others then
+  perform set_config('role', 'postgres', true);
+  raise;
+end $body$;
+$fmt$) \gexec
+
+
+\echo ''
+\echo '── A document is written a field at a time, commented on in progress, and submitted'
+
+do $body$
+declare
+  v_org      uuid := '11111111-1111-1111-1111-111111111111';
+  v_project  uuid := 'c0000000-0000-0000-0000-000000000002';   -- Course project
+  v_author   uuid := 'a0000000-0000-0000-0000-000000000008';   -- Author two
+  v_elder    uuid := 'a0000000-0000-0000-0000-000000000003';   -- attached to its class place
+  v_other    uuid := 'a0000000-0000-0000-0000-000000000006';   -- Another student, same school
+  v_part     uuid;
+  v_doc      uuid;
+  v_doc2     uuid;
+  v_ans      jsonb;
+  v_step     uuid;
+  v_task     uuid;
+  v_ask      uuid;
+  v_ver      uuid;
+  v_ok       boolean;
+begin
+  select e.id into v_part from public.participations e
+   where e.project_id = v_project and e.program_id = 'b0000000-0000-0000-0000-000000000003';
+  if v_part is null then raise exception 'FAIL the course project has no class place'; end if;
+
+  -- Only an author opens one, and opening twice is the same document.
+  perform set_config('role', 'authenticated', true);
+  perform set_config('role', 'authenticated', true);
+  perform set_config('request.jwt.claim.sub', v_other::text, true);
+  v_ok := false;
+  begin
+    perform public.open_document(v_project, 'interview_protocol', 'interview-questions', 1);
+  perform set_config('role', 'postgres', true);
+  exception when others then v_ok := true; perform set_config('role', 'postgres', true);
+  end;
+  if not v_ok then raise exception 'FAIL a classmate opened somebody else''s document'; end if;
+  raise notice '  ok   only an author opens a document';
+
+  perform set_config('role', 'authenticated', true);
+  perform set_config('request.jwt.claim.sub', v_author::text, true);
+  v_doc := public.open_document(v_project, 'interview_protocol', 'interview-questions', 1, array['elder_score']);
+  perform set_config('role', 'postgres', true);
+  v_doc2 := public.open_document(v_project, 'interview_protocol', 'interview-questions', 1, array['elder_score']);
+  perform set_config('role', 'postgres', true);
+  if v_doc <> v_doc2 then raise exception 'FAIL opening twice made two documents'; end if;
+  raise notice '  ok   opening twice is one document';
+
+  -- A field saves with its version, and a stale version is refused with the newer text.
+  v_ans := public.save_field(v_doc, 'who', to_jsonb('Parents of teens'::text), 0);
+  perform set_config('role', 'postgres', true);
+  if not (v_ans->>'ok')::boolean or (v_ans->>'version')::int <> 1 then
+    raise exception 'FAIL first save: %', v_ans;
+  end if;
+  v_ans := public.save_field(v_doc, 'who', to_jsonb('Parents and nurses'::text), 1);
+  perform set_config('role', 'postgres', true);
+  if not (v_ans->>'ok')::boolean or (v_ans->>'version')::int <> 2 then
+    raise exception 'FAIL second save: %', v_ans;
+  end if;
+  v_ans := public.save_field(v_doc, 'who', to_jsonb('Stale text'::text), 1);
+  perform set_config('role', 'postgres', true);
+  if (v_ans->>'ok')::boolean then raise exception 'FAIL a stale save overwrote a newer field'; end if;
+  if v_ans->>'value' <> 'Parents and nurses' then raise exception 'FAIL the conflict did not carry the newer text: %', v_ans; end if;
+  raise notice '  ok   a stale save is refused and answered with the newer text';
+
+  -- The Elder's part: the author may not write it, the Elder may, and it
+  -- does not flip a submitted document back to revising.
+  perform set_config('role', 'authenticated', true);
+  v_ok := false;
+  begin
+    perform public.save_field(v_doc, 'elder_score', to_jsonb('4'::text), 0);
+  exception when others then v_ok := true; perform set_config('role', 'postgres', true);
+  end;
+  if not v_ok then raise exception 'FAIL the author wrote the Elder''s field'; end if;
+  perform set_config('role', 'authenticated', true);
+  perform set_config('request.jwt.claim.sub', v_elder::text, true);
+  v_ans := public.save_field(v_doc, 'elder_score', to_jsonb('3.5'::text), 0);
+  perform set_config('role', 'postgres', true);
+  if not (v_ans->>'ok')::boolean then raise exception 'FAIL the Elder could not write their field: %', v_ans; end if;
+  perform set_config('role', 'authenticated', true);
+  v_ok := false;
+  begin
+    perform public.save_field(v_doc, 'who', to_jsonb('x'::text), 2);
+  exception when others then v_ok := true; perform set_config('role', 'postgres', true);
+  end;
+  if not v_ok then raise exception 'FAIL the Elder wrote the student''s field'; end if;
+  raise notice '  ok   the Elder writes their part of the handout and nothing else';
+  perform set_config('request.jwt.claim.sub', v_author::text, true);
+
+  -- A classmate cannot write a field, nor read the document.
+  perform set_config('role', 'authenticated', true);
+  perform set_config('request.jwt.claim.sub', v_other::text, true);
+  v_ok := false;
+  begin
+    perform public.save_field(v_doc, 'who', to_jsonb('x'::text), 2);
+  perform set_config('role', 'postgres', true);
+  exception when others then v_ok := true; perform set_config('role', 'postgres', true);
+  end;
+  if not v_ok then raise exception 'FAIL a classmate wrote a field'; end if;
+  perform set_config('role', 'authenticated', true);
+  if exists (select 1 from public.documents where id = v_doc) then
+    raise exception 'FAIL a classmate reads the document';
+  end if;
+  perform set_config('role', 'postgres', true);
+  raise notice '  ok   a classmate neither reads nor writes it';
+
+  -- An Elder's task on the place, waiting on the student step, and a comment on a field.
+  perform set_config('role', 'postgres', true);
+  insert into public.entry_milestones (org_id, participation_id, name, kind, due_on, owner, step_id)
+  values (v_org, v_part, 'Interview questions, read by an elder', 'local', current_date + 3, 'student', 'interview_questions')
+  returning id into v_step;
+  insert into public.entry_milestones (org_id, participation_id, name, kind, due_on, owner, step_id, requires_step, feedback_on)
+  values (v_org, v_part, 'Read the interview questions and say what to change', 'local', current_date + 3, 'staff', 'elder_iq', 'interview_questions', 'interview_protocol')
+  returning id into v_task;
+  perform set_config('role', 'authenticated', true);
+
+  perform set_config('role', 'authenticated', true);
+  perform set_config('request.jwt.claim.sub', v_elder::text, true);
+  v_ask := public.comment_on_document(v_doc, 'who', 'Name the clinic too.', true, null);
+  perform set_config('role', 'postgres', true);
+  if exists (select 1 from public.entry_milestones where id = v_task and completed_on is not null) then
+    raise exception 'FAIL a comment before the step was met completed the Elder''s task';
+  end if;
+  if not exists (select 1 from public.deliverable_feedback f where f.id = v_ask and f.field_id = 'who' and f.field_version = 2 and f.needs_revision) then
+    raise exception 'FAIL the comment did not keep the field and its version';
+  end if;
+  if not exists (select 1 from public.notifications n where n.kind = 'revision_asked' and n.recipient_id = v_author and n.subject_id = v_doc) then
+    raise exception 'FAIL the author was not told about the ask';
+  end if;
+  raise notice '  ok   an Elder comments on a field in progress and the author is told';
+
+  -- The author replies, and may not ask themselves for a revision.
+  perform set_config('role', 'authenticated', true);
+  perform set_config('request.jwt.claim.sub', v_author::text, true);
+  perform public.comment_on_document(v_doc, 'who', 'Added the clinic.', true, v_ask);
+  perform set_config('role', 'postgres', true);
+  if exists (select 1 from public.deliverable_feedback f where f.reply_to = v_ask and f.needs_revision) then
+    raise exception 'FAIL an author''s reply carried the revision flag';
+  end if;
+  raise notice '  ok   the author replies in the thread without the flag';
+
+  -- An author's question on a field nobody has commented on reaches every Elder on the project.
+  delete from public.notifications where subject_id = v_doc and kind = 'comment';
+  perform set_config('role', 'authenticated', true);
+  perform set_config('request.jwt.claim.sub', v_author::text, true);
+  perform public.comment_on_document(v_doc, 'what', 'Is one paragraph enough here?', false, null);
+  perform set_config('role', 'postgres', true);
+  if exists (
+    select 1 from public.project_authors a
+     where a.project_id = v_project and a.role = 'officer' and a.self_managed_at is null
+       and not exists (select 1 from public.notifications n
+                        where n.kind = 'comment' and n.recipient_id = a.user_id and n.subject_id = v_doc)
+  ) then
+    raise exception 'FAIL an Elder on the project was not told about the author''s question';
+  end if;
+  raise notice '  ok   an author''s question reaches the Elders who look after the project';
+
+  -- With no Elder on the project (an Elder's own work), the program's advisors are told instead.
+  create temp table elders_held as
+    select * from public.project_authors a
+     where a.project_id = v_project and a.role = 'officer' and a.self_managed_at is null;
+  delete from public.project_authors a
+   where a.project_id = v_project and a.role = 'officer' and a.self_managed_at is null;
+  delete from public.notifications where subject_id = v_doc and kind = 'comment';
+  perform set_config('role', 'authenticated', true);
+  perform set_config('request.jwt.claim.sub', v_author::text, true);
+  perform public.comment_on_document(v_doc, 'what', 'Nobody looks after this one yet.', false, null);
+  perform set_config('role', 'postgres', true);
+  if not exists (
+    select 1 from public.notifications n
+      join public.user_roles r on r.user_id = n.recipient_id and r.role = 'advisor' and r.revoked_at is null
+     where n.kind = 'comment' and n.subject_id = v_doc
+  ) then
+    raise exception 'FAIL with no Elder on the project, no advisor was told';
+  end if;
+  insert into public.project_authors select * from elders_held;
+  drop table elders_held;
+  raise notice '  ok   with no Elder on the project the advisors are told';
+
+  -- A classmate may not comment.
+  perform set_config('role', 'authenticated', true);
+  perform set_config('request.jwt.claim.sub', v_other::text, true);
+  v_ok := false;
+  begin
+    perform public.comment_on_document(v_doc, null, 'hi', false, null);
+  perform set_config('role', 'postgres', true);
+  exception when others then v_ok := true; perform set_config('role', 'postgres', true);
+  end;
+  if not v_ok then raise exception 'FAIL a classmate commented'; end if;
+  raise notice '  ok   a classmate may not comment';
+
+  -- Submitting records the deliverable, completes the step, fixes a version, resolves the ask,
+  -- and a linked Google Doc lands on the deliverable row.
+  perform set_config('role', 'authenticated', true);
+  perform set_config('request.jwt.claim.sub', v_author::text, true);
+  v_ans := public.save_field(v_doc, '_doc_link', to_jsonb('https://docs.google.com/document/d/abc/edit'::text), 0);
+  perform set_config('role', 'postgres', true);
+  perform set_config('role', 'authenticated', true);
+  v_ver := public.submit_document(v_doc, v_part, v_step, 'User interview questions');
+  perform set_config('role', 'postgres', true);
+  if (select d.external_url from public.deliverables d where d.document_version_id = v_ver) <> 'https://docs.google.com/document/d/abc/edit' then
+    raise exception 'FAIL the linked document did not reach the deliverable row';
+  end if;
+  perform set_config('role', 'authenticated', true);
+  perform set_config('role', 'postgres', true);
+  if not exists (select 1 from public.entry_milestones where id = v_step and completed_on is not null) then
+    raise exception 'FAIL the step did not complete on submit';
+  end if;
+  if not exists (select 1 from public.deliverables d join public.document_versions v on v.id = d.document_version_id
+                  where v.id = v_ver and d.participation_id = v_part and d.type = 'interview_protocol' and d.superseded_at is null) then
+    raise exception 'FAIL the deliverable row does not point at the version';
+  end if;
+  if (select content->>'who' from public.document_versions where id = v_ver) <> 'Parents and nurses' then
+    raise exception 'FAIL the version did not snapshot the fields';
+  end if;
+  if exists (select 1 from public.deliverable_feedback f where f.id = v_ask and f.resolved_at is null) then
+    raise exception 'FAIL the ask was not resolved by the submission';
+  end if;
+  if (select status from public.documents where id = v_doc) <> 'submitted' then
+    raise exception 'FAIL the document is not marked submitted';
+  end if;
+  if not exists (select 1 from public.notifications n where n.kind = 'new_version' and n.recipient_id = v_elder and n.subject_id = v_doc) then
+    raise exception 'FAIL the Elder was not told about the new version';
+  end if;
+  raise notice '  ok   submitting records, completes the step, fixes the version and resolves the ask';
+
+  -- Now the Elder's task is ready, and the next comment completes it and writes the notebook line.
+  perform set_config('role', 'authenticated', true);
+  perform set_config('request.jwt.claim.sub', v_elder::text, true);
+  perform public.comment_on_document(v_doc, null, 'Good set. One more on cost.', false, null);
+  perform set_config('role', 'postgres', true);
+  if not exists (select 1 from public.entry_milestones where id = v_task and completed_on is not null and completed_by = v_elder) then
+    raise exception 'FAIL the Elder''s comment after submission did not complete the task';
+  end if;
+  if not exists (select 1 from public.field_notes where project_id = v_project and body_md like 'Feedback on **User interview questions**%') then
+    raise exception 'FAIL the notebook did not get the review''s line';
+  end if;
+  raise notice '  ok   the Elder''s review completes the task and the notebook says so';
+
+  -- Editing after submission marks it revising; submitting again supersedes.
+  perform set_config('role', 'authenticated', true);
+  perform set_config('request.jwt.claim.sub', v_author::text, true);
+  v_ans := public.save_field(v_doc, 'who', to_jsonb('Parents, nurses, the clinic'::text), 2);
+  perform set_config('role', 'postgres', true);
+  if (select status from public.documents where id = v_doc) <> 'revising' then
+    raise exception 'FAIL an edit after submission did not mark it revising';
+  end if;
+  perform public.submit_document(v_doc, v_part, v_step, 'User interview questions');
+  perform set_config('role', 'postgres', true);
+  if (select count(*) from public.deliverables d where d.participation_id = v_part and d.type = 'interview_protocol' and d.superseded_at is null) <> 1 then
+    raise exception 'FAIL two live deliverable rows after a second submission';
+  end if;
+  if (select version_no from public.documents where id = v_doc) <> 2 then
+    raise exception 'FAIL the version number did not advance';
+  end if;
+  raise notice '  ok   a second submission supersedes the first';
+
+  perform set_config('role', 'postgres', true);
+  delete from public.notifications where subject_id = v_doc or subject_kind = 'assessments';
+  delete from public.deliverable_feedback where document_id = v_doc;
+  update public.deliverables set document_version_id = null where document_version_id in (select id from public.document_versions where document_id = v_doc);
+  delete from public.document_versions where document_id = v_doc;
+  delete from public.deliverables where participation_id = v_part and type = 'interview_protocol';
+  delete from public.field_notes where project_id = v_project and body_md like '%User interview questions%';
+  delete from public.document_fields where document_id = v_doc;
+  delete from public.documents where id = v_doc;
+  delete from public.entry_milestones where id in (v_task, v_step);
+exception when others then
+  perform set_config('role', 'postgres', true);
+  raise;
+end $body$;
+
+
+\echo ''
+\echo '── The family''s score and the teacher''s grade are two rows, and who reads which'
+
+do $body$
+declare
+  v_org      uuid := '11111111-1111-1111-1111-111111111111';
+  v_project  uuid := 'c0000000-0000-0000-0000-000000000002';   -- Course project
+  v_author   uuid := 'a0000000-0000-0000-0000-000000000008';   -- Author two
+  v_elder    uuid := 'a0000000-0000-0000-0000-000000000003';   -- attached to its class place
+  v_elder2   uuid := 'a0000000-0000-0000-0000-00000000000a';   -- another Elder of the class
+  v_advisor  uuid := 'a0000000-0000-0000-0000-000000000004';
+  v_other    uuid := 'a0000000-0000-0000-0000-000000000006';   -- a student, no role
+  v_part     uuid;
+  v_step     uuid;
+  v_elder_row uuid;
+  v_teacher_row uuid;
+  v_ok       boolean;
+begin
+  select e.id into v_part from public.participations e
+   where e.project_id = v_project and e.program_id = 'b0000000-0000-0000-0000-000000000003';
+  insert into public.entry_milestones (org_id, participation_id, name, kind, due_on, owner, step_id, completed_on)
+  values (v_org, v_part, 'Narrowing the topic', 'local', current_date - 2, 'student', 'narrow', current_date - 2)
+  returning id into v_step;
+
+  -- The Elder on the place scores; it is an elder row, released at once.
+  perform set_config('role', 'authenticated', true);
+  perform set_config('request.jwt.claim.sub', v_elder::text, true);
+  v_elder_row := public.grade_milestone(v_step, v_author, 3.5, 4, 'good work, add detail', null, false);
+  perform set_config('role', 'postgres', true);
+  if not exists (select 1 from public.assessments a where a.id = v_elder_row and a.kind = 'elder' and a.released_at is not null) then
+    raise exception 'FAIL the Elder''s score is not an elder row released at once';
+  end if;
+  raise notice '  ok   the Elder on the place writes the family''s score';
+
+  -- A student with no role may not.
+  perform set_config('role', 'authenticated', true);
+  perform set_config('request.jwt.claim.sub', v_other::text, true);
+  v_ok := false;
+  begin
+    perform public.grade_milestone(v_step, v_author, 4, 4, 'x', null, false);
+  exception when others then v_ok := true; perform set_config('role', 'postgres', true);
+  end;
+  if not v_ok then raise exception 'FAIL a classmate scored'; end if;
+  raise notice '  ok   nobody else scores';
+
+  -- The advisor grades; a teacher row, separate from the Elder's, not released.
+  perform set_config('role', 'authenticated', true);
+  perform set_config('request.jwt.claim.sub', v_advisor::text, true);
+  v_teacher_row := public.grade_milestone(v_step, v_author, 3, 4, 'teacher says', null, false);
+  perform set_config('role', 'postgres', true);
+  if (select count(*) from public.assessments a where a.milestone_id = v_step and a.student_id = v_author and a.superseded_by is null) <> 2 then
+    raise exception 'FAIL the teacher''s grade superseded the Elder''s score, or the other way round';
+  end if;
+  raise notice '  ok   the teacher''s grade is its own row beside the Elder''s score';
+
+  -- Another Elder of the class reads the Elder's score and not the teacher's grade.
+  perform set_config('role', 'authenticated', true);
+  perform set_config('request.jwt.claim.sub', v_elder2::text, true);
+  if not exists (select 1 from public.assessments a where a.id = v_elder_row) then
+    perform set_config('role', 'postgres', true);
+    raise exception 'FAIL another Elder of the class cannot read the family''s score';
+  end if;
+  if exists (select 1 from public.assessments a where a.id = v_teacher_row) then
+    perform set_config('role', 'postgres', true);
+    raise exception 'FAIL an Elder reads the teacher''s grade';
+  end if;
+  perform set_config('role', 'postgres', true);
+  raise notice '  ok   every Elder of the class reads the family''s scores, and no teacher''s grade';
+
+  -- The student reads the Elder's score now and the teacher's grade only once released.
+  perform set_config('role', 'authenticated', true);
+  perform set_config('request.jwt.claim.sub', v_author::text, true);
+  if not exists (select 1 from public.assessments a where a.id = v_elder_row) then
+    perform set_config('role', 'postgres', true);
+    raise exception 'FAIL the student cannot read the family''s score';
+  end if;
+  if exists (select 1 from public.assessments a where a.id = v_teacher_row) then
+    perform set_config('role', 'postgres', true);
+    raise exception 'FAIL the student reads an unreleased grade';
+  end if;
+  perform set_config('role', 'postgres', true);
+  raise notice '  ok   the student reads the score now and the grade when it is released';
+
+  -- Release touches only the teacher's rows.
+  perform set_config('role', 'authenticated', true);
+  perform set_config('request.jwt.claim.sub', v_advisor::text, true);
+  if public.release_grades('b0000000-0000-0000-0000-000000000003') < 1 then
+    perform set_config('role', 'postgres', true);
+    raise exception 'FAIL nothing was released';
+  end if;
+  perform set_config('role', 'postgres', true);
+  raise notice '  ok   releasing releases the teacher''s grades';
+
+  delete from public.notifications where subject_kind = 'assessments';
+  delete from public.assessments where milestone_id = v_step;
+  delete from public.entry_milestones where id = v_step;
+exception when others then
+  perform set_config('role', 'postgres', true);
+  raise;
+end $body$;
+
+\echo ''
 \echo '── Asking co-authors before taking shared work'
 
 do $body$
@@ -1701,6 +2298,227 @@ begin
      and a.role = 'officer' and a.self_managed_at is not null;
   if v_n <> 1 then raise exception 'FAIL taking your own project was not marked self managed'; end if;
   raise notice '  ok   and the row says self managed, so nothing is concealed';
+
+  perform set_config('request.jwt.claim.sub', '', true);
+end
+$body$;
+
+
+-- ── Two Elders on one place ──────────────────────────────────────────────
+--
+-- A class pairs two Elders with a project. The schema always allowed it,
+-- `unique (participation_id, user_id)` being per person rather than per
+-- place, and the screens assumed one. This pins the shape the pilot loads:
+-- both rows stand, both people see the project, both can be nudged and each
+-- nudge is tracked on its own, and removing one leaves the other.
+do $body$
+declare
+  v_org   uuid;
+  v_prog  uuid;
+  v_p1    uuid := gen_random_uuid();
+  v_part  uuid := gen_random_uuid();
+  v_kid   uuid := gen_random_uuid();
+  v_e1    uuid := gen_random_uuid();
+  v_e2    uuid := gen_random_uuid();
+  v_adv   uuid := gen_random_uuid();
+  v_ms    uuid;
+  v_n     int;
+begin
+  select o.id into v_org from public.organizations o where o.slug = 'mv';
+  select p.id into v_prog from public.programs p
+   where p.org_id = v_org and p.program_role = 'opportunity' limit 1;
+
+  insert into auth.users (id) values (v_kid), (v_e1), (v_e2), (v_adv);
+  insert into public.users (id, org_id, display_name, consent_state)
+  values (v_kid, v_org, 'Paired Student', 'not_required'),
+         (v_e1, v_org, 'Elder One', 'not_required'),
+         (v_e2, v_org, 'Elder Two', 'not_required'),
+         (v_adv, v_org, 'Pairing Teacher', 'not_required');
+
+  insert into public.user_roles (org_id, user_id, role, scope_id)
+  values (v_org, v_e1, 'officer', v_prog),
+         (v_org, v_e2, 'officer', v_prog),
+         (v_org, v_adv, 'advisor', null);
+
+  insert into public.projects (id, org_id, title, created_by)
+  values (v_p1, v_org, 'A project with two Elders', v_kid);
+  insert into public.project_authors (org_id, project_id, user_id, role, accepted_at)
+  values (v_org, v_p1, v_kid, 'author', now());
+  insert into public.participations (id, org_id, project_id, program_id)
+  values (v_part, v_org, v_p1, v_prog);
+  /* One open obligation, so there is something to nudge about. */
+  insert into public.entry_milestones (org_id, participation_id, name, kind, due_on)
+  values (v_org, v_part, 'Research plan', 'deadline', current_date + 7);
+
+  perform set_config('request.jwt.claim.sub', v_adv::text, true);
+  perform public.assign_officer(v_part, v_e1);
+  perform public.assign_officer(v_part, v_e2);
+
+  select count(*) into v_n from public.project_authors a
+   where a.participation_id = v_part and a.role = 'officer';
+  if v_n <> 2 then
+    raise exception 'FAIL assigning a second Elder left % officer rows rather than 2', v_n;
+  end if;
+  raise notice '  ok   a place holds two Elders';
+
+  perform set_config('request.jwt.claim.sub', v_e1::text, true);
+  if not app.can_see_project(v_p1) then raise exception 'FAIL the first Elder cannot see the project'; end if;
+  perform set_config('request.jwt.claim.sub', v_e2::text, true);
+  if not app.can_see_project(v_p1) then raise exception 'FAIL the second Elder cannot see the project'; end if;
+  raise notice '  ok   both Elders see it';
+
+  -- An obligation to nudge about, if the program seeded one on this place.
+  select em.id into v_ms from public.entry_milestones em
+   where em.participation_id = v_part and em.completed_on is null
+   order by em.due_on nulls last limit 1;
+
+  if v_ms is not null then
+    perform set_config('request.jwt.claim.sub', v_adv::text, true);
+    if public.nudge(v_ms, v_e1) <> 'sent' then raise exception 'FAIL the first Elder could not be nudged'; end if;
+    if public.nudge(v_ms, v_e2) <> 'sent' then raise exception 'FAIL the second Elder could not be nudged'; end if;
+
+    select count(*) into v_n from public.nudge_state(v_part)
+     where milestone_id = v_ms and recipient_id in (v_e1, v_e2) and nudges = 1;
+    if v_n <> 2 then
+      raise exception 'FAIL two Elders nudged once each reported % separate tracks rather than 2', v_n;
+    end if;
+    raise notice '  ok   each Elder is nudged and tracked on their own';
+  else
+    raise notice '  --   no obligation on the place, the two-Elder nudge check skipped';
+  end if;
+
+  perform set_config('request.jwt.claim.sub', v_adv::text, true);
+  perform public.detach_from_project(v_part, v_e1);
+
+  select count(*) into v_n from public.project_authors a
+   where a.participation_id = v_part and a.role = 'officer' and a.user_id = v_e2;
+  if v_n <> 1 then raise exception 'FAIL removing one Elder removed the other'; end if;
+  raise notice '  ok   removing one Elder leaves the other';
+
+  -- ── Two sponsors on one place ──────────────────────────────────────────
+  --
+  -- A class taught by two teachers has two, and recording the second used
+  -- to supersede the first. The same address twice is a correction to that
+  -- teacher's own row; a different address is an addition.
+  declare
+    v_n2 int;
+    v_s1 uuid;
+  begin
+    perform set_config('request.jwt.claim.sub', v_kid::text, true);
+    perform public.record_sponsor(v_part, 'First Teacher', 'first@fuhsd.org', current_date - 30);
+    perform public.record_sponsor(v_part, 'Second Teacher', 'second@fuhsd.org', current_date - 20);
+
+    select count(*) into v_n2 from public.project_sponsors
+     where participation_id = v_part and superseded_at is null;
+    if v_n2 <> 2 then
+      raise exception 'FAIL two teachers left % current sponsors rather than 2', v_n2;
+    end if;
+    raise notice '  ok   a place holds two sponsors';
+
+    perform public.record_sponsor(v_part, 'First Teacher', 'FIRST@fuhsd.org', current_date - 25);
+    select count(*) into v_n2 from public.project_sponsors
+     where participation_id = v_part and superseded_at is null;
+    if v_n2 <> 2 then
+      raise exception 'FAIL re-recording the same teacher made % sponsors', v_n2;
+    end if;
+    raise notice '  ok   the same teacher recorded twice corrects their own row';
+
+    -- The derived date is the earliest signature, so adding a teacher later
+    -- cannot move approval past the day work began.
+    if (select app.derived_date('sponsor', v_part, null)) <> current_date - 25 then
+      raise exception 'FAIL the derived sponsor date is % rather than the earliest signature',
+        (select app.derived_date('sponsor', v_part, null));
+    end if;
+    raise notice '  ok   the approval date is the earliest signature';
+
+    select id into v_s1 from public.project_sponsors
+     where participation_id = v_part and superseded_at is null
+       and teacher_email = 'second@fuhsd.org';
+    perform public.withdraw_sponsor(v_s1);
+
+    select count(*) into v_n2 from public.project_sponsors
+     where participation_id = v_part and superseded_at is null;
+    if v_n2 <> 1 then
+      raise exception 'FAIL withdrawing one sponsor left % rather than 1', v_n2;
+    end if;
+    raise notice '  ok   a sponsor is taken off one at a time, and the history keeps them';
+  end;
+
+  -- ── The load list counts past the visibility rule ──────────────────────
+  --
+  -- Elder Two was removed from the paired project above, so Elder One holds
+  -- it alone. Give Elder Two a project of their own that Elder One cannot
+  -- see (6.9), and Elder One's load list must still count it.
+  declare
+    v_p2   uuid := gen_random_uuid();
+    v_pt2  uuid := gen_random_uuid();
+    v_kid2 uuid := gen_random_uuid();
+    v_held int;
+    v_open int;
+  begin
+    insert into auth.users (id) values (v_kid2);
+    insert into public.users (id, org_id, display_name, consent_state)
+    values (v_kid2, v_org, 'Another Student', 'not_required');
+    insert into public.projects (id, org_id, title, created_by)
+    values (v_p2, v_org, 'Elder Two''s own charge', v_kid2);
+    insert into public.project_authors (org_id, project_id, user_id, role, accepted_at)
+    values (v_org, v_p2, v_kid2, 'author', now());
+    insert into public.participations (id, org_id, project_id, program_id)
+    values (v_pt2, v_org, v_p2, v_prog);
+
+    perform set_config('request.jwt.claim.sub', v_adv::text, true);
+    perform public.assign_officer(v_pt2, v_e2);
+    perform public.assign_officer(v_part, v_e1);
+
+    perform set_config('request.jwt.claim.sub', v_e1::text, true);
+    if app.can_see_project(v_p2) then
+      raise exception 'FAIL Elder One can see a project Elder Two alone looks after';
+    end if;
+
+    select held into v_held from public.officer_load() where user_id = v_e2;
+    if coalesce(v_held, 0) < 1 then
+      raise exception 'FAIL Elder One''s load list does not count Elder Two''s project (%)', coalesce(v_held, 0);
+    end if;
+    raise notice '  ok   an Elder counts a colleague''s load without seeing the project';
+
+    perform set_config('request.jwt.claim.sub', v_kid2::text, true);
+    if exists (select 1 from public.officer_load()) then
+      raise exception 'FAIL a student can read the load list';
+    end if;
+    raise notice '  ok   a student gets no load list';
+  end;
+
+  -- ── Renaming ──────────────────────────────────────────────────────────
+  perform set_config('request.jwt.claim.sub', v_kid::text, true);
+  perform public.rename_project(v_p1, '  A better working title ');
+  if (select title from public.projects where id = v_p1) <> 'A better working title' then
+    raise exception 'FAIL an author could not rename their project';
+  end if;
+  if not exists (
+    select 1 from public.audit_log
+     where action = 'project.renamed' and entity_id = v_p1
+       and before->>'title' = 'A project with two Elders'
+       and after->>'title' = 'A better working title'
+  ) then
+    raise exception 'FAIL the rename left no audit line carrying both titles';
+  end if;
+  raise notice '  ok   an author renames their project, and the log keeps the old name';
+
+  begin
+    perform public.rename_project(v_p1, '');
+    raise exception 'FAIL an empty title was accepted';
+  exception when others then
+    if sqlerrm like 'FAIL%' then raise; end if;
+  end;
+
+  perform set_config('request.jwt.claim.sub', v_e2::text, true);
+  begin
+    perform public.rename_project(v_p1, 'Renamed by the Elder');
+    raise exception 'FAIL an Elder renamed a project they do not write';
+  exception when others then
+    if sqlerrm like 'FAIL%' then raise; end if;
+  end;
+  raise notice '  ok   an empty title and a rename by somebody who is not an author are refused';
 
   perform set_config('request.jwt.claim.sub', '', true);
 end
@@ -2060,6 +2878,7 @@ declare
   v_org     uuid;
   v_answer  text;
   v_n       int;
+  v_teacher uuid;
 begin
   select em.id, em.participation_id, em.org_id
     into v_ms, v_part, v_org
@@ -2071,6 +2890,26 @@ begin
     raise notice '  --   no open obligation seeded, nudge checks skipped';
     return;
   end if;
+
+  /* **Somebody is asking.** Each DO block is its own transaction, so the
+     session the previous block set is gone by here, and every call below
+     ran with no `auth.uid()`. `app.org_id()` answered null, `nudge` refused
+     each one as *no such obligation at this school*, and the refusals were
+     caught by the handlers written for different refusals -- so the first
+     eleven assertions passed without a nudge ever being sent, and the
+     twelfth, which is not inside a handler, failed on the same cause. The
+     block acts as the school's advisor, who may nudge anybody on any
+     project, which is the case the block is about. */
+  select r.user_id into v_teacher
+    from public.user_roles r
+   where r.org_id = v_org and r.role = 'advisor' and r.revoked_at is null
+   limit 1;
+
+  if v_teacher is null then
+    raise notice '  --   no advisor at this school, nudge checks skipped';
+    return;
+  end if;
+  perform set_config('request.jwt.claim.sub', v_teacher::text, true);
 
   select a.user_id into v_author
     from public.project_authors a
@@ -2326,7 +3165,7 @@ begin
       -- Compared by time rather than by existence: a relay from a fortnight
       -- ago does not answer a request made this morning. Without this the
       -- Elder could never be nudged about the same obligation twice.
-      perform set_config('request.jwt.claim.sub', null, true);
+      perform set_config('request.jwt.claim.sub', v_teacher::text, true);
 
       update public.notifications
          set created_at = created_at - interval '8 days'
@@ -2360,7 +3199,7 @@ begin
       end if;
       raise notice '  ok   the student sees what was passed to them';
 
-      perform set_config('request.jwt.claim.sub', null, true);
+      perform set_config('request.jwt.claim.sub', v_teacher::text, true);
     end if;
   end;
 
@@ -2401,6 +3240,159 @@ begin
       raise notice '  ok   the count is readable from nudge_state';
     end if;
   end if;
+end $body$;
+
+-- ── The way back: a reply reaches whoever asked, and only them ────────────
+--
+-- The nudge loop had no return path: a teacher who nudged on Monday read the
+-- same row on Wednesday whether the Elder had spoken to the student or had
+-- not opened the app. This block picks a place that has an Elder, an author
+-- and an open obligation, runs the loop, and reads it back from both ends.
+do $body$
+declare
+  v_part    uuid;
+  v_ms      uuid;
+  v_org     uuid;
+  v_program uuid;
+  v_teacher uuid;
+  v_elder   uuid;
+  v_kid     uuid;
+  v_r       text;
+begin
+  select em.id, em.participation_id, em.org_id, pt.program_id
+    into v_ms, v_part, v_org, v_program
+    from public.entry_milestones em
+    join public.participations pt on pt.id = em.participation_id
+   where em.completed_on is null
+     and exists (select 1 from public.project_authors o
+                  where o.participation_id = pt.id and o.role = 'officer' and o.self_managed_at is null)
+     and exists (select 1 from public.project_authors a
+                  where a.project_id = pt.project_id and a.role = 'author')
+   /* A class first, so the roll-up is exercised where the fixture has one. */
+   order by (select g.program_role = 'cohort' and g.status = 'open' from public.programs g where g.id = pt.program_id) desc,
+            em.due_on nulls last
+   limit 1;
+
+  if v_ms is null then
+    raise notice '  --   no place with an Elder, an author and an open obligation; the reply checks skipped';
+    return;
+  end if;
+
+  select o.user_id into v_elder from public.project_authors o
+   where o.participation_id = v_part and o.role = 'officer' and o.self_managed_at is null limit 1;
+  select a.user_id into v_kid from public.project_authors a
+    join public.participations pt on pt.project_id = a.project_id
+   where pt.id = v_part and a.role = 'author' and a.user_id <> v_elder limit 1;
+
+  select r.user_id into v_teacher
+    from public.user_roles r
+   where r.org_id = v_org and r.role = 'advisor' and r.revoked_at is null
+     and (r.scope_id is null or r.scope_id = v_program)
+   order by r.scope_id nulls first
+   limit 1;
+
+  if v_teacher is null or v_kid is null then
+    raise notice '  --   no advisor or no student for the place; the reply checks skipped';
+    return;
+  end if;
+
+  -- Teacher asks the Elder; the Elder passes it on and then writes back.
+  perform set_config('request.jwt.claim.sub', v_teacher::text, true);
+  -- 'already' is fine: an earlier block may have nudged this one this week.
+  v_r := public.nudge(v_ms, v_elder);
+  if v_r not in ('sent', 'already') then
+    raise exception 'FAIL the teacher could not nudge the Elder (%)', v_r;
+  end if;
+  -- Whoever actually holds this week's nudge is the one the reply answers.
+  select n.actor_id into v_teacher
+    from public.notifications n
+   where n.kind = any (app.nudge_kinds()) and n.subject_id = v_ms and n.recipient_id = v_elder
+   order by n.created_at desc limit 1;
+
+  perform set_config('request.jwt.claim.sub', v_elder::text, true);
+  if public.nudge_reply(v_ms, '   ') <> 'empty' then
+    raise exception 'FAIL a blank reply was accepted';
+  end if;
+  perform public.nudge(v_ms, v_kid);
+  v_r := public.nudge_reply(v_ms, 'Spoke to them, the form is coming Friday.');
+  if v_r <> 'sent' then
+    raise exception 'FAIL the Elder could not reply (%)', v_r;
+  end if;
+  if not exists (
+    select 1 from public.notifications
+     where kind = 'nudge_reply' and subject_id = v_ms and actor_id = v_elder and recipient_id = v_teacher
+  ) then
+    raise exception 'FAIL the reply is not addressed to the teacher who asked';
+  end if;
+  if exists (
+    select 1 from public.notifications r
+     where r.kind = 'nudge_reply' and r.subject_id = v_ms and r.actor_id = v_elder
+       and not exists (select 1 from public.notifications n
+                        where n.kind = any (app.nudge_kinds()) and n.subject_id = v_ms
+                          and n.recipient_id = v_elder and n.actor_id = r.recipient_id)
+  ) then
+    raise exception 'FAIL the reply reached somebody who did not ask';
+  end if;
+  raise notice '  ok   a reply goes to whoever asked and nobody else';
+
+  -- Replying is also acknowledging.
+  if not exists (
+    select 1 from public.notifications
+     where kind = any (app.nudge_kinds()) and subject_id = v_ms
+       and recipient_id = v_elder and acknowledged_at is not null
+  ) then
+    raise exception 'FAIL replying did not mark the ask as seen';
+  end if;
+  raise notice '  ok   replying marks the ask as seen';
+
+  -- The teacher reads reply, seen and passed on in one list, and the
+  -- class-wide track carries the row.
+  perform set_config('request.jwt.claim.sub', v_teacher::text, true);
+  if exists (select 1 from public.my_classes() c where c.program_id = v_program) then
+    if not exists (
+      select 1 from public.class_answers(v_program)
+       where kind = 'reply' and milestone_id = v_ms and who_id = v_elder
+         and note = 'Spoke to them, the form is coming Friday.'
+    ) then
+      raise exception 'FAIL the reply is not in the class answers';
+    end if;
+    if not exists (select 1 from public.class_answers(v_program) where kind = 'relayed' and milestone_id = v_ms) then
+      raise exception 'FAIL the relay is not in the class answers';
+    end if;
+    if not exists (select 1 from public.class_answers(v_program) where kind = 'seen' and milestone_id = v_ms) then
+      raise exception 'FAIL the acknowledgement is not in the class answers';
+    end if;
+    if not exists (
+      select 1 from public.program_nudge_state(v_program)
+       where milestone_id = v_ms and recipient_id = v_elder and participation_id = v_part
+    ) then
+      raise exception 'FAIL the class-wide track does not carry the Elder''s row';
+    end if;
+    raise notice '  ok   reply, seen and passed on read together on the class page';
+  else
+    raise notice '  --   the advisor does not run this program as a class; the roll-up check skipped';
+  end if;
+
+  -- Nobody asked the teacher, so there is nobody to reply to.
+  if public.nudge_reply(v_ms, 'hello') <> 'nobody' then
+    raise exception 'FAIL a reply was sent to nobody';
+  end if;
+  raise notice '  ok   a reply with nobody to answer is refused';
+
+  -- The student answers the Elder, and the Elder reads it on the row.
+  perform set_config('request.jwt.claim.sub', v_kid::text, true);
+  if public.nudge_reply(v_ms, 'Bringing it Monday.') <> 'sent' then
+    raise exception 'FAIL the student could not reply to the Elder';
+  end if;
+  perform set_config('request.jwt.claim.sub', v_elder::text, true);
+  if not exists (select 1 from public.nudge_state(v_part)
+                  where milestone_id = v_ms and recipient_id = v_kid and reply = 'Bringing it Monday.') then
+    raise exception 'FAIL the Elder cannot read the student''s reply on the track';
+  end if;
+  if exists (select 1 from public.nudge_state(v_part) where reply = 'Spoke to them, the form is coming Friday.') then
+    raise exception 'FAIL the Elder reads their own reply as an answer';
+  end if;
+  raise notice '  ok   the Elder reads the student''s reply on the row and not their own';
 end $body$;
 
 \echo ''

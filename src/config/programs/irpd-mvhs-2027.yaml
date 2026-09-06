@@ -1,53 +1,63 @@
 # Interdisciplinary Research and Project Design, 2026-27.
 #
-# Rewritten from the two documents the class actually publishes: the IRPD
-# Roadmap, which is the same every year, and the semester calendar, which is
-# not.
+# ── Dates are absolute here ─────────────────────────
 #
-# ── What was taken, and what was left ─────────────────────────────────────
+# Some templates express a deadline as an offset from an anchor, so that
+# moving one date moves the rest. This is a class calendar with actual dates.
 #
-# The calendar is a teaching plan. It carries the aluminum foil challenge,
-# the compass points activity, polaroid pictures for the family boards, brain
-# breaks, sweatshirts, the yearbook page and the Thanksgiving potluck, and it
-# is right that it does — that is what makes the class work.
-#
-# **None of it belongs here.** This file is the set of things a student is
-# held to: what they hand in, what has to be signed, and where they present.
-# A student who opens their deadlines and finds "walk and talk, five minutes"
-# in the list learns to skim the list, and the one they skim past is the
-# consent form. So the question asked of every line of the calendar was: does
-# a student owe somebody something on this date? Roughly one line in four
-# did.
-#
-# The roadmap is the durable half, so it supplies the **phases** — its six
-# milestones, in its order. The calendar is the season's instance, so it
-# supplies the **dates**.
-#
-# ── Dates are absolute here, and that is a change ─────────────────────────
-#
-# Most templates express a deadline as an offset from an anchor, so that
-# moving one date moves the rest. A class calendar does not work that way: it
-# bends around Labor Day, three PD days, finals week and two breaks, and no
-# offset from the first day of school reproduces it. The teachers publish
-# actual days, so actual days are what this carries.
-#
-# The three anchors that remain are the ones that move as a unit and are not
-# ours to predict: the first day, the feedback session, and the showcase.
 
 id: irpd-mvhs-2027
 
-# Who read the source this is built from, what they read, and when. A year
-# after `verified_on` the program's advisor is told: a rulebook and a school
-# calendar both change annually, and a file nobody has looked at since last
-# season looks exactly like one checked this morning.
 provenance:
   owner: Rohan Agarwal
   source_url: https://irpdelders.wixsite.com/
   rules_year: 2027
-  verified_on: 2026-08-22
+  verified_on: 2026-09-02
   changes:
     - on: 2026-08-22
       what: First reading, against the class roadmap and the semester calendar.
+    - on: 2026-09-02
+      what: >-
+        Second reading of the semester calendar, line by line, before the
+        pilot. Every existing date held. Four steps added, all inside the
+        September window, all of them things the calendar states a student
+        hands in and this file had folded into a later step: the literature
+        review turned in for family feedback on the 3rd, the interview
+        protocol handout on the 15th, the journey map first draft on the
+        15th, and the elders' feedback on the literature reviews on the 14th.
+    - on: 2026-09-04
+      what: >-
+        The literature review moved from the 14th to the 8th, so it is open
+        on the pilot's first day. The class rubric from the literature review
+        template put on the step. The five September deliverables given
+        shapes and written in SciPath.
+    - on: 2026-09-06
+      what: >-
+        Cleaned up for the pilot: impact and feasibility, the weekly journal
+        step, the list of users and the interview questions (with the
+        Elder's reading of them) removed; steps renamed to the class's own
+        words (Green sheet, Lit Review v1 and v2, Journey Map v1, Elder
+        Feedback: Lit Review); the research question and graphic on the
+        10th, the journey map's first draft on the 17th; the sequence made
+        chronological across the phases.
+
+# ── Free text on deliverables and steps, and where each shows ──────────────
+#
+# Three keys carry prose. Each is left as "" where nothing is written; put
+# text in place of the quotes (a long paragraph goes as `>-` on its own
+# line with the text indented beneath it).
+#
+#   deliverables[].guidance   Under the deliverable's name in the Deadlines
+#                             row on the project page, and as the line under
+#                             the row on the Workbench plate. What the thing
+#                             is and what a good one has.
+#   steps[].risk              Behind "Where this usually goes wrong" on the
+#                             Deadlines row. The mistake students make here.
+#   steps[].note              Only as the Workbench plate's line when the
+#                             step's deliverables have no guidance and the
+#                             step has no risk. Background for the reader,
+#                             not shown on the project page.
+#
 
 family: irpd
 kind: course
@@ -65,12 +75,12 @@ role: cohort
 # If a showcase ever needs a record of its own, milestone 6 is where it comes
 # from and the template does not have to exist first.
 
-name: Interdisciplinary Research and Project Design
+name: IRPD
 short_name: IRPD
 authority: Monta Vista High School
 level: school
 season: 2027
-version: 2
+version: 4
 
 uses:
   deliverables: [deliverables-common]
@@ -78,9 +88,11 @@ url: https://irpdelders.wixsite.com/irpd/
 location: Room A112
 publishes_to: mvrj
 
-teachers:
-  - { name: Kavita Gupta }
-  - { name: Sushma Bana }
+# The teachers are not named here. This file is public; the class roster,
+# the teachers included, is loaded from `local-data/pilot-irpd.yaml` by
+# `npm run pilot:load`, which gives them the advisor role and makes them the
+# sponsors of every project in the class. Nothing reads a `teachers` key
+# from a template.
 
 roles:
   staff: { singular: Elder, plural: Elders }
@@ -115,15 +127,25 @@ facts:
 # phases with one id merge into one heading, and a student sees the class's
 # journey map filed under the fair's idea of design.
 phases:
-  - { id: irpd_topic,     name: "Research I · Research topic",             window: { from: august,    to: september } }
-  - { id: irpd_empathy,   name: "Research II · Interviews and literature", window: { from: august,    to: september } }
-  - { id: irpd_question,  name: "Research III · Research question",        window: { from: august,    to: september } }
-  - { id: irpd_design,    name: "Design · Project design",                 window: { from: september, to: october } }
-  - { id: irpd_impact,    name: "Impact I · Implementation",               window: { from: october,   to: november } }
-  - { id: irpd_scaling,   name: "Impact II · Scaling",                     window: { from: november,  to: april } }
+  - { id: irpd_topic,     name: "Research topic",             window: { from: august,    to: september } }
+  - { id: irpd_empathy,   name: "Lit Review", window: { from: august,    to: september } }
+  - { id: irpd_question,  name: "Interviews",        window: { from: august,    to: september } }
+  - { id: irpd_design,    name: "Project design",                 window: { from: september, to: october } }
+  - { id: irpd_impact,    name: "Implementation",               window: { from: october,   to: november } }
+  - { id: irpd_scaling,   name: "Scaling",                     window: { from: november,  to: april } }
 
 joining: approval
-places: 30
+places: 40
+
+# The class shows its work to itself. Every project appears on the IRPD
+# Showcase, live, to the class's members and staff and to nobody else, and
+# nothing from the class becomes a public record while this stands. A
+# student may take their own card off the page and put it back whenever
+# they like.
+showcase: private
+# The teachers are the sponsors and the roster comes from the class list;
+# students see the people on their project and do not change them.
+people: staff
 
 # ── When a milestone starts being mentioned ────────────────────────────────
 #
@@ -166,36 +188,55 @@ anchor_specs:
 # so that the research club's steps, which reference the shared ids, still
 # point at the same artifact. One document satisfying two calendars is 6.8,
 # and it works only while the id is the same in both.
+# `template_url` on any of these is the class's own template as a copy link
+# (a Google Doc's address with `/copy` in place of `/edit`). The row then
+# offers "Start from the class template", the student gets their own copy
+# in their Drive, and records its address back here. Fill them in as the
+# teachers share the documents.
 deliverables:
   - { id: green_sheet, name: Green sheet, kind: form, owner: student, requirement: required }
   - { id: project_idea, name: Project idea form, kind: form, owner: student, requirement: required }
   - { id: topic_narrowing, name: Narrowing down your research topic, kind: link, owner: student, requirement: required }
-  - { id: impact_feasibility, name: Impact and feasibility analysis, kind: link, owner: student, requirement: required }
-  - { id: user_list, name: List of potential users, kind: link, owner: student, requirement: required }
-  - { id: interview_protocol, name: User interview questions, kind: link, owner: student, requirement: required }
+  # Written in SciPath from a shape (6.16): the row opens the document,
+  # the Elder reads it there, and Submit records it.
+  - { id: interview_protocol_handout, name: Interview protocol, kind: text, owner: student, requirement: required, shape: interview-protocol }
   - { id: interview_consent, name: Consent to be interviewed, kind: form, owner: student, per: participant, requirement: conditional, applies_when: humans, before_work: true }
   - { id: interview_synthesis, name: What the interviews said, kind: link, owner: student, requirement: required }
 
   - id: question
-    name: The research question
+    name: Research question and Research Graphic
     kind: text
     owner: student
     requirement: required
-    guidance: >-
-      Narrow the scope until it is feasible and still worth doing. A topic is
-      what you are interested in; a question is what you are going to answer.
+    guidance: ""
 
   - id: literature_review
-    name: Literature review
+    name: Lit Review v2
+    kind: text
+    owner: student
+    requirement: required
+    shape: literature-review
+    guidance: ""
+
+  # Its own id rather than a second reference to `literature_review`, because
+  # a step and its draft that share a deliverable share a completion: record
+  # the draft and the final reads as met. The draft is a real turn-in with a
+  # real date and it is not the same claim as the finished review.
+  - id: literature_review_draft
+    name: Lit Review v1
     kind: link
     owner: student
     requirement: required
-    guidance: >-
-      What already exists, and what it does not answer. Read before you
-      design, which is why this is milestone 2 rather than a section of the
-      write-up.
+    guidance: ""
 
-  - { id: project_summary, name: Project summary, kind: link, owner: student, requirement: required }
+  - id: literature_review_worksheet
+    name: Literature review worksheet with self-reflection
+    kind: text
+    owner: student
+    requirement: required
+    shape: literature-review-worksheet
+
+  - { id: project_summary, name: Project summary, kind: text, owner: student, requirement: required, shape: project-summary }
   - { id: journey_map_1, name: Journey map, kind: link, owner: student, requirement: required }
   - { id: wbs, name: Work breakdown structure, kind: link, owner: student, requirement: required }
   - { id: oral_pitch, name: Two minute oral pitch, kind: link, owner: student, requirement: required }
@@ -205,10 +246,7 @@ deliverables:
     kind: link
     owner: student
     requirement: required
-    guidance: >-
-      The deliverables and the timeline, built from the work breakdown
-      structure. The class calls this the project plan; a fair entering the
-      same work calls it the research plan, and it is one document.
+    guidance: ""
 
   - { id: grants_scan, name: Grants and competitions to apply for, kind: link, owner: student, requirement: optional }
   - { id: prototype_plan, name: Prototype implementation and testing, kind: link, owner: student, requirement: required }
@@ -221,9 +259,7 @@ deliverables:
     kind: link
     owner: student
     requirement: required
-    guidance: >-
-      A site or a profile that outlives the class. Drafted in October and
-      finished in the spring, which is why it appears twice.
+    guidance: ""
 
   - { id: showcase_presentation, name: Showcase presentation, kind: link, owner: student, requirement: required }
 
@@ -235,9 +271,13 @@ deliverables:
     shape: design-research
 
 steps:
+  # The sequence is chronological across the phases (2.8): `order` runs
+  # with the dates, and a step sits in the phase whose name says what it
+  # is, even where two phases share a month.
+
   # ── 01 Research topic ────────────────────────────────────────────────────
   - id: green_sheet
-    name: Green sheet signed and returned
+    name: Green sheet
     phase: irpd_topic
     order: 10
     owner: student
@@ -263,110 +303,196 @@ steps:
     requires: [project_idea]
     deliverables:
       - { ref: topic_narrowing }
-    note: >-
-      Post-it feedback from the family on this date, so it is brought to
-      class rather than turned in after it.
+    note: ""
 
-  - id: impact_feasibility
-    name: Impact and feasibility analysis
-    phase: irpd_topic
-    order: 40
-    owner: student
-    due: { on: 2026-09-01 }
-    requires: [topic_narrowing]
-    deliverables:
-      - { ref: impact_feasibility }
-
-  - id: notebook
-    name: Keep the research journal current
-    phase: irpd_topic
-    order: 50
-    owner: student
-    repeats: { every: week }
-
-  # ── 02 Empathy interviews and literature review ──────────────────────────
-  - id: user_list
-    name: List the people you need to hear from
+  # ── 02 Lit Review and Research Question ──────────────────────────────────
+  - id: literature_review_draft
+    name: Lit Review v1
     phase: irpd_empathy
     order: 10
     owner: student
-    due: { on: 2026-08-31 }
+    due: { on: 2026-09-03 }
     deliverables:
-      - { ref: user_list }
+      - { ref: literature_review_draft }
+    note: ""
 
-  - id: interview_questions
-    name: Interview questions, read by an elder
+  - id: literature_review
+    name: Lit Review v2
     phase: irpd_empathy
     order: 20
     owner: student
-    due: { on: 2026-09-09 }
-    requires: [user_list]
+    # Moved from the 14th on September 4, so the review is open when the
+    # pilot starts on the 8th. The Elders' reading of it keeps the 14th.
+    due: { on: 2026-09-08 }
+    requires: [literature_review_draft]
     deliverables:
-      - { ref: interview_protocol }
+      - { ref: literature_review }
+      - { ref: literature_review_worksheet }
+    note: ""
+    # The class's own rubric, from the literature review template: four
+    # levels, an overall score out of 4 (the mean of the rows chosen, so a
+    # 3.5 is a real score), the same grid the student self-evaluates on
+    # inside the document. A criterion with a level missing in the handout
+    # has that level missing here.
+    rubric:
+      scoring: average
+      criteria:
+        - id: question
+          name: Research question
+          levels:
+            - { id: exemplary, label: Exemplary, points: 4, description: Research question is clear, focused, and realistic. }
+            - { id: accomplished, label: Accomplished, points: 3, description: Research question is generally clear, focused, and realistic. }
+            - { id: developing, label: Developing, points: 2, description: Includes a research question. }
+            - { id: beginning, label: Beginning, points: 1, description: Has a research topic. }
+        - id: introduction
+          name: Introduction
+          levels:
+            - { id: exemplary, label: Exemplary, points: 4, description: "Grabs the reader's attention. Includes problem statement or importance of topic. If appropriate, it includes the gap in the research. Includes research question. Writing is clear and well-organized." }
+            - { id: accomplished, label: Accomplished, points: 3, description: Includes problem statement or importance of topic. If appropriate, it includes the gap in the research. Includes research question. Writing is generally clear and well-organized. }
+            - { id: developing, label: Developing, points: 2, description: Introduces research question, with some context. }
+            - { id: beginning, label: Beginning, points: 1, description: Introduces research question. }
+        - id: background
+          name: Background and literature review
+          levels:
+            - { id: exemplary, label: Exemplary, points: 4, description: Includes thorough background information in the field. Background information informs the research question. Defines key terms. Writing is clear and well-organized. }
+            - { id: accomplished, label: Accomplished, points: 3, description: Includes background information in the field. Background information informs the research question. Defines key terms. Writing is generally clear and well-organized. }
+            - { id: developing, label: Developing, points: 2, description: Includes some background information in the field. In general, the background information informs the research. }
+            - { id: beginning, label: Beginning, points: 1, description: Includes some background information in the field. }
+        - id: corner
+          name: Looking around the corner
+          levels:
+            - { id: exemplary, label: Exemplary, points: 4, description: Clear, thorough, and complete. }
+            - { id: accomplished, label: Accomplished, points: 3, description: Clear and complete. }
+            - { id: beginning, label: Beginning, points: 1, description: Complete. }
+        - id: audience
+          name: Audience
+          levels:
+            - { id: exemplary, label: Exemplary, points: 4, description: Written for an educated, curious, academic reader who only knows a little about the topic. }
+            - { id: accomplished, label: Accomplished, points: 3, description: With a few exceptions, written for an educated, curious, academic reader who only knows a little about the topic. }
+            - { id: beginning, label: Beginning, points: 1, description: Too informal and simplistic, or so academic the writing is difficult to understand for anyone who is not an expert. }
+        - id: citations
+          name: In-text citations
+          levels:
+            - { id: exemplary, label: Exemplary, points: 4, description: All information properly cited. }
+            - { id: accomplished, label: Accomplished, points: 3, description: All information cited, with a few mechanical errors. }
+            - { id: developing, label: Developing, points: 2, description: Some information cited, with some mechanical errors. }
+            - { id: beginning, label: Beginning, points: 1, description: Information not cited. }
+        - id: references
+          name: Reference page
+          levels:
+            - { id: exemplary, label: Exemplary, points: 4, description: "Properly formatted reference page: titled, double spaced, alphabetized, hanging indents, citations in proper form." }
+            - { id: developing, label: Developing, points: 2, description: Some formatting errors in the reference page. }
+            - { id: beginning, label: Beginning, points: 1, description: Only the URLs included. }
+        - id: mechanics
+          name: Mechanics
+          guidance: This does not have to be perfect this round.
+          levels:
+            - { id: exemplary, label: Exemplary, points: 4, description: Spellcheck and grammar check run, and perhaps somebody checked the paper. }
+            - { id: developing, label: Developing, points: 2, description: Mechanical errors detract from the reading experience. }
+            - { id: beginning, label: Beginning, points: 1, description: Mechanical errors make the paper difficult to understand. }
 
-  - id: interviews
-    name: Empathy interviews
+  - id: project_summary
+    name: Project summary
+    phase: irpd_empathy
+    order: 30
+    owner: student
+    due: { on: 2026-09-08 }
+    deliverables:
+      - { ref: project_summary }
+
+  - id: research_question
+    name: Research question and Research Graphic
     phase: irpd_empathy
     order: 40
     owner: student
-    requires: [interview_questions]
+    due: { on: 2026-09-10 }
+    requires: [topic_narrowing]
+    deliverables:
+      - { ref: question }
+
+  # The Elder's task. `owner: staff` makes a step the Elder's rather than
+  # the student's: it sits on the project's calendar so the student can see
+  # feedback is coming, and on no student surface as something they owe.
+  # `requires` names the student step it waits on; `feedback_on` the
+  # deliverable the feedback is written on, and the Elder's first comment
+  # on that document completes the task.
+  - id: elder_literature_review_feedback
+    name: "Elder Feedback: Lit Review"
+    phase: irpd_empathy
+    order: 50
+    owner: staff
+    due: { on: 2026-09-14 }
+    requires: [literature_review]
+    feedback_on: literature_review
+    note: ""
+
+  # ── 03 Interviews ────────────────────────────────────────────────────────
+  - id: interview_protocol_handout
+    name: Interview protocol
+    phase: irpd_question
+    order: 10
+    owner: student
+    due: { on: 2026-09-15 }
+    deliverables:
+      - { ref: interview_protocol_handout }
+
+  - id: interviews
+    name: Empathy interviews
+    phase: irpd_question
+    order: 20
+    owner: student
+    requires: [interview_protocol_handout]
     consequence: blocks_human_participants
     applies_when: humans
     deliverables:
       - { ref: interview_consent }
       - { ref: interview_synthesis }
-    risk: >-
-      Consent comes **before** the interview, not after it, and anybody under
-      18 needs a guardian's. This is the one step in the class that cannot be
-      put right afterwards: an interview conducted without consent cannot be
-      used, and repeating it is not the same evidence.
-
-  - id: literature_review
-    name: Literature review
-    phase: irpd_empathy
-    order: 30
-    owner: student
-    due: { on: 2026-09-14 }
-    deliverables:
-      - { ref: literature_review }
-    note: >-
-      Elder feedback in family on the day it is due.
-
-  # ── 03 Research question ─────────────────────────────────────────────────
-  - id: research_question
-    name: Settle the research question
-    phase: irpd_question
-    order: 10
-    owner: student
-    due: { on: 2026-08-31 }
-    requires: [topic_narrowing]
-    deliverables:
-      - { ref: question }
-
-  - id: project_summary
-    name: Project summary
-    phase: irpd_question
-    order: 20
-    owner: student
-    due: { on: 2026-09-08 }
-    requires: [research_question]
-    deliverables:
-      - { ref: project_summary }
+    risk: ""
 
   # ── 04 Project design ────────────────────────────────────────────────────
-  - id: journey_map
-    name: Journey map
+  # No deliverable. The first draft is made on binder paper in class and read
+  # by the family the same period, so there is nothing to hand in and nothing
+  # to link. It is here because the final is a week later and a student who
+  # missed this one has missed the feedback, not the deadline.
+  - id: journey_map_draft
+    name: Journey Map v1
     phase: irpd_design
     order: 10
     owner: student
+    due: { on: 2026-09-17 }
+
+  - id: elder_journey_map_feedback
+    name: "Elder Feedback: Journey Map v1"
+    phase: irpd_design
+    order: 15
+    owner: staff
+    due: { on: 2026-09-17 }
+    requires: [journey_map_draft]
+
+  - id: journey_map
+    name: Journey map
+    phase: irpd_design
+    order: 20
+    owner: student
     due: { on: 2026-09-24 }
+    requires: [journey_map_draft]
     deliverables:
       - { ref: journey_map_1 }
+
+  # Waits on the journey map: a pitch is made from the design, so an Elder
+  # with nothing to read had this open from the first day of the class.
+  - id: elder_pitch_help
+    name: Help the family prepare their two minute pitches
+    phase: irpd_design
+    order: 30
+    owner: staff
+    due: { on: 2026-09-28 }
+    requires: [journey_map]
 
   - id: oral_pitch
     name: Two minute oral pitch
     phase: irpd_design
-    order: 20
+    order: 40
     owner: student
     due: { on: 2026-09-29 }
     deliverables:
@@ -375,7 +501,7 @@ steps:
   - id: wbs
     name: Work breakdown structure
     phase: irpd_design
-    order: 30
+    order: 50
     owner: student
     due: { on: 2026-09-30 }
     requires: [journey_map]
@@ -385,7 +511,7 @@ steps:
   - id: project_plan
     name: Project plan
     phase: irpd_design
-    order: 40
+    order: 60
     owner: student
     due: { on: 2026-10-06 }
     requires: [wbs]
@@ -446,9 +572,7 @@ steps:
     owner: student
     due: { anchor: feedback_session, days: 0 }
     review: formative
-    note: >-
-      A checkpoint, not a decision. Nothing is accepted or declined; the
-      outcome is feedback and a record that progress was shown.
+    note: ""
 
   # ── 06 Scaling ───────────────────────────────────────────────────────────
   - id: nsta
@@ -475,8 +599,7 @@ steps:
     owner: student
     due: { on: 2026-11-24 }
     requirement: optional
-    note: >-
-      Launched as a class in November and worked on again in January.
+    note: ""
 
   - id: lessons_learned
     name: Lessons learned
@@ -504,6 +627,10 @@ steps:
     owner: student
     due: { on: 2027-03-31 }
     requirement: optional
+    # [VERIFY] The calendar gives March and a link, no day. The 31st is the
+    # end of the month standing in for a date, which is the one kind of
+    # invented deadline worth removing: read it off Sigma Xi's own page, or
+    # carry the step with no date until somebody has.
 
   - id: quest_fair
     name: Quest Innovation Fair
@@ -522,9 +649,7 @@ steps:
     review: formative
     deliverables:
       - { ref: showcase_presentation }
-    note: >-
-      Milestone 6, and the last thing the class asks for. A checkpoint
-      rather than a decision.
+    note: ""
 
 presents_at:
   - { name: Junior Science and Humanities Symposium }

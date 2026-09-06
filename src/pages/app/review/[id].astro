@@ -142,6 +142,7 @@ const due = new Date(review.due_at).toLocaleDateString('en-US', {
         <b>{doneLabel(didAction)}</b>
         <span>
           {new Date().toLocaleString('en-US', {
+            timeZone: org.timezone,
             month: 'long',
             day: 'numeric',
             hour: 'numeric',

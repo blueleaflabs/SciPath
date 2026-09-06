@@ -124,6 +124,39 @@ for (const org of orgs ?? []) {
   console.log('');
 }
 
-if (filter && shown === 0) {
+/* The credentials, with their doors. `public.identities` is a mirror filled
+   in at sign-in, so an account loaded by a script and never signed into
+   shows `(no address)` above; this reads `auth.users` itself and says which
+   providers each credential holds. The question it answers is the pilot's
+   first-sign-in question: after a Google sign-in, one credential carrying
+   both `email` and `google` is the link working; two credentials on one
+   address is the link having failed. A credential with no row at any
+   school is the other thing worth seeing, because that is what the signup
+   screen is shown to. */
+const { data: listed } = await db.auth.admin.listUsers({ perPage: 1000 });
+const rows = new Set((people ?? []).map((p) => p.id));
+const creds = (listed?.users ?? [])
+  .filter((u) => !filter || String(u.email ?? '').toLowerCase().includes(filter.toLowerCase()))
+  .sort((a, b) => String(a.email ?? '').localeCompare(String(b.email ?? '')));
+
+if (creds.length > 0) {
+  console.log(`  credentials  ${creds.length}${filter ? ` matching "${filter}"` : ''}`);
+  for (const u of creds) {
+    const doors = (u.identities ?? []).map((i) => i.provider).join('+') || 'none';
+    const row = rows.has(u.id) ? '' : '   NO ROW AT ANY SCHOOL';
+    console.log(`      ${String(u.email ?? '(no email)').padEnd(38)} ${doors.padEnd(14)} ${u.last_sign_in_at ? 'signed in ' + u.last_sign_in_at.slice(0, 16) : 'never signed in'}${row}`);
+  }
+  const byEmail = new Map();
+  for (const u of creds) {
+    const e = String(u.email ?? '').toLowerCase();
+    if (e) byEmail.set(e, (byEmail.get(e) ?? 0) + 1);
+  }
+  for (const [e, n] of byEmail) {
+    if (n > 1) console.log(`      ! ${e} has ${n} credentials: a Google sign-in made a second user instead of linking`);
+  }
+  console.log('');
+}
+
+if (filter && shown === 0 && creds.length === 0) {
   console.log(`  Nothing matching "${filter}".\n`);
 }

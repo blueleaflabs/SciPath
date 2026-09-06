@@ -1000,15 +1000,18 @@ declare
   v_token   record;
   v_consent record;
 begin
+  /* Found by its hash whether or not it has been spent. The lookup used to
+     exclude a consumed token, which made the "already answered" branch
+     below unreachable: a parent clicking the link a second time was told
+     the page was unavailable rather than shown what they had decided, and
+     the test that asserts the second click had been red for that reason. */
   select * into v_token
     from public.confirmation_tokens t
    where t.purpose = 'guardian_consent'
-     and t.token_hash = app.consent_token_hash(p_token)
-     and t.expires_at > now()
-     and t.consumed_at is null;
+     and t.token_hash = app.consent_token_hash(p_token);
 
-  /* One answer for unknown, expired and spent, for the reason above. */
-  if v_token.id is null then
+  /* One answer for unknown and expired, for the reason above. */
+  if v_token.id is null or (v_token.consumed_at is null and v_token.expires_at <= now()) then
     return 'unavailable';
   end if;
 
@@ -1022,17 +1025,30 @@ begin
 
   /* Already answered. Idempotent rather than an error: a parent who clicks
      the link twice, or whose mail client prefetches it, has not done
-     anything wrong and should be shown what they decided. */
+     anything wrong and should be shown what they decided. A spent token
+     cannot reverse the answer, because the answer is read from the consent
+     row and not from the parameter. */
   if v_consent.confirmed_at is not null then
     return 'approved';
   end if;
   if v_consent.revoked_at is not null then
     return 'declined';
   end if;
+  if v_token.consumed_at is not null then
+    return 'unavailable';
+  end if;
 
   update public.confirmation_tokens
      set consumed_at = now(), updated_at = now()
    where id = v_token.id;
+
+  /* The parent has no session, so `auth.uid()` is null and the guard on
+     `users` refused the very column this function exists to set. This is
+     the same transaction-local grant `record_sponsor` and `complete_signup`
+     use for a function acting on somebody's behalf, and it names exactly
+     who may flip `consent_state` without a session: this function, on the
+     strength of a token the guardian was mailed. */
+  perform set_config('app.system_grant', 'on', true);
 
   if p_approve then
     update public.guardian_consents
@@ -1051,6 +1067,8 @@ begin
        set consent_state = 'paused', updated_at = now()
      where id = v_consent.user_id;
   end if;
+
+  perform set_config('app.system_grant', 'off', true);
 
   /* The student is told either way, and told by the outbox rather than on a
      screen they may not be looking at. */
@@ -1362,8 +1380,7 @@ begin
          and r.claimed_at is null
     ) then
       raise exception
-        'This school admits people by invitation. Ask an advisor to add % to the roster.',
-        v_email;
+        'This school admits people by invitation. Ask an advisor to add you to the roster, or try the open version at www.scipath.org.';
     end if;
   end if;
 
@@ -1638,27 +1655,23 @@ security definer
 set search_path = ''
 as $$
 begin
+  /* **The service role and migrations.** Decision 68: `answer_guardian_consent`
+     runs for a parent with no session, so `auth.uid()` is null, and this
+     guard raised *field is not self editable* at the one update the pilot's
+     families would make. `app.guard_role_grant` has always had this escape,
+     and a guard that stops the service key from editing a column while that
+     key can delete the row protects nothing. It was also what refused
+     `seed-people` changing an existing account's `population`. */
+  if auth.uid() is null then
+    return new;
+  end if;
+
   if (select app.is_staff()) then
     return new;
   end if;
 
-  /* **A function in this migration acting on the caller's behalf.**
-  
-     Same transaction-local flag `app.guard_role_grant` reads, set only by a
-     SECURITY DEFINER function defined here, so a client update can never
-     claim it.
-  
-     It is needed because `record_sponsor` verifies the authors' affiliation
-     as part of naming a teacher -- which is the whole point of naming one --
-     and a student recording their own sponsor is not staff, so this guard
-     refused the update with *field is not self editable*. The refusal was
-     correct about the column and wrong about the actor: the student did not
-     edit `affiliation_state`, a function did, on the strength of a teacher's
-     signature.
-  
-     It fires only where the author is still `unverified`, which is exactly
-     the student the update exists for, so the failure was invisible in any
-     fixture where students arrive already domain verified. */
+  /* A function in this migration acting on the caller's behalf, marked by
+     the transaction-local flag only a SECURITY DEFINER function sets. */
   if coalesce(current_setting('app.system_grant', true), '') = 'on' then
     return new;
   end if;
@@ -2008,6 +2021,14 @@ create table public.programs (
                      'independent', 'showcase')),
   template_id   text,
 
+  -- Where this program's work is shown. `public` is the ordinary case: a
+  -- record goes to the school's showcase when it is published. `private`
+  -- is a class whose work is shown to its own members and staff, live, on a
+  -- page of its own, and whose projects can never become public records
+  -- while the flag stands. `none` shows nothing anywhere.
+  showcase      text not null default 'public'
+                check (showcase in ('public', 'private', 'none')),
+
   -- The research process this program prescribes for a project started in
   -- it, or null where it prescribes none. A cohort may; an opportunity may
   -- not, and the check at the foot of this table refuses one that tries
@@ -2193,6 +2214,19 @@ create table public.program_milestones (
   -- Completed by something happening rather than by somebody ticking it.
   satisfied_by  text check (satisfied_by in ('sponsor', 'officer', 'start_date')),
 
+  -- Whose obligation this is. `student` is the ordinary case and every
+  -- student surface reads only those. `staff` is an Elder's task on the
+  -- project: it is shown on the project as the Elder's, counted against
+  -- nobody but the Elder, and completed by the Elder with feedback.
+  owner         text not null default 'student' check (owner in ('student', 'staff')),
+  -- The template step this came from, so a dependency can be resolved by
+  -- id rather than by the name a teacher may later edit.
+  step_id       text,
+  -- For a staff task: the student step that has to be met before the task
+  -- is actionable, and the deliverable the feedback is written on.
+  requires_step text,
+  feedback_on   text,
+
   /* **Which deliverable this step asks for**, by the id the template uses.
   
      A milestone is a step's deadline and a deliverable is what the step wants
@@ -2261,6 +2295,14 @@ create table public.projects (
   -- people responsible for it, and does not unpublish a published record:
   -- that is a retraction. 6.6.
   is_private    boolean not null default false,
+
+  -- The class showcase. A summary in the author's words, and whether the
+  -- author has taken the project off the class page for now. Both are the
+  -- author's to change as often as they like; nothing about them is a
+  -- published record.
+  summary              text,
+  showcase_hidden      boolean not null default false,
+  showcase_updated_at  timestamptz,
 
   -- One address, stored and never fetched. 7.4.
   video_url     text,
@@ -2692,7 +2734,11 @@ create table public.entry_milestones (
   created_at           timestamptz not null default now(),
   updated_at           timestamptz not null default now(),
 
-  satisfied_by  text check (satisfied_by in ('sponsor', 'officer', 'start_date'))
+  satisfied_by  text check (satisfied_by in ('sponsor', 'officer', 'start_date')),
+  owner         text not null default 'student' check (owner in ('student', 'staff')),
+  step_id       text,
+  requires_step text,
+  feedback_on   text
 );
 
 create index entry_milestones_participation_idx
@@ -2935,9 +2981,11 @@ declare
 begin
   insert into public.entry_milestones
     (org_id, participation_id, program_milestone_id, name, kind, due_on, required,
-     blocks_experimentation, satisfied_by, sort_order, source, phase)
+     blocks_experimentation, satisfied_by, sort_order, source, phase,
+     owner, step_id, requires_step, feedback_on)
   select p_org_id, p_participation_id, m.id, m.name, m.kind, m.due_on, m.required,
-         m.blocks_experimentation, m.satisfied_by, m.sort_order, m.source, m.phase
+         m.blocks_experimentation, m.satisfied_by, m.sort_order, m.source, m.phase,
+         m.owner, m.step_id, m.requires_step, m.feedback_on
     from public.program_milestones m
    where m.program_id = p_program_id
      and (m.org_id is null or m.org_id = p_org_id)
@@ -3355,6 +3403,61 @@ as $$
 $$;
 
 grant execute on function app.can_edit_project(uuid) to authenticated;
+
+-- The class showcase's two questions, placed here because the record
+-- generators below ask the second. The rest of the showcase is at the end
+-- of the file.
+-- Whether the caller may read a program's private showcase: a member of it,
+-- an officer of it, or an advisor at the school.
+create or replace function app.showcase_viewer(p_program_id uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select exists (
+    select 1 from public.programs g
+     where g.id = p_program_id
+       and g.showcase = 'private'
+       and g.org_id = app.org_id()
+  )
+  and (
+    app.is_advisor()
+    or app.has_role('officer', p_program_id)
+    or exists (
+      select 1 from public.memberships m
+       where m.cohort_id = p_program_id
+         and m.user_id = auth.uid()
+         and m.state = 'member'
+    )
+  );
+$$;
+
+grant execute on function app.showcase_viewer(uuid) to authenticated;
+
+-- Whether a project belongs to any program with a private showcase. Read by
+-- the two record generators, which refuse: the class's rule is that its work
+-- is shown inside the class, and a public record would be that rule broken
+-- by whoever pressed publish.
+create or replace function app.showcase_private(p_project_id uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select exists (
+    select 1
+      from public.participations e
+      join public.programs g on g.id = e.program_id
+     where e.project_id = p_project_id
+       and g.showcase = 'private'
+  );
+$$;
+
+grant execute on function app.showcase_private(uuid) to authenticated;
+
 
 create policy projects_read on public.projects
   for select to authenticated
@@ -3790,19 +3893,30 @@ begin
        SQL-language function. And a child table added later is covered by
        this without anybody remembering to add a branch -- it degrades to a
        plain sentence rather than to the raw constraint text. */
-    delete from public.entry_milestones em
-     using public.participations pa
-     where pa.id = em.participation_id
-       and pa.project_id = p_project_id
-       and pa.program_id = p_cohort_id;
-
+    /* The copies go first, and inside the same handler as the row: a
+       deliverable, a grade or a piece of feedback keys to a milestone, so
+       the milestone delete was where a class with anything recorded
+       failed, and it failed with the constraint's own name on the screen
+       rather than the sentence below. */
     begin
+      delete from public.entry_milestones em
+       using public.participations pa
+       where pa.id = em.participation_id
+         and pa.project_id = p_project_id
+         and pa.program_id = p_cohort_id;
+
       delete from public.participations
        where project_id = p_project_id and program_id = p_cohort_id;
     exception when foreign_key_violation then
       get stacked diagnostics v_constraint = constraint_name;
 
-      if v_constraint like 'project_sponsors%' then
+      if v_constraint like 'assessments%' then
+        raise exception
+          'there are grades recorded against this class. Removing it would delete them, so it is not done from here.';
+      elsif v_constraint like 'deliverable_feedback%' then
+        raise exception
+          'there is feedback recorded against this class. Removing it would delete it, so it is not done from here.';
+      elsif v_constraint like 'project_sponsors%' then
         raise exception
           'a teacher is recorded as sponsoring this project here. Ask them, or an officer, to take that off first.';
       elsif v_constraint like 'deliverables%' then
@@ -3829,6 +3943,24 @@ begin
        and m.state = 'member'
   ) and not app.is_staff() then
     raise exception 'join that first. A project belongs to a cohort you are in.';
+  end if;
+
+  /* **One project per person per cohort at a time.**
+     A class or a club holds one project of each student's. A second one
+     started for testing was accepted here and appeared on the teacher's
+     roll call beside the first. The way to change which project is in the
+     class is to leave with the one and join with the other; a teacher or
+     an officer may hold more than one, being on other people's projects. */
+  if not app.is_staff() and exists (
+    select 1
+      from public.participations pa
+      join public.project_authors a on a.project_id = pa.project_id
+     where pa.program_id = p_cohort_id
+       and pa.project_id <> p_project_id
+       and a.user_id = v_uid
+       and a.role = 'author'
+  ) then
+    raise exception 'you already have a project in this class. Leave with that one first if this is the one that belongs here.';
   end if;
 
   insert into public.participations (org_id, project_id, program_id, added_by)
@@ -3942,6 +4074,143 @@ grant execute on function public.join_cohort(uuid) to authenticated;
 grant execute on function public.decide_membership(uuid, boolean, text) to authenticated;
 grant execute on function public.set_project_cohort(uuid, uuid, boolean) to authenticated;
 grant execute on function public.start_project(text, date, uuid) to authenticated;
+
+-- ---------------------------------------------------------------------------
+-- A project may be renamed by the people doing the work.
+--
+-- The working title changes weekly in the first month of a class, and the
+-- only way to change it was to ask whoever holds the service key. The update
+-- policy on `projects` already admits an author, so this is not a permission
+-- being opened; it is the write given a name, a check that the new title is
+-- a title, and a line in the audit log carrying both the old and the new,
+-- because a project whose name has changed three times should be able to
+-- say what it used to be called.
+-- ---------------------------------------------------------------------------
+create or replace function public.rename_project(
+  p_project_id uuid,
+  p_title      text
+)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_org   uuid;
+  v_title text;
+  v_new   text := trim(coalesce(p_title, ''));
+begin
+  if auth.uid() is null then
+    raise exception 'not authenticated';
+  end if;
+
+  select p.org_id, p.title into v_org, v_title
+    from public.projects p where p.id = p_project_id;
+
+  if v_org is null or v_org is distinct from app.org_id() then
+    raise exception 'no such project at this school';
+  end if;
+
+  if not app.can_edit_project(p_project_id) then
+    raise exception 'only an author may rename this project';
+  end if;
+
+  if v_new = '' then
+    raise exception 'give the project a working title';
+  end if;
+  if length(v_new) > 200 then
+    raise exception 'a title is at most 200 characters';
+  end if;
+
+  if v_new = v_title then
+    return;
+  end if;
+
+  update public.projects
+     set title = v_new, updated_at = now()
+   where id = p_project_id;
+
+  perform app.audit(v_org, 'project.renamed', 'projects', p_project_id,
+    jsonb_build_object('title', v_title),
+    jsonb_build_object('title', v_new));
+end;
+$$;
+
+revoke all on function public.rename_project(uuid, text) from public, anon;
+grant execute on function public.rename_project(uuid, text) to authenticated;
+
+-- ---------------------------------------------------------------------------
+-- HOW MANY PLACES EACH OFFICER HOLDS, COUNTED PAST THE VISIBILITY RULE.
+--
+-- 6.9: an officer sees the projects they look after and the ones nobody
+-- has taken, and not a colleague's. Right for the projects; wrong for the
+-- load list, which the assign screen computed from the projects the reader
+-- could see, so every other Elder read as holding nothing and the reader
+-- could not tell who was free to take more. A count is not a project: it
+-- says nothing about whose work it is, and a list of who is carrying what
+-- is exactly what somebody assigning work needs.
+--
+-- So the count is made here, SECURITY DEFINER, over the places in every
+-- program the caller runs (a role scoped to the program, or an unscoped
+-- one), and returns numbers and user ids only. Staff only; a student gets
+-- nothing. `places` and `unassigned` ride along on every row so the
+-- header needs no second call, and a program with no officers still
+-- answers with one row carrying them.
+-- ---------------------------------------------------------------------------
+create or replace function public.officer_load()
+returns table (user_id uuid, held int, places int, unassigned int)
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  with mine as (
+    select p.id
+      from public.programs p
+     where p.org_id = app.org_id()
+       and app.is_staff()
+       and exists (
+         select 1 from public.user_roles r
+          where r.user_id = auth.uid()
+            and r.role in ('officer', 'advisor')
+            and r.revoked_at is null
+            and (r.scope_id is null or r.scope_id = p.id)
+       )
+  ),
+  spots as (
+    select pa.id
+      from public.participations pa
+      join public.projects pr on pr.id = pa.project_id
+     where pa.program_id in (select id from mine)
+       and pr.archived_at is null
+  ),
+  totals as (
+    select count(*)::int as places,
+           count(*) filter (where not exists (
+             select 1 from public.project_authors a
+              where a.participation_id = spots.id and a.role = 'officer'
+           ))::int as unassigned
+      from spots
+  ),
+  held as (
+    select a.user_id, count(distinct a.participation_id)::int as held
+      from public.project_authors a
+     where a.role = 'officer'
+       and a.participation_id in (select id from spots)
+     group by a.user_id
+  )
+  select h.user_id, h.held, t.places, t.unassigned
+    from held h cross join totals t
+  union all
+  select null, 0, t.places, t.unassigned
+    from totals t
+   where not exists (select 1 from held)
+     and app.is_staff()
+$$;
+
+revoke all on function public.officer_load() from public, anon;
+grant execute on function public.officer_load() to authenticated;
+
 
 -- PostgREST caches the schema. A function added by a migration is invisible
 -- to the API until it reloads, which presents as "could not find the
@@ -4153,6 +4422,11 @@ create table public.deliverables (
   -- the only one the ordering check may use.
   signed_on    date,
 
+  -- The submission of a document written in SciPath that this row records
+  -- (6.16). The key is added once document_versions exists, at the end of
+  -- this file, since the two tables point at each other.
+  document_version_id uuid,
+
   required     boolean not null default true,
   submitted_at timestamptz,
   verified_by  uuid references public.users on delete restrict,
@@ -4330,15 +4604,60 @@ create policy project_links_write on public.project_links
 -- furthest down because it was the last of the four to change.
 -- ---------------------------------------------------------------------------
 
+/**
+ * **Who looks after a place: the Elder, and the advisor only where there is
+ * none.**
+ *
+ * Verifying a deliverable, giving feedback and completing an Elder's task
+ * are the Elder's work. `app.is_staff()` let the advisor do all three, and
+ * a teacher pressing *Give feedback* on a project with two Elders completed
+ * the Elders' task as hers. The advisor stands in only for a place with no
+ * Elder attached (a self-managed author holds an officer row but is not an
+ * Elder of their own work).
+ */
+create or replace function app.looks_after(p_participation_id uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select exists (
+    select 1 from public.project_authors a
+     where a.participation_id = p_participation_id
+       and a.user_id = auth.uid()
+       and a.role = 'officer'
+       and a.self_managed_at is null
+  )
+  or (
+    app.is_advisor()
+    and not exists (
+      select 1 from public.project_authors a
+       where a.participation_id = p_participation_id
+         and a.role = 'officer'
+         and a.self_managed_at is null
+    )
+  );
+$$;
+
+grant execute on function app.looks_after(uuid) to authenticated;
+
 create or replace function public.verify_deliverable(p_id uuid)
 returns void
 language plpgsql
 security definer
 set search_path = ''
 as $$
+declare
+  v_part uuid;
 begin
-  if not app.is_staff() then
-    raise exception 'only an officer or the club advisor may verify a deliverable';
+  select d.participation_id into v_part from public.deliverables d
+   where d.id = p_id and d.org_id = app.org_id();
+  if v_part is null then
+    raise exception 'no such deliverable at this school';
+  end if;
+  if not app.looks_after(v_part) then
+    raise exception 'the Elder on this project verifies what is recorded; the advisor only where there is none';
   end if;
 
   update public.deliverables
@@ -4412,6 +4731,51 @@ begin
   return v_url;
 end;
 $$;
+
+-- Feedback on a deliverable, declared beside deliverables because
+-- record_deliverable resolves it when a new version answers an ask. The
+-- functions that write it are with the Elders' tasks at the end of the
+-- file.
+create table public.deliverable_feedback (
+  id               uuid primary key default gen_random_uuid(),
+  org_id           uuid not null references public.organizations on delete restrict,
+  participation_id uuid not null references public.participations on delete restrict,
+  deliverable_id   uuid references public.deliverables on delete restrict,
+  milestone_id     uuid references public.entry_milestones on delete restrict,
+  author_id        uuid not null references public.users on delete restrict,
+  body_md          text not null,
+  needs_revision   boolean not null default false,
+  created_at       timestamptz not null default now(),
+  resolved_at      timestamptz,
+  resolved_by      uuid references public.deliverables on delete restrict,
+  -- On a document written in SciPath (6.16): which one, which field, the
+  -- field's version when this was written (so the page can say "changed
+  -- since"), and the comment this replies to. The key to documents is
+  -- added at the end of this file.
+  document_id      uuid,
+  field_id         text,
+  field_version    int,
+  reply_to         uuid references public.deliverable_feedback on delete restrict
+);
+create index if not exists deliverable_feedback_document_id_idx on public.deliverable_feedback (document_id);
+create index if not exists deliverable_feedback_reply_to_idx on public.deliverable_feedback (reply_to);
+
+create index deliverable_feedback_participation_idx on public.deliverable_feedback (participation_id, created_at desc);
+create index if not exists deliverable_feedback_deliverable_id_idx on public.deliverable_feedback (deliverable_id);
+create index if not exists deliverable_feedback_milestone_id_idx on public.deliverable_feedback (milestone_id);
+create index if not exists deliverable_feedback_author_id_idx on public.deliverable_feedback (author_id);
+create index if not exists deliverable_feedback_resolved_by_idx on public.deliverable_feedback (resolved_by);
+
+alter table public.deliverable_feedback enable row level security;
+
+-- Whoever may see the project reads its feedback: the authors, both Elders
+-- on the place, the advisor.
+create policy deliverable_feedback_read on public.deliverable_feedback
+  for select to authenticated
+  using ((select app.can_see_project((select e.project_id from public.participations e where e.id = deliverable_feedback.participation_id))));
+
+grant select on public.deliverable_feedback to authenticated, service_role;
+grant insert, update on public.deliverable_feedback to service_role;
 
 create or replace function public.record_deliverable(
   p_participation_id     uuid,
@@ -4498,7 +4862,31 @@ begin
     update public.deliverables
        set superseded_by = v_id
      where id = v_previous;
+
+    /* A new version answers the feedback that asked for one. */
+    update public.deliverable_feedback
+       set resolved_at = now(), resolved_by = v_id
+     where deliverable_id = v_previous and resolved_at is null;
   end if;
+
+  /* **The work writes the notebook.** Recording a deliverable is a dated
+     event in the project's life and the notebook is the dated log of it,
+     so a line goes in without anybody remembering to write one: what was
+     recorded, the date on it, and where it lives. Attributed to whoever
+     recorded it, on the day of the signature where there is one, so the
+     export reads as the arc of the year. A replacement says so. */
+  insert into public.field_notes
+    (org_id, project_id, author_id, body_md, occurred_on)
+  values
+    (v_org, v_project, auth.uid(),
+     'Recorded ' || case when v_previous is not null then 'a new version of ' else '' end
+       || '**' || trim(p_label) || '**'
+       || case when p_signed_on is not null then ' dated ' || to_char(p_signed_on, 'Mon DD, YYYY') else '' end
+       || case when nullif(trim(coalesce(p_external_url, '')), '') is not null
+            then ' at ' || app.safe_url(p_external_url, 'link to a deliverable') else '' end
+       || case when nullif(trim(coalesce(p_storage_path, '')), '') is not null then ' as a file' else '' end
+       || '.',
+     coalesce(p_signed_on, current_date));
 
   /* The milestone follows the current row. `completed_on is null` is kept:
      a replacement should not move a date that a first recording already
@@ -5208,7 +5596,9 @@ returns table (
   met_after       boolean,
   acknowledged_at timestamptz,
   relayed_at      timestamptz,
-  relayed_to      text
+  relayed_to      text,
+  replied_at      timestamptz,
+  reply           text
 )
 language sql
 stable
@@ -5263,8 +5653,20 @@ as $$
                   and n2.kind = any (app.nudge_kinds())
              )
            order by r.created_at desc
-           limit 1)
-
+           limit 1),
+         /* **What they wrote back**, the latest reply from this recipient
+            to the caller about this obligation. On the row, under the
+            track, rather than in a list of its own: an inbox of answers
+            is one more thing to manage, and the row is where the teacher
+            already looks. */
+         (select rp.created_at from public.notifications rp
+           where rp.kind = 'nudge_reply' and rp.subject_id = n.subject_id
+             and rp.actor_id = n.recipient_id and rp.recipient_id = auth.uid()
+           order by rp.created_at desc limit 1),
+         (select rp.payload->>'note' from public.notifications rp
+           where rp.kind = 'nudge_reply' and rp.subject_id = n.subject_id
+             and rp.actor_id = n.recipient_id and rp.recipient_id = auth.uid()
+           order by rp.created_at desc limit 1)
     from public.notifications n
     join public.entry_milestones em on em.id = n.subject_id
     left join public.users u on u.id = n.recipient_id
@@ -5541,13 +5943,20 @@ as $$
            when 'sponsor' then (
              /* This participation's sponsor and no other (22.18). A sponsor
                 with no signature date still counts as named, so the date it
-                was recorded is what we have. */
-             select coalesce(s.signed_on, s.recorded_at::date)
+                was recorded is what we have.
+
+                **The earliest of them, where a place has two.** The date
+                answers "when did a teacher stand behind this", which the
+                ordering check compares against the day work began, and the
+                first signature is when that became true. Taking the most
+                recent would move the answer later every time a second
+                teacher was added, and could turn a project that was
+                properly approved in October into one that reads as
+                approved after it started. */
+             select min(coalesce(s.signed_on, s.recorded_at::date))
                from public.project_sponsors s
               where s.participation_id = p_participation_id
-                and s.superseded_at is null
-              order by s.recorded_at desc
-              limit 1)
+                and s.superseded_at is null)
            when 'officer' then (
              /* This participation's officer, for the same reason as the
                 sponsor above. Oversight belongs to the place now, so an
@@ -5678,9 +6087,26 @@ begin
     raise exception 'that does not look like an email address';
   end if;
 
+  /* **A place may have more than one sponsor, and the same teacher only
+     once.**
+
+     This took whichever current sponsor it found and superseded it, so a
+     second teacher recorded on the same place replaced the first. IRPD is
+     taught by two teachers and both stand behind every project in the
+     class, which is not a corner case: a class with two teachers is the
+     ordinary shape of a class.
+
+     So the row superseded is the one naming **this teacher**, which makes
+     recording the same address twice a correction to their signature date
+     rather than a duplicate, and recording a different address an addition.
+     Removing somebody is `withdraw_sponsor`, which says what it does; a
+     replacement that happened as a side effect of an addition could not
+     be told from a mistake. */
   select s.id into v_previous
     from public.project_sponsors s
-   where s.participation_id = p_participation_id and s.superseded_at is null
+   where s.participation_id = p_participation_id
+     and s.superseded_at is null
+     and lower(s.teacher_email) = lower(trim(p_teacher_email))
    limit 1;
 
   insert into public.project_sponsors
@@ -6241,6 +6667,63 @@ end;
 $$;
 
 grant execute on function public.record_sponsor(uuid, text, text, date) to authenticated;
+
+-- ---------------------------------------------------------------------------
+-- Taking a sponsor off a place.
+--
+-- `record_sponsor` adds; a place may hold several (a class taught by two
+-- teachers), and the same teacher recorded twice is a correction to their
+-- own row. Removing one therefore needs its own verb, rather than being the
+-- side effect of naming somebody else.
+--
+-- Supersedes rather than deletes, so the history the team page prints stays
+-- complete: a signature that existed and was withdrawn is a fact about the
+-- project, and a fair asking who signed and when gets a full answer.
+-- ---------------------------------------------------------------------------
+create or replace function public.withdraw_sponsor(p_sponsor_id uuid)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_org     uuid;
+  v_project uuid;
+  v_place   uuid;
+begin
+  if auth.uid() is null then
+    raise exception 'not authenticated';
+  end if;
+
+  select s.org_id, s.participation_id, pa.project_id
+    into v_org, v_place, v_project
+    from public.project_sponsors s
+    join public.participations pa on pa.id = s.participation_id
+   where s.id = p_sponsor_id and s.superseded_at is null;
+
+  if v_org is null or v_org is distinct from app.org_id() then
+    raise exception 'no such sponsor at this school';
+  end if;
+
+  /* The same people who may record one. A student asks the teacher and
+     records the answer; staff tidy up after them. */
+  if not app.can_edit_project(v_project) and not app.is_staff() then
+    raise exception 'only an author of this project, or the school, can do that';
+  end if;
+
+  update public.project_sponsors
+     set superseded_at = now(), updated_at = now()
+   where id = p_sponsor_id;
+
+  perform app.sync_derived(v_project);
+
+  perform app.audit(v_org, 'sponsor.withdrawn', 'participations', v_place,
+    jsonb_build_object('sponsor', p_sponsor_id), '{}'::jsonb);
+end;
+$$;
+
+revoke all on function public.withdraw_sponsor(uuid) from public, anon;
+grant execute on function public.withdraw_sponsor(uuid) to authenticated;
 grant execute on function public.assign_officer(uuid, uuid) to authenticated;
 grant execute on function public.detach_from_project(uuid, uuid) to authenticated;
 grant execute on function public.set_project_start(uuid, date) to authenticated;
@@ -9107,6 +9590,9 @@ begin
   if v_state not in ('accepted', 'scheduled') then
     raise exception 'only an accepted submission is published';
   end if;
+  if v_pid is not null and app.showcase_private(v_pid) then
+    raise exception 'this project is in a program with a private showcase and is not published';
+  end if;
 
   if exists (select 1 from public.records r where r.submission_id = p_submission_id) then
     raise exception
@@ -9413,6 +9899,9 @@ begin
   select p.org_id into v_org from public.projects p where p.id = p_project_id;
   if v_org is null then
     raise exception 'no such project';
+  end if;
+  if app.showcase_private(p_project_id) then
+    raise exception 'this project is in a program with a private showcase and is not published';
   end if;
 
   /* Every author's guardian, before an identifier is minted.
@@ -10167,18 +10656,35 @@ grant execute on function public.deletion_impact() to authenticated;
 
 create or replace function public.may_reset_password(p_email text)
 returns boolean
-language sql
+language plpgsql
 stable
 security definer
 set search_path = ''
 as $$
-  select exists (
+begin
+  -- Our mirror first, then the source it mirrors. The mirror is written on a
+  -- sign-in, so a teacher whose account was made by the roster loader and who
+  -- has never signed in had no row here, and the reset link that would have
+  -- been their first way in was silently not sent. The definer may read
+  -- auth.identities; the answer is the same boolean either way. plpgsql
+  -- rather than sql so the reference resolves at call time, as
+  -- sync_identities does: the test harness has no auth schema.
+  return exists (
     select 1
       from public.identities i
      where lower(i.email) = lower(btrim(p_email))
        and i.revoked_at is null
        and i.provider = 'email'
+  )
+  or exists (
+    select 1
+      from auth.identities ai
+      join public.users u on u.id = ai.user_id
+     where lower(coalesce(ai.identity_data ->> 'email', '')) = lower(btrim(p_email))
+       and ai.provider = 'email'
+       and u.population = 'staff'
   );
+end;
 $$;
 
 -- Callable while signed out, because that is the only state it is used in.
@@ -10826,10 +11332,1766 @@ $$;
 
 grant execute on function public.deletion_ready() to authenticated;
 
+-- ===========================================================================
+-- THE CLASS SHOWCASE
+--
+-- A program whose `showcase` is `private` shows its working projects to its
+-- own members and staff, live, and to nobody else. Nothing here is a
+-- published record: a card is a project as it stands today, edited by its
+-- authors whenever they like, hidden by them whenever they like.
+--
+-- A member does not otherwise see a classmate's project (`can_see_project`
+-- is deliberately narrower than that), so the page reads through one
+-- definer function that checks the reader's standing in the program and
+-- returns only what a card needs. The media route asks a second function
+-- the same question about one image.
+-- ===========================================================================
+
+-- The programs whose private showcase the caller may read, for the nav.
+create or replace function public.my_showcases()
+returns table (program_id uuid, name text, short_name text)
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select g.id, g.name, g.short_name
+    from public.programs g
+   where g.showcase = 'private'
+     and g.org_id = app.org_id()
+     and g.status = 'open'
+     and app.showcase_viewer(g.id)
+   order by g.name;
+$$;
+
+grant execute on function public.my_showcases() to authenticated;
+
+-- The authors' side: the summary and whether the card is shown.
+create or replace function public.set_project_showcase(
+  p_project_id uuid,
+  p_summary    text,
+  p_hidden     boolean
+)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_org uuid;
+  v_before jsonb;
+  v_summary text := nullif(trim(coalesce(p_summary, '')), '');
+begin
+  if auth.uid() is null then
+    raise exception 'not authenticated';
+  end if;
+
+  select p.org_id, jsonb_build_object('summary', p.summary, 'hidden', p.showcase_hidden)
+    into v_org, v_before
+    from public.projects p where p.id = p_project_id;
+
+  if v_org is null or v_org is distinct from app.org_id() then
+    raise exception 'no such project at this school';
+  end if;
+  if not app.can_edit_project(p_project_id) then
+    raise exception 'only an author changes the showcase';
+  end if;
+  if length(v_summary) > 1200 then
+    raise exception 'a summary is at most 1200 characters';
+  end if;
+
+  update public.projects
+     set summary = v_summary,
+         showcase_hidden = coalesce(p_hidden, false),
+         showcase_updated_at = now(),
+         updated_at = now()
+   where id = p_project_id;
+
+  perform app.audit(v_org, 'project.showcase', 'projects', p_project_id,
+    v_before, jsonb_build_object('summary', v_summary, 'hidden', coalesce(p_hidden, false)));
+end;
+$$;
+
+revoke all on function public.set_project_showcase(uuid, text, boolean) from public, anon;
+grant execute on function public.set_project_showcase(uuid, text, boolean) to authenticated;
+
+-- One card per shown project in the program, for a reader who may see it.
+-- Everything a card needs and nothing a card does not: no notebook, no
+-- deliverables, no sponsor. The next open deadline says where the project
+-- is; the page turns its phase id into the phase's name from the template.
+create or replace function public.program_showcase(p_program_id uuid)
+returns table (
+  project_id   uuid,
+  title        text,
+  summary      text,
+  video_url    text,
+  updated_at   timestamptz,
+  authors      text[],
+  elders       text[],
+  images       jsonb,
+  links        jsonb,
+  done         int,
+  total        int,
+  next_name    text,
+  next_phase   text,
+  mine         boolean
+)
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select p.id,
+         p.title,
+         p.summary,
+         p.video_url,
+         coalesce(p.showcase_updated_at, p.updated_at),
+         (select coalesce(array_agg(u.display_name order by a.created_at), '{}')
+            from public.project_authors a join public.users u on u.id = a.user_id
+           where a.project_id = p.id and a.role = 'author'),
+         (select coalesce(array_agg(distinct u.display_name), '{}')
+            from public.project_authors a join public.users u on u.id = a.user_id
+           where a.participation_id = e.id and a.role = 'officer' and a.self_managed_at is null),
+         (select coalesce(jsonb_agg(jsonb_build_object('path', i.storage_path, 'alt', i.alt, 'caption', i.caption) order by i.position), '[]'::jsonb)
+            from public.project_images i
+           where i.project_id = p.id and i.withdrawn_at is null),
+         (select coalesce(jsonb_agg(jsonb_build_object('label', l.label, 'url', l.url) order by l.created_at), '[]'::jsonb)
+            from public.project_links l
+           where l.project_id = p.id and l.visibility = 'published'),
+         (select count(*)::int from public.entry_milestones m
+           where m.participation_id = e.id and m.completed_on is not null and m.kind <> 'event' and m.owner = 'student'),
+         (select count(*)::int from public.entry_milestones m
+           where m.participation_id = e.id and m.kind <> 'event' and m.owner = 'student'),
+         (select m.name from public.entry_milestones m
+           where m.participation_id = e.id and m.completed_on is null and m.kind <> 'event' and m.due_on is not null and m.owner = 'student'
+           order by m.due_on limit 1),
+         (select m.phase from public.entry_milestones m
+           where m.participation_id = e.id and m.completed_on is null and m.kind <> 'event' and m.due_on is not null and m.owner = 'student'
+           order by m.due_on limit 1),
+         exists (select 1 from public.project_authors a
+                  where a.project_id = p.id and a.user_id = auth.uid() and a.role = 'author')
+    from public.participations e
+    join public.projects p on p.id = e.project_id
+   where e.program_id = p_program_id
+     and app.showcase_viewer(p_program_id)
+     and p.archived_at is null
+     and not p.showcase_hidden
+     and e.status in ('entered', 'competed')
+   order by coalesce(p.showcase_updated_at, p.updated_at) desc;
+$$;
+
+grant execute on function public.program_showcase(uuid) to authenticated;
+
+-- Whether one stored image is on a card the caller may see. The media route
+-- asks this after the ordinary policies have said no.
+create or replace function public.may_see_showcase_media(p_path text)
+returns boolean
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select exists (
+    select 1
+      from public.project_images i
+      join public.projects p on p.id = i.project_id
+      join public.participations e on e.project_id = p.id
+     where i.storage_path = p_path
+       and i.withdrawn_at is null
+       and not p.showcase_hidden
+       and p.archived_at is null
+       and app.showcase_viewer(e.program_id)
+  );
+$$;
+
+grant execute on function public.may_see_showcase_media(text) to authenticated;
+
+-- ===========================================================================
+-- THE CLASS PAGE
+--
+-- A teacher's day: what is due this week and how far behind the class is,
+-- what has come in and needs them, who has gone quiet, and how the Elders
+-- are doing. Almost all of it reads through the ordinary policies, because
+-- an advisor may see every project. Two things the policies cannot give:
+-- which classes the advisor runs, for the tab, and when each student last
+-- signed in, which lives in auth and is the one signal a quiet student
+-- cannot hide.
+-- ===========================================================================
+
+-- The cohort programs this advisor runs, for the tab beside the Workbench.
+create or replace function public.my_classes()
+returns table (program_id uuid, name text, short_name text)
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select g.id, g.name, g.short_name
+    from public.programs g
+   where g.org_id = app.org_id()
+     and g.program_role = 'cohort'
+     and g.status = 'open'
+     and (app.has_role('advisor', g.id) or exists (
+       select 1 from public.user_roles r
+        where r.user_id = auth.uid() and r.role = 'advisor'
+          and r.scope_id is null and r.revoked_at is null))
+   order by g.name;
+$$;
+
+grant execute on function public.my_classes() to authenticated;
+
+-- When each member of a class last signed in. Advisors only, and only the
+-- timestamp: nothing else from auth leaves the schema. plpgsql so the
+-- reference to auth resolves at call time, as sync_identities does.
+create or replace function public.class_signins(p_program_id uuid)
+returns table (user_id uuid, last_sign_in_at timestamptz)
+language plpgsql
+stable
+security definer
+set search_path = ''
+as $$
+begin
+  if not app.is_advisor() then
+    raise exception 'only an advisor reads this';
+  end if;
+  if not exists (select 1 from public.programs g where g.id = p_program_id and g.org_id = app.org_id()) then
+    raise exception 'no such program at this school';
+  end if;
+
+  return query
+    select m.user_id, au.last_sign_in_at
+      from public.memberships m
+      join auth.users au on au.id = m.user_id
+     where m.cohort_id = p_program_id
+       and m.state = 'member';
+end;
+$$;
+
+grant execute on function public.class_signins(uuid) to authenticated;
+
+-- ===========================================================================
+-- GRADES, WITH FEEDBACK
+--
+-- An assessment is a teacher's judgment of one student's work on one
+-- obligation: a score and what it is out of, a rubric where the template
+-- carries one, and feedback in the teacher's words. Per student rather than
+-- per project, because the gradebook is; per obligation rather than per
+-- deliverable, because the thing being judged is the step and the
+-- deliverable is its evidence.
+--
+-- Append-only, like everything here that somebody could later dispute: a
+-- regrade is a new row that supersedes the old, so the history is honest.
+-- Released separately from written, so a teacher can grade a batch and let
+-- the class see it together.
+--
+-- The district's system is the gradebook of record. This exports to it and
+-- never pretends otherwise.
+-- ===========================================================================
+
+-- The program a participation is in, read past row level security: a
+-- policy that asks "which class is this row in" must not depend on whether
+-- the reader may see the project, which for an Elder reading a
+-- colleague's family is exactly the case (6.9).
+create or replace function app.program_of_participation(p_participation_id uuid)
+returns uuid
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select e.program_id from public.participations e where e.id = p_participation_id;
+$$;
+
+grant execute on function app.program_of_participation(uuid) to authenticated;
+
+create table public.assessments (
+  id               uuid primary key default gen_random_uuid(),
+  org_id           uuid not null references public.organizations on delete restrict,
+  participation_id uuid not null references public.participations on delete restrict,
+  milestone_id     uuid not null references public.entry_milestones on delete restrict,
+  student_id       uuid not null references public.users on delete restrict,
+  grader_id        uuid not null references public.users on delete restrict,
+  score            numeric(7, 2),
+  out_of           numeric(7, 2),
+  rubric           jsonb,
+  feedback_md      text,
+  released_at      timestamptz,
+  superseded_by    uuid references public.assessments on delete restrict,
+  created_at       timestamptz not null default now(),
+  -- Whose judgment. The teacher's is the grade; the Elder's is the
+  -- family's score (the class tracker: a number out of 4 and a comment,
+  -- per student per assignment), written by the Elder on the place,
+  -- visible at once to every Elder of the program, the teachers and the
+  -- student. Decision 78 stands for the teacher's rows: an Elder never
+  -- reads a classmate's grade.
+  kind             text not null default 'teacher'
+                   check (kind in ('teacher', 'elder'))
+);
+
+create index assessments_participation_idx on public.assessments (participation_id, milestone_id);
+create index if not exists assessments_student_id_idx on public.assessments (student_id);
+create index if not exists assessments_grader_id_idx on public.assessments (grader_id);
+create index if not exists assessments_milestone_id_idx on public.assessments (milestone_id);
+create index if not exists assessments_superseded_by_idx on public.assessments (superseded_by);
+
+alter table public.assessments enable row level security;
+
+-- The student reads their own, once released. An advisor reads every one
+-- at the school. An Elder reads none: Elders are students, and a
+-- classmate's grade is not theirs to see.
+create policy assessments_read on public.assessments
+  for select to authenticated
+  using (
+    org_id = app.org_id()
+    and (
+      app.is_advisor()
+      or (student_id = auth.uid() and released_at is not null)
+      /* The family's scores are the class's shared tracker: every Elder of
+         the program reads every Elder's score. The teacher's grades stay
+         closed to them. */
+      or (kind = 'elder' and app.has_role('officer', app.program_of_participation(assessments.participation_id)))
+    )
+  );
+
+grant select on public.assessments to authenticated, service_role;
+grant insert, update on public.assessments to service_role;
+
+-- Written through a function: the advisor names the obligation and the
+-- student, and the row is checked against both.
+create or replace function public.grade_milestone(
+  p_milestone_id uuid,
+  p_student_id   uuid,
+  p_score        numeric,
+  p_out_of       numeric,
+  p_feedback_md  text,
+  p_rubric       jsonb default null,
+  p_release      boolean default false
+)
+returns uuid
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_org  uuid;
+  v_part uuid;
+  v_prev uuid;
+  v_id   uuid;
+  v_kind text;
+begin
+  select e.org_id, e.id into v_org, v_part
+    from public.entry_milestones m
+    join public.participations e on e.id = m.participation_id
+   where m.id = p_milestone_id;
+
+  if v_org is null or v_org is distinct from app.org_id() then
+    raise exception 'no such obligation at this school';
+  end if;
+
+  /* Whose judgment this is follows who is calling, never a parameter: an
+     advisor writes the grade; an Elder on the place writes the family's
+     score, released the moment it is written, since the tracker it
+     replaces was shared. Nobody else grades. */
+  if app.is_advisor() then
+    v_kind := 'teacher';
+  elsif app.looks_after(v_part) then
+    v_kind := 'elder';
+  else
+    raise exception 'the advisor grades; the Elder on the place scores';
+  end if;
+
+  if not exists (
+    select 1 from public.project_authors a
+      join public.participations e on e.project_id = a.project_id
+     where e.id = v_part and a.user_id = p_student_id and a.role = 'author'
+  ) then
+    raise exception 'that student is not an author of this project';
+  end if;
+
+  if p_score is not null and p_out_of is not null and p_score > p_out_of then
+    raise exception 'a score cannot exceed what it is out of';
+  end if;
+  if p_score is not null and p_score < 0 then
+    raise exception 'a score is not negative';
+  end if;
+
+  select a.id into v_prev
+    from public.assessments a
+   where a.milestone_id = p_milestone_id and a.student_id = p_student_id
+     and a.kind = v_kind and a.superseded_by is null;
+
+  insert into public.assessments
+    (org_id, participation_id, milestone_id, student_id, grader_id,
+     score, out_of, rubric, feedback_md, released_at, kind)
+  values
+    (v_org, v_part, p_milestone_id, p_student_id, auth.uid(),
+     p_score, p_out_of, p_rubric, nullif(trim(coalesce(p_feedback_md, '')), ''),
+     case when p_release or v_kind = 'elder' then now() end, v_kind)
+  returning id into v_id;
+
+  if v_prev is not null then
+    update public.assessments set superseded_by = v_id where id = v_prev;
+  end if;
+
+  perform app.audit(v_org, 'assessment.written', 'assessments', v_id,
+    null, jsonb_build_object('milestone_id', p_milestone_id, 'student_id', p_student_id,
+                             'score', p_score, 'out_of', p_out_of, 'released', p_release, 'kind', v_kind));
+  return v_id;
+end;
+$$;
+
+revoke all on function public.grade_milestone(uuid, uuid, numeric, numeric, text, jsonb, boolean) from public, anon;
+grant execute on function public.grade_milestone(uuid, uuid, numeric, numeric, text, jsonb, boolean) to authenticated;
+
+-- Everything unreleased in a program, released together.
+create or replace function public.release_grades(p_program_id uuid)
+returns int
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_n int;
+  v_row record;
+begin
+  if not app.is_advisor() then
+    raise exception 'only an advisor releases grades';
+  end if;
+  if not exists (select 1 from public.programs g where g.id = p_program_id and g.org_id = app.org_id()) then
+    raise exception 'no such program at this school';
+  end if;
+
+  v_n := 0;
+  for v_row in
+    update public.assessments a
+       set released_at = now()
+      from public.participations e, public.entry_milestones m
+     where e.id = a.participation_id
+       and m.id = a.milestone_id
+       and e.program_id = p_program_id
+       and a.kind = 'teacher'
+       and a.released_at is null
+       and a.superseded_by is null
+     returning a.id, a.org_id, a.student_id, a.milestone_id, m.name as obligation, e.project_id
+  loop
+    v_n := v_n + 1;
+    insert into public.notifications
+      (org_id, kind, recipient_id, actor_id, subject_kind, subject_id, payload, dedupe_key)
+    values
+      (v_row.org_id, 'grade_released', v_row.student_id, auth.uid(), 'assessments', v_row.id,
+       jsonb_build_object('obligation', v_row.obligation, 'project_id', v_row.project_id, 'program_id', p_program_id,
+                          'path', '/app/project/' || v_row.project_id::text || '/in/' || p_program_id::text || '/?at=grades'),
+       'grade_released:' || v_row.id::text)
+    on conflict do nothing;
+  end loop;
+  return v_n;
+end;
+$$;
+
+revoke all on function public.release_grades(uuid) from public, anon;
+grant execute on function public.release_grades(uuid) to authenticated;
+
+-- ===========================================================================
+-- AN ELDER'S TASKS, AND FEEDBACK ON A DELIVERABLE
+--
+-- A milestone whose `owner` is `staff` is the Elder's obligation on the
+-- project: read this, say what to change, help prepare that. It sits on the
+-- project's calendar so the student can see feedback is coming, and on no
+-- student surface as something they owe. It becomes actionable when the
+-- student step it `requires` is met, and it is completed by the Elder with
+-- feedback.
+--
+-- Feedback lives on the deliverable, beside the artifact the student will
+-- revise, and not in the notebook, which is the student's own record. A
+-- re-recorded deliverable supersedes the old row and resolves the feedback
+-- that asked for it. The notebook gets one automatic line, as it does when
+-- something is recorded, so the log of the year stays complete.
+-- ===========================================================================
+
+-- Whether the caller looks after this participation: attached as an officer
+-- to it, or an advisor. The same rule `nudge` applies.
+create or replace function app.oversees(p_participation_id uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select app.is_advisor() or exists (
+    select 1 from public.project_authors a
+     where a.participation_id = p_participation_id
+       and a.user_id = auth.uid()
+       and a.role = 'officer'
+  );
+$$;
+
+grant execute on function app.oversees(uuid) to authenticated;
+
+-- Whether a staff task may be done yet: its required student step is met,
+-- or it requires nothing.
+create or replace function app.staff_task_ready(p_milestone_id uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select case
+    when m.requires_step is null then true
+    else exists (
+      select 1 from public.entry_milestones r
+       where r.participation_id = m.participation_id
+         and r.step_id = m.requires_step
+         and r.completed_on is not null
+    )
+  end
+    from public.entry_milestones m
+   where m.id = p_milestone_id;
+$$;
+
+grant execute on function app.staff_task_ready(uuid) to authenticated;
+
+-- Feedback on a deliverable, from an Elder on the place or the advisor.
+-- Completes the staff task that was waiting to give it, where one exists,
+-- and writes the notebook's one line.
+create or replace function public.give_feedback(
+  p_deliverable_id uuid,
+  p_body_md        text,
+  p_needs_revision boolean default false
+)
+returns uuid
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_org     uuid;
+  v_part    uuid;
+  v_project uuid;
+  v_type    text;
+  v_label   text;
+  v_id      uuid;
+  v_task    uuid;
+  v_who     text;
+begin
+  if auth.uid() is null then
+    raise exception 'not authenticated';
+  end if;
+  if coalesce(btrim(p_body_md), '') = '' then
+    raise exception 'say something';
+  end if;
+
+  select d.org_id, d.participation_id, e.project_id, d.type, d.label
+    into v_org, v_part, v_project, v_type, v_label
+    from public.deliverables d
+    join public.participations e on e.id = d.participation_id
+   where d.id = p_deliverable_id and d.superseded_at is null;
+
+  if v_org is null or v_org is distinct from app.org_id() then
+    raise exception 'no such deliverable at this school';
+  end if;
+  if not app.looks_after(v_part) then
+    raise exception 'the Elder on this project gives feedback; the advisor only where there is none';
+  end if;
+
+  /* The staff task this feedback answers: the open one on this place whose
+     feedback_on names this deliverable, and which is ready. */
+  select m.id into v_task
+    from public.entry_milestones m
+   where m.participation_id = v_part
+     and m.owner = 'staff'
+     and m.feedback_on = v_type
+     and m.completed_on is null
+     and app.staff_task_ready(m.id)
+   order by m.due_on nulls last
+   limit 1;
+
+  insert into public.deliverable_feedback
+    (org_id, participation_id, deliverable_id, milestone_id, author_id, body_md, needs_revision)
+  values
+    (v_org, v_part, p_deliverable_id, v_task, auth.uid(), btrim(p_body_md), coalesce(p_needs_revision, false))
+  returning id into v_id;
+
+  if v_task is not null then
+    update public.entry_milestones
+       set completed_on = current_date, completed_by = auth.uid(), updated_at = now()
+     where id = v_task;
+  end if;
+
+  select u.display_name into v_who from public.users u where u.id = auth.uid();
+
+  insert into public.field_notes (org_id, project_id, author_id, body_md, occurred_on)
+  values (v_org, v_project, auth.uid(),
+          'Feedback on **' || v_label || '** from ' || coalesce(v_who, 'an Elder')
+            || case when coalesce(p_needs_revision, false) then ', asking for a revision.' else '.' end,
+          current_date);
+
+  perform app.audit(v_org, 'feedback.given', 'deliverable_feedback', v_id,
+    null, jsonb_build_object('deliverable_id', p_deliverable_id, 'task', v_task, 'needs_revision', p_needs_revision));
+  return v_id;
+end;
+$$;
+
+revoke all on function public.give_feedback(uuid, text, boolean) from public, anon;
+grant execute on function public.give_feedback(uuid, text, boolean) to authenticated;
+
+-- A staff task with no deliverable to write on: the journey map on binder
+-- paper, help with the pitches. Completed with a line of feedback on the
+-- task itself.
+create or replace function public.complete_staff_task(
+  p_milestone_id uuid,
+  p_body_md      text default null
+)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_org     uuid;
+  v_part    uuid;
+  v_project uuid;
+  v_name    text;
+  v_owner   text;
+  v_who     text;
+begin
+  if auth.uid() is null then
+    raise exception 'not authenticated';
+  end if;
+
+  select m.org_id, m.participation_id, e.project_id, m.name, m.owner
+    into v_org, v_part, v_project, v_name, v_owner
+    from public.entry_milestones m
+    join public.participations e on e.id = m.participation_id
+   where m.id = p_milestone_id;
+
+  if v_org is null or v_org is distinct from app.org_id() then
+    raise exception 'no such obligation at this school';
+  end if;
+  if v_owner <> 'staff' then
+    raise exception 'that is the student''s obligation, not an Elder''s task';
+  end if;
+  if not app.looks_after(v_part) then
+    raise exception 'the Elder on this project completes this; the advisor only where there is none';
+  end if;
+  if not app.staff_task_ready(p_milestone_id) then
+    raise exception 'waiting on the student: the step this answers is not met yet';
+  end if;
+
+  update public.entry_milestones
+     set completed_on = current_date, completed_by = auth.uid(), updated_at = now()
+   where id = p_milestone_id and completed_on is null;
+
+  if coalesce(btrim(p_body_md), '') <> '' then
+    insert into public.deliverable_feedback
+      (org_id, participation_id, deliverable_id, milestone_id, author_id, body_md)
+    values (v_org, v_part, null, p_milestone_id, auth.uid(), btrim(p_body_md));
+
+    select u.display_name into v_who from public.users u where u.id = auth.uid();
+    insert into public.field_notes (org_id, project_id, author_id, body_md, occurred_on)
+    values (v_org, v_project, auth.uid(),
+            'Feedback on **' || v_name || '** from ' || coalesce(v_who, 'an Elder') || '.', current_date);
+  end if;
+
+  perform app.audit(v_org, 'staff_task.completed', 'entry_milestones', p_milestone_id,
+    null, jsonb_build_object('name', v_name));
+end;
+$$;
+
+revoke all on function public.complete_staff_task(uuid, text) from public, anon;
+grant execute on function public.complete_staff_task(uuid, text) to authenticated;
+
+-- Every staff task across the places the caller looks after, for the
+-- Elder's own list. Advisors get every open place they run through the
+-- Class page instead; this is the Elder's.
+create or replace function public.my_staff_tasks()
+returns table (
+  milestone_id     uuid,
+  name             text,
+  due_on           date,
+  completed_on     date,
+  ready            boolean,
+  requires_name    text,
+  feedback_on      text,
+  deliverable_id   uuid,
+  participation_id uuid,
+  program_id       uuid,
+  project_id       uuid,
+  project_title    text,
+  authors          text[]
+)
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select m.id, m.name, m.due_on, m.completed_on,
+         app.staff_task_ready(m.id),
+         (select r.name from public.entry_milestones r
+           where r.participation_id = m.participation_id and r.step_id = m.requires_step limit 1),
+         m.feedback_on,
+         (select d.id from public.deliverables d
+           where d.participation_id = m.participation_id and d.type = m.feedback_on and d.superseded_at is null
+           order by d.submitted_at desc limit 1),
+         e.id, e.program_id, p.id, p.title,
+         (select coalesce(array_agg(u.display_name), '{}')
+            from public.project_authors x join public.users u on u.id = x.user_id
+           where x.project_id = p.id and x.role = 'author')
+    from public.entry_milestones m
+    join public.participations e on e.id = m.participation_id
+    join public.projects p on p.id = e.project_id
+   where m.owner = 'staff'
+     and m.org_id = app.org_id()
+     and p.archived_at is null
+     and exists (
+       select 1 from public.project_authors a
+        where a.participation_id = e.id and a.user_id = auth.uid() and a.role = 'officer'
+     )
+   order by m.completed_on nulls first, m.due_on nulls last;
+$$;
+
+grant execute on function public.my_staff_tasks() to authenticated;
+
+-- ===========================================================================
+-- THE NUDGE LOOP, CLOSED
+--
+-- A nudge went out and nothing came back. The row knew more than any page
+-- showed: whether it was seen, whether the Elder passed it on, whether the
+-- obligation was met afterwards. And there was no way for the person asked
+-- to say anything at all, so a teacher who nudged on Monday read the same
+-- row on Wednesday whether the Elder had spoken to the student or had not
+-- opened the app. Three functions close it: the recipient can reply, the
+-- class page can read every track in one call, and what came back rolls
+-- up in one list.
+-- ===========================================================================
+
+/**
+ * Reply to whoever nudged me about this obligation.
+ *
+ * One row per person who asked, addressed to them, carrying the note. A
+ * reply is also an acknowledgment: saying "spoke to them, Friday" is
+ * saying "I have it". `nudge_reply` is its own kind and not one of
+ * `app.nudge_kinds()`, because a reply is not a nudge and must not count
+ * as one on the track.
+ *
+ * Returns `sent`, `empty` for a blank note, or `nobody` when nobody has
+ * asked this person about this obligation, which is the only case the
+ * button should not have been offered.
+ */
+create or replace function public.nudge_reply(p_milestone_id uuid, p_note text)
+returns text
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_m    record;
+  v_note text;
+  v_from text;
+  v_to   uuid;
+  v_sent int := 0;
+begin
+  select em.id, em.name, em.due_on, em.org_id, pt.project_id, pt.program_id, p.title
+    into v_m
+    from public.entry_milestones em
+    join public.participations pt on pt.id = em.participation_id
+    join public.projects p on p.id = pt.project_id
+   where em.id = p_milestone_id;
+  if v_m.id is null or v_m.org_id is distinct from app.org_id() then
+    raise exception 'no such obligation at this school';
+  end if;
+
+  v_note := left(btrim(coalesce(p_note, '')), 500);
+  if v_note = '' then
+    return 'empty';
+  end if;
+
+  select u.display_name into v_from from public.users u where u.id = auth.uid();
+
+  for v_to in
+    select distinct n.actor_id
+      from public.notifications n
+     where n.kind = any (app.nudge_kinds())
+       and n.subject_kind = 'entry_milestones'
+       and n.subject_id = p_milestone_id
+       and n.recipient_id = auth.uid()
+       and n.actor_id is not null
+       and n.actor_id <> auth.uid()
+  loop
+    insert into public.notifications
+      (org_id, kind, recipient_id, actor_id, subject_kind, subject_id, payload, dedupe_key)
+    values
+      (v_m.org_id, 'nudge_reply', v_to, auth.uid(), 'entry_milestones', v_m.id,
+       jsonb_build_object(
+         'obligation', v_m.name,
+         'due_on', v_m.due_on,
+         'project_title', v_m.title,
+         'note', v_note,
+         'from', v_from,
+         'path', '/app/project/' || v_m.project_id || '/in/' || v_m.program_id || '/#m-' || v_m.id
+       ),
+       /* Every reply is its own message; the key only has to be unique. */
+       'nudge_reply:' || v_m.id || ':' || auth.uid() || ':' || gen_random_uuid())
+    on conflict (recipient_key, dedupe_key) do nothing;
+    v_sent := v_sent + 1;
+  end loop;
+
+  if v_sent = 0 then
+    return 'nobody';
+  end if;
+
+  update public.notifications n
+     set acknowledged_at = now()
+   where n.kind = any (app.nudge_kinds())
+     and n.subject_kind = 'entry_milestones'
+     and n.subject_id = p_milestone_id
+     and n.recipient_id = auth.uid()
+     and n.acknowledged_at is null;
+
+  return 'sent';
+end;
+$$;
+
+grant execute on function public.nudge_reply(uuid, text) to authenticated;
+
+/**
+ * Every nudge track in a class, in one call, for the advisor who runs it.
+ * `nudge_state` per participation, keyed by participation as well.
+ */
+create or replace function public.program_nudge_state(p_program_id uuid)
+returns table (
+  participation_id uuid,
+  milestone_id    uuid,
+  recipient_id    uuid,
+  nudges          int,
+  last_sent_at    timestamptz,
+  last_to         text,
+  met_after       boolean,
+  acknowledged_at timestamptz,
+  relayed_at      timestamptz,
+  relayed_to      text,
+  replied_at      timestamptz,
+  reply           text
+)
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select pt.id, s.milestone_id, s.recipient_id, s.nudges, s.last_sent_at, s.last_to,
+         s.met_after, s.acknowledged_at, s.relayed_at, s.relayed_to, s.replied_at, s.reply
+    from public.participations pt
+    cross join lateral public.nudge_state(pt.id) s
+   where pt.program_id = p_program_id
+     and pt.org_id = app.org_id()
+     and exists (select 1 from public.my_classes() c where c.program_id = p_program_id);
+$$;
+
+grant execute on function public.program_nudge_state(uuid) to authenticated;
+
+/**
+ * What came back on the nudges I sent in this class, newest first, over
+ * the last fourteen days. Four kinds of answer, and only the first is a
+ * message: a reply written to me; a nudge of mine marked seen; a nudge of
+ * mine passed on to the student by the Elder I sent it to; an obligation
+ * I nudged about, met since. The last three are facts the rows already
+ * held and nobody read together.
+ */
+create or replace function public.class_answers(p_program_id uuid)
+returns table (
+  kind          text,
+  at            timestamptz,
+  who           text,
+  who_id        uuid,
+  milestone_id  uuid,
+  obligation    text,
+  project_id    uuid,
+  project_title text,
+  note          text,
+  to_name       text
+)
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  with mine as (
+    select n.id, n.subject_id, n.recipient_id, n.created_at, n.acknowledged_at
+      from public.notifications n
+     where n.kind = any (app.nudge_kinds())
+       and n.subject_kind = 'entry_milestones'
+       and n.actor_id = auth.uid()
+       and n.org_id = app.org_id()
+  ),
+  scope as (
+    select em.id as milestone_id, em.name, em.completed_on, pt.project_id, p.title
+      from public.entry_milestones em
+      join public.participations pt on pt.id = em.participation_id
+      join public.projects p on p.id = pt.project_id
+     where pt.program_id = p_program_id
+       and pt.org_id = app.org_id()
+       and exists (select 1 from public.my_classes() c where c.program_id = p_program_id)
+  )
+  select * from (
+    /* Replies written to me. */
+    select 'reply'::text, n.created_at, u.display_name, n.actor_id,
+           sc.milestone_id, sc.name, sc.project_id, sc.title,
+           n.payload->>'note', null::text
+      from public.notifications n
+      join scope sc on sc.milestone_id = n.subject_id
+      join public.users u on u.id = n.actor_id
+     where n.kind = 'nudge_reply'
+       and n.recipient_id = auth.uid()
+    union all
+    /* Mine, seen. */
+    select 'seen', max(m.acknowledged_at), u.display_name, m.recipient_id,
+           sc.milestone_id, sc.name, sc.project_id, sc.title, null, null
+      from mine m
+      join scope sc on sc.milestone_id = m.subject_id
+      join public.users u on u.id = m.recipient_id
+     where m.acknowledged_at is not null
+     group by u.display_name, m.recipient_id, sc.milestone_id, sc.name, sc.project_id, sc.title
+    union all
+    /* Mine, passed on: the person I nudged nudged somebody else about the
+       same obligation, after I did. */
+    select 'relayed', r.created_at, au.display_name, r.actor_id,
+           sc.milestone_id, sc.name, sc.project_id, sc.title, null, ru.display_name
+      from public.notifications r
+      join scope sc on sc.milestone_id = r.subject_id
+      join public.users au on au.id = r.actor_id
+      join public.users ru on ru.id = r.recipient_id
+     where r.kind = any (app.nudge_kinds())
+       and r.actor_id <> auth.uid()
+       and exists (select 1 from mine m
+                    where m.subject_id = r.subject_id
+                      and m.recipient_id = r.actor_id
+                      and m.created_at <= r.created_at)
+    union all
+    /* Mine, met since. */
+    select 'met', (max(sc.completed_on))::timestamptz, u.display_name, m.recipient_id,
+           sc.milestone_id, sc.name, sc.project_id, sc.title, null, null
+      from mine m
+      join scope sc on sc.milestone_id = m.subject_id
+      join public.users u on u.id = m.recipient_id
+     where sc.completed_on is not null
+       and sc.completed_on >= m.created_at::date
+     group by u.display_name, m.recipient_id, sc.milestone_id, sc.name, sc.project_id, sc.title
+  ) answers (kind, at, who, who_id, milestone_id, obligation, project_id, project_title, note, to_name)
+  where at > now() - interval '14 days'
+  order by at desc;
+$$;
+
+grant execute on function public.class_answers(uuid) to authenticated;
+
+
+-- ===========================================================================
+-- FEEDBACK
+--
+-- What people say about the software while they are using it, kept where
+-- the people running the pilot can read it back, and mailed the moment it
+-- is written. The row is the record; the mail is the alert.
+--
+-- Written through a function rather than an insert policy because the one
+-- thing the form must be able to do is work when nothing else does: signed
+-- out, on the wrong tenant, on a page that has just failed. `anon` may call
+-- it. The diagnostic fields are what the browser and the server could see;
+-- nothing in them is asked of the person beyond what they typed.
+--
+-- Read by staff at the school, and by nobody else through a session; the
+-- pilot's own reading is by the secret key.
+-- ===========================================================================
+
+create table public.feedback (
+  id            uuid primary key default gen_random_uuid(),
+  org_id        uuid references public.organizations on delete restrict,
+  user_id       uuid references public.users on delete set null,
+  kind          text not null check (kind in ('bug', 'confusing', 'signin', 'idea', 'other')),
+  doing         text not null,
+  happened      text not null,
+  reply_to      text,
+  page          text,
+  diagnostics   jsonb not null default '{}'::jsonb,
+  mailed_at     timestamptz,
+  mail_error    text,
+  created_at    timestamptz not null default now()
+);
+
+create index feedback_org_time_idx on public.feedback (org_id, created_at desc);
+create index if not exists feedback_user_id_idx on public.feedback (user_id);
+
+alter table public.feedback enable row level security;
+
+create policy feedback_read_staff on public.feedback
+  for select to authenticated
+  using (org_id = app.org_id() and app.is_staff());
+
+grant select on public.feedback to authenticated, service_role;
+grant insert, update on public.feedback to service_role;
+
+create or replace function public.send_feedback(
+  p_org_slug    text,
+  p_kind        text,
+  p_doing       text,
+  p_happened    text,
+  p_reply_to    text default null,
+  p_page        text default null,
+  p_diagnostics jsonb default '{}'::jsonb
+)
+returns uuid
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_org uuid;
+  v_id  uuid;
+begin
+  if coalesce(btrim(p_happened), '') = '' then
+    raise exception 'say what happened';
+  end if;
+  if length(p_doing) > 4000 or length(p_happened) > 8000 then
+    raise exception 'that is longer than a note';
+  end if;
+
+  select o.id into v_org from public.organizations o where o.slug = p_org_slug;
+
+  insert into public.feedback
+    (org_id, user_id, kind, doing, happened, reply_to, page, diagnostics)
+  values
+    (v_org, auth.uid(), p_kind, left(coalesce(p_doing, ''), 4000), left(p_happened, 8000),
+     nullif(btrim(coalesce(p_reply_to, '')), ''), left(coalesce(p_page, ''), 2000),
+     coalesce(p_diagnostics, '{}'::jsonb))
+  returning id into v_id;
+
+  return v_id;
+end;
+$$;
+
+grant execute on function public.send_feedback(text, text, text, text, text, text, jsonb)
+  to anon, authenticated, service_role;
+
+-- Whether the mail went, written back by the page that sent it. The id is
+-- the only key and it is unguessable, which is the whole of the guard: the
+-- worst a caller can do with it is mark their own note as mailed.
+create or replace function public.feedback_mailed(p_id uuid, p_error text default null)
+returns void
+language sql
+security definer
+set search_path = ''
+as $$
+  update public.feedback
+     set mailed_at  = case when p_error is null then now() else mailed_at end,
+         mail_error = p_error
+   where id = p_id;
+$$;
+
+grant execute on function public.feedback_mailed(uuid, text) to anon, authenticated, service_role;
+
+-- ===========================================================================
+-- INDEXES ON EVERY COLUMN A POLICY OR A JOIN READS
+--
+-- Postgres indexes a primary key and a unique constraint and nothing else.
+-- A foreign key is a constraint, not an index, and seventy-seven of them
+-- here had none. It did not matter on a laptop with sixty rows. It is the
+-- one thing on this list that degrades nonlinearly: every policy asks
+-- `org_id = app.org_id()`, `can_see_project` joins through
+-- `project_authors` and `participations`, `my_nudges` reads
+-- `notifications.recipient_id`, and each of those is a sequential scan
+-- that grows with the tenant until the column has an index.
+--
+-- Not every foreign key. The columns that record who did something
+-- (`created_by`, `decided_by`, `superseded_by`, `actor_id` and their kin)
+-- are read by looking a row up, never by looking a person up, and an index
+-- nobody reads is a cost on every write. What is indexed is what a policy
+-- filters on, what a join walks, and what a screen lists by. `tests/indexes.mjs`
+-- holds the line: every `org_id` and every foreign key outside that
+-- bookkeeping set, or the test names the column.
+--
+-- At the end of the file rather than beside each table, because a block
+-- that can be read as a list is a block that can be checked as a list, and
+-- because several of these tables gain their foreign key in an `alter`
+-- further down than their `create`.
+-- ===========================================================================
+
+create index if not exists identities_org_id_idx on public.identities (org_id);
+create index if not exists feedback_org_id_idx on public.feedback (org_id);
+create index if not exists deliverable_feedback_org_id_idx on public.deliverable_feedback (org_id);
+create index if not exists assessments_org_id_idx on public.assessments (org_id);
+create index if not exists user_roles_org_id_idx on public.user_roles (org_id);
+create index if not exists guardian_consents_org_id_idx on public.guardian_consents (org_id);
+create index if not exists confirmation_tokens_org_id_idx on public.confirmation_tokens (org_id);
+create index if not exists audit_log_actor_user_id_idx on public.audit_log (actor_user_id);
+create index if not exists notifications_org_id_idx on public.notifications (org_id);
+create index if not exists notifications_recipient_id_idx on public.notifications (recipient_id);
+create index if not exists notifications_actor_id_idx on public.notifications (actor_id);
+create index if not exists notifications_subject_id_idx on public.notifications (subject_id);
+create index if not exists account_deletions_org_id_idx on public.account_deletions (org_id);
+create index if not exists account_deletion_approvals_org_id_idx on public.account_deletion_approvals (org_id);
+create index if not exists programs_open_to_cohort_idx on public.programs (open_to_cohort);
+create index if not exists programs_prepares_for_idx on public.programs (prepares_for);
+create index if not exists program_milestones_org_id_idx on public.program_milestones (org_id);
+create index if not exists project_authors_org_id_idx on public.project_authors (org_id);
+create index if not exists memberships_org_id_idx on public.memberships (org_id);
+create index if not exists participations_org_id_idx on public.participations (org_id);
+create index if not exists entry_milestones_org_id_idx on public.entry_milestones (org_id);
+create index if not exists entry_milestones_program_milestone_id_idx on public.entry_milestones (program_milestone_id);
+create index if not exists deliverables_org_id_idx on public.deliverables (org_id);
+create index if not exists field_notes_org_id_idx on public.field_notes (org_id);
+create index if not exists field_notes_author_id_idx on public.field_notes (author_id);
+create index if not exists field_notes_corrects_id_idx on public.field_notes (corrects_id);
+create index if not exists note_media_org_id_idx on public.note_media (org_id);
+create index if not exists project_links_org_id_idx on public.project_links (org_id);
+create index if not exists project_sponsors_org_id_idx on public.project_sponsors (org_id);
+create index if not exists step_warnings_org_id_idx on public.step_warnings (org_id);
+create index if not exists manuscript_sections_org_id_idx on public.manuscript_sections (org_id);
+create index if not exists manuscript_figures_org_id_idx on public.manuscript_figures (org_id);
+create index if not exists manuscript_references_org_id_idx on public.manuscript_references (org_id);
+create index if not exists submissions_submitted_by_idx on public.submissions (submitted_by);
+create index if not exists submissions_assigned_editor_idx on public.submissions (assigned_editor);
+create index if not exists state_events_org_id_idx on public.state_events (org_id);
+create index if not exists reviews_org_id_idx on public.reviews (org_id);
+create index if not exists review_findings_org_id_idx on public.review_findings (org_id);
+create index if not exists records_submission_id_idx on public.records (submission_id);
+create index if not exists records_project_id_idx on public.records (project_id);
+create index if not exists records_manuscript_id_idx on public.records (manuscript_id);
+create index if not exists records_participation_id_idx on public.records (participation_id);
+create index if not exists records_supersedes_idx on public.records (supersedes);
+create index if not exists records_superseded_by_idx on public.records (superseded_by);
+create index if not exists record_authors_user_id_idx on public.record_authors (user_id);
+create index if not exists project_images_org_id_idx on public.project_images (org_id);
+
 notify pgrst, 'reload schema';
 
 
 
 
+
+
+-- ===========================================================================
+-- DOCUMENTS: EVERY DELIVERABLE WRITTEN IN SCIPATH (6.16)
+--
+-- A shape (src/config/shapes/) is the template of a deliverable: sections
+-- of fields with kinds. A document is a student's instance of one, alive
+-- from the moment it is opened, written a field at a time, read and
+-- commented on while it is in progress. Submitting it fixes a version and
+-- records a deliverable through `record_deliverable`, so everything that
+-- reads deliverables (the plate, the ledger, the roll call, the Elder's
+-- task, the notebook's line, the grades) keeps working unchanged.
+--
+-- The document belongs to the PROJECT, not to a participation: one
+-- literature review satisfies the class's step and a fair's, as 6.8
+-- promised, and each submission records against the participation whose
+-- step is being met.
+--
+-- One row per field, with a version: two authors write different fields
+-- without clobbering each other, a save that carries a stale version is
+-- refused with the newer text rather than overwriting it, and a comment
+-- remembers the version it was written against so the page can say
+-- "changed since".
+-- ===========================================================================
+
+create table public.documents (
+  id             uuid primary key default gen_random_uuid(),
+  org_id         uuid not null references public.organizations on delete restrict,
+  project_id     uuid not null references public.projects on delete restrict,
+  -- The deliverable's id in the library (what `deliverables.type` records).
+  deliverable    text not null,
+  shape_id       text not null,
+  shape_version  int  not null default 1,
+  -- drafting: never submitted. submitted: the last submission stands.
+  -- revising: edited since the last submission.
+  status         text not null default 'drafting'
+                 check (status in ('drafting', 'submitted', 'revising')),
+  version_no     int  not null default 0,
+  -- The shape's fields that are the Elder's to write (a score, a
+  -- rationale), copied here when the document is opened so save_field can
+  -- tell whose a field is without reading the template.
+  staff_fields   text[] not null default '{}',
+  submitted_at   timestamptz,
+  submitted_by   uuid references public.users on delete restrict,
+  opened_by      uuid not null references public.users on delete restrict,
+  opened_at      timestamptz not null default now(),
+  updated_at     timestamptz not null default now(),
+  unique (project_id, deliverable)
+);
+
+create index documents_org_id_idx on public.documents (org_id);
+create index documents_project_id_idx on public.documents (project_id);
+create index documents_submitted_by_idx on public.documents (submitted_by);
+create index documents_opened_by_idx on public.documents (opened_by);
+
+create table public.document_fields (
+  id           uuid primary key default gen_random_uuid(),
+  org_id       uuid not null references public.organizations on delete restrict,
+  document_id  uuid not null references public.documents on delete restrict,
+  field_id     text not null,
+  value        jsonb not null default 'null'::jsonb,
+  version      int  not null default 1,
+  updated_at   timestamptz not null default now(),
+  updated_by   uuid not null references public.users on delete restrict,
+  unique (document_id, field_id)
+);
+
+create index document_fields_org_id_idx on public.document_fields (org_id);
+create index document_fields_document_id_idx on public.document_fields (document_id);
+create index document_fields_updated_by_idx on public.document_fields (updated_by);
+
+-- A snapshot each time it is submitted. A grade and a comment refer to
+-- text that does not change under them.
+create table public.document_versions (
+  id               uuid primary key default gen_random_uuid(),
+  org_id           uuid not null references public.organizations on delete restrict,
+  document_id      uuid not null references public.documents on delete restrict,
+  version_no       int  not null,
+  content          jsonb not null,
+  participation_id uuid not null references public.participations on delete restrict,
+  deliverable_id   uuid references public.deliverables on delete restrict,
+  submitted_by     uuid not null references public.users on delete restrict,
+  submitted_at     timestamptz not null default now(),
+  unique (document_id, version_no)
+);
+
+create index document_versions_org_id_idx on public.document_versions (org_id);
+create index document_versions_document_id_idx on public.document_versions (document_id);
+create index document_versions_participation_id_idx on public.document_versions (participation_id);
+create index document_versions_deliverable_id_idx on public.document_versions (deliverable_id);
+create index document_versions_submitted_by_idx on public.document_versions (submitted_by);
+
+-- Images pasted into a field. Served by the media route like every other
+-- object we hold, under the project's visibility.
+create table public.document_media (
+  id           uuid primary key default gen_random_uuid(),
+  org_id       uuid not null references public.organizations on delete restrict,
+  document_id  uuid not null references public.documents on delete restrict,
+  storage_path text not null unique,
+  uploaded_by  uuid not null references public.users on delete restrict,
+  created_at   timestamptz not null default now()
+);
+
+create index document_media_org_id_idx on public.document_media (org_id);
+create index document_media_document_id_idx on public.document_media (document_id);
+create index document_media_uploaded_by_idx on public.document_media (uploaded_by);
+
+-- The keys the two older tables could not carry until now: a deliverable
+-- row points at the submission it records, a comment at its document.
+alter table public.deliverables
+  add constraint deliverables_document_version_fk
+  foreign key (document_version_id) references public.document_versions on delete restrict;
+create index deliverables_document_version_id_idx on public.deliverables (document_version_id);
+
+alter table public.deliverable_feedback
+  add constraint deliverable_feedback_document_fk
+  foreign key (document_id) references public.documents on delete restrict;
+
+alter table public.documents enable row level security;
+alter table public.document_fields enable row level security;
+alter table public.document_versions enable row level security;
+alter table public.document_media enable row level security;
+
+create policy documents_read on public.documents
+  for select to authenticated
+  using ((select app.can_see_project(documents.project_id)));
+
+create policy document_fields_read on public.document_fields
+  for select to authenticated
+  using ((select app.can_see_project((select d.project_id from public.documents d where d.id = document_fields.document_id))));
+
+create policy document_versions_read on public.document_versions
+  for select to authenticated
+  using ((select app.can_see_project((select d.project_id from public.documents d where d.id = document_versions.document_id))));
+
+create policy document_media_read on public.document_media
+  for select to authenticated
+  using ((select app.can_see_project((select d.project_id from public.documents d where d.id = document_media.document_id))));
+
+grant select on public.documents, public.document_fields, public.document_versions, public.document_media to authenticated, service_role;
+grant insert, update on public.documents, public.document_fields, public.document_versions, public.document_media to service_role;
+
+-- Who may comment on a document: an author of the project, an Elder on
+-- any of its places, or an advisor. Not the officer of another project,
+-- which app.can_see_project would allow for reading.
+create or replace function app.may_comment_on(p_project_id uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select app.authors_project(p_project_id)
+      or app.is_advisor()
+      or exists (
+        select 1 from public.project_authors a
+         where a.project_id = p_project_id
+           and a.user_id = auth.uid()
+           and a.role = 'officer'
+           and a.self_managed_at is null
+      );
+$$;
+
+grant execute on function app.may_comment_on(uuid) to authenticated;
+
+-- Open a document, or find the one that exists. Authors only.
+create or replace function public.open_document(
+  p_project_id    uuid,
+  p_deliverable   text,
+  p_shape_id      text,
+  p_shape_version int default 1,
+  p_staff_fields  text[] default '{}'
+)
+returns uuid
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_org uuid;
+  v_id  uuid;
+begin
+  if auth.uid() is null then
+    raise exception 'not authenticated';
+  end if;
+  select p.org_id into v_org from public.projects p where p.id = p_project_id;
+  if v_org is null or v_org is distinct from app.org_id() then
+    raise exception 'no such project at this school';
+  end if;
+  if not app.authors_project(p_project_id) then
+    raise exception 'only an author on this project writes its documents';
+  end if;
+  if coalesce(btrim(p_deliverable), '') = '' or coalesce(btrim(p_shape_id), '') = '' then
+    raise exception 'a document needs a deliverable and a shape';
+  end if;
+
+  select d.id into v_id from public.documents d
+   where d.project_id = p_project_id and d.deliverable = p_deliverable;
+  if v_id is not null then
+    /* A shape edited mid-season may move a field between the two owners;
+       the row follows the shape as it stands. */
+    update public.documents set staff_fields = coalesce(p_staff_fields, '{}')
+     where id = v_id and staff_fields is distinct from coalesce(p_staff_fields, '{}');
+    return v_id;
+  end if;
+
+  insert into public.documents (org_id, project_id, deliverable, shape_id, shape_version, opened_by, staff_fields)
+  values (v_org, p_project_id, p_deliverable, p_shape_id, coalesce(p_shape_version, 1), auth.uid(), coalesce(p_staff_fields, '{}'))
+  returning id into v_id;
+
+  perform app.audit(v_org, 'document.opened', 'documents', v_id, null,
+    jsonb_build_object('deliverable', p_deliverable, 'shape', p_shape_id));
+  return v_id;
+end;
+$$;
+
+revoke all on function public.open_document(uuid, text, text, int, text[]) from public, anon;
+grant execute on function public.open_document(uuid, text, text, int, text[]) to authenticated;
+
+-- Save one field. The caller says which version it read; a newer one on
+-- the row means somebody else wrote here first, and the answer is their
+-- text and their name rather than an overwrite. Returns
+--   { ok: true, version }                          saved
+--   { ok: false, version, value, by }              conflict
+create or replace function public.save_field(
+  p_document_id uuid,
+  p_field_id    text,
+  p_value       jsonb,
+  p_version     int
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_org     uuid;
+  v_project uuid;
+  v_status  text;
+  v_staff   text[];
+  v_row     public.document_fields%rowtype;
+  v_by      text;
+begin
+  if auth.uid() is null then
+    raise exception 'not authenticated';
+  end if;
+  select d.org_id, d.project_id, d.status, d.staff_fields into v_org, v_project, v_status, v_staff
+    from public.documents d where d.id = p_document_id;
+  if v_org is null or v_org is distinct from app.org_id() then
+    raise exception 'no such document at this school';
+  end if;
+  if coalesce(btrim(p_field_id), '') = '' then
+    raise exception 'which field';
+  end if;
+
+  /* Whose field it is. The Elder's part of a handout (a score, a
+     rationale) is written by an Elder on the project or the advisor and
+     never by the author; everything else is the author's and never the
+     Elder's. */
+  if p_field_id = any (v_staff) then
+    if app.authors_project(v_project) or not app.may_comment_on(v_project) then
+      raise exception 'this part of the document is the Elder''s to write';
+    end if;
+  elsif not app.authors_project(v_project) then
+    raise exception 'only an author on this project writes its documents';
+  end if;
+
+  select * into v_row from public.document_fields f
+   where f.document_id = p_document_id and f.field_id = p_field_id
+   for update;
+
+  if v_row.id is null then
+    insert into public.document_fields (org_id, document_id, field_id, value, version, updated_by)
+    values (v_org, p_document_id, p_field_id, coalesce(p_value, 'null'::jsonb), 1, auth.uid())
+    returning * into v_row;
+  elsif v_row.version <> coalesce(p_version, 0) then
+    select u.display_name into v_by from public.users u where u.id = v_row.updated_by;
+    return jsonb_build_object('ok', false, 'version', v_row.version, 'value', v_row.value, 'by', v_by,
+                              'at', v_row.updated_at);
+  else
+    update public.document_fields
+       set value = coalesce(p_value, 'null'::jsonb), version = v_row.version + 1,
+           updated_at = now(), updated_by = auth.uid()
+     where id = v_row.id
+     returning * into v_row;
+  end if;
+
+  update public.documents
+     set updated_at = now(),
+         status = case when status = 'submitted' and not (p_field_id = any (v_staff)) then 'revising' else status end
+   where id = p_document_id;
+
+  return jsonb_build_object('ok', true, 'version', v_row.version, 'at', v_row.updated_at);
+end;
+$$;
+
+revoke all on function public.save_field(uuid, text, jsonb, int) from public, anon;
+grant execute on function public.save_field(uuid, text, jsonb, int) to authenticated;
+
+-- Submit: fix a version and record the deliverable on the participation
+-- whose step this meets. Everything downstream is record_deliverable's:
+-- the milestone completes, the notebook gets its line, the previous
+-- version is superseded, the asks on it are resolved, the Elder's task
+-- becomes ready. Everybody who commented is told there is a new version.
+create or replace function public.submit_document(
+  p_document_id     uuid,
+  p_participation_id uuid,
+  p_milestone_id    uuid,
+  p_label           text
+)
+returns uuid
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_doc      public.documents%rowtype;
+  v_part_project uuid;
+  v_content  jsonb;
+  v_version  uuid;
+  v_deliv    uuid;
+  v_no       int;
+  v_who      text;
+  v_to       uuid;
+begin
+  if auth.uid() is null then
+    raise exception 'not authenticated';
+  end if;
+  select * into v_doc from public.documents d where d.id = p_document_id for update;
+  if v_doc.id is null or v_doc.org_id is distinct from app.org_id() then
+    raise exception 'no such document at this school';
+  end if;
+  if not app.authors_project(v_doc.project_id) then
+    raise exception 'only an author on this project submits its documents';
+  end if;
+  select e.project_id into v_part_project from public.participations e where e.id = p_participation_id;
+  if v_part_project is null or v_part_project <> v_doc.project_id then
+    raise exception 'that place is not this project''s';
+  end if;
+
+  select coalesce(jsonb_object_agg(f.field_id, f.value), '{}'::jsonb) into v_content
+    from public.document_fields f where f.document_id = p_document_id;
+
+  v_no := v_doc.version_no + 1;
+
+  insert into public.document_versions
+    (org_id, document_id, version_no, content, participation_id, submitted_by)
+  values
+    (v_doc.org_id, p_document_id, v_no, v_content, p_participation_id, auth.uid())
+  returning id into v_version;
+
+  /* A document written in a Google Doc and linked here carries the
+     address onto the deliverable row, where the ledger reads it. The
+     reserved field `_doc_link` is where the page keeps it. */
+  v_deliv := public.record_deliverable(
+    p_participation_id, p_milestone_id, v_doc.deliverable,
+    coalesce(nullif(btrim(p_label), ''), v_doc.deliverable), current_date,
+    nullif(btrim(coalesce(v_content->>'_doc_link', '')), ''), null);
+
+  update public.deliverables set document_version_id = v_version where id = v_deliv;
+  update public.document_versions set deliverable_id = v_deliv where id = v_version;
+
+  update public.documents
+     set status = 'submitted', version_no = v_no, submitted_at = now(),
+         submitted_by = auth.uid(), updated_at = now()
+   where id = p_document_id;
+
+  /* An ask on the document is answered by the submission, as an ask on a
+     deliverable row is answered by its new version. */
+  update public.deliverable_feedback
+     set resolved_at = now(), resolved_by = v_deliv
+   where document_id = p_document_id and needs_revision and resolved_at is null;
+
+  select u.display_name into v_who from public.users u where u.id = auth.uid();
+
+  for v_to in
+    select distinct f.author_id from public.deliverable_feedback f
+     where f.document_id = p_document_id and f.author_id <> auth.uid()
+  loop
+    insert into public.notifications
+      (org_id, kind, recipient_id, actor_id, subject_kind, subject_id, payload, dedupe_key)
+    values
+      (v_doc.org_id, 'new_version', v_to, auth.uid(), 'documents', p_document_id,
+       jsonb_build_object('label', coalesce(nullif(btrim(p_label), ''), v_doc.deliverable),
+                          'from', v_who, 'version', v_no,
+                          'project_id', v_doc.project_id,
+                          'path', '/app/project/' || v_doc.project_id::text || '/doc/' || v_doc.deliverable || '/'),
+       'new_version:' || v_version::text || ':' || v_to::text)
+    on conflict do nothing;
+  end loop;
+
+  perform app.audit(v_doc.org_id, 'document.submitted', 'documents', p_document_id, null,
+    jsonb_build_object('version', v_no, 'participation', p_participation_id, 'deliverable', v_deliv));
+  return v_version;
+end;
+$$;
+
+revoke all on function public.submit_document(uuid, uuid, uuid, text) from public, anon;
+grant execute on function public.submit_document(uuid, uuid, uuid, text) to authenticated;
+
+-- A comment on a field or on the document, or a reply in a thread. The
+-- Elders on the project, the advisor, and the authors in reply; an author
+-- may not ask themselves for a revision. An Elder's first comment
+-- completes the Elder's task that names this deliverable, as give_feedback
+-- does, and only then does the notebook get a line: a running
+-- conversation on a draft is not the record, the review is.
+create or replace function public.comment_on_document(
+  p_document_id    uuid,
+  p_field_id       text,
+  p_body_md        text,
+  p_needs_revision boolean default false,
+  p_reply_to       uuid default null
+)
+returns uuid
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_doc     public.documents%rowtype;
+  v_author  boolean;
+  v_part    uuid;
+  v_task    uuid;
+  v_fv      int;
+  v_id      uuid;
+  v_who     text;
+  v_to      uuid;
+  v_ask     boolean;
+  v_label   text;
+begin
+  if auth.uid() is null then
+    raise exception 'not authenticated';
+  end if;
+  if coalesce(btrim(p_body_md), '') = '' then
+    raise exception 'say something';
+  end if;
+  select * into v_doc from public.documents d where d.id = p_document_id;
+  if v_doc.id is null or v_doc.org_id is distinct from app.org_id() then
+    raise exception 'no such document at this school';
+  end if;
+  if not app.may_comment_on(v_doc.project_id) then
+    raise exception 'the Elders on this project, the advisor and the authors may comment';
+  end if;
+
+  v_author := app.authors_project(v_doc.project_id);
+  v_ask := coalesce(p_needs_revision, false) and not v_author;
+
+  /* The place this comment is filed under: the one the caller looks after,
+     else the project's class, else any. */
+  select e.id into v_part from public.participations e
+    join public.programs g on g.id = e.program_id
+   where e.project_id = v_doc.project_id
+   order by (select exists (select 1 from public.project_authors a
+                             where a.participation_id = e.id and a.user_id = auth.uid()
+                               and a.role = 'officer' and a.self_managed_at is null)) desc,
+            (g.program_role = 'cohort') desc, e.entered_at
+   limit 1;
+  if v_part is null then
+    raise exception 'this project is in no program';
+  end if;
+
+  if p_field_id is not null then
+    select f.version into v_fv from public.document_fields f
+     where f.document_id = p_document_id and f.field_id = p_field_id;
+  end if;
+
+  if p_reply_to is not null and not exists (
+    select 1 from public.deliverable_feedback f where f.id = p_reply_to and f.document_id = p_document_id
+  ) then
+    raise exception 'that is not a comment on this document';
+  end if;
+
+  /* The Elder's task this answers, if the caller looks after the place. */
+  if not v_author and app.looks_after(v_part) then
+    select m.id into v_task
+      from public.entry_milestones m
+     where m.participation_id = v_part
+       and m.owner = 'staff'
+       and m.feedback_on = v_doc.deliverable
+       and m.completed_on is null
+       and app.staff_task_ready(m.id)
+     order by m.due_on nulls last
+     limit 1;
+  end if;
+
+  insert into public.deliverable_feedback
+    (org_id, participation_id, document_id, field_id, field_version, reply_to,
+     milestone_id, author_id, body_md, needs_revision)
+  values
+    (v_doc.org_id, v_part, p_document_id, nullif(btrim(coalesce(p_field_id, '')), ''), v_fv, p_reply_to,
+     v_task, auth.uid(), btrim(p_body_md), v_ask)
+  returning id into v_id;
+
+  select u.display_name into v_who from public.users u where u.id = auth.uid();
+  v_label := coalesce((select d.label from public.deliverables d
+                        where d.participation_id = v_part and d.type = v_doc.deliverable
+                          and d.superseded_at is null limit 1), v_doc.deliverable);
+
+  if v_task is not null then
+    update public.entry_milestones
+       set completed_on = current_date, completed_by = auth.uid(), updated_at = now()
+     where id = v_task;
+    insert into public.field_notes (org_id, project_id, author_id, body_md, occurred_on)
+    values (v_doc.org_id, v_doc.project_id, auth.uid(),
+            'Feedback on **' || v_label || '** from ' || coalesce(v_who, 'an Elder')
+              || case when v_ask then ', asking for a revision.' else '.' end,
+            current_date);
+  end if;
+
+  /* Who is told. An author's reply goes to the person it answers (and to
+     everybody who commented, deduped per hour); a comment goes to the
+     authors. One message an hour per document per recipient: five
+     comments on five fields are one mail, and the page has the rest. */
+  /* An author's line goes to whoever has commented, and always to the
+     Elders who look after the project: a student's first question on a
+     document nobody has read yet went to nobody (2.8). */
+  if v_author then
+    for v_to in
+      select distinct x.uid from (
+        select f.author_id as uid from public.deliverable_feedback f
+         where f.document_id = p_document_id
+        union
+        select a.user_id from public.project_authors a
+         where a.project_id = v_doc.project_id and a.role = 'officer' and a.self_managed_at is null
+        union
+        /* No Elder on the project (an Elder's own project, say): the
+           advisors of the program the comment is filed under. */
+        select r.user_id from public.user_roles r
+          join public.participations e on e.id = v_part
+         where r.role = 'advisor' and r.revoked_at is null and r.org_id = v_doc.org_id
+           and (r.scope_id is null or r.scope_id = e.program_id)
+           and not exists (select 1 from public.project_authors a
+                            where a.project_id = v_doc.project_id and a.role = 'officer' and a.self_managed_at is null)
+      ) x where x.uid <> auth.uid()
+    loop
+      insert into public.notifications
+        (org_id, kind, recipient_id, actor_id, subject_kind, subject_id, payload, dedupe_key)
+      values
+        (v_doc.org_id, 'comment', v_to, auth.uid(), 'documents', p_document_id,
+         jsonb_build_object('label', v_label, 'from', v_who, 'note', left(btrim(p_body_md), 400),
+                            'project_id', v_doc.project_id, 'reply', true,
+                            'path', '/app/project/' || v_doc.project_id::text || '/doc/' || v_doc.deliverable || '/'),
+         'comment:' || p_document_id::text || ':' || v_to::text || ':' || to_char(now(), 'YYYY-MM-DD-HH24'))
+      on conflict do nothing;
+    end loop;
+  else
+    for v_to in
+      select a.user_id from public.project_authors a
+       where a.project_id = v_doc.project_id and a.role = 'author' and a.user_id <> auth.uid()
+    loop
+      insert into public.notifications
+        (org_id, kind, recipient_id, actor_id, subject_kind, subject_id, payload, dedupe_key)
+      values
+        (v_doc.org_id, case when v_ask then 'revision_asked' else 'comment' end, v_to, auth.uid(),
+         'documents', p_document_id,
+         jsonb_build_object('label', v_label, 'from', v_who, 'note', left(btrim(p_body_md), 400),
+                            'project_id', v_doc.project_id, 'reply', false,
+                            'path', '/app/project/' || v_doc.project_id::text || '/doc/' || v_doc.deliverable || '/'),
+         case when v_ask then 'revision_asked:' else 'comment:' end
+           || p_document_id::text || ':' || v_to::text || ':' || to_char(now(), 'YYYY-MM-DD-HH24'))
+      on conflict do nothing;
+    end loop;
+  end if;
+
+  perform app.audit(v_doc.org_id, 'document.comment', 'deliverable_feedback', v_id, null,
+    jsonb_build_object('document', p_document_id, 'field', p_field_id, 'task', v_task, 'needs_revision', v_ask));
+  return v_id;
+end;
+$$;
+
+revoke all on function public.comment_on_document(uuid, text, text, boolean, uuid) from public, anon;
+grant execute on function public.comment_on_document(uuid, text, text, boolean, uuid) to authenticated;
+
+-- An ask on a document, withdrawn by the person who asked it, without a
+-- new version: the student answered in the thread and that was enough.
+create or replace function public.resolve_ask(p_feedback_id uuid)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_row public.deliverable_feedback%rowtype;
+begin
+  select * into v_row from public.deliverable_feedback f where f.id = p_feedback_id;
+  if v_row.id is null or v_row.org_id is distinct from app.org_id() then
+    raise exception 'no such comment at this school';
+  end if;
+  if v_row.author_id <> auth.uid() and not app.is_advisor() then
+    raise exception 'only whoever asked, or the advisor, withdraws an ask';
+  end if;
+  update public.deliverable_feedback set resolved_at = now() where id = p_feedback_id and resolved_at is null;
+end;
+$$;
+
+revoke all on function public.resolve_ask(uuid) from public, anon;
+grant execute on function public.resolve_ask(uuid) to authenticated;
+
+-- An image pasted into a field: the object is already in the bucket, this
+-- is the row that lets the media route serve it under the project's
+-- visibility. Authors only.
+create or replace function public.add_document_media(p_document_id uuid, p_storage_path text)
+returns uuid
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_org uuid;
+  v_project uuid;
+  v_id uuid;
+begin
+  select d.org_id, d.project_id into v_org, v_project from public.documents d where d.id = p_document_id;
+  if v_org is null or v_org is distinct from app.org_id() then
+    raise exception 'no such document at this school';
+  end if;
+  if not app.authors_project(v_project) then
+    raise exception 'only an author on this project adds to its documents';
+  end if;
+  insert into public.document_media (org_id, document_id, storage_path, uploaded_by)
+  values (v_org, p_document_id, p_storage_path, auth.uid())
+  returning id into v_id;
+  return v_id;
+end;
+$$;
+
+revoke all on function public.add_document_media(uuid, text) from public, anon;
+grant execute on function public.add_document_media(uuid, text) to authenticated;
 
 notify pgrst, 'reload schema';

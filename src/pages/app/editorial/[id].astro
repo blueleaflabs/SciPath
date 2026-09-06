@@ -2,7 +2,7 @@
 export const prerender = false;
 
 import Base from '../../../layouts/Base.astro';
-import { formatDate } from '../../../lib/dates';
+import { formatDate, todayIn } from '../../../lib/dates';
 import AppShell from '../../../components/AppShell.astro';
 import { activeOrg } from '../../../lib/tenant';
 import { one, serverClient } from '../../../lib/supabase';
@@ -245,7 +245,7 @@ const outstanding = (reviews ?? []).filter((r: any) => !r.submitted_at);
 
 const when = (iso: string | null) => formatDate(iso, 'short', '');
 
-const defaultDue = new Date(Date.now() + 14 * 86400000).toISOString().slice(0, 10);
+const defaultDue = todayIn(org.timezone, new Date(Date.now() + 14 * 86400000));
 
 /* What happened, when, and where it is now. The timestamp comes from the
    event the database wrote rather than from this request, so a page reloaded
@@ -255,6 +255,7 @@ const confirmation = didAction
   ? {
       what: doneLabel(didAction),
       when: new Date(latest?.occurred_at ?? Date.now()).toLocaleString('en-US', {
+        timeZone: org.timezone,
         month: 'long',
         day: 'numeric',
         hour: 'numeric',

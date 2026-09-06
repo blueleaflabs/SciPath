@@ -10,6 +10,7 @@ import { sharedStaffWord } from '../../../../lib/program-names';
 import { afterPost, outcomeFrom } from '../../../../lib/post-redirect';
 import { signInWith } from '../../../../lib/next-path';
 import { participationsForProject } from '../../../../lib/participation';
+import { resolveProgram } from '../../../../lib/templates';
 
 const { session, account, roles } = Astro.locals;
 const org = activeOrg(Astro);
@@ -33,6 +34,33 @@ let { error: error } = outcomeFrom(Astro.url);
 let cleared: number | null = null;
 let detached = false;
 
+/**
+ * **Whether the people on a place are the students' to change.**
+ *
+ * A template says `people: staff` for a class whose teachers are the
+ * sponsors by definition and whose roster came from the class list (IRPD);
+ * a fair entry (MVRC) leaves it at the default and the students record
+ * their own sponsor. Read off the program's template each time, because a
+ * project can be in both at once and the answer is per place. Staff are
+ * never locked out.
+ */
+const peopleLocked = (templateId: string | null | undefined) => {
+  if (me.runsTheClub || !templateId) return false;
+  try {
+    return resolveProgram(templateId, null).program.people === 'staff';
+  } catch {
+    return false;
+  }
+};
+const lockedPlace = async (participationId: string) => {
+  const { data } = await supabase
+    .from('participations')
+    .select('id, programs(template_id)')
+    .eq('id', participationId)
+    .maybeSingle();
+  return peopleLocked((data?.programs as any)?.template_id);
+};
+
 if (Astro.request.method === 'POST') {
   const form = await Astro.request.formData();
 
@@ -55,7 +83,21 @@ if (Astro.request.method === 'POST') {
     if (e) error = e.message;
   }
 
-  if (action === 'sponsor') {
+  if (action === 'unsponsor') {
+    const sponsorId = String(form.get('sponsor_id') ?? '');
+    const { data: sp } = await supabase.from('project_sponsors').select('participation_id').eq('id', sponsorId).maybeSingle();
+    if (sp && (await lockedPlace(sp.participation_id))) {
+      error = 'The sponsor for this class is set by the class.';
+    } else {
+      const { error: e } = await supabase.rpc('withdraw_sponsor', { p_sponsor_id: sponsorId });
+      if (e) error = e.message;
+      else detached = true;
+    }
+  }
+
+  if (action === 'sponsor' && (await lockedPlace(String(form.get('participation_id') ?? '')))) {
+    error = 'The sponsor for this class is set by the class.';
+  } else if (action === 'sponsor') {
     const { error: e } = await supabase.rpc('record_sponsor', {
       p_participation_id: String(form.get('participation_id') ?? ''),
       p_teacher_name: String(form.get('teacher_name') ?? ''),
@@ -122,6 +164,15 @@ const cameFrom = askedFor ? places.find((p) => p.programId === askedFor) ?? null
 
 const placeIds = places.map((p) => p.id);
 
+/* The places whose people the reader may not change, and whether that is
+   all of them. */
+const lockedIds = new Set(places.filter((p) => peopleLocked(p.templateId)).map((p) => p.id));
+const openPlaces = places.filter((p) => !lockedIds.has(p.id));
+const allLocked = places.length > 0 && openPlaces.length === 0;
+/* The place the sponsor form records for: the one asked for if its
+   people are open, else the only open one, else a choice among the open. */
+const formPlace = forProgram && !lockedIds.has(forProgram.id) ? forProgram : openPlaces.length === 1 ? openPlaces[0] : null;
+
 /**
  * **A project has several sponsors, one per place, and they are different
  * people.**
@@ -146,9 +197,14 @@ const { data: currentSponsors } = placeIds.length
       .order('recorded_at', { ascending: false })
   : { data: [] as any[] };
 
-const sponsorOf = new Map<string, any>();
+/* **A list per place, not one.** A class taught by two teachers has two
+   sponsors on every project in it, and keeping the first row found made the
+   second invisible on the page that exists to show who has been asked. */
+const sponsorOf = new Map<string, any[]>();
 for (const row of currentSponsors ?? []) {
-  if (!sponsorOf.has(row.participation_id)) sponsorOf.set(row.participation_id, row);
+  const held = sponsorOf.get(row.participation_id) ?? [];
+  held.push(row);
+  sponsorOf.set(row.participation_id, held);
 }
 
 /* Every place, with whoever sponsors it, in the order a student thinks about
@@ -157,13 +213,15 @@ const sponsorRows = places
   .map((place) => ({
     place,
     name: (place.row.programs as any)?.name ?? 'This program',
-    sponsor: sponsorOf.get(place.id) ?? null,
+    sponsors: sponsorOf.get(place.id) ?? [],
+    sponsor: (sponsorOf.get(place.id) ?? [])[0] ?? null,
   }))
   .sort((a, b) => Number(Boolean(a.sponsor)) - Number(Boolean(b.sponsor)));
 
 /* The one this page is scoped to, where it is scoped at all. Kept for the
    acknowledgement below, which is about a single named teacher. */
-const sponsor = forProgram ? sponsorOf.get(forProgram.id) ?? null : null;
+const forSponsors = forProgram ? sponsorOf.get(forProgram.id) ?? [] : [];
+const sponsor = forSponsors[0] ?? null;
 
 const { data: sponsorHistory } = placeIds.length
   ? await supabase
@@ -175,10 +233,13 @@ const { data: sponsorHistory } = placeIds.length
   : { data: [] as any[] };
 
 /* A sponsor who happens to be signed in can acknowledge it. Nothing waits. */
-const iSponsor = Boolean(
-  sponsor && session.email &&
-  sponsor.teacher_email.toLowerCase() === session.email.toLowerCase()
-);
+/* Whichever of this place's sponsors is the person reading, if any. With
+   two teachers on a class, asking only about the first meant the second
+   could never acknowledge their own signature. */
+const mine = forSponsors.find(
+  (x: any) => session.email && x.teacher_email.toLowerCase() === session.email.toLowerCase()
+) ?? null;
+const iSponsor = Boolean(mine);
 const iAuthor = isAuthorOf(attachments, account.id);
 const attachedIds = new Set(attachments.map((a: any) => a.users?.id));
 
@@ -317,14 +378,27 @@ const fmt = (d: string | null) =>
           {sponsorRows.map((row) => (
             <li>
               <b>{row.name}</b>
-              {row.sponsor ? (
-                <span class="t-sm">
-                  {' · '}{row.sponsor.teacher_name}
-                  {row.sponsor.signed_on
-                    ? ` · signed ${fmt(row.sponsor.signed_on)}`
-                    : ' · no signature date'}
-                  {row.sponsor.confirmed_at ? ' · acknowledged' : ''}
-                </span>
+              {row.sponsors.length > 0 ? (
+                <ul class="sponsors">
+                  {row.sponsors.map((sp: any) => (
+                    <li class="t-sm">
+                      {sp.teacher_name}
+                      {sp.signed_on ? ` · signed ${fmt(sp.signed_on)}` : ' · no signature date'}
+                      {sp.confirmed_at ? ' · acknowledged' : ''}
+                      {(iAuthor || me.runsTheClub) && !lockedIds.has(row.place.id) && (
+                        <form method="POST" action="#outcome" class="inline-f">
+                          <input type="hidden" name="action" value="unsponsor" />
+                          <input type="hidden" name="sponsor_id" value={sp.id} />
+                          <button
+                            class="linkish"
+                            type="submit"
+                            aria-label={`Take ${sp.teacher_name} off ${row.name}`}
+                          >Take off</button>
+                        </form>
+                      )}
+                    </li>
+                  ))}
+                </ul>
               ) : (
                 <span class="t-sm"> · nobody named yet</span>
               )}
@@ -333,7 +407,7 @@ const fmt = (d: string | null) =>
         </ul>
       )}
 
-      {sponsorRows.length > 0 && sponsorRows.every((row) => !row.sponsor) && (
+      {sponsorRows.length > 0 && sponsorRows.every((row) => row.sponsors.length === 0) && (
         <div class="note">
           <h4>No sponsor named</h4>
           <p>
@@ -349,7 +423,7 @@ const fmt = (d: string | null) =>
       {iSponsor && sponsor && !sponsor.confirmed_at && (
         <form method="POST" action="#outcome" style="margin-top:16px">
           <input type="hidden" name="action" value="confirm" />
-          <input type="hidden" name="sponsor_id" value={sponsor.id} />
+          <input type="hidden" name="sponsor_id" value={mine.id} />
           <button class="btn" type="submit">Yes, I am sponsoring this project</button>
         </form>
       )}
@@ -361,17 +435,23 @@ const fmt = (d: string | null) =>
         </p>
       )}
 
-      {(iAuthor || me.runsTheClub) && places.length > 0 && (
+      {(iAuthor || me.runsTheClub) && allLocked && (
+        <p class="t-sm" style="max-width:var(--measure-text); margin-top:20px">
+          The sponsor and the people on this project are set by the class. Ask your teacher to change them.
+        </p>
+      )}
+
+      {(iAuthor || me.runsTheClub) && openPlaces.length > 0 && (
         <form method="POST" action="#outcome" class="assign" style="margin-top:20px">
           <input type="hidden" name="action" value="sponsor" />
           {/* Which class or fair this signature is for. A project in one
               place is not asked; a project in several has to say, because
               the approval it clears belongs to that one calendar. */}
-          {forProgram ? (
+          {formPlace ? (
             <>
-              <input type="hidden" name="participation_id" value={forProgram.id} />
+              <input type="hidden" name="participation_id" value={formPlace.id} />
               <p class="t-sm whole-row">
-                For <b>{(forProgram.row.programs as any)?.name}</b>.
+                For <b>{(formPlace.row.programs as any)?.name}</b>.
               </p>
             </>
           ) : (
@@ -381,10 +461,12 @@ const fmt = (d: string | null) =>
                   failure this replaces was a form that asked the question
                   and then hid the answer. */}
               <select name="participation_id" required>
-                {sponsorRows.map((row) => (
+                {sponsorRows.filter((row) => !lockedIds.has(row.place.id)).map((row) => (
                   <option value={row.place.id}>
                     {row.name}
-                    {row.sponsor ? ` — currently ${row.sponsor.teacher_name}` : ' — nobody yet'}
+                    {row.sponsors.length > 0
+                      ? ` — ${row.sponsors.map((sp: any) => sp.teacher_name).join(', ')}`
+                      : ' — nobody yet'}
                   </option>
                 ))}
               </select>
@@ -392,7 +474,7 @@ const fmt = (d: string | null) =>
           )}
           <label>
             <span>Teacher's name</span>
-            <input name="teacher_name" required value={sponsor?.teacher_name ?? ''} />
+            <input name="teacher_name" required />
             {/* Named elsewhere on this project, so the student can see who
                 they already asked without going looking. Not prefilled: a
                 teacher who agreed to the club has not thereby agreed to the
@@ -406,8 +488,12 @@ const fmt = (d: string | null) =>
           </label>
           <label>
             <span>Their school email</span>
-            <input name="teacher_email" type="email" required value={sponsor?.teacher_email ?? ''} />
-            <small>They can sign in with their district email to see this notebook.</small>
+            <input name="teacher_email" type="email" required />
+            <small>
+              They can sign in with their district email to see this notebook.
+              The same address recorded twice corrects that teacher's date rather
+              than naming them again.
+            </small>
           </label>
           {/* Required, and dated today by default.
           
@@ -424,11 +510,16 @@ const fmt = (d: string | null) =>
               type="date"
               name="signed_on"
               required
-              value={sponsor?.signed_on ?? today}
+              value={today}
             />
             <small>Clears the approval obligation, dated to the signature.</small>
           </label>
-          <button class="btn" type="submit">{sponsor ? 'Change the sponsor' : 'Record the sponsor'}</button>
+          {/* Adding, always. A class may have two teachers and both sponsor
+              every project in it, so naming somebody never displaces
+              anybody; *Take off* above is how a sponsor leaves. */}
+          <button class="btn" type="submit">
+            {forSponsors.length > 0 ? 'Record another sponsor' : 'Record the sponsor'}
+          </button>
         </form>
       )}
 
@@ -620,4 +711,10 @@ const fmt = (d: string | null) =>
 
   .assign button { padding: 9px 16px; border: 1px solid var(--ink); background: var(--ink); color: var(--paper); font-family: var(--face-ui); font-size: 1rem; font-weight: 600; cursor: pointer; margin-top: 22px; align-self: flex-start; }
   .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+  /* One line per sponsor, with the way to take them off on the same
+     line, because a class with two teachers has two of these. */
+  .sponsors { list-style: none; margin: 4px 0 0; padding: 0 0 0 12px; }
+  .sponsors li { display: flex; gap: 8px; align-items: baseline; }
+  .inline-f { display: inline; }
+
 </style>

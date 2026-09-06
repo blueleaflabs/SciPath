@@ -60,10 +60,17 @@ const nav = org.isPlatform
       { href: '/guides/', label: 'Guides' },
     ]
   : [
-      { href: '/showcase/', label: 'Showcase' },
-      { href: '/guides/', label: 'Guides' },
-      { href: '/submit/', label: 'Publish' },
-    ];
+      { href: '/showcase/', label: 'Showcase', key: 'showcase' },
+      { href: '/guides/', label: 'Guides', key: 'guides' },
+      { href: '/submit/', label: 'Publish', key: 'publish' },
+    ].filter((n: any) => {
+      /* A pilot keeps a link off the bar until a date (org-shape.ts,
+         `hiddenUntil`). The page still answers; only the way in is
+         withheld. */
+      const h = org.hiddenUntil;
+      if (!h || !n.key || !h.surfaces.includes(n.key)) return true;
+      return new Date().toISOString().slice(0, 10) >= h.date;
+    });
 
 /* The working surface, reachable from every page. On a prerendered page
    there is no session to read, so the label is the invitation rather than the
@@ -91,7 +98,7 @@ const isCurrent = (href: string) => here === href || (href !== '/' && here.start
       <a class="lockup" href="/">
         <span class="badge" data-len={String(org.mark.length)} aria-hidden="true">{org.mark}</span>
         <span class="names">
-          <span class="org">{org.name}</span>
+          <span class="org">{org.shortName ?? org.name}</span>
           {!org.isPlatform && <span class="plat">{platform.lockupSuffix}</span>}
         </span>
       </a>
@@ -141,6 +148,13 @@ const isCurrent = (href: string) => here === href || (href !== '/' && here.start
             Sections and "who am I" are different kinds of thing and should
             not read as one run of links. */}
         <ul class="mnav mnav-acct">
+          {/* **Feedback, on every page, in the accent.** During a pilot the
+              value of a report decays by the hour, so the way to send one
+              is the one loud thing in the bar. Carries the page it was
+              pressed on. */}
+          <li class="mnav-fb">
+            <a href={`/feedback/?from=${encodeURIComponent(here)}`}>Feedback</a>
+          </li>
           {signedIn && account ? (
             <>
               <li class="mnav-who">
@@ -247,6 +261,21 @@ const isCurrent = (href: string) => here === href || (href !== '/' && here.start
 )}
 
 <style>
+  .mnav-fb a {
+    display: inline-block;
+    padding: 5px 12px;
+    background: var(--accent);
+    color: var(--accent-ink);
+    font-family: var(--face-num);
+    font-weight: 700;
+    font-size: 0.78rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    text-decoration: none;
+  }
+  .mnav-fb a:hover,
+  .mnav-fb a:focus-visible { background: var(--accent-pale); color: var(--accent-ink); text-decoration: none; }
+
   /* ONE ROW, AND WHAT GIVES WAY BEFORE IT BECOMES TWO.
   
      `wrap` was the whole answer, so the row split whenever the total ran over

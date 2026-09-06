@@ -1,0 +1,201 @@
+---
+export const prerender = false;
+
+/**
+ * A DOCUMENT AS A PDF (6.16).
+ *
+ * Every deliverable written in SciPath can leave as a PDF: this is the
+ * document as a printed page, nothing else on it, and the browser's own
+ * "Save as PDF" is the export. No PDF library runs at the edge; a print
+ * stylesheet and a page that is only the document do the job, on every
+ * machine, with the fonts the reader has.
+ *
+ * `?version=N` prints a submitted version as it was; without it the
+ * document as it stands. `?comments=1` adds the threads under each
+ * field. `?go=1` opens the print dialog on load.
+ */
+
+import '../../../../../../styles/tokens.css';
+import { serverClient } from '../../../../../../lib/supabase';
+import { activeOrg } from '../../../../../../lib/tenant';
+import { formatDate } from '../../../../../../lib/dates';
+import { signInWith } from '../../../../../../lib/next-path';
+import { shape as shapeOf } from '../../../../../../lib/templates';
+import { renderMarkdown } from '../../../../../../lib/notes';
+import { placesWanting, sectionsOf, textOf, isFilled, wordCount } from '../../../../../../lib/documents';
+
+const { session, account } = Astro.locals;
+const org = activeOrg(Astro);
+const { id: projectId, deliverable: deliverableId } = Astro.params;
+
+if (!session) return Astro.redirect(signInWith(Astro.url));
+if (!account) return Astro.redirect('/app/welcome/');
+if (!projectId || !deliverableId) return Astro.redirect('/app/');
+
+const supabase = serverClient(Astro.request, Astro.cookies, (Astro.locals as any).runtime?.env);
+
+const { data: project } = await supabase
+  .from('projects')
+  .select('id, title, facts, process_id, project_authors(role, self_managed_at, users(id, display_name))')
+  .eq('id', projectId)
+  .maybeSingle();
+if (!project) return Astro.redirect('/app/');
+
+const authors = (project.project_authors ?? []).filter((a: any) => a.role === 'author' && a.users).map((a: any) => a.users.display_name);
+const places = await placesWanting(supabase, projectId, deliverableId, project.facts ?? {}, project.process_id ?? null);
+const wanted = places[0] ?? null;
+const shape = wanted?.deliverable.shape ? shapeOf(wanted.deliverable.shape) : null;
+const label = wanted?.deliverable.name ?? deliverableId;
+const rubric = wanted?.step?.rubric ?? null;
+
+const { data: doc } = await supabase
+  .from('documents')
+  .select('id, status, version_no, submitted_at, updated_at')
+  .eq('project_id', projectId)
+  .eq('deliverable', deliverableId)
+  .maybeSingle();
+
+const wantVersion = Number(Astro.url.searchParams.get('version') ?? '') || null;
+let values: Record<string, any> = {};
+let stamp = '';
+if (doc && wantVersion) {
+  const { data: v } = await supabase.from('document_versions').select('content, version_no, submitted_at').eq('document_id', doc.id).eq('version_no', wantVersion).maybeSingle();
+  values = v?.content ?? {};
+  stamp = v ? `Version ${v.version_no}, submitted ${formatDate(String(v.submitted_at).slice(0, 10), 'long')}` : 'No such version';
+} else if (doc) {
+  const { data: fields } = await supabase.from('document_fields').select('field_id, value').eq('document_id', doc.id);
+  for (const f of fields ?? []) values[f.field_id] = f.value;
+  stamp = doc.status === 'submitted' ? `Submitted ${formatDate(String(doc.submitted_at).slice(0, 10), 'long')}${doc.version_no > 1 ? ` (version ${doc.version_no})` : ''}` : `As it stands, ${formatDate(String(doc.updated_at).slice(0, 10), 'long')}`;
+}
+
+const withComments = Astro.url.searchParams.get('comments') === '1';
+const { data: comments } = doc && withComments
+  ? await supabase.from('deliverable_feedback').select('field_id, body_md, needs_revision, created_at, author:author_id(display_name)').eq('document_id', doc.id).order('created_at', { ascending: true })
+  : { data: [] as any[] };
+
+const sections = shape ? sectionsOf(shape) : [];
+const go = Astro.url.searchParams.get('go') === '1';
+const docLink = typeof values['_doc_link'] === 'string' ? values['_doc_link'] : '';
+---
+
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="robots" content="noindex" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{label} · {project.title}</title>
+    <style>
+      @page { margin: 18mm 16mm; }
+      html { color-scheme: light; }
+      body { margin: 0; padding: 28px; font: 11.5pt/1.5 Georgia, 'Times New Roman', serif; color: var(--ink); background: var(--card); max-width: 820px; margin-inline: auto; }
+      .bar { display: flex; gap: 10px; justify-content: flex-end; margin-bottom: 18px; }
+      .bar .btn, .bar a { font: 10.5pt system-ui, sans-serif; padding: 6px 12px; border: 1px solid var(--ink-3); background: var(--sunk); color: var(--ink); text-decoration: none; cursor: pointer; }
+      header { border-bottom: 2px solid var(--ink); padding-bottom: 10px; margin-bottom: 18px; }
+      .kick { font: 9.5pt system-ui, sans-serif; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-3); margin: 0 0 4px; }
+      h1 { font-size: 20pt; margin: 0 0 4px; }
+      .meta { font: 10pt system-ui, sans-serif; color: var(--ink-2); margin: 0; }
+      h2 { font-size: 13.5pt; margin: 22px 0 8px; border-bottom: 1px solid var(--rule); padding-bottom: 3px; page-break-after: avoid; }
+      .field { margin: 0 0 14px; page-break-inside: avoid; }
+      .prompt { font: 600 10.5pt system-ui, sans-serif; margin: 0 0 3px; }
+      .owner { font-weight: 400; color: var(--ink-3); }
+      .note { color: var(--ink-2); font-size: 10.5pt; }
+      .empty { color: var(--ink-3); font-style: italic; }
+      .prose p { margin: 0 0 8px; }
+      .prose img { max-width: 100%; }
+      table { border-collapse: collapse; width: 100%; font-size: 9.5pt; margin: 4px 0; }
+      th, td { border: 1px solid var(--rule); padding: 4px 6px; vertical-align: top; text-align: left; }
+      th[scope=row] { width: 150px; background: var(--sunk); }
+      .levels { list-style: none; padding: 0; margin: 0; font-size: 10.5pt; }
+      .comments { margin: 6px 0 0 14px; padding: 0; list-style: none; font-size: 10pt; }
+      .comments li { border-left: 2px solid var(--rule); padding: 2px 8px; margin: 3px 0; }
+      .comments .asks { border-left-color: var(--alert); }
+      .words { font: 9pt system-ui, sans-serif; color: var(--ink-3); }
+      footer { margin-top: 28px; border-top: 1px solid var(--rule); padding-top: 6px; font: 9pt system-ui, sans-serif; color: var(--ink-3); }
+      @media print { .bar { display: none; } body { padding: 0; } }
+    </style>
+  </head>
+  <body>
+    <div class="bar">
+      <a href={`/app/project/${project.id}/doc/${deliverableId}/`}>Back to the document</a>
+      {!withComments ? <a href={`?${wantVersion ? `version=${wantVersion}&` : ''}comments=1`}>With comments</a> : <a href={`?${wantVersion ? `version=${wantVersion}` : ''}`}>Without comments</a>}
+      <button class="btn" type="button" onclick="window.print()">Print or save as PDF</button>
+    </div>
+
+    <header>
+      <p class="kick">{org.name}{wanted ? ` · ${wanted.programName}` : ''}</p>
+      <h1>{label}</h1>
+      <p class="meta">{project.title} · {authors.join(', ') || 'No author'}</p>
+      {stamp && <p class="meta">{stamp}</p>}
+      {docLink && <p class="meta">Linked document: {docLink}</p>}
+    </header>
+
+    {!shape ? (
+      <p class="empty">This deliverable is not written in SciPath.</p>
+    ) : (
+      sections.map((section) => (
+        <section>
+          {section.name && <h2>{section.name}</h2>}
+          {section.fields.map((f) => {
+            const v = values[f.id];
+            const fieldComments = (comments ?? []).filter((c: any) => c.field_id === f.id);
+            return (
+              <div class="field">
+                {f.kind === 'note' ? (
+                  <div class="note" set:html={renderMarkdown(f.text ?? '')} />
+                ) : (
+                  <>
+                    <p class="prompt">{f.prompt}{f.owner === 'staff' && <span class="owner"> · Elder's part</span>}</p>
+                    {f.kind === 'long' ? (
+                      isFilled(f, v) ? <div class="prose" set:html={renderMarkdown(String(v))} /> : <p class="empty">Not written</p>
+                    ) : f.kind === 'table' && Array.isArray(v) ? (
+                      <table>
+                        <thead><tr><th></th>{(f.columns ?? []).map((c) => <th>{c}</th>)}</tr></thead>
+                        <tbody>{(f.rows ?? []).map((r, ri) => <tr><th scope="row">{r}</th>{(f.columns ?? []).map((_, ci) => <td>{Array.isArray(v[ri]) ? v[ri][ci] ?? '' : ''}</td>)}</tr>)}</tbody>
+                      </table>
+                    ) : f.kind === 'rubric' && rubric && v && typeof v === 'object' ? (
+                      <ul class="levels">
+                        {rubric.criteria.map((c: any) => {
+                          const level = c.levels.find((l: any) => l.id === v[c.id]);
+                          return <li><b>{c.name}:</b> {level ? `${level.label} (${level.points})` : 'not marked'}</li>;
+                        })}
+                      </ul>
+                    ) : f.kind === 'file' && v?.path ? (
+                      String(v.path).match(/\.(png|jpe?g|gif|webp)$/i) ? <img src={`/app/media/${v.path}`} alt={v.name ?? ''} style="max-width:100%" /> : <p>{v.name ?? v.path}</p>
+                    ) : isFilled(f, v) ? (
+                      <p>{textOf(f, v)}</p>
+                    ) : (
+                      <p class="empty">Not answered</p>
+                    )}
+                    {(f.kind === 'long') && isFilled(f, v) && <p class="words">{wordCount(String(v))} words</p>}
+                    {fieldComments.length > 0 && (
+                      <ul class="comments">
+                        {fieldComments.map((c: any) => (
+                          <li class:list={[c.needs_revision && 'asks']}><b>{c.author?.display_name}</b> ({formatDate(String(c.created_at).slice(0, 10), 'short')}): {c.body_md}</li>
+                        ))}
+                      </ul>
+                    )}
+                  </>
+                )}
+              </div>
+            );
+          })}
+        </section>
+      ))
+    )}
+
+    {withComments && (comments ?? []).some((c: any) => !c.field_id) && (
+      <section>
+        <h2>On the whole document</h2>
+        <ul class="comments">
+          {(comments ?? []).filter((c: any) => !c.field_id).map((c: any) => (
+            <li class:list={[c.needs_revision && 'asks']}><b>{c.author?.display_name}</b> ({formatDate(String(c.created_at).slice(0, 10), 'short')}): {c.body_md}</li>
+          ))}
+        </ul>
+      </section>
+    )}
+
+    <footer>Printed from SciPath, {org.name}. {label}, {project.title}.</footer>
+
+    {go && <script is:inline>window.addEventListener('load', () => setTimeout(() => window.print(), 300));</script>}
+  </body>
+</html>

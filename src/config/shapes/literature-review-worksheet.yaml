@@ -1,0 +1,42 @@
+# The literature review worksheet with self-reflection, due the same day as
+# the review and a second document, not a section of it.
+
+id: literature-review-worksheet
+name: Literature review worksheet
+version: 1
+sections:
+  - id: worksheet
+    name: Worksheet
+    fields:
+      - id: search
+        kind: long
+        prompt: Where did you search, and with which terms?
+        tip: Databases, sites, search terms. Enough that somebody could repeat it.
+        max_words: 150
+        required: true
+      - id: kept
+        kind: long
+        prompt: What did you keep, and what did you throw out, and why?
+        max_words: 200
+        required: true
+      - id: strongest
+        kind: text
+        prompt: The single strongest source, and one sentence on why
+        required: true
+  - id: reflection
+    name: Self-reflection
+    fields:
+      - id: hard
+        kind: long
+        prompt: What was hardest about this, and what did you do about it?
+        max_words: 150
+        required: true
+      - id: confidence
+        kind: choice
+        prompt: How confident are you that you have found the main sources?
+        options: [Very, Fairly, Not very, I do not know what I have missed]
+        required: true
+      - id: next
+        kind: long
+        prompt: What would you read next if you had another week?
+        max_words: 100

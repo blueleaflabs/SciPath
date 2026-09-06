@@ -37,6 +37,14 @@ export interface Deliverable {
   signed_by?: string[];
   per?: 'project' | 'member' | 'participant';
   url?: string;
+  /**
+   * A copy link to the class's own template for this deliverable, usually a
+   * Google Doc's `/copy` address. The student clicks, gets their own copy
+   * in their Drive, works in it, and records the address back here. No
+   * API, no token: the seam between where writing happens and where the
+   * obligation lives is one link each way (7.4).
+   */
+  template_url?: string;
 }
 
 export interface ShapePart {
@@ -46,14 +54,183 @@ export interface ShapePart {
   guidance?: string;
 }
 
+/**
+ * A field of a document (6.16). What the handout asks for, one box at a
+ * time: a note the student reads, a line, paragraphs with a word floor or
+ * ceiling, one choice, several, a number, a date, an address, a file.
+ */
+export type FieldKind =
+  | 'note'
+  | 'text'
+  | 'long'
+  | 'choice'
+  | 'choices'
+  | 'number'
+  | 'date'
+  | 'link'
+  | 'file'
+  /** A fixed grid of short answers: `rows` by `columns`. */
+  | 'table'
+  /** The step's rubric as a self-evaluation: one level per criterion. */
+  | 'rubric';
+
+export interface ShapeField {
+  id: string;
+  kind: FieldKind;
+  /**
+   * Who writes it. `student` (the default) is the author's; `staff` is
+   * the Elder's part of the handout (a score, a rationale), written by
+   * the Elder on the place or the advisor, never by the author, and never
+   * counted against the student's submission.
+   */
+  owner?: 'student' | 'staff';
+  /** For `table`: the row and column headings. */
+  rows?: string[];
+  columns?: string[];
+  /** The question, in the handout's words. */
+  prompt?: string;
+  /** For `note`: the text itself, Markdown. */
+  text?: string;
+  /** The italic line under the prompt. */
+  tip?: string;
+  min_words?: number;
+  max_words?: number;
+  /** For `choice` and `choices`. */
+  options?: string[];
+  required?: boolean;
+  /** For `file`: `image` limits it to pictures. */
+  accept?: 'image' | 'any';
+}
+
+export interface ShapeSection {
+  id: string;
+  name?: string;
+  fields: ShapeField[];
+}
+
 export interface Shape {
   id: string;
   name: string;
+  version?: number;
   layout?: string;
   guidance?: string;
+  /** The older form: parts in order, each a paragraph box. */
   parts?: ShapePart[];
   /** For a shape that is questions rather than sections. */
   answers?: string[];
+  /** The full form: sections of fields with kinds. */
+  sections?: ShapeSection[];
+}
+
+/**
+ * Every shape as sections of fields, whichever way it was written. A
+ * shape of `parts` is one section of paragraph fields; a shape of
+ * `answers` is one section of paragraph fields named by their questions.
+ * The document page, the validator and the class board all read this and
+ * never the raw file.
+ */
+export function sectionsOf(shape: Shape): ShapeSection[] {
+  if (shape.sections && shape.sections.length > 0) {
+    return shape.sections.map((s) => ({ ...s, fields: s.fields ?? [] }));
+  }
+  if (shape.parts && shape.parts.length > 0) {
+    return [
+      {
+        id: 'body',
+        fields: shape.parts.map((p) => ({
+          id: p.id,
+          kind: 'long' as const,
+          prompt: p.name,
+          tip: p.guidance,
+          min_words: p.min_words,
+          required: true,
+        })),
+      },
+    ];
+  }
+  if (shape.answers && shape.answers.length > 0) {
+    return [
+      {
+        id: 'answers',
+        fields: shape.answers.map((q, i) => ({
+          id: `q${i + 1}`,
+          kind: 'long' as const,
+          prompt: q,
+          required: true,
+        })),
+      },
+    ];
+  }
+  return [];
+}
+
+export function fieldsOf(shape: Shape): ShapeField[] {
+  return sectionsOf(shape).flatMap((s) => s.fields);
+}
+
+/** The fields a student fills: every kind but a note, and not the Elder's. */
+export function askedOf(shape: Shape): ShapeField[] {
+  return fieldsOf(shape).filter((f) => f.kind !== 'note' && (f.owner ?? 'student') === 'student');
+}
+
+/** The Elder's fields, for the document row to remember who may write them. */
+export function staffFieldsOf(shape: Shape): string[] {
+  return fieldsOf(shape).filter((f) => f.kind !== 'note' && f.owner === 'staff').map((f) => f.id);
+}
+
+const FIELD_KINDS: FieldKind[] = ['note', 'text', 'long', 'choice', 'choices', 'number', 'date', 'link', 'file', 'table', 'rubric'];
+
+/**
+ * What is wrong with a shape, as a list of sentences; empty when nothing
+ * is. Checked at build, like a program template: a shape a student cannot
+ * fill is broken before anybody opens it.
+ */
+export function validateShape(shape: Shape): string[] {
+  const problems: string[] = [];
+  if (!shape.id) problems.push('a shape needs an id');
+  if (!shape.name) problems.push(`${shape.id}: a shape needs a name`);
+  const sections = sectionsOf(shape);
+  if (sections.length === 0) problems.push(`${shape.id}: a shape asks for nothing`);
+  const seen = new Set<string>();
+  const sectionIds = new Set<string>();
+  for (const section of sections) {
+    if (!section.id) problems.push(`${shape.id}: a section needs an id`);
+    else if (sectionIds.has(section.id)) problems.push(`${shape.id}: section "${section.id}" twice`);
+    sectionIds.add(section.id);
+    for (const f of section.fields) {
+      const at = `${shape.id}/${f.id ?? '?'}`;
+      if (!f.id) problems.push(`${shape.id}: a field needs an id`);
+      else if (!/^[a-z][a-z0-9_]*$/.test(f.id)) problems.push(`${at}: field ids are lower case letters, digits and underscores`);
+      else if (seen.has(f.id)) problems.push(`${at}: field id twice`);
+      seen.add(f.id);
+      if (!FIELD_KINDS.includes(f.kind)) problems.push(`${at}: unknown kind "${f.kind}"`);
+      if (f.kind === 'note') {
+        if (!f.text) problems.push(`${at}: a note needs text`);
+      } else if (!f.prompt) {
+        problems.push(`${at}: a field needs a prompt`);
+      }
+      if ((f.kind === 'choice' || f.kind === 'choices') && !(f.options && f.options.length > 1)) {
+        problems.push(`${at}: a choice needs at least two options`);
+      }
+      if (f.min_words != null && f.max_words != null && f.min_words > f.max_words) {
+        problems.push(`${at}: min_words above max_words`);
+      }
+      if ((f.min_words != null || f.max_words != null) && f.kind !== 'long' && f.kind !== 'text') {
+        problems.push(`${at}: a word limit belongs on a text field`);
+      }
+      if (f.kind === 'table' && !(f.rows && f.rows.length > 0 && f.columns && f.columns.length > 0)) {
+        problems.push(`${at}: a table needs rows and columns`);
+      }
+      if (f.owner && f.owner !== 'student' && f.owner !== 'staff') {
+        problems.push(`${at}: owner is student or staff`);
+      }
+      if (f.owner === 'staff' && f.required) {
+        problems.push(`${at}: the Elder's field cannot be required of the student`);
+      }
+    }
+  }
+  if (askedOf(shape).length === 0) problems.push(`${shape.id}: every field is a note`);
+  return problems;
 }
 
 export interface Phase {
@@ -108,6 +285,70 @@ export interface Step {
 
   /** One line a template may add, exactly as `risk` does. */
   notify_note?: string;
+
+  /**
+   * How this step is graded, where the class grades it. Criteria with
+   * levels and points; the grade form renders one choice per criterion and
+   * the score is the sum. Absent, the form is a score, an out-of and
+   * feedback. Beside the step because an assessment is of the step (6.13).
+   */
+  rubric?: Rubric;
+
+  /**
+   * For a staff-owned step: the deliverable (by id) the Elder's feedback is
+   * written on. `requires` names the student step that has to be met before
+   * the task is actionable; a staff step never gates a student step.
+   */
+  feedback_on?: string;
+}
+
+export interface RubricLevel {
+  id: string;
+  label: string;
+  points: number;
+  description?: string;
+}
+
+export interface RubricCriterion {
+  id: string;
+  name: string;
+  guidance?: string;
+  levels: RubricLevel[];
+}
+
+export interface Rubric {
+  criteria: RubricCriterion[];
+  /**
+   * How the criteria become a score. `sum` (the default) adds the points
+   * chosen and the out-of is the sum of each criterion's best. `average`
+   * is a class rubric out of 4: the score is the mean of the levels
+   * chosen, to two places, and the out-of is the best level.
+   */
+  scoring?: 'sum' | 'average';
+}
+
+/** The score and the out-of a set of choices earns under a rubric. */
+export function scoreRubric(rubric: Rubric, chosen: { id: string; level: string }[]): { score: number | null; outOf: number; picks: { id: string; level: string; points: number }[] } {
+  const picks: { id: string; level: string; points: number }[] = [];
+  let sum = 0;
+  let best = 0;
+  let top = 0;
+  for (const c of rubric.criteria) {
+    const max = Math.max(...c.levels.map((l) => l.points));
+    best += max;
+    top = Math.max(top, max);
+    const pick = chosen.find((x) => x.id === c.id);
+    const level = pick ? c.levels.find((l) => l.id === pick.level) : null;
+    if (level) {
+      sum += level.points;
+      picks.push({ id: c.id, level: level.id, points: level.points });
+    }
+  }
+  if (picks.length === 0) return { score: null, outOf: rubric.scoring === 'average' ? top : best, picks };
+  if (rubric.scoring === 'average') {
+    return { score: Math.round((sum / picks.length) * 100) / 100, outOf: top, picks };
+  }
+  return { score: sum, outOf: best, picks };
 }
 
 export interface Program {
@@ -121,6 +362,22 @@ export interface Program {
   extends?: string;
   process?: string;
   role?: 'cohort' | 'opportunity' | 'none';
+  /**
+   * Where the program's work is shown. `public` publishes records to the
+   * school's showcase in the ordinary way. `private` is a class that shows
+   * its working projects to its own members and staff on a page of its own
+   * and never publishes a public record. `none` shows nothing.
+   */
+  showcase?: 'public' | 'private' | 'none';
+  /**
+   * Who may change the people on a project while it is in this program.
+   * `authors` (the default) lets the students record and withdraw the
+   * sponsor and change co-authors, which a fair entry needs. `staff` is a
+   * class where the teachers are the sponsors by definition and the roster
+   * is set by the load: students see the people and cannot change them;
+   * staff can.
+   */
+  people?: 'authors' | 'staff';
   prepares_for?: string;
   /** An opportunity only this cohort's members may enter. */
   open_to_cohort?: string;

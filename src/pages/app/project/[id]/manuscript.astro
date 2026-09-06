@@ -412,6 +412,7 @@ const confirmation = didAction
   ? {
       what: doneLabel(didAction),
       when: new Date().toLocaleString('en-US', {
+        timeZone: org.timezone,
         month: 'long',
         day: 'numeric',
         hour: 'numeric',
@@ -431,6 +432,7 @@ const selfWithdraw =
 const stamp = (value: string | null) =>
   value
     ? new Date(value).toLocaleString('en-US', {
+        timeZone: org.timezone,
         month: 'long',
         day: 'numeric',
         year: 'numeric',

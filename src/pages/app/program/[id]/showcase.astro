@@ -1,0 +1,268 @@
+---
+export const prerender = false;
+
+/**
+ * THE CLASS SHOWCASE.
+ *
+ * Every working project in a program whose showcase is private, as it stands
+ * today, for the program's own members and staff. Nothing here is a
+ * published record and nothing here is approved: a card is what its authors
+ * have put on it, live, and a project whose authors have taken it off the
+ * page for now is simply absent. The point is a living track of a class's
+ * progress that the class can look at; a queue in front of it would be a
+ * queue in front of that.
+ *
+ * Read through `program_showcase`, a definer function that checks the
+ * reader's standing in the program and returns only what a card needs. A
+ * member does not otherwise see a classmate's project, and this page is the
+ * one place that is allowed.
+ */
+
+import Base from '../../../../layouts/Base.astro';
+import AppShell from '../../../../components/AppShell.astro';
+import { activeOrg } from '../../../../lib/tenant';
+import { serverClient } from '../../../../lib/supabase';
+import { resolveProgram } from '../../../../lib/templates';
+import { programTitle } from '../../../../lib/program-names';
+import { parseVideo } from '../../../../lib/video';
+import { formatDate } from '../../../../lib/dates';
+import { signInWith } from '../../../../lib/next-path';
+
+const { session, account, roles } = Astro.locals;
+const org = activeOrg(Astro);
+const { id } = Astro.params;
+
+if (!session) return Astro.redirect(signInWith(Astro.url));
+if (!account) return Astro.redirect('/app/welcome/');
+
+const supabase = serverClient(Astro.request, Astro.cookies, (Astro.locals as any).runtime?.env);
+
+const { data: program } = await supabase
+  .from('programs')
+  .select('id, name, short_name, season_year, kind, program_role, roles, template_id, showcase')
+  .eq('id', id)
+  .maybeSingle();
+
+/* Absent, or not a program with a private showcase, or not this reader's
+   to see: the same answer, and the answer is the door. */
+if (!program || program.showcase !== 'private') return Astro.redirect('/app/');
+
+const mayRead = ((Astro.locals as any).showcases ?? []).some((s: any) => s.program_id === id);
+if (!mayRead) return Astro.redirect('/app/');
+
+const { data: cards, error } = await supabase.rpc('program_showcase', { p_program_id: id });
+if (error) console.error(`program_showcase: ${error.message}`);
+
+/* Phase ids on a milestone become the phase's name from the template. */
+const template = program.template_id
+  ? (() => {
+      try {
+        return resolveProgram(program.template_id, null);
+      } catch {
+        return null;
+      }
+    })()
+  : null;
+const phaseName = (phaseId: string | null) =>
+  template?.phases?.find((p: any) => p.id === phaseId)?.name ?? null;
+
+const mediaUrl = (path: string) => `/app/media/${path}`;
+const label = program.short_name ?? program.name;
+const rows = (cards ?? []) as any[];
+const mineFirst = rows.find((c) => c.mine) ?? null;
+---
+
+<Base title={`${label} Showcase`} noindex={true}>
+  <div class="wrap">
+    <AppShell org={org} account={account} roles={roles} here={`/app/program/${id}/showcase/`} />
+
+    <section class="cover">
+      <p class="kick">{programTitle(program)} · {org.name}</p>
+      <h1>{label} Showcase</h1>
+      <p class="sub">
+        Every project in the class, as it stands today. Written by the people
+        doing the work and changed whenever they change it. Shown to the class
+        and to nobody else.
+      </p>
+    </section>
+
+    <div class="showcase-bar">
+      <span class="t-num">{rows.length} {rows.length === 1 ? 'project' : 'projects'} shown</span>
+      {mineFirst ? (
+        <a class="btn btn-sm ghost" href={`/app/project/${mineFirst.project_id}/showcase/`}>My showcase</a>
+      ) : null}
+    </div>
+
+    {rows.length === 0 ? (
+      <div class="allclear" style="margin-top:20px">
+        <b>Nothing shown yet</b>
+        Cards appear here as people put them up. Yours is on your project page, under My showcase.
+      </div>
+    ) : (
+      <ul class="gallery">
+        {rows.map((c: any) => {
+          const video = parseVideo(c.video_url);
+          const images = (c.images ?? []) as any[];
+          const links = (c.links ?? []) as any[];
+          const hero = images[0] ?? null;
+          return (
+            <li class:list={['gcard', c.mine && 'is-mine']}>
+              {hero ? (
+                <a href={`/app/program/${id}/showcase/${c.project_id}/`}><img class="ghero" src={mediaUrl(hero.path)} alt={hero.alt ?? ''} loading="lazy" /></a>
+              ) : video?.poster ? (
+                <a href={video.watch} target="_blank" rel="noopener noreferrer">
+                  <img class="ghero" src={video.poster} alt="" loading="lazy" />
+                </a>
+              ) : (
+                <div class="ghero gblank"><span>{String(c.title ?? '').slice(0, 1)}</span></div>
+              )}
+
+              <div class="gbody">
+                <p class="ord">
+                  <span>{c.next_phase ? phaseName(c.next_phase) ?? 'In progress' : c.total > 0 && c.done === c.total ? 'Complete' : 'In progress'}</span>
+                  <b>{c.done} of {c.total}</b>
+                </p>
+                <h3><a href={`/app/program/${id}/showcase/${c.project_id}/`}>{c.title}</a></h3>
+                <p class="who">{(c.authors ?? []).join(', ')}</p>
+                {c.summary ? (
+                  <p class="gsum">{c.summary}</p>
+                ) : (
+                  <p class="gsum quiet">{c.mine ? 'Write a few lines about it on My showcase.' : 'No summary yet.'}</p>
+                )}
+
+                {images.length > 1 && (
+                  <ul class="gthumbs">
+                    {images.slice(1, 4).map((img: any) => (
+                      <li><img src={mediaUrl(img.path)} alt={img.alt ?? ''} loading="lazy" /></li>
+                    ))}
+                  </ul>
+                )}
+
+                {(video || links.length > 0) && (
+                  <p class="glinks">
+                    {video && (
+                      <a href={video.watch} target="_blank" rel="noopener noreferrer">
+                        Watch on {video.host === 'vimeo' ? 'Vimeo' : 'YouTube'}
+                      </a>
+                    )}
+                    {links.map((l: any) => (
+                      <a href={l.url} target="_blank" rel="noopener noreferrer">{l.label}</a>
+                    ))}
+                  </p>
+                )}
+
+                <p class="gfoot">
+                  <span>{c.next_name ? `Next: ${c.next_name}` : 'Nothing outstanding'}</span>
+                  <a class="t-num" href={`/app/program/${id}/showcase/${c.project_id}/`}>Open →</a>
+                </p>
+                {c.mine && (
+                  <p class="gmine"><a href={`/app/project/${c.project_id}/showcase/`}>Change my card</a></p>
+                )}
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+    )}
+  </div>
+</Base>
+
+<style>
+  .showcase-bar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+    margin: 26px 0 18px;
+  }
+
+  .gallery {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    gap: 20px;
+  }
+
+  .gcard {
+    display: flex;
+    flex-direction: column;
+    background: var(--card);
+    border: 1px solid var(--rule);
+    box-shadow: var(--lift-2);
+    overflow: hidden;
+  }
+
+  .gcard.is-mine { outline: 3px solid var(--accent); outline-offset: -3px; }
+
+  .ghero {
+    display: block;
+    width: 100%;
+    aspect-ratio: 16 / 10;
+    object-fit: cover;
+    background: var(--sunk);
+  }
+
+  /* No image yet: the first letter of the title on the school's hue, so
+     the grid stays a grid rather than a list of cards with holes in it. */
+  .gblank {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--brand);
+    color: var(--cover-ink);
+    font-family: var(--face-ui);
+    font-weight: 800;
+    font-size: 4rem;
+  }
+
+  .gbody { display: flex; flex-direction: column; gap: 8px; padding: 16px 18px 16px; flex: 1; }
+
+  .ord {
+    display: flex;
+    justify-content: space-between;
+    gap: 10px;
+    margin: 0;
+    font-family: var(--face-num);
+    font-size: 0.7rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+  }
+  .ord b { color: var(--accent-deep); }
+
+  .gbody h3 a { color: inherit; text-decoration: none; }
+  .gbody h3 a:hover { text-decoration: underline; }
+  .gbody h3 {
+    margin: 0;
+    font-family: var(--face-ui);
+    font-size: 1.15rem;
+    line-height: 1.22;
+    text-wrap: balance;
+  }
+
+  .who { margin: 0; font-size: 0.92rem; color: var(--ink-2); }
+  .gsum { margin: 4px 0 0; font-size: 0.96rem; line-height: 1.5; }
+  .gsum.quiet { color: var(--ink-3); font-style: italic; }
+
+  .gthumbs { list-style: none; margin: 4px 0 0; padding: 0; display: flex; gap: 6px; }
+  .gthumbs li { flex: 1; }
+  .gthumbs img { display: block; width: 100%; aspect-ratio: 1; object-fit: cover; }
+
+  .glinks { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 4px 0 0; font-family: var(--face-ui); font-size: 0.88rem; }
+
+  .gfoot {
+    display: flex;
+    justify-content: space-between;
+    gap: 10px;
+    margin: auto 0 0;
+    padding-top: 10px;
+    border-top: 1px solid var(--rule-fine);
+    font-family: var(--face-ui);
+    font-size: 0.84rem;
+    color: var(--ink-3);
+  }
+
+  .gmine { margin: 0; font-family: var(--face-ui); font-size: 0.86rem; }
+</style>

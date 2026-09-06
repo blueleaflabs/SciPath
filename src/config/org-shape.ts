@@ -53,8 +53,14 @@ export interface Org {
   signupMode?: 'domain' | 'open' | 'invite';
   /** False for an open program with no school behind it. */
   requiresMentor?: boolean;
-  /** Full name, rendered in the lockup. */
+  /** Full name, on every page title and record. */
   name: string;
+  /**
+   * The name the lockup shows, where the full one is too long for a bar
+   * that also holds the nav and the account: "Monta Vista" for "Monta Vista
+   * High School". Absent, the lockup shows the full name.
+   */
+  shortName?: string;
   /**
    * Two to six characters for the lockup badge.
    *
@@ -125,6 +131,15 @@ export interface Org {
    * it belongs on the record rather than being reparsed.
    */
   provisioned?: boolean;
+  /**
+   * What a pilot keeps out of sight until a date: tabs off the working
+   * surface bar and links off the masthead (`surfaces`: editorial, publish,
+   * assign, roles, showcase, guides), and programs the school lists but
+   * has not opened (`programs`, seeded as `draft`). `tests/orgs.mjs` fails
+   * once the date has passed, which is what stops "for now" from becoming
+   * forever.
+   */
+  hiddenUntil?: { date: string; surfaces: string[]; programs: string[] };
 }
 
 /**
@@ -142,6 +157,7 @@ export function shapeOrg(doc: any): Org {
     signupMode: doc.signup_mode,
     requiresMentor: doc.requires_mentor,
     name: doc.name,
+    shortName: doc.short_name,
     mark: doc.mark,
     theme: doc.theme,
     isPlatform: doc.is_platform,
@@ -157,5 +173,14 @@ export function shapeOrg(doc: any): Org {
        said `undefined` would put the burden of remembering the default on
        every caller. */
     provisioned: doc.provisioned !== false,
+    hiddenUntil: doc.hidden_until
+      ? {
+          date: doc.hidden_until.date instanceof Date ? doc.hidden_until.date.toISOString().slice(0, 10) : String(doc.hidden_until.date),
+          surfaces: doc.hidden_until.surfaces ?? [],
+          /* Programs the school lists but does not open yet: seeded as
+             `draft`, so nothing that lists open programs shows them. */
+          programs: doc.hidden_until.programs ?? [],
+        }
+      : undefined,
   };
 }

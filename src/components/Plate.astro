@@ -1,0 +1,207 @@
+---
+/**
+ * THE PLATE.
+ *
+ * What is on somebody's plate today, at most a few rows, each with its
+ * number, its name and its verb. One component for both places it shows:
+ * the top of a project page (that project's rows) and the top of the
+ * Workbench (every row across the projects a person works on or looks
+ * after). The same shape in both places is the point: a person's eye
+ * learns one thing, and a student who is nobody's Elder sees the same
+ * rows on both pages.
+ *
+ * The first row wears the gold number; the rest are quieter and ruled
+ * off. A row may carry buttons (links), and an Elder's task carries a
+ * folded form so it is done on the row.
+ */
+
+export interface PlateAction {
+  href: string;
+  label: string;
+  accent?: boolean;
+}
+
+export interface PlateRow {
+  /** The number in the block, or null for "no date". */
+  n: number | null;
+  /** The word under it: days left, days late, days quiet. */
+  unit: string;
+  late?: boolean;
+  /** The kicker before the name: Next up, Overdue, Yours to do, Notebook. */
+  kick: string;
+  title: string;
+  /** The line under the title: due date, project, who it is for. */
+  sub?: string;
+  actions?: PlateAction[];
+  /**
+   * Done on the row. An Elder's task (feedback on a deliverable, or a
+   * plain completion), or the student's own obligation: `record` carries
+   * the deliverables the step still wants, one short form each, the same
+   * two fields as the ledger row; `done` is a step with nothing to hand
+   * in, marked complete with a date. Both post to the page they are on,
+   * and both name the participation so the Workbench can post the same
+   * form as the project page.
+   */
+  form?:
+    | { kind: 'feedback'; deliverableId: string }
+    | { kind: 'task'; milestoneId: string }
+    | {
+        kind: 'record';
+        participationId: string;
+        milestoneId: string;
+        today: string;
+        items: { id: string; name: string; templateUrl: string | null }[];
+      }
+    | { kind: 'done'; participationId: string; milestoneId: string; name: string; milestoneKind: string; today: string };
+  /**
+   * Somebody has asked for this one. The nudge's sender and the two
+   * answers the student has: *On it*, and a written line back. Shown on
+   * the row the ask is about, so the request and the way to meet it are
+   * one thing.
+   */
+  ask?: { milestoneId: string; askedBy: string | null; times: number; acknowledged: boolean };
+  /** Anchor, so a link can land on the row. */
+  id?: string;
+  /**
+   * The project the row belongs to. Rows with the same group sit under
+   * one line naming it, so the Workbench says a project's title once
+   * rather than on every row (2.8). Omitted on a page that is already
+   * one project's.
+   */
+  group?: string;
+}
+
+interface Props {
+  rows: PlateRow[];
+}
+
+const { rows } = Astro.props;
+const first = rows[0];
+---
+
+{rows.length > 0 && (
+  <div class:list={['alarm', 'plate', !first?.late && 'soon']} role="status">
+    {rows.map((row, i) => (
+      <>
+        {row.group && row.group !== rows[i - 1]?.group && <p class="plate-group">{row.group}</p>}
+      <div class:list={['plate-row', i === 0 && 'first', row.late && 'is-late']} id={row.id}>
+        <div class="big">
+          {row.n === null ? '—' : Math.abs(row.n)}
+          <small>{row.unit}</small>
+        </div>
+        <div class="body">
+          <h3>{row.kick}: {row.title}</h3>
+          {row.sub && <p>{row.sub}</p>}
+          {row.form && (
+            <details class="plate-do">
+              <summary class:list={['btn', 'btn-sm', row.form.kind === 'feedback' || row.form.kind === 'task' || row.late ? 'accent' : 'ghost']}>
+                {row.form.kind === 'feedback' ? 'Give feedback' : row.form.kind === 'task' ? 'Mark done' : 'Submit'}
+              </summary>
+              {row.form.kind === 'record' ? (
+                /* The student's own row, recorded where it is read. One
+                   form per deliverable the step still wants, the same
+                   fields as the ledger row three screens down, so the
+                   plate is where the two minutes happen. */
+                row.form.items.map((d) => (
+                  <form method="POST" action="#outcome" class="plate-form">
+                    <input type="hidden" name="action" value="deliverable" />
+                    <input type="hidden" name="participation_id" value={(row.form as any).participationId} />
+                    <input type="hidden" name="milestone" value={(row.form as any).milestoneId} />
+                    <input type="hidden" name="deliverable" value={d.id} />
+                    <input type="hidden" name="label" value={d.name} />
+                    {(row.form as any).items.length > 1 && <p class="plate-n">{d.name}</p>}
+                    {d.templateUrl && (
+                      <p class="plate-tpl">
+                        <a class="btn btn-sm accent" href={d.templateUrl} target="_blank" rel="noopener noreferrer">Start from the class template</a>
+                        <span>Makes your own copy in your Drive. Paste its address below when you are done.</span>
+                      </p>
+                    )}
+                    <label><span>Date on it</span><input class="in" type="date" name="signed_on" value={(row.form as any).today} /></label>
+                    <label><span>Google Drive or other URL</span><input class="in" type="url" name="external_url" /></label>
+                    <button class="btn btn-sm" type="submit">Save</button>
+                  </form>
+                ))
+              ) : row.form.kind === 'done' ? (
+                <form method="POST" action="#outcome" class="plate-form">
+                  <input type="hidden" name="action" value="status" />
+                  <input type="hidden" name="status" value="complete" />
+                  <input type="hidden" name="participation_id" value={row.form.participationId} />
+                  <input type="hidden" name="milestone_id" value={row.form.milestoneId} />
+                  <input type="hidden" name="name" value={row.form.name} />
+                  <input type="hidden" name="kind" value={row.form.milestoneKind} />
+                  <label><span>Date done</span><input class="in" type="date" name="on" value={row.form.today} /></label>
+                  <button class="btn btn-sm" type="submit">Done</button>
+                </form>
+              ) : row.form.kind === 'feedback' ? (
+                <form method="POST" action="#outcome" class="plate-form">
+                  <input type="hidden" name="action" value="feedback" />
+                  <input type="hidden" name="deliverable_id" value={row.form.deliverableId} />
+                  <label><span>What to change, or what was good</span><textarea class="ta" name="body" rows="3" required></textarea></label>
+                  <label class="plate-rev"><input type="checkbox" name="needs_revision" value="1" /> <span>Ask for a revision</span></label>
+                  <button class="btn btn-sm" type="submit">Send feedback</button>
+                </form>
+              ) : (
+                <form method="POST" action="#outcome" class="plate-form">
+                  <input type="hidden" name="action" value="task" />
+                  <input type="hidden" name="milestone_id" value={row.form.milestoneId} />
+                  <label><span>A line of feedback, if there is one</span><textarea class="ta" name="body" rows="2"></textarea></label>
+                  <button class="btn btn-sm" type="submit">Done</button>
+                </form>
+              )}
+            </details>
+          )}
+          {row.ask && (
+            <div class="plate-ask">
+              <p class="plate-ask-l">
+                <b>{row.ask.askedBy ?? 'Somebody'} asked{row.ask.times > 1 ? ` ${row.ask.times} times` : ''}.</b>
+                {row.ask.acknowledged ? (
+                  <span> You said you had this.</span>
+                ) : (
+                  <form method="POST" action="#outcome" class="inline">
+                    <input type="hidden" name="action" value="ack" />
+                    <input type="hidden" name="milestone_id" value={row.ask.milestoneId} />
+                    <button class="btn btn-sm ghost" type="submit">On it</button>
+                  </form>
+                )}
+              </p>
+              <form method="POST" action="#outcome" class="plate-reply">
+                <input type="hidden" name="action" value="reply" />
+                <input type="hidden" name="milestone_id" value={row.ask.milestoneId} />
+                <label><span>Reply to {String(row.ask.askedBy ?? 'whoever asked').split(' ')[0]}</span><input class="in" name="note" maxlength="500" /></label>
+                <button class="btn btn-sm ghost" type="submit">Send</button>
+              </form>
+            </div>
+          )}
+        </div>
+        {(row.actions ?? []).length > 0 && (
+          <div class="act">
+            {(row.actions ?? []).map((a) => (
+              <a class:list={['btn', a.accent ? 'accent' : 'ghost']} href={a.href}>{a.label}</a>
+            ))}
+          </div>
+        )}
+      </div>
+      </>
+    ))}
+  </div>
+)}
+
+<style>
+  .plate-do { margin-top: 8px; }
+  .plate-do > summary { list-style: none; display: inline-block; cursor: pointer; }
+  .plate-do > summary::-webkit-details-marker { display: none; }
+  .plate-form { display: grid; gap: 8px; margin-top: 10px; max-width: var(--measure-form); }
+  .plate-form label { display: grid; gap: 4px; font-family: var(--face-ui); font-size: 0.88rem; color: var(--brand-contrast); }
+  .plate-form .plate-rev { display: flex; gap: 8px; align-items: center; }
+  .plate-form .ta, .plate-form .in { background: var(--card); color: var(--ink); }
+  .plate-form + .plate-form { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--cover-rule); }
+  .plate-ask { margin-top: 10px; padding-top: 8px; border-top: 1px dashed var(--cover-rule); display: grid; gap: 6px; max-width: var(--measure-form); }
+  .plate-ask-l { margin: 0; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; font-family: var(--face-ui); font-size: 0.88rem; color: var(--brand-contrast); }
+  .plate-ask .inline { display: inline; }
+  .plate-reply { display: flex; gap: 8px; align-items: end; flex-wrap: wrap; }
+  .plate-reply label { display: grid; gap: 4px; flex: 1 1 200px; font-family: var(--face-ui); font-size: 0.82rem; color: var(--brand-contrast); }
+  .plate-reply .in { background: var(--card); color: var(--ink); }
+  .plate-n { margin: 0; font-family: var(--face-ui); font-size: 0.88rem; font-weight: 600; color: var(--brand-contrast); }
+  .plate-tpl { display: grid; gap: 6px; margin: 0; justify-items: start; }
+  .plate-tpl span { font-family: var(--face-ui); font-size: 0.82rem; color: var(--brand-contrast); }
+</style>

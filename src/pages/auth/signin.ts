@@ -72,6 +72,13 @@ export const GET: APIRoute = async ({ request, cookies, url, locals, redirect })
     options: {
       scopes: SCOPES,
       redirectTo: new URL('/auth/callback/', origin).href,
+      /* Always the account chooser. A browser signed into a personal Gmail
+         and a school account would otherwise be sent straight through on
+         whichever Google considers current, and a student whose personal
+         account went first is refused by the domain rule with no way to
+         choose the other. `select_account` puts the choice on screen every
+         time, which costs one click and removes the question. */
+      queryParams: { prompt: 'select_account' },
     },
   });
 
