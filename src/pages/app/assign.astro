@@ -12,6 +12,7 @@ import { checkDateOrder, worstFinding } from '../../lib/dateOrder';
 import { afterPost, outcomeFrom } from '../../lib/post-redirect';
 import { signInWith } from '../../lib/next-path';
 import { allRows } from '../../lib/all-rows';
+import { stepProgress } from '../../lib/step-progress';
 
 const { session, account, roles } = Astro.locals;
 const org = activeOrg(Astro);
@@ -174,7 +175,7 @@ const { data: milestones } = entryIds.length
   ? await allRows(() =>
       supabase
         .from('entry_milestones')
-        .select('id, participation_id, name, due_on, required, blocks_experimentation, completed_on')
+        .select('id, participation_id, name, kind, owner, due_on, required, blocks_experimentation, completed_on')
         .in('participation_id', entryIds)
         .order('due_on', { ascending: true, nullsFirst: false })
             .order('id')
@@ -436,8 +437,8 @@ const rows = (projects ?? [])
        comes through the embedded row. Any current sponsor on any of the
        project's participations answers "is this project sponsored". */
     sponsor: (sponsors ?? []).find((s: any) => s.participations?.project_id === p.id) ?? null,
-    done: mine.filter((m: any) => m.completed_on).length,
-    total: mine.length,
+    done: stepProgress(mine).done,
+    total: stepProgress(mine).total,
     worst: worstFinding(findings),
   };
 })

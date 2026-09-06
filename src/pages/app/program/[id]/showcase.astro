@@ -119,7 +119,7 @@ const mineFirst = rows.find((c) => c.mine) ?? null;
 
               <div class="gbody">
                 <p class="ord">
-                  <span>{c.next_phase ? phaseName(c.next_phase) ?? 'In progress' : c.total > 0 && c.done === c.total ? 'Complete' : 'In progress'}</span>
+                  <span>{c.next_phase ? phaseName(c.next_phase) ?? 'In Progress' : c.total > 0 && c.done === c.total ? 'Complete' : 'In Progress'}</span>
                   <b>{c.done} of {c.total}</b>
                 </p>
                 <h3><a href={`/app/program/${id}/showcase/${c.project_id}/`}>{c.title}</a></h3>

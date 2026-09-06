@@ -20,6 +20,29 @@ export const platform = {
   license: 'MIT',
   /** The single permitted mention of the operator, rendered in the footer only. */
   operatorCredit: 'A project of Blue Leaf Labs, a registered 501(c)(3) nonprofit.',
+  /**
+   * The footer's directory of links (Read, Use it, Who it is for, Trust,
+   * About, the source code). Off for the contained IRPD pilot (September
+   * 2026): every public link is a door somebody can wander through, and
+   * the pilot wants none open. The directory itself stays in
+   * `Footer.astro`, untouched, for the demonstrations that come after;
+   * flipping this shows it again.
+   */
+  footerLinks: false,
+  /**
+   * Whether a student sees the family's score (the Elder's, out of 4) on
+   * their own deliverables list. Off until the class approves showing it
+   * (September 2026); the Elders and the teachers see and write it
+   * regardless, on the project page and the tracker. Flip to show.
+   */
+  familyScoresToStudents: false,
+  /**
+   * The project page's Linked documents section (a label and a URL kept
+   * on the project). Off for the pilot (September 2026): every deliverable
+   * now carries its own Google Drive link, so the loose list duplicated
+   * them. The section and its form stay in the page; flip to show.
+   */
+  linkedDocuments: false,
 } as const;
 
 /*

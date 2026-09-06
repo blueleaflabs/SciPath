@@ -1,0 +1,201 @@
+---
+/**
+ * A PROJECT IN SOMEBODY'S CARE, AS A CARD (2.8).
+ *
+ * One card per project on the Workbench's care list, in place of the
+ * table row. The head: the title in bold, then the authors and the Elder
+ * in normal weight. Three metrics in one type: complete, in progress, and
+ * notebook entries (with the last entry's date, which is what "behind on
+ * the notebook" means). The student's next task with its date, the
+ * Elder's next task with what it waits on (and "Do it" where it is ready,
+ * which opens the feedback document or the task itself). The rail along
+ * the bottom: the two exports, the selection where a fair selects, and
+ * the nudge with its track and the reply.
+ *
+ * Two arrangements from one component, chosen by the list (`layout` on
+ * the wrapper): `grid` sets three across, an Elder's family on one
+ * screen; `wide` sets one column with the head, metrics and tasks side by
+ * side, a teacher's whole class down the page. The card's markup is the
+ * same in both; only the wrapper's class changes, so the switch is one
+ * word.
+ *
+ * Everything that was on the row is on the card, and nothing new is
+ * read: the page computed `w`, the tasks and the nudges once for the
+ * table and hands them here. Rendering a card is a few dozen nodes, so a
+ * class of forty is the same page weight as the table was.
+ */
+
+interface Props {
+  w: any;
+  nextTask: any | null;
+  readyTask: any | null;
+  elderWord: string;
+  selects: boolean;
+  formatDate: (d: any, style?: any) => string;
+  daysWord: (days: number | null) => string;
+}
+
+const { w, nextTask, readyTask, elderWord, selects, formatDate, daysWord } = Astro.props;
+
+const late = w.daysToNext !== null && w.daysToNext < 0;
+const lateCount = late ? Math.abs(w.daysToNext) : 0;
+const authors = w.authors.map((a: any) => a.users?.display_name).filter(Boolean).join(', ') || 'no author';
+const officers = w.officers.map((m: any) => m.users?.display_name).filter(Boolean).join(', ');
+const pending = Math.max(0, w.total - w.done);
+const notebook = w.notebook?.count ?? 0;
+const bad = w.worst?.severity === 'disqualifying';
+const warn = w.worst?.severity === 'planned';
+---
+
+<article class:list={['care-card', late && 'is-late', bad && 'is-bad', warn && 'is-warn']} id={`care-${w.id}`}>
+  <div class="cc-head">
+    <p class="cc-title">
+      <a href={w.entry ? `/app/entry/${w.entry.id}/` : `/app/project/${w.id}/`}>{w.title}</a>
+      {late && <span class="pill late">{lateCount} {lateCount === 1 ? 'day' : 'days'} late</span>}
+      {!late && w.daysToNext !== null && w.daysToNext <= 7 && <span class="pill soon">{w.daysToNext === 0 ? 'due today' : `${w.daysToNext} ${w.daysToNext === 1 ? 'day' : 'days'} left`}</span>}
+      {w.daysToNext === null && !w.next && <span class="pill ok">in order</span>}
+    </p>
+    <p class="cc-who">
+      {authors}
+      {officers ? <>{' · '}<span class="role">{elderWord}:</span> {officers}</> : w.selfManaged?.length > 0 ? ' · self-managed' : ''}
+    </p>
+    {w.verdict?.level === 'disqualifying' && w.verdict.reasons.map((r: string) => <span class="cc-sev">{r}</span>)}
+  </div>
+
+  {/* The three metrics, one type. The notebook count links to the project
+      page (its notebook is a section there) and carries the last entry's
+      date, since being behind on a notebook is a date, not a count. */}
+  <div class="cc-metrics">
+    <div class="cc-metric"><b>{w.done} of {w.total}</b><span>complete</span></div>
+    <div class="cc-metric"><b>{w.inProgress} of {pending}</b><span>in progress</span></div>
+    <div class="cc-metric">
+      <b><a href={`/app/project/${w.id}/`}>{notebook}</a></b>
+      <span>{notebook === 1 ? 'notebook entry' : 'notebook entries'}{notebook > 0 && w.notebook?.last ? ` · last ${formatDate(w.notebook.last, 'short')}` : ''}</span>
+    </div>
+  </div>
+
+  <div class="cc-tasks">
+    <div class="cc-task">
+      <span class="cc-lbl">Student</span>
+      <div>
+        {w.next ? (
+          <>
+            <span class="cc-name">{w.next.name}</span>
+            <span class:list={['cc-sub', late && 'late']}>{w.next.due_on ? `due ${formatDate(w.next.due_on, 'short')} · ${daysWord(w.daysToNext)}` : 'no date set'}</span>
+          </>
+        ) : <span class="cc-none">Nothing outstanding</span>}
+      </div>
+    </div>
+    <div class="cc-task">
+      <span class="cc-lbl">{elderWord}</span>
+      <div>
+        {nextTask ? (
+          <>
+            <span class:list={['cc-name', nextTask.late && 'late']}>{nextTask.name}</span>
+            <span class:list={['cc-sub', nextTask.late && 'late']}>
+              {nextTask.ready ? daysWord(nextTask.days) : <>waiting on the student · <a href={nextTask.href}>open</a></>}
+            </span>
+            {!nextTask.ready && readyTask && <span class="cc-sub">ready now: {readyTask.name}</span>}
+          </>
+        ) : <span class="cc-none">Nothing open</span>}
+      </div>
+    </div>
+  </div>
+
+  <div class="cc-foot">
+    <span class="cc-exports">
+      <a href={`/app/project/${w.id}/notebook/`}>Export Notebook</a> ·{' '}
+      <a href={`/app/project/${w.id}/documents/print/`}>Export Deliverables</a>
+    </span>
+    {selects && w.entry && (
+      <form method="POST" action="#outcome" class="cc-select">
+        <input type="hidden" name="action" value="select" />
+        <input type="hidden" name="participation_id" value={w.entry.id} />
+        <select name="state" aria-label={`Selection state for ${w.title}`}>
+          <option value="candidate" selected={w.entry.selection_state === 'candidate'}>Under consideration</option>
+          <option value="selected" selected={w.entry.selection_state === 'selected'}>Selected</option>
+          <option value="not_selected" selected={w.entry.selection_state === 'not_selected'}>Not selected</option>
+          <option value="withdrawn" selected={w.entry.selection_state === 'withdrawn'}>Withdrawn</option>
+        </select>
+        <button class="btn btn-sm" type="submit">Set</button>
+      </form>
+    )}
+    <span class="cc-acts">
+      {/* The Elder's ready task, as the verb: it opens the document or the
+          task to be done. */}
+      {readyTask && <a class:list={['btn', 'btn-sm', readyTask.late ? 'accent' : '']} href={readyTask.href}>Do it</a>}
+      {/* The nudge, to whoever the row is addressed to (the Elder where one
+          is attached, else the student), with its track and their reply. */}
+      {w.next && w.nudgeTos.length > 0 ? w.nudgeTos.map((to: any) => {
+        const nudge = w.nudges?.get(to.id) ?? null;
+        return (
+          <form method="POST" action="#outcome" class="cc-nudge">
+            <input type="hidden" name="action" value="nudge" />
+            <input type="hidden" name="milestone_id" value={w.next.id} />
+            <input type="hidden" name="recipient_id" value={to.id} />
+            <button class:list={['btn', 'btn-sm', late && !nudge ? 'accent' : 'btn-2']} type="submit">{nudge ? `Nudged ${to.first} ${nudge.nudges}×` : `Nudge ${to.first}`}</button>
+            {nudge && (
+              <span class={nudge.met_after || nudge.relayed_at || nudge.acknowledged_at ? 'cc-sub' : 'cc-sub late'}>
+                {nudge.met_after ? 'met' : nudge.relayed_at ? `passed to ${String(nudge.relayed_to ?? 'them').split(' ')[0]}` : nudge.acknowledged_at ? `${to.first} has it` : `${to.first} · not seen`}
+              </span>
+            )}
+            {nudge?.reply && <span class="cc-sub cc-reply"><i>{nudge.reply}</i> · {formatDate(String(nudge.replied_at).slice(0, 10), 'short')}</span>}
+          </form>
+        );
+      }) : null}
+    </span>
+  </div>
+</article>
+
+<style is:global>
+  /* The list: `grid` three across, `wide` one column. */
+  .care-cards { display: grid; gap: 14px; margin-top: 6px; }
+  .care-cards.grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .care-cards.wide { grid-template-columns: 1fr; }
+  @media (max-width: 960px) { .care-cards.grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  @media (max-width: 620px) { .care-cards.grid { grid-template-columns: 1fr; } }
+
+  .care-card { background: var(--card); border: 1px solid var(--rule); border-top: 4px solid var(--brand); padding: 12px 16px 12px; display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+  .care-card.is-late { border-top-color: var(--alert); }
+  .care-card.is-bad { border-top-color: var(--alert); background: var(--alert-bg); }
+  .care-card.is-warn { border-top-color: var(--accent); }
+  .cc-title { margin: 0; font-size: 1.1rem; font-weight: 700; line-height: 1.25; }
+  .cc-title a { color: inherit; text-decoration: none; }
+  .cc-title a:hover { text-decoration: underline; }
+  .cc-title .pill { margin-left: 8px; vertical-align: middle; }
+  .cc-who { margin: 2px 0 0; color: var(--ink-2); font-size: 0.95rem; }
+  .cc-who .role { color: var(--ink-3); }
+  .cc-sev { display: block; margin-top: 4px; font-family: var(--face-ui); font-size: 0.86rem; color: var(--alert); font-weight: 600; }
+  .cc-metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; padding: 10px 0; border-top: 1px solid var(--rule-fine); border-bottom: 1px solid var(--rule-fine); }
+  .cc-metric { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+  .cc-metric b { font-size: 1.25rem; font-weight: 700; line-height: 1.1; }
+  .cc-metric b a { color: inherit; text-decoration: none; }
+  .cc-metric b a:hover { text-decoration: underline; }
+  .cc-metric span { font-size: 0.82rem; color: var(--ink-3); }
+  .cc-tasks { display: grid; gap: 8px; }
+  .cc-task { display: grid; grid-template-columns: 4.2em 1fr; gap: 10px; align-items: baseline; }
+  .cc-task > div { min-width: 0; }
+  .cc-lbl { font-family: var(--face-ui); font-size: 0.74rem; color: var(--ink-3); text-transform: uppercase; letter-spacing: 0.04em; }
+  .cc-name { display: block; font-weight: 600; }
+  .cc-name.late { color: var(--alert); }
+  .cc-sub { display: block; font-size: 0.88rem; color: var(--ink-3); }
+  .cc-sub.late { color: var(--alert); }
+  .cc-sub a { color: var(--brand); }
+  .cc-none { color: var(--ink-3); font-style: italic; }
+  .cc-foot { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-top: auto; padding-top: 8px; border-top: 1px solid var(--rule-fine); flex-wrap: wrap; }
+  .cc-exports { font-size: 0.88rem; }
+  .cc-acts { display: flex; gap: 8px; align-items: flex-start; flex-wrap: wrap; }
+  .cc-nudge { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; margin: 0; }
+  .cc-nudge .btn { min-width: 9.5em; text-align: center; }
+  .cc-reply { max-width: 22em; text-align: right; }
+  .cc-select { display: flex; gap: 6px; align-items: center; margin: 0; }
+
+  /* One column: the head, the metrics and the tasks side by side, the
+     rail along the bottom. */
+  .care-cards.wide .care-card { flex-direction: row; flex-wrap: wrap; align-items: flex-start; gap: 0 28px; }
+  .care-cards.wide .cc-head { flex: 1 1 260px; min-width: 0; }
+  .care-cards.wide .cc-metrics { flex: 0 0 300px; border: 0; padding: 0; }
+  .care-cards.wide .cc-tasks { flex: 1 1 320px; }
+  .care-cards.wide .cc-foot { flex: 1 1 100%; }
+  @media (max-width: 760px) { .care-cards.wide .care-card { flex-direction: column; gap: 10px; } .care-cards.wide .cc-metrics { flex-basis: auto; padding: 10px 0; border-top: 1px solid var(--rule-fine); border-bottom: 1px solid var(--rule-fine); } }
+</style>

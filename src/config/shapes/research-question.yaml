@@ -1,0 +1,73 @@
+# "Choosing Research Question", the IRPD handout (credit: Scribbr), in the
+# handout's own words. Parts I and II are read; Parts III and IV are
+# written. The handout itself is linked at the top.
+
+id: research-question
+name: Choosing research question
+version: 1
+guidance: >-
+  A research question pinpoints exactly what you want to find out in your
+  work. A good research question is essential for outstanding research.
+sections:
+  - id: handout
+    name: The handout
+    fields:
+      - id: handout
+        kind: note
+        text: |-
+          [Choosing Research Question](https://docs.google.com/document/d/1NHPJuiGhJGyGoFuy3gKIpu88sHDGpJ1WOIiLeukbigw/edit?tab=t.0), the class handout. Credit: Scribbr.
+  - id: part1
+    name: "PART I: What is a good research question?"
+    fields:
+      - id: part1
+        kind: note
+        text: |-
+          A research question pinpoints exactly what you want to find out in your work. A good research question is essential for outstanding research.
+
+          All research questions should be:
+
+          - Focused on a single problem or issue
+          - Researchable using [primary and/or secondary sources](https://www.scribbr.com/working-with-sources/primary-and-secondary-sources/)
+          - Feasible to answer within the timeframe and practical constraints
+          - Specific enough to answer thoroughly
+          - Complex enough to develop the answer over the space of a paper or thesis
+  - id: part2
+    name: "PART II: Types of research and questions:"
+    fields:
+      - id: part2
+        kind: note
+        text: |-
+          | Type of research | Example question |
+          | --- | --- |
+          | Qualitative research question | What are the experiences of the parents of children with Down syndrome enrolled in public preschools in the city? |
+          | | What are the perceptions of night-shift oncology nurses at the local hospital? |
+          | Quantitative research question | What is the demographic makeup of South Korea in 2020 compared to 2010? |
+          | | How has the average sea level changed on the Norwegian coast over the 25 years? |
+          | Statistical research question | Is there a significant relationship between ice cream consumption and drowning deaths at the local freshwater lake? |
+          | | Is there a significant relationship between salary and mental well-being on a scale of 1 to 5 of employees at the local shoe company? |
+  - id: part3
+    name: "PART III: Let’s consider your research area and topic:"
+    fields:
+      - id: area
+        kind: long
+        prompt: a) Write your research area/topic.
+        required: true
+      - id: interest
+        kind: long
+        prompt: b) What got you interested in this area?
+        required: true
+      - id: experience
+        kind: long
+        prompt: c) Have you had any experience with this topic? Explain.
+        required: true
+      - id: impact
+        kind: long
+        prompt: d) What impact would you want your research to have?
+        required: true
+  - id: part4
+    name: "PART IV"
+    fields:
+      - id: question
+        kind: long
+        prompt: "Write your research question here:"
+        required: true

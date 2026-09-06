@@ -1,0 +1,185 @@
+---
+export const prerender = false;
+
+/**
+ * EVERY DELIVERABLE, AS ONE PDF (2.8).
+ *
+ * The project's documents written in SciPath, as they stand right now,
+ * on one paper: the header once, then each document in the order the
+ * class's calendar wants them, each starting on a new page with its own
+ * name and standing. The same two components draw the single document's
+ * PDF (`PaperHeader`, `DocumentPaper`), so the two never drift. The
+ * browser's Save as PDF is the export. `?comments=1` adds the threads.
+ */
+
+import { serverClient } from '../../../../../lib/supabase';
+import { activeOrg } from '../../../../../lib/tenant';
+import { formatDate } from '../../../../../lib/dates';
+import { signInWith } from '../../../../../lib/next-path';
+import { shape as shapeOf, resolveProgram, deliverablesFor } from '../../../../../lib/templates';
+import { programTitle, staffWord } from '../../../../../lib/program-names';
+import { exportName } from '../../../../../lib/export-names';
+import { docStanding } from '../../../../../lib/documents';
+import PaperHeader from '../../../../../components/PaperHeader.astro';
+import DocumentPaper from '../../../../../components/DocumentPaper.astro';
+
+const { session, account } = Astro.locals;
+const org = activeOrg(Astro);
+const { id: projectId } = Astro.params;
+
+if (!session) return Astro.redirect(signInWith(Astro.url));
+if (!account) return Astro.redirect('/app/welcome/');
+if (!projectId) return Astro.redirect('/app/');
+
+const supabase = serverClient(Astro.request, Astro.cookies, (Astro.locals as any).runtime?.env);
+
+const { data: project } = await supabase
+  .from('projects')
+  .select('id, title, facts, process_id, project_authors(role, self_managed_at, users(id, display_name))')
+  .eq('id', projectId)
+  .maybeSingle();
+if (!project) return Astro.redirect('/app/');
+
+const authors = (project.project_authors ?? []).filter((a: any) => a.role === 'author' && a.users).map((a: any) => a.users.display_name);
+const elders = (project.project_authors ?? []).filter((a: any) => a.role === 'officer' && !a.self_managed_at && a.users).map((a: any) => a.users.display_name);
+
+/* The class this project is in: its template names the documents and
+   their order. The first cohort participation; a fair alongside adds
+   nothing written in SciPath for the pilot. */
+const { data: parts } = await supabase
+  .from('participations')
+  .select('id, program_id, programs(id, name, short_name, program_role, template_id, process_id), entry_milestones(name, due_on, completed_on)')
+  .eq('project_id', projectId)
+  .in('status', ['entered', 'competed']);
+const place: any = (parts ?? []).find((p: any) => p.programs?.program_role === 'cohort') ?? (parts ?? [])[0] ?? null;
+const program = place?.programs?.template_id ? (() => { try { return resolveProgram(place.programs.template_id, place.programs.process_id ?? project.process_id ?? null); } catch { return null; } })() : null;
+
+/* Every deliverable with a shape, once, in step order, with the step's
+   due date. */
+const wanted: { id: string; name: string; shape: any; dueOn: string | null }[] = [];
+if (program) {
+  const seen = new Set<string>();
+  for (const step of program.steps) {
+    for (const d of deliverablesFor(program, step, project.facts ?? {})) {
+      if (!d.shape || seen.has(d.id)) continue;
+      seen.add(d.id);
+      const row = (place?.entry_milestones ?? []).find((m: any) => m.name === step.name);
+      wanted.push({ id: d.id, name: d.name, shape: shapeOf(d.shape), dueOn: row?.due_on ?? null });
+    }
+  }
+  /* In the order they come due (2.8). */
+  wanted.sort((a, b) => (a.dueOn ?? '9999').localeCompare(b.dueOn ?? '9999') || a.name.localeCompare(b.name));
+}
+/* The running head and foot on every sheet: the project top left, the
+   researcher top right, the page bottom right. Fixed text in the page's
+   own margin boxes, since a browser cannot read it off the page. */
+const cssText = (t: string) => JSON.stringify(t);
+
+const { data: sponsors } = await supabase
+  .from('project_sponsors')
+  .select('teacher_name, participations!inner(project_id)')
+  .eq('participations.project_id', projectId)
+  .is('superseded_at', null);
+const teacherNames = [...new Set((sponsors ?? []).map((s: any) => s.teacher_name).filter(Boolean))];
+
+const { data: docs } = await supabase
+  .from('documents')
+  .select('id, deliverable, status, version_no, opened_at, submitted_at, updated_at, document_fields(field_id, value)')
+  .eq('project_id', projectId);
+const docOf = new Map<string, any>((docs ?? []).map((d: any) => [d.deliverable, d]));
+
+const withComments = Astro.url.searchParams.get('comments') === '1';
+const { data: comments } = withComments && (docs ?? []).length > 0
+  ? await supabase.from('deliverable_feedback').select('document_id, field_id, body_md, needs_revision, created_at, author:author_id(display_name)').in('document_id', (docs ?? []).map((d: any) => d.id)).order('created_at', { ascending: true })
+  : { data: [] as any[] };
+
+const when = (iso: string | null | undefined) =>
+  iso ? new Date(iso).toLocaleString('en-US', { year: 'numeric', month: 'long', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZone: org.timezone }) : '';
+const standingOf = (doc: any, sh: any = null) => docStanding(doc, sh, when).label;
+const valuesOf = (doc: any) => Object.fromEntries((doc?.document_fields ?? []).map((f: any) => [f.field_id, f.value]));
+const rubricOf = (deliverableId: string) => program?.steps.find((st: any) => (st.deliverables ?? []).some((d: any) => (d.ref ?? d.id) === deliverableId))?.rubric ?? null;
+
+const printedOn = when(new Date().toISOString());
+const elderWord = staffWord(program as any, elders.length === 1 ? 'singular' : 'plural');
+const go = Astro.url.searchParams.get('go') === '1';
+const backHref = place ? `/app/project/${project.id}/in/${place.program_id}/` : `/app/project/${project.id}/`;
+---
+
+<html lang="en" data-surface="print">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="robots" content="noindex" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{exportName(program as any, authors.join(', '), 'All deliverables', new Date(), org.timezone)}</title>
+  </head>
+  <body>
+    <div class="toolbar">
+      <a href={backHref}>Back to the project</a>
+      <label class="opt">
+        <input type="checkbox" checked={withComments} data-on="?comments=1" data-off="" onchange="location.search = this.checked ? this.dataset.on : this.dataset.off" />
+        Include the comments
+      </label>
+      <button class="btn" type="button" onclick="window.print()">Print or save as PDF</button>
+    </div>
+
+    <article class="book">
+      <PaperHeader org={org} what="All deliverables" title={project.title} rows={[
+        { label: `Author${authors.length === 1 ? '' : 's'}`, value: authors.join(', ') || '—' },
+        ...(program ? [{ label: 'Class', value: programTitle(program as any) || place?.programs?.name || '' }] : []),
+        ...(elders.length > 0 ? [{ label: elderWord, value: elders.join(', ') }] : []),
+        ...(teacherNames.length > 0 ? [{ label: `Teacher${teacherNames.length === 1 ? '' : 's'}`, value: teacherNames.join(', ') }] : []),
+        { label: 'Documents', value: String(wanted.length) },
+        { label: 'Printed', value: printedOn },
+      ]} />
+
+      <section class="appendix">
+        <h2>Contents</h2>
+        <ol class="contents">
+          {wanted.map((w) => <li>{w.name}{w.dueOn ? ` · due ${formatDate(w.dueOn, 'long')}` : ''} · {standingOf(docOf.get(w.id), w.shape)}</li>)}
+        </ol>
+      </section>
+
+      {wanted.map((w) => {
+        const doc = docOf.get(w.id);
+        return (
+          <div class="paper-doc">
+            <PaperHeader org={org} bare what={w.name} title={project.title} rows={[
+              { label: 'Document', value: `${w.name}${w.dueOn ? `, due ${formatDate(w.dueOn, 'long')}` : ''}` },
+              { label: 'Standing', value: standingOf(doc, w.shape) },
+            ]} />
+            {w.shape ? (
+              <DocumentPaper shape={w.shape} values={valuesOf(doc)} rubric={rubricOf(w.id)} program={program} comments={withComments ? (comments ?? []).filter((c: any) => c.document_id === doc?.id) : []} when={when} />
+            ) : (
+              <p class="empty">No shape for this deliverable.</p>
+            )}
+          </div>
+        );
+      })}
+
+      <p class="fine colophon">Printed from SciPath, {org.name}. All deliverables, {project.title}, {printedOn}.</p>
+    </article>
+
+    {go && <script is:inline>window.addEventListener('load', () => setTimeout(() => window.print(), 300));</script>}
+  </body>
+</html>
+
+<style is:global set:html={`
+  @page {
+    margin: 30mm 0 28mm;
+    @top-left { content: ${cssText(project.title)}; font-family: system-ui, sans-serif; font-size: 9pt; color: var(--print-folio); }
+    @top-right { content: ${cssText(authors.join(', '))}; font-family: system-ui, sans-serif; font-size: 9pt; color: var(--print-folio); }
+    @bottom-center { content: none; }
+    @bottom-right { content: counter(page) ' of ' counter(pages); font-family: system-ui, sans-serif; font-size: 9pt; color: var(--print-folio); }
+  }
+`}></style>
+
+<style is:global>
+  @import '../../../../../styles/print-book.css';
+
+  /* Each document starts a page of its own (2.8). */
+  .paper-doc { page-break-before: always; break-before: page; padding-top: 8px; }
+  .contents { margin: 0; padding-left: 20px; font-size: 0.95rem; }
+  .contents li { margin: 2px 0; }
+  .colophon { margin-top: 28px; border-top: 1px solid var(--rule); padding-top: 6px; page-break-before: avoid; break-before: avoid; }
+  @media screen { .paper-doc { margin-top: 36px; border-top: 1px dashed var(--rule); padding-top: 28px; } }
+</style>

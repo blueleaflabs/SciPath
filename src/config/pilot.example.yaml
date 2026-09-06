@@ -78,3 +78,15 @@ projects:
     authors: [a-student]
   - title: A project two people share
     authors: [b-student, c-student]
+
+# The family scores already given, from the class tracker, so the tracker
+# in SciPath is caught up on day one. One row per student per step: the
+# Elder's number out of 4 and their comment. `student` and `by` are keys
+# from the groups above (a full name as written there is accepted too);
+# `step` is the step's id in the program template; `on` is the day it was
+# given. Loaded as that Elder's assessment on that step, released at once.
+# Safe to run twice: a score already there with the same number and
+# comment is left alone; a changed one supersedes the earlier row.
+scores:
+  - { student: a-student, step: project_idea, score: 4, comment: try to take more family feedback but good overall, by: b-student, on: 2026-08-20 }
+  - { student: a-student, step: topic_narrowing, score: 3.5, by: b-student, on: 2026-08-28 }

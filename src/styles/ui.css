@@ -599,16 +599,23 @@ a.btn:focus {
 
 a.btn-2,
 a.btn-2:link,
-a.btn-2:visited,
+a.btn-2:visited {
+  color: var(--card);
+}
+
 a.btn-q,
 a.btn-q:link,
 a.btn-q:visited {
   color: var(--ink);
 }
 
+/* One weight of button on paper (2.8): the outlined second button read as
+   disabled beside a filled one, so `.btn-2` and `.ghost` are the same
+   black as `.btn` on a light surface. On the purple they are the accent. */
 .btn-2 {
-  background: transparent;
-  color: var(--ink);
+  background: var(--ink);
+  color: var(--card);
+  border-color: var(--ink);
 }
 
 /* The file input's own button.
@@ -735,15 +742,16 @@ select {
 }
 
 /* Inside a table row, where the full size turns one line into two. */
+.btn.is-off, .btn.is-off:hover { opacity: 0.45; cursor: not-allowed; pointer-events: none; }
 .btn-sm {
   padding: 7px 14px;
   font-size: 0.9rem;
 }
 
 .btn-2:hover {
-  background: var(--sunk);
-  color: var(--ink);
-  border-color: var(--ink);
+  background: var(--ink-2);
+  color: var(--card);
+  border-color: var(--ink-2);
 }
 
 .btn-q {
@@ -1899,6 +1907,13 @@ mark {
 .pill.late { background: var(--alert); color: var(--brand-contrast); }
 .pill.soon { background: var(--accent-pale); color: var(--accent-deep); }
 .pill.ok { background: var(--ok-bg); color: var(--stage-comp); }
+/* A family score wears its band (2.8): 1 red, 2 yellow, 3 green, 4 blue,
+   pale enough for black text, on a pill or on a whole tracker cell. */
+.band-1 { background: var(--band-1-bg) !important; color: var(--band-1-ink); }
+.band-2 { background: var(--band-2-bg) !important; color: var(--band-2-ink); }
+.band-3 { background: var(--band-3-bg) !important; color: var(--band-3-ink); }
+.band-4 { background: var(--band-4-bg) !important; color: var(--band-4-ink); }
+td.band-1, td.band-2, td.band-3, td.band-4 { color: inherit; }
 .pill.quiet { background: var(--sunk); color: var(--ink-3); }
 
 /* ── THE VERDICT ───────────────────────────────────────────────
@@ -2305,7 +2320,7 @@ mark {
   max-width: none;
   justify-self: end;
 }
-.alarm.plate .plate-row > .act .btn { text-align: center; white-space: nowrap; }
+.alarm.plate .plate-row > .act .btn { text-align: center; white-space: nowrap; min-width: var(--row-btn); box-sizing: border-box; }
 @media (max-width: 720px) {
   .alarm.plate .plate-row { grid-template-columns: minmax(0, 1fr); }
   .alarm.plate .plate-row > .act { justify-self: stretch; }
@@ -2315,9 +2330,9 @@ mark {
    wears on paper would vanish into the bar it sits on. */
 .alarm a.btn.ghost,
 .alarm a.btn.ghost:link,
-.alarm a.btn.ghost:visited { border-color: var(--brand-contrast); color: var(--brand-contrast); background: transparent; }
+.alarm a.btn.ghost:visited { border-color: var(--accent); color: var(--accent-ink); background: var(--accent); }
 .alarm a.btn.ghost:hover,
-.alarm a.btn.ghost:focus { background: var(--brand-contrast); color: var(--brand-deep); }
+.alarm a.btn.ghost:focus { background: var(--brand-contrast); color: var(--brand-deep); border-color: var(--brand-contrast); }
 .cover a.btn.ghost,
 .cover a.btn.ghost:link,
 .cover a.btn.ghost:visited { border-color: var(--cover-ink-2); color: var(--cover-ink); background: transparent; }
@@ -2355,17 +2370,17 @@ a.btn.accent:focus {
 a.btn.ghost,
 a.btn.ghost:link,
 a.btn.ghost:visited {
-  background: transparent;
-  border-color: var(--brand-deep);
-  color: var(--brand-deep);
+  background: var(--ink);
+  border-color: var(--ink);
+  color: var(--card);
 }
 
 .btn.ghost:hover,
 a.btn.ghost:hover,
 a.btn.ghost:focus {
-  background: var(--brand-deep);
-  border-color: var(--brand-deep);
-  color: var(--brand-contrast);
+  background: var(--ink-2);
+  border-color: var(--ink-2);
+  color: var(--card);
 }
 
 /* The good news, said as a panel rather than as a grey line. */
@@ -2386,3 +2401,21 @@ a.btn.ghost:focus {
   text-transform: uppercase;
   color: var(--stage-comp);
 }
+
+/* The backup-path strip (2.8): shown only while live updates poll
+   because the socket would not connect. */
+.live-strip {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 40;
+  padding: 8px 16px;
+  background: var(--sunk);
+  color: var(--ink-2);
+  border-top: 1px solid var(--rule);
+  font-family: var(--face-ui);
+  font-size: 0.82rem;
+  text-align: center;
+}
+@media print { .live-strip { display: none !important; } }

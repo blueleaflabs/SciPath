@@ -17,12 +17,15 @@ export const prerender = false;
 
 import Base from '../../../../layouts/Base.astro';
 import AppShell from '../../../../components/AppShell.astro';
+import ProjectCover from '../../../../components/ProjectCover.astro';
 import { activeOrg } from '../../../../lib/tenant';
 import { serverClient } from '../../../../lib/supabase';
 import { afterPost, outcomeFrom } from '../../../../lib/post-redirect';
 import { signInWith } from '../../../../lib/next-path';
-import { programTitle } from '../../../../lib/program-names';
+import { programTitle, staffWord } from '../../../../lib/program-names';
 import { parseVideo } from '../../../../lib/video';
+import { identify } from '../../../../lib/filetype';
+import { blobStore, projectImagePath, MAX_UPLOAD_BYTES } from '../../../../lib/blob';
 
 const { session, account, roles } = Astro.locals;
 const org = activeOrg(Astro);
@@ -38,6 +41,55 @@ let { error, note } = outcomeFrom(Astro.url);
 if (Astro.request.method === 'POST') {
   const form = await Astro.request.formData();
   const action = String(form.get('action') ?? '');
+
+  /* The pictures and the video, moved here from the project page (2.8):
+     this is the page that shows them, so it is the page that takes them. */
+  if (action === 'image') {
+    const file = form.get('image') as File | null;
+    if (!file || file.size === 0) error = 'Choose an image first.';
+    else if (file.size > MAX_UPLOAD_BYTES) error = 'That file is too large.';
+    else {
+      const blob = blobStore(Astro.locals);
+      if (!blob.available()) error = 'File storage is not configured here.';
+      else {
+        const kind = await identify(file);
+        if (!kind || !kind.mime.startsWith('image/')) {
+          error = 'That is not an image we can show. Use a JPEG, PNG, WebP or GIF.';
+        } else {
+          const path = projectImagePath(id!, file.name, kind.ext);
+          try {
+            await blob.put(path, await file.arrayBuffer(), kind.mime);
+            const { error: e } = await supabase.rpc('add_project_image', {
+              p_project_id: id,
+              p_storage_path: path,
+              p_alt: String(form.get('alt') ?? ''),
+              p_caption: String(form.get('caption') ?? ''),
+            });
+            if (e) error = e.message;
+            else note = 'Image added.';
+          } catch (e: any) {
+            error = e.message;
+          }
+        }
+      }
+    }
+    return afterPost(Astro.url, { error, note });
+  }
+
+  if (action === 'image_remove') {
+    const { error: e } = await supabase.rpc('remove_project_image', { p_image_id: String(form.get('image_id') ?? '') });
+    if (e) error = e.message;
+    else note = 'Image removed.';
+    return afterPost(Astro.url, { error, note });
+  }
+
+  if (action === 'video') {
+    const { error: e } = await supabase.rpc('save_project_video', { p_project_id: id, p_url: String(form.get('video_url') ?? '') });
+    if (e) error = e.message;
+    else note = 'Video saved.';
+    return afterPost(Astro.url, { error, note });
+  }
+
   const hidden = action === 'hide' ? true : action === 'show' ? false : String(form.get('hidden') ?? '') === '1';
 
   const { error: e } = await supabase.rpc('set_project_showcase', {
@@ -54,7 +106,7 @@ if (Astro.request.method === 'POST') {
 
 const { data: project } = await supabase
   .from('projects')
-  .select('id, title, summary, showcase_hidden, showcase_updated_at, video_url, project_authors(user_id, role)')
+  .select('id, title, summary, showcase_hidden, showcase_updated_at, video_url, project_authors(user_id, role, self_managed_at, users(id, display_name))')
   .eq('id', id)
   .maybeSingle();
 
@@ -90,21 +142,39 @@ const shownLinks = (links ?? []).filter((l: any) => l.visibility === 'published'
 const video = parseVideo(project.video_url);
 const mediaUrl = (path: string) => `/app/media/${path}`;
 const firstPlace = (places ?? []).find((p: any) => p.programs?.showcase === 'private');
+
+/* The cover's people, as the deliverables page names them. */
+const coverAuthors = (project.project_authors ?? []).filter((a: any) => a.role === 'author' && a.users).map((a: any) => a.users.display_name);
+const coverElders = (project.project_authors ?? []).filter((a: any) => a.role === 'officer' && !a.self_managed_at && a.users).map((a: any) => a.users.display_name);
+const { data: coverSponsors } = await supabase
+  .from('project_sponsors')
+  .select('teacher_name, participations!inner(project_id)')
+  .eq('participations.project_id', id)
+  .is('superseded_at', null);
+const coverSponsorNames = [...new Set((coverSponsors ?? []).map((x: any) => x.teacher_name).filter(Boolean))];
+const coverProgram = ((firstPlace ?? (places ?? [])[0])?.programs ?? null) as any;
 ---
 
 <Base title="My showcase" noindex={true}>
   <div class="wrap">
     <AppShell org={org} account={account} roles={roles} here="/app/" />
 
-    <section class="cover">
-      <p class="kick">My showcase</p>
-      <h1>{project.title}</h1>
-      <p class="sub">
-        {shows.length > 0
-          ? <>What the class sees on the {shows.map((g: any) => `${g.short_name ?? g.name} Showcase`).join(' and ')}. Change it as often as you like; there is nothing to approve.</>
-          : 'This project is not in a class with a showcase, so there is nowhere for a card to appear yet.'}
-      </p>
-    </section>
+    <ProjectCover
+      kick={coverProgram ? programTitle(coverProgram) : 'My showcase'}
+      title={project.title}
+      nav={{ projectId: project.id, programId: (firstPlace ?? (places ?? [])[0])?.program_id ?? null, showcase: true, here: 'showcase' }}
+      rename={iAuthor ? { projectId: project.id, title: project.title } : undefined}
+      people={[
+        { label: coverAuthors.length === 1 ? 'Author' : 'Authors', value: coverAuthors.join(', ') || 'No authors' },
+        ...(coverElders.length > 0 ? [{ label: coverElders.length === 1 ? staffWord(coverProgram) : staffWord(coverProgram, 'plural'), value: coverElders.join(', ') }] : []),
+        ...(coverSponsorNames.length > 0 ? [{ label: coverSponsorNames.length === 1 ? 'Sponsor' : 'Sponsors', value: coverSponsorNames.join(', ') }] : []),
+      ]}
+    />
+    <p class="lede-under">
+      {shows.length > 0
+        ? <>What the class sees on the {shows.map((g: any) => `${g.short_name ?? g.name} Showcase`).join(' and ')}. Change it as often as you like; there is nothing to approve.</>
+        : 'This project is not in a class with a showcase, so there is nowhere for a card to appear yet.'}
+    </p>
 
     <div id="outcome" tabindex="-1">
       {error && <p class="note" role="alert" style="margin-top:24px">{error}</p>}
@@ -125,13 +195,13 @@ const firstPlace = (places ?? []).find((p: any) => p.programs?.showcase === 'pri
           <form method="POST" action="#outcome">
             <input type="hidden" name="action" value={project.showcase_hidden ? 'show' : 'hide'} />
             <input type="hidden" name="summary" value={project.summary ?? ''} />
-            <button class:list={['btn', project.showcase_hidden ? 'accent' : 'ghost']} type="submit">
+            <button class="btn btn-sm" type="submit">
               {project.showcase_hidden ? 'Show it again' : 'Hide it for now'}
             </button>
           </form>
         )}
         {shows.map((g: any) => (
-          <a class="btn btn-sm btn-2" href={`/app/program/${g.id}/showcase/`}>Open the {g.short_name ?? g.name} Showcase</a>
+          <a class="btn btn-sm" href={`/app/program/${g.id}/showcase/`}>Open the {g.short_name ?? g.name} Showcase</a>
         ))}
       </div>
     )}
@@ -164,25 +234,65 @@ const firstPlace = (places ?? []).find((p: any) => p.programs?.showcase === 'pri
               <li>
                 <img src={mediaUrl(img.storage_path)} alt={img.alt ?? ''} loading="lazy" />
                 {img.caption && <p>{img.caption}</p>}
+                {iAuthor && (
+                  <form method="POST" action="#outcome">
+                    <input type="hidden" name="action" value="image_remove" />
+                    <input type="hidden" name="image_id" value={img.id} />
+                    <button class="btn btn-q" type="submit">Remove</button>
+                  </form>
+                )}
               </li>
             ))}
           </ul>
         ) : (
-          <p class="t-sm">No pictures yet. The first one becomes the card's picture.</p>
+          <p class="t-sm">No pictures yet. The first one becomes the card's picture. Four is the limit.</p>
         )}
-        {video && (
+
+        {iAuthor && (images ?? []).length < 4 && (
+          <form method="POST" action="#outcome" enctype="multipart/form-data" class="mform" style="margin-top:18px">
+            <input type="hidden" name="action" value="image" />
+            <label>
+              <span>Image</span>
+              <input class="in" type="file" name="image" accept="image/*" required />
+            </label>
+            <div class="row-2">
+              <label>
+                <span>Caption</span>
+                <input class="in" name="caption" required />
+                <small>What it shows, in a line.</small>
+              </label>
+              <label>
+                <span>Alt text</span>
+                <input class="in" name="alt" required />
+                <small>For somebody who cannot see it. Describe the content, not the fact that it is a photograph.</small>
+              </label>
+            </div>
+            <button class="btn" type="submit">Add the image</button>
+          </form>
+        )}
+
+        <h3 class="sub-h">Video</h3>
+        {video ? (
           <p class="t-sm">
-            Video: <a href={video.watch} target="_blank" rel="noopener noreferrer">{video.host === 'vimeo' ? 'Vimeo' : 'YouTube'}</a>
+            {video.host === 'vimeo' ? 'Vimeo' : 'YouTube'}, saved. <a href={video.watch} target="_blank" rel="noopener noreferrer">Watch it there</a>.
           </p>
+        ) : project.video_url ? (
+          <p class="t-sm">That address is saved and is not one we can show. YouTube and Vimeo only, and it has to start with https.</p>
+        ) : null}
+        {iAuthor && (
+          <form method="POST" action="#outcome" class="mform">
+            <input type="hidden" name="action" value="video" />
+            <label>
+              <span>Address</span>
+              <input class="in" name="video_url" value={project.video_url ?? ''} />
+              <small>One, on YouTube or Vimeo. Leave it empty to remove the one that is there.</small>
+            </label>
+            <button class="btn" type="submit">Save the video</button>
+          </form>
         )}
         {shownLinks.length > 0 && (
           <p class="t-sm">
             Links shown: {shownLinks.map((l: any) => l.label).join(', ')}
-          </p>
-        )}
-        {iAuthor && firstPlace && (
-          <p style="margin-top:14px">
-            <a class="btn btn-sm btn-2" href={`/app/project/${id}/in/${firstPlace.program_id}/#showcase`}>Add or change pictures</a>
           </p>
         )}
       </section>
@@ -219,6 +329,7 @@ const firstPlace = (places ?? []).find((p: any) => p.programs?.showcase === 'pri
   .state span { font-size: 0.95rem; color: var(--ink-2); }
   .state form { margin: 0; }
 
+  .lede-under { margin: 18px 0 0; color: var(--ink-2); max-width: var(--measure-text); }
   .two { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 0 32px; }
   .sform { max-width: var(--measure-form); }
   .sform .ta { resize: vertical; }
@@ -226,4 +337,6 @@ const firstPlace = (places ?? []).find((p: any) => p.programs?.showcase === 'pri
   .shots { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
   .shots img { display: block; width: 100%; aspect-ratio: 4 / 3; object-fit: cover; border: 1px solid var(--rule); }
   .shots p { margin: 4px 0 0; font-size: 0.86rem; color: var(--ink-2); }
+  .shots form { margin: 4px 0 0; }
+  .sub-h { margin: 34px 0 10px; font-family: var(--face-ui); font-size: 0.82rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-2); }
 </style>

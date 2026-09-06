@@ -830,7 +830,7 @@ begin
       raise exception 'FAIL leaving deleted a recorded document';
     exception when others then
       if sqlerrm like 'FAIL%%' then raise; end if;
-      if sqlerrm not like '%%documents recorded against this class%%' then
+      if sqlerrm not like '%%activity recorded against this class%%' then
         raise exception 'FAIL refused for the wrong reason: %%', sqlerrm;
       end if;
       raise notice '  ok   and refuses while a document is recorded, in words';
@@ -1740,6 +1740,41 @@ begin
   if not v_ok then raise exception 'FAIL no refusal'; end if;
   raise notice '  ok   a task waits on the student step';
 
+  -- A student step that waits on another (2.8): recording it is refused
+  -- in words while the other is open, and allowed once it is met. The
+  -- gate reads `requires_steps`, the template's whole list.
+  declare
+    v_later uuid;
+    v_part_id uuid;
+    v_author_id uuid;
+  begin
+    perform set_config('role', 'postgres', true);
+    select participation_id into v_part_id from public.entry_milestones where id = v_gate;
+    insert into public.entry_milestones (org_id, participation_id, name, kind, due_on, owner, step_id, requires_steps)
+    values (v_org, v_part_id, 'A later step', 'local', current_date + 7, 'student', 'later_step', array['the_step'])
+    returning id into v_later;
+    if app.gate_of(v_later) <> array['A student step'] then
+      raise exception 'FAIL the gate did not name the open step it waits on: %%', app.gate_of(v_later);
+    end if;
+    select a.user_id into v_author_id from public.project_authors a where a.project_id = v_project and a.role = 'author' limit 1;
+    perform set_config('role', 'authenticated', true);
+    perform set_config('request.jwt.claim.sub', v_author_id::text, true);
+    v_ok := false;
+    begin
+      perform public.record_deliverable(v_part_id, v_later, 'later_thing', 'The later thing', current_date, 'https://example.org/later', null);
+      raise exception 'FAIL a step was recorded while the step it waits on is open';
+    exception when others then
+      if sqlerrm like 'FAIL%%' then raise; end if;
+      if sqlerrm not like '%%waits on A student step%%' then
+        raise exception 'FAIL refused for the wrong reason: %%', sqlerrm;
+      end if;
+      v_ok := true;
+    end;
+    if not v_ok then raise exception 'FAIL no refusal on the gated step'; end if;
+    perform set_config('role', 'postgres', true);
+    raise notice '  ok   a student step waits on the step it requires, and says which';
+  end;
+
   -- The student meets the step; the task is ready.
   update public.entry_milestones set completed_on = current_date where id = v_gate;
   if not app.staff_task_ready(v_task) then
@@ -1798,6 +1833,7 @@ declare
   v_part     uuid;
   v_doc      uuid;
   v_doc2     uuid;
+  v_line     uuid;
   v_ans      jsonb;
   v_step     uuid;
   v_task     uuid;
@@ -1962,6 +1998,47 @@ begin
   drop table elders_held;
   raise notice '  ok   with no Elder on the project the advisors are told';
 
+  -- A line that needs no reply: the Elder closes it; the author may not.
+  perform set_config('role', 'authenticated', true);
+  perform set_config('request.jwt.claim.sub', v_author::text, true);
+  v_line := public.comment_on_document(v_doc, 'what', 'Got it, thanks.', false, null);
+  v_ok := false;
+  begin
+    perform public.mark_feedback_seen(v_line);
+  exception when others then v_ok := true;
+  end;
+  if not v_ok then raise exception 'FAIL the author closed their own line'; end if;
+  perform set_config('request.jwt.claim.sub', v_elder::text, true);
+  perform public.mark_feedback_seen(v_line);
+  perform set_config('role', 'postgres', true);
+  if not exists (select 1 from public.deliverable_feedback f where f.id = v_line and f.seen_at is not null and f.seen_by = v_elder) then
+    raise exception 'FAIL the Elder could not close a line that needs no reply';
+  end if;
+  raise notice '  ok   an Elder closes a line that needs no reply, and the author cannot';
+
+  -- The pulse (2.8): the Elder's newest moment moves when a line lands on
+  -- a document they read; a stranger to the project sees no such moment.
+  declare
+    v_before timestamptz;
+    v_after  timestamptz;
+  begin
+    perform set_config('role', 'authenticated', true);
+    perform set_config('request.jwt.claim.sub', v_elder::text, true);
+    v_before := public.my_pulse();
+    perform set_config('request.jwt.claim.sub', v_author::text, true);
+    v_line := public.comment_on_document(v_doc, 'what', 'Another line, for the pulse.', false, null);
+    perform set_config('request.jwt.claim.sub', v_elder::text, true);
+    v_after := public.my_pulse();
+    perform set_config('role', 'postgres', true);
+    /* One transaction, one now(): the line's moment is the pulse, and it
+       is never earlier than what the Elder saw before. */
+    if v_after is null or v_before is null or v_after < v_before
+       or v_after <> (select f.created_at from public.deliverable_feedback f where f.id = v_line) then
+      raise exception 'FAIL the pulse did not follow the line that landed (% -> %)', v_before, v_after;
+    end if;
+    raise notice '  ok   the pulse moves for whoever may read the new line';
+  end;
+
   -- A classmate may not comment.
   perform set_config('role', 'authenticated', true);
   perform set_config('request.jwt.claim.sub', v_other::text, true);
@@ -2079,6 +2156,21 @@ begin
   insert into public.entry_milestones (org_id, participation_id, name, kind, due_on, owner, step_id, completed_on)
   values (v_org, v_part, 'Narrowing the topic', 'local', current_date - 2, 'student', 'narrow', current_date - 2)
   returning id into v_step;
+
+  -- Nothing handed in: the Elder's score is refused; the teacher's is not.
+  perform set_config('role', 'postgres', true);
+  update public.entry_milestones set completed_on = null where id = v_step;
+  perform set_config('role', 'authenticated', true);
+  perform set_config('request.jwt.claim.sub', v_elder::text, true);
+  v_ok := false;
+  begin
+    perform public.grade_milestone(v_step, v_author, 4, 4, 'early', null, false);
+  exception when others then v_ok := sqlerrm like '%not handed in%';
+  end;
+  perform set_config('role', 'postgres', true);
+  if not v_ok then raise exception 'FAIL an Elder scored work not handed in'; end if;
+  update public.entry_milestones set completed_on = current_date - 2 where id = v_step;
+  raise notice '  ok   a family score waits for the work to be handed in';
 
   -- The Elder on the place scores; it is an elder row, released at once.
   perform set_config('role', 'authenticated', true);
@@ -3393,6 +3485,110 @@ begin
     raise exception 'FAIL the Elder reads their own reply as an answer';
   end if;
   raise notice '  ok   the Elder reads the student''s reply on the row and not their own';
+end $body$;
+
+
+\echo ''
+\echo '── Live: a change is broadcast to the room that may read it, and the socket has a backup'
+
+do $body$
+declare
+  v_project  uuid := 'c0000000-0000-0000-0000-000000000002';   -- Course project
+  v_author   uuid := 'a0000000-0000-0000-0000-000000000008';   -- Author two
+  v_elder    uuid := 'a0000000-0000-0000-0000-000000000003';   -- attached to its class place
+  v_other    uuid := 'a0000000-0000-0000-0000-000000000006';   -- Another student, same school
+  v_doc      uuid;
+  v_topics   text[];
+  v_before   int;
+  v_after    int;
+  v_ans      jsonb;
+begin
+  perform set_config('role', 'authenticated', true);
+  perform set_config('request.jwt.claim.sub', v_author::text, true);
+  v_doc := public.open_document(v_project, 'interview_protocol', 'interview-questions', 1, array['elder_score']);
+  perform set_config('role', 'postgres', true);
+
+  -- The author and the Elder may listen on the project's room and the
+  -- document's; a classmate may not; a malformed topic is refused, not raised.
+  perform set_config('request.jwt.claim.sub', v_author::text, true);
+  if not app.may_listen('project:' || v_project::text) then raise exception 'FAIL the author cannot listen on their project'; end if;
+  if not app.may_listen('doc:' || v_doc::text) then raise exception 'FAIL the author cannot listen on their document'; end if;
+  if not app.may_listen('user:' || v_author::text) then raise exception 'FAIL the author cannot listen on their own channel'; end if;
+  if app.may_listen('user:' || v_elder::text) then raise exception 'FAIL the author listens on the Elder''s channel'; end if;
+  if app.may_listen('project:not-a-uuid') then raise exception 'FAIL a malformed topic was allowed'; end if;
+  perform set_config('request.jwt.claim.sub', v_elder::text, true);
+  if not app.may_listen('project:' || v_project::text) then raise exception 'FAIL the Elder cannot listen on the project in their care'; end if;
+  perform set_config('request.jwt.claim.sub', v_other::text, true);
+  if app.may_listen('project:' || v_project::text) then raise exception 'FAIL a classmate listens on somebody else''s project'; end if;
+  if app.may_listen('doc:' || v_doc::text) then raise exception 'FAIL a classmate listens on somebody else''s document'; end if;
+  raise notice '  ok   the room is open to exactly whoever may read the project';
+
+  -- The topics a person joins name their own channel and their projects.
+  perform set_config('request.jwt.claim.sub', v_author::text, true);
+  v_topics := public.my_live_topics();
+  if not (('user:' || v_author::text) = any (v_topics)) then raise exception 'FAIL the author''s topics lack their own channel'; end if;
+  if not (('project:' || v_project::text) = any (v_topics)) then raise exception 'FAIL the author''s topics lack their project'; end if;
+  raise notice '  ok   my_live_topics names the person and their projects';
+
+  -- Saving a field broadcasts once to the document's room, with the text.
+  select count(*) into v_before from realtime.messages where topic = 'doc:' || v_doc::text and event = 'field';
+  perform set_config('role', 'authenticated', true);
+  v_ans := public.save_field(v_doc, 'who', to_jsonb('Parents, nurses and coaches'::text),
+                             coalesce((select f.version from public.document_fields f where f.document_id = v_doc and f.field_id = 'who'), 0));
+  perform set_config('role', 'postgres', true);
+  if coalesce((v_ans->>'ok')::boolean, false) is not true then raise exception 'FAIL the save was refused: %', v_ans; end if;
+  select count(*) into v_after from realtime.messages where topic = 'doc:' || v_doc::text and event = 'field';
+  if v_after <> v_before + 1 then raise exception 'FAIL a field save sent % broadcasts, not one', v_after - v_before; end if;
+  if not exists (
+    select 1 from realtime.messages m
+     where m.topic = 'doc:' || v_doc::text and m.event = 'field' and m.private
+       and m.payload->>'field_id' = 'who'
+       and m.payload->>'value' = 'Parents, nurses and coaches'
+       and m.payload->>'by_id' = v_author::text
+  ) then
+    raise exception 'FAIL the field broadcast does not carry the field, the text and the writer';
+  end if;
+  raise notice '  ok   a field saved is broadcast to the document''s room with its text';
+
+  -- A field save does not disturb the project's room (keystrokes are not news).
+  if exists (select 1 from realtime.messages where topic = 'project:' || v_project::text and event = 'field') then
+    raise exception 'FAIL a field save was broadcast to the project';
+  end if;
+  raise notice '  ok   a field save stays in the document''s room';
+
+  -- A notice reaches its recipient's own channel and nobody else's.
+  if not exists (select 1 from realtime.messages where event = 'notice' and topic like 'user:%') then
+    raise exception 'FAIL no notice has been broadcast, though the earlier blocks sent several';
+  end if;
+  if exists (
+    select 1 from realtime.messages m where m.event = 'notice' and m.topic not like 'user:%'
+  ) then
+    raise exception 'FAIL a notice was broadcast somewhere other than a person''s channel';
+  end if;
+  raise notice '  ok   a notice is broadcast on its recipient''s channel';
+
+  -- The backup path: one incident an hour per person, and the advisor reads it.
+  perform set_config('request.jwt.claim.sub', v_author::text, true);
+  if not public.report_transport_incident('fallback', '/app/', 'CHANNEL_ERROR after 3 tries', 'test') then
+    raise exception 'FAIL the first incident was not written';
+  end if;
+  if public.report_transport_incident('fallback', '/app/', 'CHANNEL_ERROR again', 'test') then
+    raise exception 'FAIL a second incident within the hour was written';
+  end if;
+  if not public.report_transport_incident('recovered', '/app/', '', 'test') then
+    raise exception 'FAIL a recovery after a fallback was not written';
+  end if;
+  perform set_config('role', 'authenticated', true);
+  perform set_config('request.jwt.claim.sub', v_other::text, true);
+  if exists (select 1 from public.transport_incidents) then
+    raise exception 'FAIL a student reads the incident log';
+  end if;
+  perform set_config('role', 'postgres', true);
+  raise notice '  ok   a socket that failed is written once an hour and read by the advisor only';
+
+  delete from public.transport_incidents;
+  delete from public.document_fields where document_id = v_doc;
+  delete from public.documents where id = v_doc;
 end $body$;
 
 \echo ''

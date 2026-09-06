@@ -49,6 +49,7 @@
  * to a check the editor makes itself.
  */
 import { renderNote } from '../lib/notes';
+import MarkdownBar from './MarkdownBar.astro';
 
 interface Props {
   /** The form field name. */
@@ -58,45 +59,27 @@ interface Props {
   rows?: number;
   required?: boolean;
   id?: string;
+  /**
+   * `shared`: this editor is one of a group under one bar drawn by the
+   * page (`.mdx-bar[data-shared-bar]` on an ancestor), so its own bar and
+   * help line stay hidden and the group's bar drives whichever editor
+   * was last in. The buttons are still here, because the page's bar
+   * clicks them.
+   */
+  shared?: boolean;
+  /** Extra attributes for the textarea (a page's own data-* hooks). */
+  data?: Record<string, string | number>;
 }
 
-const { name, value = '', rows = 7, required = false, id } = Astro.props;
+const { name, value = '', rows = 7, required = false, id, shared = false, data = {} } = Astro.props;
+const dataAttrs = Object.fromEntries(Object.entries(data).map(([k, v]) => [`data-${k}`, String(v)]));
 const fieldId = id ?? `md-${name}`;
 const seeded = value.trim() ? renderNote(value) : '';
 
-/* One entry per button, in the order they sit on the bar. The tooltip is
-   assembled in the browser, because only the browser knows whether the
-   person is on a Mac. */
-const TOOLS = [
-  { cmd: 'bold', label: 'B', title: 'Bold', keys: 'B', cls: 'b' },
-  { cmd: 'italic', label: 'I', title: 'Italic', keys: 'I', cls: 'i' },
-  { cmd: 'strike', label: 'S', title: 'Strikethrough', keys: '⇧X', cls: 's' },
-  { cmd: 'h1', label: 'H1', title: 'Heading 1', keys: '⌥1' },
-  { cmd: 'h2', label: 'H2', title: 'Heading 2', keys: '⌥2' },
-  { cmd: 'h3', label: 'H3', title: 'Heading 3', keys: '⌥3' },
-  { cmd: 'ul', label: '• List', title: 'Bulleted list', keys: '⇧8' },
-  { cmd: 'ol', label: '1. List', title: 'Numbered list', keys: '⇧7' },
-  { cmd: 'quote', label: '“ Quote', title: 'Quote', keys: null },
-  { cmd: 'code', label: '</>', title: 'Code', keys: null },
-  { cmd: 'link', label: 'Link', title: 'Link', keys: 'K' },
-];
 ---
 
-<div class="mdx" data-md-editor data-required={required ? '1' : '0'}>
-  <div class="mdx-bar" role="toolbar" aria-label="Formatting" aria-controls={fieldId}>
-    {TOOLS.map((t) => (
-      <button
-        type="button"
-        class:list={['mdx-btn', t.cls && `mdx-${t.cls}`]}
-        data-cmd={t.cmd}
-        data-keys={t.keys}
-        data-title={t.title}
-        title={t.title}
-        aria-label={t.title}
-        aria-pressed="false"
-      >{t.label}</button>
-    ))}
-  </div>
+<div class:list={['mdx', shared && 'mdx-shared']} data-md-editor data-required={required ? '1' : '0'}>
+  <MarkdownBar controls={fieldId} />
   <div class="mdx-linkbar" hidden>
     <label>
       <span>Address</span>
@@ -115,14 +98,9 @@ const TOOLS = [
     hidden
     set:html={seeded}
   />
-  <textarea id={fieldId} name={name} rows={rows} required={required}>{value}</textarea>
+  <textarea id={fieldId} name={name} rows={rows} required={required} {...dataAttrs}>{value}</textarea>
   <p class="mdx-empty" role="alert" hidden>Write what happened before recording it.</p>
-  <small class="mdx-help">
-    The same shortcuts as Google Docs: <kbd data-mod>Ctrl</kbd>+<kbd>B</kbd> bold,
-    <kbd data-mod>Ctrl</kbd>+<kbd>I</kbd> italic, <kbd data-mod>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>1</kbd> heading,
-    <kbd data-mod>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>8</kbd> list, <kbd data-mod>Ctrl</kbd>+<kbd>K</kbd> link.
-    Headings, lists, links and code are the whole vocabulary; a notebook has no fonts and no colors.
-  </small>
+  <small class="mdx-help">Use formatting buttons above. Same shortcuts as Google Docs</small>
 </div>
 
 <script>
@@ -171,6 +149,12 @@ const TOOLS = [
       const href = el.getAttribute('href') ?? '';
       const text = kids();
       return /^https?:\/\//i.test(href) ? `[${text || href}](${href})` : text;
+    }
+    /* A pasted image, already uploaded and pointed at by its address on
+       this site (the document page does the upload): Markdown's image. */
+    if (tag === 'IMG') {
+      const src = el.getAttribute('src') ?? '';
+      return /^(\/app\/media\/|https?:\/\/)/i.test(src) ? `![${(el.getAttribute('alt') ?? '').replace(/[\[\]]/g, '')}](${src})` : '';
     }
     /* Docs pastes weight and slant as styles on spans. */
     if (tag === 'SPAN' || tag === 'FONT') {
@@ -406,8 +390,12 @@ const TOOLS = [
         sel?.removeAllRanges();
         sel?.addRange(r);
       }
+      const was = ta.value;
       ta.value = toMarkdown(edit);
       if (ta.value) empty.hidden = true;
+      /* Whoever listens to the textarea (a page that saves as it goes)
+         hears the surface through it. */
+      if (ta.value !== was) ta.dispatchEvent(new Event('input', { bubbles: true }));
     };
 
     /* ── The bar ── */
@@ -426,6 +414,34 @@ const TOOLS = [
       for (const k of root.querySelectorAll<HTMLElement>('kbd')) {
         if (k.textContent === 'Alt') k.textContent = ALT;
         if (k.textContent === 'Shift') k.textContent = SHIFT;
+      }
+    }
+
+    /* ── One bar over several editors ── */
+    /* The page draws one bar (`MarkdownBar shared`) inside a
+       `[data-shared-scope]` holding several editors. A click on it goes
+       to the same button on whichever editor was last in; with none yet,
+       the first. The pressed states follow the same editor. */
+    const scope = root.closest<HTMLElement>('[data-shared-scope]');
+    const sharedBar = scope?.querySelector<HTMLElement>('[data-shared-bar]') ?? null;
+    const activeIn = (): HTMLElement | null => (scope as any)?.__mdxActive ?? scope?.querySelector<HTMLElement>('[data-md-editor]') ?? null;
+    if (scope && sharedBar) {
+      edit.addEventListener('focusin', () => { (scope as any).__mdxActive = root; });
+      if (!(sharedBar as any).__wired) {
+        (sharedBar as any).__wired = true;
+        for (const b of sharedBar.querySelectorAll<HTMLButtonElement>('button[data-cmd]')) {
+          const keys = b.dataset.keys && b.dataset.keys !== 'null' ? b.dataset.keys : null;
+          const shortcut = label(keys);
+          b.title = shortcut ? `${b.dataset.title} (${shortcut})` : (b.dataset.title ?? '');
+          b.addEventListener('mousedown', (e) => e.preventDefault());
+          b.addEventListener('click', () => {
+            const act = activeIn();
+            if (!act) return;
+            const surface = act.querySelector<HTMLElement>('.mdx-edit');
+            if (surface && !surface.contains(document.activeElement)) surface.focus();
+            act.querySelector<HTMLButtonElement>(`button[data-cmd="${b.dataset.cmd}"]`)?.click();
+          });
+        }
       }
     }
 
@@ -453,6 +469,9 @@ const TOOLS = [
           case 'ol': on = inList('insertOrderedList'); break;
         }
         btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+      }
+      if (sharedBar && activeIn() === root) {
+        for (const btn of buttons) sharedBar.querySelector(`button[data-cmd="${btn.dataset.cmd}"]`)?.setAttribute('aria-pressed', btn.getAttribute('aria-pressed') ?? 'false');
       }
     };
     document.addEventListener('selectionchange', reflect);
@@ -641,6 +660,15 @@ const TOOLS = [
 
     /* Fonts, colours and everything else a paste carries stop here. */
     edit.addEventListener('paste', (ev) => {
+      /* An image on the clipboard is the page's business (an upload),
+         not this editor's: it is announced and left alone. */
+      const image = [...(ev.clipboardData?.items ?? [])].find((i) => i.kind === 'file' && i.type.startsWith('image/'));
+      if (image) {
+        ev.preventDefault();
+        const file = image.getAsFile();
+        if (file) root.dispatchEvent(new CustomEvent('mdx:image', { bubbles: true, detail: { file, insert: (html: string) => { edit.focus(); exec('insertHTML', html); sync(); } } }));
+        return;
+      }
       const html = ev.clipboardData?.getData('text/html');
       const text = ev.clipboardData?.getData('text/plain') ?? '';
       ev.preventDefault();
@@ -648,6 +676,25 @@ const TOOLS = [
         const doc = new DOMParser().parseFromString(html, 'text/html');
         const box = document.createElement('div');
         clean(doc.body, box);
+        /* A list pasted while the caret sits in a list item would nest
+           inside it ("3." holding "1., 2."). It goes after the list the
+           caret is in instead, and an empty item it was pasted into goes. */
+        if (box.querySelector('ol, ul')) {
+          const sel = window.getSelection();
+          const at = sel?.rangeCount ? sel.getRangeAt(0).startContainer : null;
+          const li = at instanceof Element ? at.closest('li') : at?.parentElement?.closest('li');
+          const list = li?.closest('ol, ul');
+          if (li && list && edit.contains(list)) {
+            let outer: Element = list;
+            while (outer.parentElement && outer.parentElement !== edit && outer.parentElement.closest('ol, ul')) outer = outer.parentElement.closest('ol, ul')!;
+            if (!li.textContent?.trim() && !li.querySelector('img')) li.remove();
+            if (!list.querySelector('li')) list.remove();
+            const range = document.createRange();
+            if (outer.isConnected) range.setStartAfter(outer); else range.setStart(edit, edit.childNodes.length);
+            range.collapse(true);
+            sel?.removeAllRanges(); sel?.addRange(range);
+          }
+        }
         exec('insertHTML', box.innerHTML);
       } else {
         exec('insertText', text);
@@ -675,42 +722,7 @@ const TOOLS = [
 
 <style>
   .mdx { display: block; }
-  .mdx-bar {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 2px;
-    padding: 4px;
-    border: 1px solid var(--rule);
-    border-bottom: 0;
-    background: var(--paper);
-  }
-  .mdx-btn {
-    min-width: 2.2em;
-    padding: 4px 8px;
-    border: 1px solid transparent;
-    background: transparent;
-    color: var(--ink);
-    font-family: var(--face-ui);
-    font-size: 0.86rem;
-    line-height: 1.4;
-    cursor: pointer;
-    border-radius: 2px;
-  }
-  .mdx-btn:hover,
-  .mdx-btn:focus-visible {
-    border-color: var(--rule);
-    background: var(--card);
-  }
-  /* Pressed reads as a key held down: the ink and the paper swap. */
-  .mdx-btn[aria-pressed='true'] {
-    background: var(--ink);
-    border-color: var(--ink);
-    color: var(--card);
-  }
-  .mdx-b { font-weight: 700; }
-  .mdx-i { font-style: italic; }
-  .mdx-s { text-decoration: line-through; }
-
+  .mdx-shared > :global(.mdx-bar), .mdx-shared > .mdx-help { display: none; }
   .mdx-linkbar {
     display: flex;
     gap: 8px;
@@ -748,6 +760,9 @@ const TOOLS = [
   .mdx-edit { overflow-wrap: anywhere; }
   .mdx-edit:focus { outline: 2px solid var(--accent, var(--ink)); outline-offset: -1px; }
   .mdx-edit[hidden] { display: none; }
+  /* `display: flex` above beat the `hidden` attribute, so the address bar
+     showed from the start on every editor. */
+  .mdx-linkbar[hidden] { display: none; }
   /* The textarea is the form's field and the no-script fallback. Once the
      editor has taken over it is `hidden`, and the rule above that gives it
      `display: block` would otherwise win over the attribute and leave a

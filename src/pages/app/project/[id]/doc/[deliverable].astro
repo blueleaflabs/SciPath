@@ -23,6 +23,9 @@ export const prerender = false;
 import Base from '../../../../../layouts/Base.astro';
 import AppShell from '../../../../../components/AppShell.astro';
 import ProjectCover from '../../../../../components/ProjectCover.astro';
+import MarkdownEditor from '../../../../../components/MarkdownEditor.astro';
+import MarkdownBar from '../../../../../components/MarkdownBar.astro';
+import { programSlug, safePart } from '../../../../../lib/export-names';
 import { activeOrg } from '../../../../../lib/tenant';
 import { serverClient } from '../../../../../lib/supabase';
 import { standing, isAuthorOf } from '../../../../../lib/roles';
@@ -33,7 +36,6 @@ import { signInWith } from '../../../../../lib/next-path';
 import { shape as shapeOf, staffFieldsOf } from '../../../../../lib/templates';
 import { renderMarkdown } from '../../../../../lib/notes';
 import { staffWord } from '../../../../../lib/program-names';
-import { drivePreviewUrl, driveKind } from '../../../../../lib/gdrive';
 import { placesWanting, sectionsOf, progressOf, wordCount, textOf, isFilled, stateLabel, type DocState } from '../../../../../lib/documents';
 
 const { session, account, roles } = Astro.locals;
@@ -62,14 +64,20 @@ const isElderHere = elders.some((e: any) => e.users?.id === account.id);
 const mayComment = iAuthor || isElderHere || me.isAdvisor;
 /* Whose field: the author's, or the Elder's part of the handout, which an
    Elder on the project or the advisor writes and the author never does. */
-const canWrite = (f: { owner?: string }) => (f.owner === 'staff' ? isElderHere || me.isAdvisor : iAuthor);
+const canWrite = (f: { owner?: string }) => (f.owner === 'staff' ? isElderHere || me.isAdvisor : iAuthor && !gated);
 
 /* The places that want this deliverable, the class first. The shape and
    the name come from the first; a document has one shape whichever
    program reads it. */
 const places = await placesWanting(supabase, projectId, deliverableId, project.facts ?? {}, project.process_id ?? null);
-const wanted = places[0] ?? null;
+/* The step this page submits for: the first still open, so a document two
+   steps want (the journey map's draft and final) submits for the draft,
+   then for the final (2.8); with every step met, the last. */
+const wanted = places.find((p) => !p.completedOn) ?? places[places.length - 1] ?? null;
 const shape = wanted?.deliverable.shape ? shapeOf(wanted.deliverable.shape) : null;
+/* The gate (2.8): the step this page submits for still waits on another.
+   The page shows the reason; nothing is opened, written or submitted. */
+const gated = Boolean(wanted && !wanted.completedOn && wanted.waitsOn.length > 0);
 const label = wanted?.deliverable.name ?? deliverableId;
 
 let { error, note } = outcomeFrom(Astro.url);
@@ -80,7 +88,7 @@ let docRow: any = null;
 const loadDoc = async () => {
   const { data } = await supabase
     .from('documents')
-    .select('id, status, version_no, submitted_at, submitted_by, updated_at, shape_id, shape_version, opened_by')
+    .select('id, status, version_no, opened_at, submitted_at, submitted_by, updated_at, shape_id, shape_version, opened_by')
     .eq('project_id', projectId)
     .eq('deliverable', deliverableId)
     .maybeSingle();
@@ -92,7 +100,9 @@ await loadDoc();
    write a GET makes: a document exists from the moment somebody looks at
    it, which is what lets the teacher tell "not started" from "opened and
    blank". */
-if (!docRow && iAuthor && shape && wanted && Astro.request.method === 'GET') {
+/* The gate (2.8): every open step wanting this document still waits on
+   another. The page shows the reason and nothing is opened or written. */
+if (!docRow && iAuthor && shape && wanted && !gated && Astro.request.method === 'GET') {
   const { data: opened, error: e } = await supabase.rpc('open_document', {
     p_project_id: projectId,
     p_deliverable: deliverableId,
@@ -113,7 +123,7 @@ if (Astro.request.method === 'POST') {
        against the version the page rendered with. A conflict on one field
        is reported and the rest still save. */
     const conflicts: string[] = [];
-    const fieldsToSave: any[] = [...sectionsOf(shape).flatMap((s) => s.fields), { id: '_doc_link', kind: 'link', prompt: 'Google Doc' }];
+    const fieldsToSave: any[] = sectionsOf(shape).flatMap((s) => s.fields);
     for (const f of fieldsToSave) {
       if (f.kind === 'note' || !canWrite(f)) continue;
       if (!form.has(`f:${f.id}`) && f.kind !== 'choices' && f.kind !== 'table' && f.kind !== 'rubric') continue;
@@ -192,6 +202,25 @@ for (const r of fieldRows ?? []) {
   editedBy[r.field_id] = { name: (r as any).by?.display_name ?? '', at: r.updated_at };
 }
 
+/* The history (2.8): every submitted version, with which fields changed
+   from the one before, and whether the current text differs from the
+   latest submission. Each submission already kept a snapshot
+   (`document_versions`); this reads them, nothing new is written. */
+const { data: versionRows } = docRow && docRow.version_no > 0
+  ? await supabase.from('document_versions').select('version_no, content, submitted_at, by:submitted_by(display_name)').eq('document_id', docRow.id).order('version_no', { ascending: true })
+  : { data: [] as any[] };
+const promptOf = (fieldId: string) => (shape ? sectionsOf(shape).flatMap((sec) => sec.fields).find((f) => f.id === fieldId)?.prompt : null) ?? fieldId;
+const changedBetween = (before: Record<string, any>, after: Record<string, any>) =>
+  [...new Set([...Object.keys(before ?? {}), ...Object.keys(after ?? {})])].filter((k) => !k.startsWith('_') && JSON.stringify(before?.[k] ?? null) !== JSON.stringify(after?.[k] ?? null));
+const history = (versionRows ?? []).map((v: any, i: number) => ({
+  no: v.version_no,
+  at: v.submitted_at,
+  by: v.by?.display_name ?? '',
+  changed: i === 0 ? [] : changedBetween((versionRows ?? [])[i - 1].content ?? {}, v.content ?? {}).map(promptOf),
+}));
+const latest = (versionRows ?? [])[(versionRows ?? []).length - 1] ?? null;
+const changedSinceLatest = latest ? changedBetween(latest.content ?? {}, values).map(promptOf) : [];
+
 const { data: comments } = docRow
   ? await supabase
       .from('deliverable_feedback')
@@ -224,14 +253,16 @@ const days = wanted?.dueOn ? daysUntil(wanted.dueOn, today) : null;
 const dueWord =
   days === null ? '' : days < 0 ? `${Math.abs(days)} ${Math.abs(days) === 1 ? 'day' : 'days'} late` : days === 0 ? 'due today' : `${days} ${days === 1 ? 'day' : 'days'} left`;
 
-/* A document written in a Google Doc and linked here: the link stands in
-   for the fields, so Submit is open and the ledger gets the address. The
-   fields stay available, and feedback by field needs them. */
-const docLink: string = typeof values['_doc_link'] === 'string' ? values['_doc_link'] : '';
-const canSubmit = iAuthor && docRow && wanted && (progress.missing.length === 0 || docLink.length > 0);
+/* Submit waits on every required field. The Google Doc slot that once
+   stood in for them left in the pilot's friction pass (2.8): the class
+   writes here. */
+const canSubmit = iAuthor && docRow && wanted && !gated && progress.missing.length === 0;
 const rubric = wanted?.step?.rubric ?? null;
 const submitLabel = docRow?.version_no > 0 ? 'Submit again' : 'Submit';
 const elderWord = wanted ? staffWord(wanted.program as any) : 'Elder';
+/* What a file made here is called: program, who, which deliverable; the
+   browser adds the date and time when it makes one. */
+const exportBase = `${programSlug(wanted?.program as any)}-${safePart(account.display_name ?? '')}-${safePart(label)}`;
 const sections = shape ? sectionsOf(shape) : [];
 const changedSince = (c: any) => c.field_id && c.field_version != null && (versions[c.field_id] ?? 0) > c.field_version;
 ---
@@ -243,14 +274,13 @@ const changedSince = (c: any) => c.field_id && c.field_version != null && (versi
     <ProjectCover
       kick={project.title}
       title={label}
+      nav={{ projectId: project.id, programId: wanted?.programId ?? null, showcase: Boolean((wanted?.program as any)?.showcase && (wanted?.program as any).showcase !== 'none'), here: 'document' }}
       people={[
         { label: authors.length === 1 ? 'Author' : 'Authors', value: authors.map((a: any) => a.users?.display_name).join(', ') || 'None yet' },
         ...(elders.length > 0 ? [{ label: elders.length === 1 ? elderWord : staffWord(wanted?.program as any, 'plural'), value: elders.map((e: any) => e.users?.display_name).join(', ') }] : []),
       ]}
     >
-      {wanted && <a class="btn btn-sm ghost" href={`/app/project/${project.id}/in/${wanted.programId}/#m-${wanted.milestoneId ?? ''}`}>Back to the calendar</a>}
-      <a class="btn btn-sm ghost" href={`/app/project/${project.id}/`}>Project Notebook</a>
-      <a class="btn btn-sm ghost noprint" href={`/app/project/${project.id}/doc/${deliverableId}/print/?go=1`} target="_blank" rel="noopener noreferrer">Save as PDF</a>
+      <a class="btn btn-sm accent noprint" href={`/app/project/${project.id}/doc/${deliverableId}/print/?go=1`} target="_blank" rel="noopener noreferrer">Save as PDF</a>
     </ProjectCover>
 
     <div id="outcome" tabindex="-1">
@@ -262,72 +292,38 @@ const changedSince = (c: any) => c.field_id && c.field_version != null && (versi
       <div class="allclear"><b>Nothing to write here</b>This deliverable is not written in SciPath, or this project is not in a program that asks for it.</div>
     ) : (
       <>
+        {gated && (
+          <div class="note flash gate" role="status">
+            <b>Not yet.</b> This step waits on {wanted!.waitsOn.join(', ')}. It opens when {wanted!.waitsOn.length === 1 ? 'that is' : 'those are'} done.
+          </div>
+        )}
         {/* The strip: where it stands, in one line, and the verb. */}
         <div class:list={['docstrip', state]} id="docstrip">
           <div class="ds-state">
             <span class:list={['pill', state === 'submitted' ? 'ok' : state === 'revising' || openAsks.length ? 'late' : days !== null && days < 0 ? 'late' : 'soon']}>{stateLabel(state)}</span>
+            {docRow?.opened_at && <span class="ds-v">started {when(docRow.opened_at)}</span>}
             {docRow?.version_no > 0 && <span class="ds-v">version {docRow.version_no} · submitted {when(docRow.submitted_at)}</span>}
           </div>
           <div class="ds-facts">
-            <span><b>{progress.filled}</b> of {progress.asked} answered</span>
+            <span><b id="ds-filled">{progress.filled}</b> of {progress.asked} required answered</span>
             {wanted.dueOn && <span class:list={[days !== null && days < 0 && !docRow?.submitted_at && 'late']}>due {fmt(wanted.dueOn)}{dueWord ? ` · ${dueWord}` : ''}</span>}
             {openAsks.length > 0 && <span class="late"><b>{openAsks.length}</b> {openAsks.length === 1 ? 'revision asked' : 'revisions asked'}</span>}
             <span class="ds-saved" id="ds-saved" aria-live="polite">{docRow?.updated_at ? `last saved ${when(docRow.updated_at)}` : ''}</span>
+            {/* Who else has this document open, from the room (2.8). */}
+            <span class="ds-room" id="ds-room" aria-live="polite"></span>
           </div>
           {iAuthor && (
             <form method="POST" action="#outcome" class="ds-submit">
               <input type="hidden" name="action" value="submit" />
               <input type="hidden" name="participation_id" value={wanted.participationId} />
               <input type="hidden" name="milestone_id" value={wanted.milestoneId ?? ''} />
-              <button class="btn accent" type="submit" disabled={!canSubmit} title={progress.missing.length ? `Still needed: ${progress.missing.map((f) => f.prompt).join('; ')}` : ''}>{submitLabel}</button>
+              <button class="btn accent" type="submit" id="ds-submit" disabled={!canSubmit} title={progress.missing.length ? `Still needed: ${progress.missing.map((f) => f.prompt).join('; ')}` : ''}>{submitLabel}</button>
             </form>
           )}
         </div>
 
-        {!iAuthor && (
-          <p class="note watching noprint">
-            {mayComment
-              ? 'You are reading this as it is written. Comment on any field; the author is told. Ask for a revision where one is needed.'
-              : 'You are reading this as it is written.'}
-          </p>
-        )}
-
-        <form method="POST" action="#outcome" id="docform" class="docform" data-doc={docRow?.id ?? ''} data-author={iAuthor ? '1' : '0'} data-project={project.id}>
+        <form method="POST" action="#outcome" id="docform" class="docform" data-doc={docRow?.id ?? ''} data-author={iAuthor ? '1' : '0'} data-project={project.id} data-me={account.display_name ?? ''}>
           <input type="hidden" name="action" value="save" />
-
-          {/* Wrote it somewhere else? The address stands in for the fields
-              and goes onto the deliverable row on Submit; the class's own
-              Google Doc template is one click away where the step has one. */}
-          <div class="field k-link doclink" data-field="_doc_link" data-version={versions['_doc_link'] ?? 0} data-kind="link" data-writable={iAuthor ? '1' : '0'} id="f-_doc_link">
-            <p class="fprompt">Wrote it in a Google Doc instead?</p>
-            <p class="ftip">Enter URL; make sure sharing is set correctly.</p>
-            {iAuthor ? (
-              <div class="fin">
-                <input type="hidden" name="v:_doc_link" value={versions['_doc_link'] ?? 0} class="fver" />
-                <div class="doclink-row">
-                  <label class="fwrap"><span class="sr">Google Doc address</span><input id="in-_doc_link" name="f:_doc_link" class="in" type="url" value={docLink} /></label>
-                  {wanted.deliverable.template_url && (
-                    <a class="btn btn-sm ghost" href={wanted.deliverable.template_url} target="_blank" rel="noopener noreferrer">Start from the class template</a>
-                  )}
-                </div>
-                <div class="fmeta noprint"><span class="fstate" aria-live="polite"></span></div>
-              </div>
-            ) : docLink ? (
-              <p><a href={docLink} target="_blank" rel="noopener noreferrer">{docLink}</a></p>
-            ) : (
-              <p class="fempty">No linked document</p>
-            )}
-            {/* Google's own read-only preview of the linked document, on the
-                page, for whoever Google lets read it. The browser asks
-                Google; we never fetch it (7.4). */}
-            {docLink && drivePreviewUrl(docLink) && (
-              <details class="dpreview noprint" open={!iAuthor}>
-                <summary class="linkish">Show the {driveKind(docLink)} here</summary>
-                <iframe src={drivePreviewUrl(docLink)!} title={`${driveKind(docLink)}: ${label}`} loading="lazy" referrerpolicy="no-referrer" sandbox="allow-scripts allow-same-origin allow-popups allow-forms"></iframe>
-                <p class="t-sm">If Google says you need access, the author has to share it with you. <a href={docLink} target="_blank" rel="noopener noreferrer">Open it in Google</a>.</p>
-              </details>
-            )}
-          </div>
 
           {sections.map((section, si) => (
             <section class="sec doc-sec" id={`s-${section.id}`}>
@@ -340,9 +336,9 @@ const changedSince = (c: any) => c.field_id && c.field_version != null && (versi
                 const thread = threadOn(f.id);
                 const words = f.kind === 'long' || f.kind === 'text' ? wordCount(textOf(f, v)) : null;
                 return (
-                  <div class:list={['field', `k-${f.kind}`, openAskOn(f.id) && 'has-ask', f.owner === 'staff' && 'is-staff']} id={`f-${f.id}`} data-field={f.id} data-version={ver} data-kind={f.kind} data-writable={canWrite(f) ? '1' : '0'}>
+                  <div class:list={['field', `k-${f.kind}`, openAskOn(f.id) && 'has-ask', f.owner === 'staff' && 'is-staff', f.extra && 'is-extra']} id={`f-${f.id}`} data-field={f.id} data-version={ver} data-kind={f.kind} data-writable={canWrite(f) ? '1' : '0'} data-asked={f.kind !== 'note' && (f.owner ?? 'student') === 'student' ? '1' : '0'} data-required={f.required ? '1' : '0'} hidden={f.extra && !isFilled(f, v) && threadOn(f.id).length === 0}>
                     {f.kind === 'note' ? (
-                      <div class="fnote" set:html={renderMarkdown(f.text ?? '')} />
+                      <div class="fnote" set:html={renderMarkdown(f.text ?? '').replace(/<a href="http/g, '<a target="_blank" rel="noopener noreferrer" href="http')} />
                     ) : (
                       <>
                         <p class="fprompt">
@@ -353,26 +349,37 @@ const changedSince = (c: any) => c.field_id && c.field_version != null && (versi
                             <span class="flimit">{f.min_words ? `at least ${f.min_words}` : ''}{f.min_words && f.max_words ? ', ' : ''}{f.max_words ? `up to ${f.max_words}` : ''} words</span>
                           )}
                         </p>
-                        {f.tip && <p class="ftip">{f.tip}</p>}
+                        {f.tip && <p class="ftip" set:html={renderMarkdown(f.tip).replace(/^<p>|<\/p>\s*$/g, '').replace(/<a href="http/g, '<a target="_blank" rel="noopener noreferrer" href="http')} />}
 
                         {canWrite(f) ? (
                           <div class="fin">
                             <input type="hidden" name={`v:${f.id}`} value={ver} class="fver" />
                             {f.kind === 'table' && (
-                              <div class="ftable-wrap">
-                                <table class="ftable" id={`in-${f.id}`}>
-                                  <thead><tr><th></th>{(f.columns ?? []).map((c) => <th scope="col">{c}</th>)}</tr></thead>
-                                  <tbody>
-                                    {(f.rows ?? []).map((r, ri) => (
-                                      <tr>
-                                        <th scope="row">{r}</th>
-                                        {(f.columns ?? []).map((c, ci) => (
-                                          <td><label class="fwrap"><span class="sr">{r}, {c}</span><textarea class="ta fcell" name={`f:${f.id}:${ri}:${ci}`} rows="3">{Array.isArray(v) && Array.isArray(v[ri]) ? (v[ri][ci] ?? '') : ''}</textarea></label></td>
-                                        ))}
-                                      </tr>
-                                    ))}
-                                  </tbody>
-                                </table>
+                              /* One card per column (a source), the rows as wide fields
+                                 down it (2.8). Five narrow columns of boxes were a grid
+                                 nobody could write in. The first card is open; the rest
+                                 wait behind "Add a source", except any that already
+                                 have something in them. The stored shape is unchanged:
+                                 rows by columns. */
+                              <div class="fcards" id={`in-${f.id}`} data-rows={(f.rows ?? []).length} data-cols={(f.columns ?? []).length}>
+                                {(f.columns ?? []).map((c, ci) => {
+                                  const filled = (f.rows ?? []).some((_, ri) => Array.isArray(v) && Array.isArray(v[ri]) && String(v[ri][ci] ?? '').trim());
+                                  const later = ci > 0 && !filled && !(f.rows ?? []).some((_, ri) => Array.isArray(v) && Array.isArray(v[ri]) && String(v[ri][ci - 1] ?? '').trim());
+                                  return (
+                                    <div class="fcard" data-col={ci} hidden={later} data-shared-scope>
+                                      <p class="fcard-h">{c}</p>
+                                      {/* One bar for the card's boxes: it works on whichever box the caret is in. */}
+                                      <MarkdownBar shared />
+                                      {(f.rows ?? []).map((r, ri) => (
+                                        <div class="fcard-row">
+                                          <span id={`in-${f.id}-${ri}-${ci}-label`}>{r}</span>
+                                          <MarkdownEditor id={`in-${f.id}-${ri}-${ci}`} name={`f:${f.id}:${ri}:${ci}`} value={Array.isArray(v) && Array.isArray(v[ri]) ? String(v[ri][ci] ?? '') : ''} rows={2} shared data={{ r: ri, c: ci }} />
+                                        </div>
+                                      ))}
+                                    </div>
+                                  );
+                                })}
+                                {(f.columns ?? []).length > 1 && <button class="btn btn-sm btn-2 fcard-add" type="button">Add a source</button>}
                               </div>
                             )}
                             {f.kind === 'rubric' && (
@@ -408,10 +415,13 @@ const changedSince = (c: any) => c.field_id && c.field_version != null && (versi
                               )
                             )}
                             {f.kind === 'long' && (
-                              <textarea id={`in-${f.id}`} name={`f:${f.id}`} class="ta fta" rows="6" data-paste="image" aria-label={f.prompt}>{textOf(f, v)}</textarea>
+                              /* The notebook's editor (2.8): bold, headings, lists and links
+                                 the way Docs does them, Markdown underneath. The textarea it
+                                 writes is the field the autosave reads. */
+                              <MarkdownEditor id={`in-${f.id}`} name={`f:${f.id}`} value={textOf(f, v)} rows={6} />
                             )}
                             {f.kind === 'text' && <label class="fwrap"><span class="sr">{f.prompt}</span><input id={`in-${f.id}`} name={`f:${f.id}`} class="in" value={textOf(f, v)} /></label>}
-                            {f.kind === 'number' && <label class="fwrap"><span class="sr">{f.prompt}</span><input id={`in-${f.id}`} name={`f:${f.id}`} class="in fnum" type="number" value={v ?? ''} /></label>}
+                            {f.kind === 'number' && <label class="fwrap"><span class="sr">{f.prompt}</span><input id={`in-${f.id}`} name={`f:${f.id}`} class="in fnum" type="number" value={v ?? ''} min={f.min} max={f.max} step={f.step ?? 'any'} /></label>}
                             {f.kind === 'date' && <label class="fwrap"><span class="sr">{f.prompt}</span><input id={`in-${f.id}`} name={`f:${f.id}`} class="in" type="date" value={v ?? ''} /></label>}
                             {f.kind === 'link' && <label class="fwrap"><span class="sr">{f.prompt}</span><input id={`in-${f.id}`} name={`f:${f.id}`} class="in" type="url" value={v ?? ''} /></label>}
                             {f.kind === 'choice' && (
@@ -440,8 +450,26 @@ const changedSince = (c: any) => c.field_id && c.field_version != null && (versi
                                 <span class="t-sm">Uploads as soon as you choose it.</span>
                               </div>
                             )}
+                            {/* The downloads are off until there is a picture: the one
+                                saved on the document, or the one just drawn. The note
+                                under the buttons says when the boxes have changed since
+                                the picture was drawn (`drawn_from`, a hash of the
+                                sources, kept with the picture). */}
+                            {f.kind === 'graphic' && (
+                              <div class="fgraphic" id={`in-${f.id}`} data-graphic={f.graphic} data-sources={(f.sources ?? []).join(' ')} data-authors={authors.map((a: any) => a.users.display_name).join(', ')} data-name={exportBase} data-tz={org.timezone} data-drawn-from={v?.drawn_from ?? ''} data-path={v?.path ?? ''}>
+                                <p class="fgraphic-act noprint">
+                                  <button class="btn btn-sm fgen" type="button">Generate</button>
+                                  <a class="btn btn-sm btn-2 fgraphic-dl is-off" aria-disabled="true">Download PNG</a>
+                                </p>
+                                <p class="t-sm fgraphic-note noprint">Drawn from the boxes above. Generate again after any changes.</p>
+                                <canvas class="fcanvas" hidden></canvas>
+                                {v?.path ? (
+                                  <p class="fhave"><img src={`/app/media/${v.path}`} alt={v.name ?? ''} /></p>
+                                ) : <p class="fempty fgraphic-none">Not generated yet</p>}
+                              </div>
+                            )}
                             <div class="fmeta noprint">
-                              {words !== null && <span class:list={['fwords', f.max_words != null && words > f.max_words && 'over']} data-max={f.max_words ?? ''} data-min={f.min_words ?? ''}>{words} {words === 1 ? 'word' : 'words'}</span>}
+                              {words !== null && (f.min_words != null || f.max_words != null) && <span class:list={['fwords', f.max_words != null && words > f.max_words && 'over']} data-max={f.max_words ?? ''} data-min={f.min_words ?? ''}>{words} {words === 1 ? 'word' : 'words'}</span>}
                               <span class="fstate" aria-live="polite"></span>
                               {editedBy[f.id]?.name && authors.length > 1 && <span class="fby">last by {editedBy[f.id].name}</span>}
                             </div>
@@ -450,15 +478,19 @@ const changedSince = (c: any) => c.field_id && c.field_version != null && (versi
                           <div class="fread">
                             {f.kind === 'table' ? (
                               Array.isArray(v) && v.some((row: any) => Array.isArray(row) && row.some((cell: any) => String(cell ?? '').trim())) ? (
-                                <div class="ftable-wrap">
-                                  <table class="ftable read">
-                                    <thead><tr><th></th>{(f.columns ?? []).map((c) => <th scope="col">{c}</th>)}</tr></thead>
-                                    <tbody>
-                                      {(f.rows ?? []).map((r, ri) => (
-                                        <tr><th scope="row">{r}</th>{(f.columns ?? []).map((_, ci) => <td>{Array.isArray(v[ri]) ? (v[ri][ci] ?? '') : ''}</td>)}</tr>
-                                      ))}
-                                    </tbody>
-                                  </table>
+                                <div class="fcards read">
+                                  {(f.columns ?? []).map((c, ci) => {
+                                    const filled = (f.rows ?? []).some((_, ri) => Array.isArray(v[ri]) && String(v[ri][ci] ?? '').trim());
+                                    if (!filled) return null;
+                                    return (
+                                      <div class="fcard">
+                                        <p class="fcard-h">{c}</p>
+                                        {(f.rows ?? []).map((r, ri) => (
+                                          <div class="fcard-line"><b>{r}</b><div class="fprose" set:html={renderMarkdown(Array.isArray(v[ri]) ? String(v[ri][ci] ?? '') : '')} /></div>
+                                        ))}
+                                      </div>
+                                    );
+                                  })}
                                 </div>
                               ) : <p class="fempty">Not filled in</p>
                             ) : f.kind === 'rubric' ? (
@@ -472,8 +504,10 @@ const changedSince = (c: any) => c.field_id && c.field_version != null && (versi
                               ) : <p class="fempty">Not evaluated yet</p>
                             ) : f.kind === 'long' ? (
                               isFilled(f, v) ? <div class="fprose" set:html={renderMarkdown(String(v))} /> : <p class="fempty">Not written yet</p>
-                            ) : f.kind === 'file' && v?.path ? (
+                            ) : (f.kind === 'file' || f.kind === 'graphic') && v?.path ? (
                               <p>{String(v.path).match(/\.(png|jpe?g|gif|webp)$/i) ? <img src={`/app/media/${v.path}`} alt={v.name ?? ''} /> : null}<a href={`/app/media/${v.path}`} target="_blank" rel="noopener noreferrer">{v.name ?? 'the file'}</a></p>
+                            ) : f.kind === 'graphic' ? (
+                              <p class="fempty">Not generated yet</p>
                             ) : f.kind === 'link' && v ? (
                               <p><a href={String(v)} target="_blank" rel="noopener noreferrer">{String(v)}</a></p>
                             ) : isFilled(f, v) ? (
@@ -481,13 +515,13 @@ const changedSince = (c: any) => c.field_id && c.field_version != null && (versi
                             ) : (
                               <p class="fempty">Not answered yet</p>
                             )}
-                            {words !== null && words > 0 && <p class="fmeta"><span class:list={['fwords', f.max_words != null && words > f.max_words && 'over']}>{words} words</span></p>}
+                            {words !== null && words > 0 && (f.min_words != null || f.max_words != null) && <p class="fmeta"><span class:list={['fwords', f.max_words != null && words > f.max_words && 'over']}>{words} words</span></p>}
                           </div>
                         )}
 
                         {/* The thread on this field, and the box to add to it. */}
                         {(thread.length > 0 || mayComment) && (
-                          <div class="thread noprint">
+                          <div class="thread noprint" data-live={`thread-${f.id}`}>
                             {thread.length > 0 && (
                               <ul class="tlist">
                                 {thread.map((c: any) => (
@@ -504,7 +538,7 @@ const changedSince = (c: any) => c.field_id && c.field_version != null && (versi
                                 ))}
                               </ul>
                             )}
-                            {mayComment && docRow && (
+                            {mayComment && docRow && !(iAuthor && f.owner === 'staff' && !isFilled(f, v) && thread.length === 0) && (
                               <details class="tadd">
                                 <summary class="linkish">{iAuthor ? (thread.length ? 'Reply' : 'Ask a question here') : thread.length ? 'Add to this' : 'Comment on this'}</summary>
                                 <div class="tform" data-field={f.id} data-reply={thread.length ? thread[thread.length - 1].id : ''}>
@@ -521,13 +555,18 @@ const changedSince = (c: any) => c.field_id && c.field_version != null && (versi
                   </div>
                 );
               })}
+              {/* Blanks offered on demand (2.8): the next hidden one opens
+                  on the click, like the sources on the literature review. */}
+              {iAuthor && section.fields.some((f) => f.extra) && (
+                <p class="fextra-act noprint"><button class="btn btn-sm btn-2 fextra-add" type="button">Add more</button></p>
+              )}
             </section>
           ))}
 
           {iAuthor && (
             <div class="docsave noprint">
               <button class="btn" type="submit" id="save-all">Save</button>
-              <span class="t-sm">Saves as you type. This is here in case it cannot.</span>
+              <span class="t-sm">Autosave enabled. Click here to save now.</span>
             </div>
           )}
         </form>
@@ -535,6 +574,7 @@ const changedSince = (c: any) => c.field_id && c.field_version != null && (versi
         {/* The thread on the whole document. */}
         <section class="sec noprint" id="whole">
           <div class="sec-h"><b><span class="sec-n">{String(sections.length + 1).padStart(2, '0')}</span>On the whole document</b><span>{threadOn(null).length ? `${threadOn(null).length} ${threadOn(null).length === 1 ? 'comment' : 'comments'}` : ''}</span></div>
+          <div data-live="thread-whole">
           {threadOn(null).length > 0 ? (
             <ul class="tlist">
               {threadOn(null).map((c: any) => (
@@ -549,6 +589,7 @@ const changedSince = (c: any) => c.field_id && c.field_version != null && (versi
           ) : (
             <p class="t-sm">Nothing yet. A comment here is about the document as a whole; a comment on a field is beside it.</p>
           )}
+          </div>
           {mayComment && docRow && (
             <form method="POST" action="#outcome" class="tform whole">
               <input type="hidden" name="action" value="comment" />
@@ -560,9 +601,24 @@ const changedSince = (c: any) => c.field_id && c.field_version != null && (versi
           )}
         </section>
 
-        {/* The versions, for whoever wants the record. */}
-        {docRow?.version_no > 0 && (
-          <p class="t-sm noprint">Submitted {docRow.version_no} {docRow.version_no === 1 ? 'time' : 'times'}; the latest is the one on the calendar.</p>
+        {/* The history (2.8): each submitted version as it was, with what
+            changed from the one before, and what has changed since. */}
+        {history.length > 0 && (
+          <section class="sec noprint" id="history">
+            <div class="sec-h"><b><span class="sec-n">{String(sections.length + 2).padStart(2, '0')}</span>History</b><span>{history.length} {history.length === 1 ? 'version' : 'versions'} submitted; the latest is the one on the calendar</span></div>
+            <ol class="hist">
+              {[...history].reverse().map((h) => (
+                <li>
+                  <b>Version {h.no}</b> · submitted {when(h.at)}{h.by ? ` by ${h.by}` : ''}
+                  {' · '}<a href={`/app/project/${project.id}/doc/${deliverableId}/print/?version=${h.no}`} target="_blank" rel="noopener noreferrer">View as it was</a>
+                  {h.no > 1 && <span class="sub">{h.changed.length ? `Changed: ${h.changed.join('; ')}` : 'No field changed'}</span>}
+                </li>
+              ))}
+            </ol>
+            {changedSinceLatest.length > 0 && (
+              <p class="t-sm">Changed since version {latest.version_no}, not yet submitted: {changedSinceLatest.join('; ')}.</p>
+            )}
+          </section>
         )}
       </>
     )}
@@ -582,6 +638,7 @@ const changedSince = (c: any) => c.field_id && c.field_version != null && (versi
   .ds-facts { display: flex; flex-wrap: wrap; gap: 6px 16px; min-width: 0; font-family: var(--face-ui); font-size: 0.88rem; color: var(--ink-2); margin-right: auto; }
   .ds-facts .late { color: var(--alert); }
   .ds-saved { color: var(--ink-3); }
+  .ds-room { color: var(--accent); font-weight: 600; }
   @media (max-width: 720px) { .docstrip { flex-wrap: wrap; } }
   .ds-submit { display: flex; align-items: center; gap: 10px; flex: 0 0 auto; }
   .doc-sec { max-width: var(--measure-text); }
@@ -589,6 +646,9 @@ const changedSince = (c: any) => c.field_id && c.field_version != null && (versi
   .field.has-ask { border-left: 3px solid var(--alert); padding-left: 12px; }
   .fnote { color: var(--ink-2); }
   .fnote :global(p) { margin: 0 0 8px; }
+  .fnote :global(table) { border-collapse: collapse; width: 100%; margin: 4px 0 8px; font-size: 0.95rem; }
+  .fnote :global(th), .fnote :global(td) { border: 1px solid var(--rule); padding: 6px 10px; vertical-align: top; text-align: left; }
+  .fnote :global(th) { font-family: var(--face-ui); font-size: 0.86rem; background: var(--wash); }
   .fprompt { display: block; font-weight: 600; margin: 0 0 4px; }
   .fprompt .req { color: var(--alert); margin-left: 4px; }
   .flimit { margin-left: 10px; font-family: var(--face-ui); font-size: 0.8rem; font-weight: 400; color: var(--ink-3); }
@@ -597,12 +657,24 @@ const changedSince = (c: any) => c.field_id && c.field_version != null && (versi
   .fwrap { display: block; }
   .fowner { margin-left: 10px; font-family: var(--face-ui); font-size: 0.78rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--accent-deep); }
   .field.is-staff { background: var(--accent-pale); padding-left: 12px; padding-right: 12px; }
-  .doclink { border-bottom: 1px solid var(--rule-fine); }
-  .doclink-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
-  .dpreview { margin-top: 10px; }
-  .dpreview summary { cursor: pointer; font-family: var(--face-ui); font-size: 0.86rem; }
-  .dpreview iframe { width: 100%; height: 70vh; min-height: 480px; border: 1px solid var(--rule-fine); background: var(--card); margin-top: 8px; }
-  .doclink-row .fwrap { flex: 1 1 320px; }
+  .hist { margin: 0; padding-left: 20px; display: grid; gap: 8px; }
+  .hist .sub { display: block; color: var(--ink-3); font-size: 0.88rem; }
+  .fgraphic-act { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 0 0 6px; }
+  .fgraphic-note { margin: 0 0 8px; }
+  .fgraphic-note.stale { color: var(--alert); font-weight: 600; }
+  .fcanvas, .fgraphic .fhave img { width: 100%; max-width: 900px; height: auto; border: 1px solid var(--rule); background: var(--card); }
+  .fcanvas { display: block; }
+  .fcanvas[hidden] { display: none; }
+  .fcards { display: grid; gap: 10px; }
+  .fcard { margin: 0; padding: 10px 14px 12px; border: 1px solid var(--rule); background: var(--card); min-width: 0; }
+  .fcard[hidden] { display: none; }
+  .fcard-h { font-family: var(--face-ui); font-weight: 700; font-size: 0.95rem; margin: 0 0 8px; }
+  .fcard-row { display: grid; grid-template-columns: 14rem minmax(0, 1fr); gap: 6px 12px; align-items: start; margin: 8px 0 0; }
+  .fcard-row > span { font-family: var(--face-ui); font-size: 0.86rem; color: var(--ink-2); padding-top: 6px; }
+  .fcard-line { margin: 4px 0; font-size: 0.95rem; }
+  .fcard-line b { font-family: var(--face-ui); font-size: 0.86rem; display: block; color: var(--ink-2); }
+  .fcard-add { justify-self: start; }
+  @media (max-width: 640px) { .fcard-row { grid-template-columns: 1fr; } .fcard-row > span { padding-top: 0; } }
   .ftable-wrap, .frubric-wrap { overflow-x: auto; }
   .ftable { border-collapse: collapse; width: 100%; min-width: 720px; font-size: 0.9rem; }
   .ftable th, .ftable td { border: 1px solid var(--rule-fine); padding: 6px; vertical-align: top; text-align: left; }
@@ -626,6 +698,12 @@ const changedSince = (c: any) => c.field_id && c.field_version != null && (versi
   .fmeta { display: flex; gap: 14px; margin: 6px 0 0; font-family: var(--face-ui); font-size: 0.8rem; color: var(--ink-3); }
   .fwords.over { color: var(--alert); font-weight: 600; }
   .fby { color: var(--ink-3); }
+  /* The room (2.8): who is in a box, the box held for them, and a box
+     that just changed under the reader. */
+  .fwho { margin-left: 10px; font-family: var(--face-ui); font-size: 0.78rem; font-weight: 600; color: var(--accent); }
+  .field.is-held .mdx-edit, .field.is-held .in, .field.is-held .ta { background: var(--sunk); color: var(--ink-2); cursor: not-allowed; }
+  .field.is-fresh { outline: 2px solid var(--accent-pale); outline-offset: 4px; transition: outline-color 1.2s ease; }
+  .fby-live { margin-top: 6px; }
   .fstate.saving { color: var(--ink-3); }
   .fstate.saved { color: var(--stage-comp); }
   .fstate.kept { color: var(--alert); }
@@ -655,6 +733,8 @@ const changedSince = (c: any) => c.field_id && c.field_version != null && (versi
 </style>
 
 <script>
+  import { draw } from '../../../../../lib/research-graphics';
+  import { stampFor } from '../../../../../lib/export-names';
   /**
    * SAVES AS YOU TYPE.
    *
@@ -672,6 +752,7 @@ const changedSince = (c: any) => c.field_id && c.field_version != null && (versi
   const writable = form ? form.querySelectorAll('.field[data-writable="1"]').length > 0 : false;
   if (form && writable && form.dataset.doc) {
     const docId = form.dataset.doc;
+    const myName = form.dataset.me ?? '';
     const saved = document.getElementById('ds-saved');
     const key = (fieldId: string) => `sp:doc:${docId}:${fieldId}`;
     const timers = new Map<string, number>();
@@ -687,11 +768,14 @@ const changedSince = (c: any) => c.field_id && c.field_version != null && (versi
       if (kind === 'choices') {
         return [...wrap.querySelectorAll<HTMLInputElement>('input[type=checkbox]:checked')].map((c) => c.value);
       }
-      if (kind === 'file') return undefined;
+      if (kind === 'file' || kind === 'graphic') return undefined;
       if (kind === 'table') {
-        const rows: string[][] = [];
-        wrap.querySelectorAll<HTMLTableRowElement>('tbody tr').forEach((tr) => {
-          rows.push([...tr.querySelectorAll<HTMLTextAreaElement>('textarea')].map((t) => t.value));
+        const box = wrap.querySelector<HTMLElement>('.fcards');
+        const nr = Number(box?.dataset.rows ?? 0), nc = Number(box?.dataset.cols ?? 0);
+        const rows: string[][] = Array.from({ length: nr }, () => Array.from({ length: nc }, () => ''));
+        wrap.querySelectorAll<HTMLTextAreaElement>('textarea[data-r]').forEach((t) => {
+          const r = Number(t.dataset.r), c = Number(t.dataset.c);
+          if (rows[r]) rows[r][c] = t.value;
         });
         return rows;
       }
@@ -705,7 +789,16 @@ const changedSince = (c: any) => c.field_id && c.field_version != null && (versi
       }
       const el = wrap.querySelector<HTMLInputElement | HTMLTextAreaElement>(`[name="f:${fieldId}"]`);
       if (!el) return undefined;
-      if (kind === 'number') return el.value.trim() === '' ? null : Number(el.value);
+      if (kind === 'number') {
+        if (el.value.trim() === '') return null;
+        const n = Number(el.value);
+        const lo = (el as HTMLInputElement).min, hi = (el as HTMLInputElement).max;
+        if ((lo !== '' && n < Number(lo)) || (hi !== '' && n > Number(hi))) {
+          setState(wrap, `Between ${lo || '…'} and ${hi || '…'}`, 'kept');
+          return undefined;
+        }
+        return n;
+      }
       return el.value;
     };
 
@@ -713,8 +806,9 @@ const changedSince = (c: any) => c.field_id && c.field_version != null && (versi
       const kind = wrap.dataset.kind;
       const fieldId = wrap.dataset.field!;
       if (kind === 'table') {
-        wrap.querySelectorAll<HTMLTableRowElement>('tbody tr').forEach((tr, ri) => {
-          tr.querySelectorAll<HTMLTextAreaElement>('textarea').forEach((t, ci) => (t.value = Array.isArray(value?.[ri]) ? value[ri][ci] ?? '' : ''));
+        wrap.querySelectorAll<HTMLTextAreaElement>('textarea[data-r]').forEach((t) => {
+          const r = Number(t.dataset.r), c = Number(t.dataset.c);
+          t.value = Array.isArray(value?.[r]) ? value[r][c] ?? '' : '';
         });
       } else if (kind === 'rubric') {
         wrap.querySelectorAll<HTMLInputElement>('input[type=radio]').forEach((r) => {
@@ -768,7 +862,21 @@ const changedSince = (c: any) => c.field_id && c.field_version != null && (versi
       return res.json();
     };
 
-    const save = async (wrap: HTMLElement, attempt = 0) => {
+    /* One save in flight per field. A rubric is eight clicks on one field,
+       and two saves of it racing each other meant the second carried the
+       version the first was about to replace: the server answered
+       "conflict", the click was kept on the device and never sent again.
+       Now a save that finds one in flight waits for it, then reads the
+       field again, so the last click always goes with the latest version. */
+    const inFlight = new Map<string, Promise<void>>();
+    const save = (wrap: HTMLElement, attempt = 0): Promise<void> => {
+      const fieldId = wrap.dataset.field!;
+      const prior = inFlight.get(fieldId) ?? Promise.resolve();
+      const run = prior.then(() => saveNow(wrap, attempt));
+      inFlight.set(fieldId, run.catch(() => {}));
+      return run;
+    };
+    const saveNow = async (wrap: HTMLElement, attempt = 0) => {
       const fieldId = wrap.dataset.field!;
       const value = readValue(wrap);
       if (value === undefined) return;
@@ -785,7 +893,16 @@ const changedSince = (c: any) => c.field_id && c.field_version != null && (versi
           unstash(fieldId);
           pending.delete(fieldId);
           setState(wrap, 'Saved', 'saved');
+          refreshProgress();
           if (saved) saved.textContent = `last saved ${new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`;
+        } else if (out.conflict && out.by === myName && attempt < 2) {
+          /* My own newer version (another tab, or a save this one did not
+             wait for): take its number and send this text over it. */
+          wrap.dataset.version = String(out.version);
+          const ver = wrap.querySelector<HTMLInputElement>('.fver');
+          if (ver) ver.value = String(out.version);
+          pending.delete(fieldId);
+          await saveNow(wrap, attempt + 1);
         } else if (out.conflict) {
           pending.delete(fieldId);
           showConflict(wrap, out, value);
@@ -809,6 +926,31 @@ const changedSince = (c: any) => c.field_id && c.field_version != null && (versi
       const ver = wrap.querySelector<HTMLInputElement>('.fver');
       if (ver) ver.value = String(out.version);
       setState(wrap, `${out.by ?? 'Somebody else'} saved a newer version of this field. Reload the page to see it; your text is kept on this device.`, 'kept');
+    };
+
+    /* The count in the strip and the Submit button follow what is saved,
+       rather than what the page was loaded with (2.8). The same rule as
+       the server's `isFilled`: a table with one cell written, a rubric
+       with one row marked, a choice made, or any text, counts. */
+    const filledHere = (wrap: HTMLElement): boolean => {
+      /* A file or a drawn picture is on the page as what it shows, not as a value. */
+      if (wrap.dataset.kind === 'file' || wrap.dataset.kind === 'graphic') return wrap.dataset.have === '1' || Boolean(wrap.querySelector('.fhave'));
+      const v = readValue(wrap);
+      if (v == null) return false;
+      if (Array.isArray(v)) return v.some((row) => Array.isArray(row) ? row.some((c) => String(c ?? '').trim()) : String(row ?? '').trim());
+      if (typeof v === 'object') return Object.keys(v).length > 0;
+      return String(v).trim().length > 0;
+    };
+    const refreshProgress = () => {
+      const asked = [...form.querySelectorAll<HTMLElement>('.field[data-asked="1"][data-required="1"]')];
+      const filledEl = document.getElementById('ds-filled');
+      if (filledEl) filledEl.textContent = String(asked.filter(filledHere).length);
+      const submit = document.getElementById('ds-submit') as HTMLButtonElement | null;
+      if (submit) {
+        const missing = asked.filter((w) => !filledHere(w));
+        submit.disabled = missing.length > 0;
+        submit.title = missing.length ? `Still needed: ${missing.map((w) => w.querySelector('.fprompt')?.firstChild?.textContent?.trim() || w.dataset.field).join('; ')}` : '';
+      }
     };
 
     const schedule = (wrap: HTMLElement, delay = 1200) => {
@@ -850,6 +992,10 @@ const changedSince = (c: any) => c.field_id && c.field_version != null && (versi
       }
     });
 
+    /* What the live script (below) needs from this closure: a way to put
+       another author's saved text into a box and to say so. */
+    (form as any).__sp = { writeValue, setState, refreshProgress, readValue, isPending: (fieldId: string) => timers.has(fieldId) || pending.has(fieldId) };
+
     /* Files and pasted images go up at once, and the field or the text
        gets the address back. */
     const upload = async (file: File): Promise<{ path: string; name: string } | null> => {
@@ -887,90 +1033,361 @@ const changedSince = (c: any) => c.field_id && c.field_version != null && (versi
       });
     });
 
-    form.querySelectorAll<HTMLTextAreaElement>('textarea[data-paste=image]').forEach((ta) => {
-      const insert = async (file: File) => {
-        const wrap = ta.closest<HTMLElement>('.field');
-        if (!wrap) return;
-        setState(wrap, 'Uploading image…', 'saving');
-        const got = await upload(file);
-        if (!got) { setState(wrap, 'Could not upload that image', 'kept'); return; }
-        const at = ta.selectionStart ?? ta.value.length;
-        const md = `\n![${got.name.replace(/[\[\]]/g, '')}](/app/media/${got.path})\n`;
-        ta.value = ta.value.slice(0, at) + md + ta.value.slice(at);
-        ta.selectionStart = ta.selectionEnd = at + md.length;
-        countWords(wrap);
-        schedule(wrap, 200);
-      };
-      ta.addEventListener('paste', (ev) => {
-        const item = [...(ev.clipboardData?.items ?? [])].find((i) => i.kind === 'file' && i.type.startsWith('image/'));
-        if (!item) return;
-        const file = item.getAsFile();
-        if (!file) return;
-        ev.preventDefault();
-        insert(file);
-      });
-      ta.addEventListener('drop', (ev) => {
-        const file = [...(ev.dataTransfer?.files ?? [])].find((f) => f.type.startsWith('image/'));
-        if (!file) return;
-        ev.preventDefault();
-        insert(file);
+    /* Generate: the picture is drawn from the fields it names, shown on
+       the page, offered as a download, and kept on the document like a
+       file so the Elder and the PDF see it. */
+    /* What the picture is drawn from, read off the page, and a short
+       fingerprint of it kept with the picture: the page can then say
+       whether the boxes have changed since it was drawn, now or after a
+       reload. */
+    const sourcesOf = (box: HTMLElement) => {
+      const values: Record<string, string> = {};
+      for (const id of (box.dataset.sources ?? '').split(' ').filter(Boolean)) {
+        const src = form.querySelector<HTMLElement>(`.field[data-field="${id}"]`);
+        const raw = src ? readValue(src) : '';
+        values[id] = typeof raw === 'string' ? raw : raw == null ? '' : String(raw);
+      }
+      return values;
+    };
+    const fingerprint = (values: Record<string, string>) => {
+      let h = 5381;
+      /* Whitespace apart, so a saved-and-reloaded box reads as unchanged. */
+      const text = JSON.stringify(Object.fromEntries(Object.entries(values).map(([k, v]) => [k, v.replace(/\s+/g, ' ').trim()])));
+      for (const ch of text) h = (Math.imul(h, 33) ^ ch.charCodeAt(0)) >>> 0;
+      return h.toString(36);
+    };
+    const NOTE_FRESH = 'Drawn from the boxes above. Generate again after any changes.';
+    const NOTE_STALE = 'Content changed, please regenerate';
+    const refreshNote = (box: HTMLElement) => {
+      const note = box.querySelector<HTMLElement>('.fgraphic-note');
+      if (!note) return;
+      const drawn = box.dataset.drawnFrom ?? '';
+      const stale = drawn !== '' && drawn !== fingerprint(sourcesOf(box));
+      note.textContent = stale ? NOTE_STALE : NOTE_FRESH;
+      note.classList.toggle('stale', stale);
+    };
+    /* A download, switched on: the anchor is off until it has a file. */
+    const offer = (a: HTMLAnchorElement | null, data: Blob, filename: string) => {
+      if (!a) return;
+      if (a.href.startsWith('blob:')) URL.revokeObjectURL(a.href);
+      a.href = URL.createObjectURL(data); a.download = filename;
+      a.classList.remove('is-off'); a.removeAttribute('aria-disabled');
+    };
+    /* The PNG only (2.8): a PPTX was offered and withdrawn, since a slide
+       edited in PowerPoint leaves SciPath and its record behind. */
+    const offerPng = (box: HTMLElement, blob: Blob, name: string) =>
+      offer(box.querySelector<HTMLAnchorElement>('.fgraphic-dl'), blob, `${name}.png`);
+
+    form.querySelectorAll<HTMLElement>('.fgraphic').forEach((box) => {
+      refreshNote(box);
+      /* The picture already on the document: its downloads come on once
+         the file is fetched, under the name it was saved as. */
+      const path = box.dataset.path;
+      if (path) {
+        fetch(`/app/media/${path}`).then((r) => (r.ok ? r.blob() : null)).then((blob) => {
+          if (!blob) return;
+          const base = path.split('/').pop()?.replace(/\.png$/i, '') || (box.dataset.name ?? 'graphic');
+          offerPng(box, blob, base);
+        }).catch(() => {});
+      }
+      /* Typing in a source box: the note turns to "regenerate" at once. */
+      for (const id of (box.dataset.sources ?? '').split(' ').filter(Boolean)) {
+        const src = form.querySelector<HTMLElement>(`.field[data-field="${id}"]`);
+        /* After the editor has written the box's value, not before. */
+        const later = () => setTimeout(() => refreshNote(box), 80);
+        src?.addEventListener('input', later);
+        src?.addEventListener('change', later);
+      }
+    });
+
+    form.querySelectorAll<HTMLButtonElement>('.fgen').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const box = btn.closest<HTMLElement>('.fgraphic');
+        const wrap = btn.closest<HTMLElement>('.field');
+        const canvas = box?.querySelector<HTMLCanvasElement>('.fcanvas');
+        if (!box || !wrap || !canvas) return;
+        const values = sourcesOf(box);
+        draw(box.dataset.graphic as any, canvas, { values, authors: box.dataset.authors ?? '' });
+        canvas.hidden = false;
+        box.querySelector<HTMLElement>('.fgraphic-none')?.remove();
+        box.querySelector<HTMLElement>('.fhave')?.remove();
+        const blob: Blob | null = await new Promise((r) => canvas.toBlob(r, 'image/png'));
+        if (!blob) { setState(wrap, 'Could not draw it', 'kept'); return; }
+        /* Named as every file from here is: program, who, deliverable, when. */
+        const name = `${box.dataset.name ?? 'graphic'}-${stampFor(new Date(), box.dataset.tz || undefined)}`;
+        offerPng(box, blob, name);
+        box.dataset.drawnFrom = fingerprint(values);
+        refreshNote(box);
+        setState(wrap, 'Saving the picture…', 'saving');
+        const got = await upload(new File([blob], `${name}.png`, { type: 'image/png' }));
+        if (!got) { setState(wrap, 'Drawn, but could not save it to the document', 'kept'); return; }
+        const version = Number(wrap.dataset.version || 0);
+        try {
+          const out = await post({ document_id: docId, field_id: wrap.dataset.field, value: { ...got, drawn_from: box.dataset.drawnFrom }, version });
+          if (out.ok) { wrap.dataset.version = String(out.version); wrap.dataset.have = '1'; setState(wrap, 'Saved', 'saved'); refreshProgress(); }
+          else setState(wrap, 'Drawn, but could not save it to the document', 'kept');
+        } catch { setState(wrap, 'Drawn, but could not save it to the document', 'kept'); }
       });
     });
 
-    /* Comments on a field, sent without leaving the page. */
-    form.querySelectorAll<HTMLButtonElement>('[data-send=comment]').forEach((btn) => {
-      btn.addEventListener('click', async () => {
-        const box = btn.closest<HTMLElement>('.tform');
-        if (!box) return;
-        const ta = box.querySelector<HTMLTextAreaElement>('textarea');
-        const ask = box.querySelector<HTMLInputElement>('input[type=checkbox]');
-        if (!ta || !ta.value.trim()) { ta?.focus(); return; }
-        btn.disabled = true;
-        const fd = new FormData();
-        fd.append('action', 'comment');
-        fd.append('field_id', box.dataset.field ?? '');
-        fd.append('body', ta.value);
-        if (ask?.checked) fd.append('needs_revision', '1');
-        fd.append('reply_to', box.dataset.reply ?? '');
-        const res = await fetch(location.pathname, { method: 'POST', body: fd, credentials: 'same-origin', redirect: 'follow' });
-        if (res.ok) location.href = `${location.pathname}?m=${encodeURIComponent('Sent.')}#f-${box.dataset.field}`;
-        else { btn.disabled = false; alert('Could not send that. Try the Save button and send again.'); }
-      });
+    /* An image pasted into a paragraph: the editor announces it, this
+       uploads it and hands back the picture to put at the caret. */
+    form.addEventListener('mdx:image', async (ev) => {
+      const { file, insert } = (ev as CustomEvent).detail as { file: File; insert: (html: string) => void };
+      const wrap = (ev.target as HTMLElement).closest<HTMLElement>('.field');
+      if (!wrap) return;
+      setState(wrap, 'Uploading image…', 'saving');
+      const got = await upload(file);
+      if (!got) { setState(wrap, 'Could not upload that image', 'kept'); return; }
+      const alt = got.name.replace(/[\[\]"<>]/g, '');
+      insert(`<img src="/app/media/${got.path}" alt="${alt}">`);
+      schedule(wrap, 200);
     });
+
+    /* "Add more": the next blank offered on demand opens; the button goes
+       when none are left. Nothing is saved until something is typed. */
+    form.querySelectorAll<HTMLButtonElement>('.fextra-add').forEach((btn) => {
+      const sec = btn.closest<HTMLElement>('.doc-sec');
+      const refresh = () => { if (sec && !sec.querySelector('.field.is-extra[hidden]')) btn.hidden = true; };
+      btn.addEventListener('click', () => {
+        const next = sec?.querySelector<HTMLElement>('.field.is-extra[hidden]');
+        if (next) { next.hidden = false; next.querySelector<HTMLElement>('input, textarea, [contenteditable]')?.focus(); }
+        refresh();
+      });
+      refresh();
+    });
+
+    /* "Add a source": the next hidden card opens; the button goes when
+       none are left. Nothing is saved until something is typed. */
+    form.querySelectorAll<HTMLButtonElement>('.fcard-add').forEach((btn) => {
+      const box = btn.closest<HTMLElement>('.fcards');
+      const refresh = () => { if (box && !box.querySelector('.fcard[hidden]')) btn.hidden = true; };
+      btn.addEventListener('click', () => {
+        const next = box?.querySelector<HTMLElement>('.fcard[hidden]');
+        if (next) { next.hidden = false; next.querySelector<HTMLTextAreaElement>('textarea')?.focus(); }
+        refresh();
+      });
+      refresh();
+    });
+
   }
 
-  /* Withdrawing an ask, from inside the document form (a nested form is not HTML). */
-  document.querySelectorAll<HTMLButtonElement>('[data-resolve]').forEach((btn) => {
-    btn.addEventListener('click', async () => {
+  /* Comments on a field and withdrawn asks, sent without leaving the
+     page, and without reloading it: the thread is a live region, so it
+     re-reads itself once the line is in (2.8). One listener on the
+     document, because a live swap replaces the buttons. */
+  const sendComment = async (btn: HTMLButtonElement) => {
+    const box = btn.closest<HTMLElement>('.tform');
+    if (!box) return;
+    const ta = box.querySelector<HTMLTextAreaElement>('textarea');
+    const ask = box.querySelector<HTMLInputElement>('input[type=checkbox]');
+    if (!ta || !ta.value.trim()) { ta?.focus(); return; }
+    btn.disabled = true;
+    const fd = new FormData();
+    fd.append('action', 'comment');
+    fd.append('field_id', box.dataset.field ?? '');
+    fd.append('body', ta.value);
+    if (ask?.checked) fd.append('needs_revision', '1');
+    fd.append('reply_to', box.dataset.reply ?? '');
+    const res = await fetch(location.pathname, { method: 'POST', body: fd, credentials: 'same-origin', redirect: 'follow' });
+    if (res.ok) {
+      ta.value = '';
+      if (ask) ask.checked = false;
+      btn.disabled = false;
+      btn.blur();
+      box.closest<HTMLDetailsElement>('details')?.removeAttribute('open');
+      document.dispatchEvent(new CustomEvent('live:refresh'));
+    } else { btn.disabled = false; alert('Could not send that. Try the Save button and send again.'); }
+  };
+  document.addEventListener('click', async (ev) => {
+    const target = ev.target as HTMLElement | null;
+    const send = target?.closest<HTMLButtonElement>('[data-send=comment]');
+    if (send) { await sendComment(send); return; }
+    const resolve = target?.closest<HTMLButtonElement>('[data-resolve]');
+    if (resolve) {
       const fd = new FormData();
       fd.append('action', 'resolve');
-      fd.append('feedback_id', btn.dataset.resolve ?? '');
+      fd.append('feedback_id', resolve.dataset.resolve ?? '');
       const res = await fetch(location.pathname, { method: 'POST', body: fd, credentials: 'same-origin', redirect: 'follow' });
-      if (res.ok) location.href = `${location.pathname}?m=${encodeURIComponent('Ask withdrawn.')}`;
-    });
+      if (res.ok) document.dispatchEvent(new CustomEvent('live:refresh'));
+    }
   });
+</script>
 
-  /* Readers who may comment but are not authors: the same buttons, no autosave. */
-  const readerForm = document.getElementById('docform') as HTMLFormElement | null;
-  if (readerForm && !writable) {
-    readerForm.querySelectorAll<HTMLButtonElement>('[data-send=comment]').forEach((btn) => {
-      btn.addEventListener('click', async () => {
-        const box = btn.closest<HTMLElement>('.tform');
-        if (!box) return;
-        const ta = box.querySelector<HTMLTextAreaElement>('textarea');
-        const ask = box.querySelector<HTMLInputElement>('input[type=checkbox]');
-        if (!ta || !ta.value.trim()) { ta?.focus(); return; }
-        btn.disabled = true;
-        const fd = new FormData();
-        fd.append('action', 'comment');
-        fd.append('field_id', box.dataset.field ?? '');
-        fd.append('body', ta.value);
-        if (ask?.checked) fd.append('needs_revision', '1');
-        fd.append('reply_to', box.dataset.reply ?? '');
-        const res = await fetch(location.pathname, { method: 'POST', body: fd, credentials: 'same-origin', redirect: 'follow' });
-        if (res.ok) location.href = `${location.pathname}?m=${encodeURIComponent('Sent.')}#f-${box.dataset.field}`;
-        else { btn.disabled = false; alert('Could not send that.'); }
-      });
+<script>
+  import { join, onMessage, liveMe, onHealth } from '../../../../../lib/live-client';
+  import { renderMarkdown } from '../../../../../lib/notes';
+  /**
+   * THE ROOM (2.8).
+   *
+   * Everybody with this document open is in its room, over the socket:
+   * the authors and whoever looks after them. Three things happen there.
+   *
+   * WHO IS WHERE. Each person's presence names the box they are in. On
+   * every other screen that box shows the name ("Priya is writing here"),
+   * so two authors do not start the same paragraph and an Elder watches
+   * a student work a box at a time.
+   *
+   * THE SOFT LOCK. A box somebody else is in is read-only on this screen
+   * while they are there, with their name on it. Soft, because it is only
+   * presence: a browser that vanishes releases it within the socket's
+   * heartbeat, and the version on every save is still what refuses a
+   * stale write. Whoever is already typing when the other arrives keeps
+   * typing; the second arrival is the one that waits.
+   *
+   * THE TEXT ARRIVING. A field another person saved is broadcast by the
+   * database and lands in the box here, without a reload: into an editor
+   * the reader is not in, or into the printed text on a reader's screen.
+   * Big fields (over the broadcast's ride-along size) are fetched.
+   */
+  const form = document.getElementById('docform') as HTMLFormElement | null;
+  const docId = form?.dataset.doc;
+  const me = liveMe();
+  if (form && docId && me) {
+    const myName = form.dataset.me ?? '';
+    const hooks = () => (form as any).__sp as { writeValue: (w: HTMLElement, v: any) => void; setState: (w: HTMLElement, t: string, c: string) => void; refreshProgress: () => void; readValue: (w: HTMLElement) => any; isPending: (id: string) => boolean } | undefined;
+    const fieldEl = (id: string) => form.querySelector<HTMLElement>(`.field[data-field="${CSS.escape(id)}"]`);
+    const topic = `doc:${docId}`;
+    const ch = join(topic, { presence: true });
+
+    /* ── Presence: where I am ─────────────────────────────────────────── */
+    let here: string | null = null;
+    let trackTimer: number | undefined;
+    const track = () => {
+      if (!ch) return;
+      window.clearTimeout(trackTimer);
+      trackTimer = window.setTimeout(() => { try { ch.track({ name: myName, field: here, at: Date.now() }); } catch {} }, 120);
+    };
+    form.addEventListener('focusin', (ev) => {
+      const w = (ev.target as HTMLElement).closest<HTMLElement>('.field[data-field]');
+      const next = w?.dataset.writable === '1' ? w.dataset.field ?? null : null;
+      if (next !== here) { here = next; track(); }
     });
+    form.addEventListener('focusout', () => {
+      window.setTimeout(() => {
+        const a = document.activeElement as HTMLElement | null;
+        const w = a?.closest<HTMLElement>('.field[data-field]');
+        const next = w && w.dataset.writable === '1' ? w.dataset.field ?? null : null;
+        if (next !== here) { here = next; track(); }
+      }, 50);
+    });
+
+    /* ── Presence: where everybody else is ───────────────────────────── */
+    const held = new Map<string, string>();   // field -> name of who is in it
+    const applyPresence = () => {
+      if (!ch) return;
+      const state = ch.presenceState() as Record<string, any[]>;
+      held.clear();
+      const names: string[] = [];
+      for (const [key, metas] of Object.entries(state)) {
+        if (key === me) continue;
+        const m = metas[metas.length - 1] ?? {};
+        const name = String(m.name ?? 'Somebody');
+        if (!names.includes(name)) names.push(name);
+        if (m.field && !held.has(m.field)) held.set(m.field, name);
+      }
+      for (const w of form.querySelectorAll<HTMLElement>('.field[data-field]')) {
+        const id = w.dataset.field!;
+        const who = held.get(id);
+        let chip = w.querySelector<HTMLElement>('.fwho');
+        if (who) {
+          if (!chip) { chip = document.createElement('span'); chip.className = 'fwho'; (w.querySelector('.fprompt') ?? w).appendChild(chip); }
+          chip.textContent = `${who} is ${w.dataset.writable === '1' ? 'writing' : 'in'} here`;
+          /* The soft lock: read-only while they are there, unless this
+             reader is already in it. */
+          const mine = here === id;
+          const lock = w.dataset.writable === '1' && !mine;
+          w.classList.toggle('is-held', lock);
+          for (const el of w.querySelectorAll<HTMLElement>('.mdx-edit')) el.contentEditable = lock ? 'false' : 'true';
+          for (const el of w.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>('input:not([type=hidden]), textarea:not([hidden])')) el.readOnly = lock;
+          for (const el of w.querySelectorAll<HTMLInputElement>('input[type=radio], input[type=checkbox]')) el.disabled = lock;
+        } else if (chip || w.classList.contains('is-held')) {
+          chip?.remove();
+          w.classList.remove('is-held');
+          for (const el of w.querySelectorAll<HTMLElement>('.mdx-edit')) el.contentEditable = 'true';
+          for (const el of w.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>('input:not([type=hidden]), textarea:not([hidden])')) el.readOnly = false;
+          for (const el of w.querySelectorAll<HTMLInputElement>('input[type=radio], input[type=checkbox]')) el.disabled = false;
+        }
+      }
+      const roster = document.getElementById('ds-room');
+      if (roster) roster.textContent = names.length ? `Also here: ${names.join(', ')}` : '';
+    };
+    if (ch) {
+      ch.on('presence', { event: 'sync' }, applyPresence);
+      ch.on('presence', { event: 'join' }, applyPresence);
+      ch.on('presence', { event: 'leave' }, applyPresence);
+    }
+    /* Once the channel is up, say I am here (even in no box). */
+    onHealth((h) => { if (h === 'live') track(); });
+    document.addEventListener('live:reconnected', () => track());
+
+    /* ── The text arriving ───────────────────────────────────────────── */
+    const when = (iso: string) => new Date(iso).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    const showRead = (w: HTMLElement, value: any) => {
+      /* A reader's screen: redraw the printed text for the kinds the page
+         can draw here; the rest re-read themselves from the page. */
+      const read = w.querySelector<HTMLElement>('.fread');
+      if (!read) return false;
+      const kind = w.dataset.kind;
+      const empty = (t: string) => `<p class="fempty">${t}</p>`;
+      if (kind === 'long') { read.innerHTML = value && String(value).trim() ? `<div class="fprose">${renderMarkdown(String(value))}</div>` : empty('Not written yet'); return true; }
+      if (kind === 'text' || kind === 'number' || kind === 'choice' || kind === 'date') { read.innerHTML = value != null && String(value).trim() ? `<p></p>` : empty('Not answered yet'); if (value != null && String(value).trim()) read.querySelector('p')!.textContent = String(value); return true; }
+      if (kind === 'choices') { read.innerHTML = Array.isArray(value) && value.length ? `<p></p>` : empty('Not answered yet'); if (Array.isArray(value) && value.length) read.querySelector('p')!.textContent = value.join(', '); return true; }
+      return false;
+    };
+    const reloadField = async (w: HTMLElement) => {
+      /* The kinds drawn server-side (a table of cards, a rubric, a file):
+         fetch the page and swap this field's read-only block. */
+      try {
+        const res = await fetch(location.pathname + location.search, { credentials: 'same-origin', cache: 'no-store', headers: { 'X-Live': '1' } });
+        if (!res.ok) return;
+        const fresh = new DOMParser().parseFromString(await res.text(), 'text/html');
+        const next = fresh.querySelector<HTMLElement>(`#${CSS.escape(w.id)} .fread`);
+        const mine = w.querySelector<HTMLElement>('.fread');
+        if (next && mine) mine.innerHTML = next.innerHTML;
+      } catch {}
+    };
+    const applyField = async (p: any) => {
+      if (!p || p.document_id !== docId || !p.field_id) return;
+      if (p.by_id === me) return;
+      const w = fieldEl(p.field_id);
+      if (!w) return;
+      let value = p.value;
+      if (p.big) {
+        try {
+          const res = await fetch(`/app/api/field/?document_id=${encodeURIComponent(docId)}&field_id=${encodeURIComponent(p.field_id)}`, { credentials: 'same-origin', cache: 'no-store' });
+          if (!res.ok) return;
+          value = (await res.json()).value;
+        } catch { return; }
+      }
+      const h = hooks();
+      if (w.dataset.writable === '1' && h) {
+        /* My box, their text. Not while I am typing in it: the version
+           refusal and the conflict note handle that moment. */
+        if (here === p.field_id || h.isPending(p.field_id)) { h.setState(w, `${p.by ?? 'Somebody'} saved a newer version of this field at ${when(p.at)}. Yours is refused until you reload.`, 'kept'); return; }
+        h.writeValue(w, value);
+        /* The rich editor draws from its surface, not the textarea. */
+        for (const edit of w.querySelectorAll<HTMLElement>('.mdx-edit')) {
+          const ta = edit.parentElement?.querySelector('textarea');
+          if (ta) edit.innerHTML = ta.value.trim() ? renderMarkdown(ta.value) : '';
+        }
+        w.dataset.version = String(p.version);
+        const ver = w.querySelector<HTMLInputElement>('.fver');
+        if (ver) ver.value = String(p.version);
+        h.setState(w, `Updated by ${p.by ?? 'somebody'} at ${when(p.at)}`, 'saved');
+        h.refreshProgress();
+        if (w.hidden) w.hidden = false;
+      } else {
+        w.dataset.version = String(p.version);
+        if (!showRead(w, value)) await reloadField(w);
+        if (w.hidden) w.hidden = false;
+        let by = w.querySelector<HTMLElement>('.fby-live');
+        if (!by) { by = document.createElement('p'); by.className = 'fmeta fby-live'; w.querySelector('.fread')?.appendChild(by); }
+        by.textContent = `${p.by ?? 'Somebody'} saved this at ${when(p.at)}`;
+      }
+      w.classList.add('is-fresh');
+      window.setTimeout(() => w.classList.remove('is-fresh'), 1600);
+    };
+    onMessage((m) => { if (m.topic === topic && m.event === 'field') applyField(m.payload).catch(() => {}); });
   }
 </script>

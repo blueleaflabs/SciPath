@@ -1,61 +1,39 @@
-# The project summary, due September 8. A starting point in the handout's
-# voice; the Elders' own wording replaces it as they share it. Every
-# document in the class is written from a shape like this one (6.16).
+# The project summary, due September 8: the class's research graphic.
+# Four boxes in the handout's words and the picture drawn from them, made
+# on the page with Generate and kept on the document as a PNG.
 
 id: project-summary
 name: Project summary
-version: 1
+version: 2
 guidance: >-
-  One page a stranger could read and understand what you are doing and why.
-  Write it after the research question is settled, not before.
+  Fill in the four boxes, then Generate the graphic. Generate again after
+  you change anything.
 sections:
-  - id: about
-    name: The project
+  - id: boxes
+    name: The four boxes
     fields:
-      - id: title
-        kind: text
-        prompt: What is your project called, for now?
-        tip: A working title is fine. It will change.
-        required: true
       - id: question
         kind: long
-        prompt: What is the research question?
-        tip: One sentence. A topic is what you are interested in; a question is what you are going to answer.
-        max_words: 60
+        prompt: "Research Question:"
         required: true
-  - id: why
-    name: Why it matters
+      - id: impact
+        kind: long
+        prompt: "Impact:"
+        required: true
+      - id: data
+        kind: long
+        prompt: What data do you need to collect?
+        required: true
+      - id: users
+        kind: long
+        prompt: Who are your users? Who should you interview?
+        required: true
+  - id: graphic
+    name: The graphic
     fields:
-      - id: problem
-        kind: long
-        prompt: What is the problem, and who has it?
-        tip: Name the people. "Teens with endometriosis waiting years for a diagnosis" says more than "healthcare".
-        min_words: 80
-        max_words: 250
-        required: true
-      - id: known
-        kind: long
-        prompt: What is already known, in three or four sentences?
-        tip: From your reading so far. The literature review comes later; this is the shape of it.
-        max_words: 200
-        required: true
-  - id: plan
-    name: What you will do
-    fields:
-      - id: approach
-        kind: long
-        prompt: What will you do this semester, step by step?
-        min_words: 60
-        max_words: 250
-        required: true
-      - id: interviews
-        kind: choice
-        prompt: Will you interview or survey anybody?
-        options: [Yes, No, Not sure yet]
-        required: true
-      - id: success
-        kind: long
-        prompt: What would a good result look like by the showcase?
-        tip: Say it as a thing somebody could see or measure.
-        max_words: 120
+      - id: graphic
+        kind: graphic
+        graphic: summary
+        sources: [question, impact, data, users]
+        prompt: Your research graphic
         required: true

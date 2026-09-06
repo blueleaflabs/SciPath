@@ -4,6 +4,7 @@ export const prerender = false;
 import Base from '../../layouts/Base.astro';
 import { formatDate, todayIn } from '../../lib/dates';
 import AppShell from '../../components/AppShell.astro';
+import CareCard from '../../components/CareCard.astro';
 import { activeOrg } from '../../lib/tenant';
 import { programTitle, programKind, participationVerb, staffWord } from '../../lib/program-names';
 import { serverClient } from '../../lib/supabase';
@@ -16,7 +17,10 @@ import { hidesProgram } from '../../lib/hidden-programs';
 import Plate from '../../components/Plate.astro';
 import { safeNext, HOME } from '../../lib/next-path';
 import { nextUpNote } from '../../lib/next-up';
-import { resolveProgram, deliverablesFor } from '../../lib/templates';
+import { byDueThenOrder } from '../../lib/milestone-order';
+import { resolveProgram, deliverablesFor, shape } from '../../lib/templates';
+import { docStanding } from '../../lib/documents';
+import { stepProgress } from '../../lib/step-progress';
 
 const { configured, session, account, roles } = Astro.locals;
 const org = activeOrg(Astro);
@@ -394,6 +398,13 @@ let myManuscripts = new Set<string>();
 
 /** Every dated obligation this person owes, late first. See below. */
 let dueNow: any[] = [];
+const myDocState = new Map<string, any>();
+/* The verb and the standing of a document on the plate, the same words the
+   project's deliverables table uses (2.8): Start, Continue, Open, and how
+   many answered. */
+const docStandingOn = (projectId: string, deliverableId: string, shapeId: string | null) =>
+  docStanding(myDocState.get(`${projectId}:${deliverableId}`) ?? null, shapeId ? shape(shapeId) : null, (iso) => formatDate(String(iso).slice(0, 10), 'short'));
+
 /** Released grades per project: how many, and the running total. */
 const gradesFor = new Map<string, { n: number; score: number; outOf: number }>();
 let myNotes = 0;
@@ -438,6 +449,13 @@ if (supabase && account) {
           .order('created_at', { ascending: false })
       : { data: [] as any[] };
 
+    /* Which documents exist, for the verb on the plate: Start for one not
+       begun, Continue for one under way, Open for one submitted (2.8). */
+    const { data: myDocs } = myProjectIds.length
+      ? await supabase.from('documents').select('project_id, deliverable, status, version_no, opened_at, submitted_at, document_fields(field_id, value)').in('project_id', myProjectIds)
+      : { data: [] as any[] };
+    for (const d of myDocs ?? []) myDocState.set(`${d.project_id}:${d.deliverable}`, d);
+
     const { data: theirEntries } = myProjectIds.length
       ? await supabase
           .from('opportunity_participations')
@@ -477,7 +495,7 @@ if (supabase && account) {
     const { data: mineDue } = myProjectIds.length
       ? await supabase
           .from('entry_milestones')
-          .select('id, name, due_on, completed_on, kind, participations!inner(id, project_id, program_id, programs(name, season_year, kind, roles, template_id))')
+          .select('id, name, due_on, completed_on, kind, sort_order, step_id, requires_step, requires_steps, participations!inner(id, project_id, program_id, programs(name, season_year, kind, roles, template_id))')
           .in('participations.project_id', myProjectIds)
           .is('completed_on', null)
           .not('due_on', 'is', null)
@@ -487,7 +505,22 @@ if (supabase && account) {
              here as something the student owes. */
           .eq('owner', 'student')
           .order('due_on', { ascending: true })
+          .order('sort_order', { ascending: true })
+          .order('id')
       : { data: [] as any[] };
+
+    /* The gate (2.8): the names of the steps an open row waits on that
+       are not met, from one read of the same places' rows. */
+    const partIds = [...new Set((mineDue ?? []).map((r: any) => (r.participations as any)?.id).filter(Boolean))];
+    const { data: gateRows } = partIds.length
+      ? await supabase.from('entry_milestones').select('participation_id, step_id, name, kind, completed_on, due_on, sort_order').in('participation_id', partIds).order('due_on', { ascending: true, nullsFirst: false }).order('sort_order')
+      : { data: [] as any[] };
+    const gateOf = (row: any): string[] => {
+      const ids = new Set<string>([...(row.requires_steps ?? []), ...(row.requires_step ? [row.requires_step] : [])]);
+      if (ids.size === 0) return [];
+      const pid = (row.participations as any)?.id;
+      return (gateRows ?? []).filter((g: any) => g.participation_id === pid && ids.has(g.step_id) && !g.completed_on).map((g: any) => g.name);
+    };
 
     const nextFor = new Map<string, any>();
     for (const row of mineDue ?? []) {
@@ -552,6 +585,8 @@ if (supabase && account) {
           name: row.name,
           kind: row.kind,
           dueOn: row.due_on,
+          sortOrder: row.sort_order ?? 0,
+          waitsOn: gateOf(row),
           days,
           late: days !== null && days < 0,
           participationId: part.id,
@@ -562,7 +597,7 @@ if (supabase && account) {
           items: wants.map((d: any) => ({ id: d.id, name: d.name, templateUrl: d.template_url ?? null })),
           /* Written in SciPath: the plate opens the document instead of
              folding a form (6.16). */
-          docs: wants.filter((d: any) => d.shape).map((d: any) => ({ id: d.id, name: d.name, href: `/app/project/${part.project_id}/doc/${d.id}/` })),
+          docs: wants.filter((d: any) => d.shape).map((d: any) => ({ id: d.id, name: d.name, shape: d.shape, href: `/app/project/${part.project_id}/doc/${d.id}/` })),
           projectId: part.project_id,
           projectTitle: titleOf.get(part.project_id) ?? 'A project',
           programId: part.program_id,
@@ -575,7 +610,7 @@ if (supabase && account) {
           href: `/app/project/${part.project_id}/in/${part.program_id}/#m-${row.id}`,
         };
       })
-      .sort((a: any, b: any) => (a.dueOn ?? '').localeCompare(b.dueOn ?? ''));
+      .sort((a: any, b: any) => byDueThenOrder({ due_on: a.dueOn, sort_order: a.sortOrder, id: a.id }, { due_on: b.dueOn, sort_order: b.sortOrder, id: b.id }));
 
     /* Released grades, rolled up per project for the card. The policy
        returns only this person's own released rows. */
@@ -1007,6 +1042,15 @@ if (supabase && account) {
       notebookOf.set(n.project_id, held);
     }
 
+    /* Documents under way, per project: one read for the whole list
+       (2.8), so the row can say "2 of 25 in progress" beside "5 of 30 met"
+       without a query per project. Submitted ones are met already. */
+    const { data: docStateRows } = ids.length
+      ? await supabase.from('documents').select('project_id, status').in('project_id', ids).neq('status', 'submitted')
+      : { data: [] as any[] };
+    const inProgressOf = new Map<string, number>();
+    for (const d of docStateRows ?? []) inProgressOf.set(d.project_id, (inProgressOf.get(d.project_id) ?? 0) + 1);
+
     const entryIds = (entries ?? []).map((e: any) => e.id);
 
     /* Paged, because this is thirty-eight projects times thirty-two
@@ -1017,12 +1061,13 @@ if (supabase && account) {
       ? await allRows(() =>
           supabase
             .from('entry_milestones')
-            .select('id, participation_id, name, kind, due_on, required, blocks_experimentation, completed_on, owner')
+            .select('id, participation_id, name, kind, due_on, required, blocks_experimentation, completed_on, owner, sort_order')
             .in('participation_id', entryIds)
             /* The students' obligations. The Elder's tasks are read separately,
                below, as the Elder's own list. */
             .eq('owner', 'student')
             .order('due_on', { ascending: true, nullsFirst: false })
+            .order('sort_order', { ascending: true })
             .order('id')
         )
       : { data: [] as any[] };
@@ -1087,8 +1132,9 @@ if (supabase && account) {
         selfManaged,
         sponsor,
         notebook: notebookOf.get(p.id) ?? { count: 0, last: null },
-        done: mine.filter((m: any) => m.completed_on).length,
-        total: mine.length,
+        done: stepProgress(mine).done,
+        total: stepProgress(mine).total,
+        inProgress: inProgressOf.get(p.id) ?? 0,
 
         /* Where the project is: the next thing not done, by date. Undated
            steps sort last, because a step nobody has scheduled is not the
@@ -1101,10 +1147,10 @@ if (supabase && account) {
         next:
           mine
             .filter((m: any) => !m.completed_on && m.kind !== 'event')
-            .sort((a: any, b: any) => (a.due_on ?? '9999').localeCompare(b.due_on ?? '9999'))[0] ??
+            .sort(byDueThenOrder)[0] ??
           mine
             .filter((m: any) => !m.completed_on)
-            .sort((a: any, b: any) => (a.due_on ?? '9999').localeCompare(b.due_on ?? '9999'))[0] ??
+            .sort(byDueThenOrder)[0] ??
           null,
         worst,
 
@@ -1195,7 +1241,7 @@ if (supabase && account) {
         daysToNext: daysUntil(
           mine
             .filter((m: any) => !m.completed_on && m.kind !== 'event' && m.due_on)
-            .sort((a: any, b: any) => a.due_on.localeCompare(b.due_on))[0]?.due_on ?? null,
+            .sort(byDueThenOrder)[0]?.due_on ?? null,
           today
         ),
 
@@ -1204,8 +1250,8 @@ if (supabase && account) {
           hasOfficer: officers.length > 0 || selfManaged.length > 0,
           hasSponsor: Boolean(sponsor),
           startedOn: p.started_on,
-          obligationsDone: mine.filter((m: any) => m.completed_on).length,
-          obligationsTotal: mine.length,
+          obligationsDone: stepProgress(mine).done,
+          obligationsTotal: stepProgress(mine).total,
         }),
       };
     });
@@ -1373,7 +1419,7 @@ if (supabase && careRows.length > 0) {
   if (docOf.size > 0) {
     const { data: lines } = await supabase
       .from('deliverable_feedback')
-      .select('id, document_id, field_id, author_id, body_md, created_at, author:author_id(display_name)')
+      .select('id, document_id, field_id, author_id, body_md, created_at, seen_at, author:author_id(display_name)')
       .in('document_id', [...docOf.keys()])
       .gte('created_at', since)
       .order('created_at', { ascending: true });
@@ -1383,7 +1429,7 @@ if (supabase && careRows.length > 0) {
     for (const c of lines ?? []) last.set(`${c.document_id}:${c.field_id ?? ''}`, c);
     const titleOfProject = new Map<string, string>(careRows.map((w: any) => [w.id, w.title]));
     waiting = [...last.values()]
-      .filter((c: any) => authorIds.get(docOf.get(c.document_id)?.project_id)?.has(c.author_id))
+      .filter((c: any) => !c.seen_at && authorIds.get(docOf.get(c.document_id)?.project_id)?.has(c.author_id))
       .map((c: any) => {
         const d = docOf.get(c.document_id);
         return {
@@ -1405,7 +1451,27 @@ const showWork = hasOwnWork && myEntries.length > 0;
 
 /* The reader's own lines on the plate: everything late, then everything
    due inside a week, at most three, the same rule the project page keeps. */
-const myPlate = [...dueNow.filter((d: any) => d.late), ...dueNow.filter((d: any) => !d.late && d.days !== null && d.days <= 7)].slice(0, 3);
+/* One row per project (2.8): the latest of the late, else the nearest
+   due, in the template's order when the dates tie. Three rows for one
+   project read as a list of chores, not a next step. */
+const askFor = (milestoneId: string) => {
+  const n = myNudges.find((x: any) => x.milestone_id === milestoneId && !x.relay_to_id);
+  if (!n) return undefined;
+  return { milestoneId, askedBy: n.asked_by ?? null, askedOn: n.asked_at ? formatDate(String(n.asked_at).slice(0, 10), 'short') : null, times: Number(n.times ?? 1), acknowledged: Boolean(n.acknowledged_at) };
+};
+const myPlate = (() => {
+  const seen = new Set<string>();
+  const out: any[] = [];
+  /* What an Elder asked for comes first, whatever its date: the ask sits
+     on the row it is about, so the nudged step is the project's row. */
+  const asked = dueNow.filter((d: any) => askFor(d.id)).sort((a: any, b: any) => String(myNudges.find((x: any) => x.milestone_id === b.id)?.asked_at ?? '').localeCompare(String(myNudges.find((x: any) => x.milestone_id === a.id)?.asked_at ?? '')));
+  for (const d of [...asked, ...dueNow.filter((d: any) => d.late), ...dueNow.filter((d: any) => !d.late && d.days !== null && d.days <= 7)]) {
+    if (seen.has(d.projectId)) continue;
+    seen.add(d.projectId);
+    out.push(d);
+  }
+  return out;
+})();
 /* And the notebook line only when it is a week quiet. */
 const myNotebookQuietWeek = myNotebookAge === null || myNotebookAge <= -7;
 
@@ -1432,11 +1498,13 @@ const plateRows = [
   ...waiting.map((q) => ({
     id: `q-${q.id}`,
     n: daysUntil(q.when, today),
-    unit: daysUntil(q.when, today) === 0 ? 'today' : 'days ago',
+    unit: daysUntil(q.when, today) === 0 ? 'today' : daysUntil(q.when, today) === -1 ? 'day ago' : 'days ago',
     kick: 'Question',
     title: `${q.who} on ${q.label}`,
     group: q.projectTitle,
     sub: q.body,
+    /* A question wants an answer (2.8): the row leaves when the Elder's
+       reply is the last line on that field. No other way to close it. */
     actions: [{ href: `/app/project/${q.projectId}/doc/${q.deliverable}/${q.field ? `#f-${q.field}` : ''}`, label: 'Answer', accent: true }],
   })),
   ...readyTasks.map((t) => ({
@@ -1448,10 +1516,15 @@ const plateRows = [
     title: t.name,
     group: t.project_title,
     sub: `${t.authors.join(', ') || 'the student'}${t.due_on ? ` · due ${formatDate(t.due_on, 'short')}` : ''}`,
-    actions: t.docHref ? [{ href: t.docHref, label: 'Read it', accent: true }, { href: t.href, label: 'The row' }] : [{ href: t.href, label: 'Open' }],
-    form: t.feedback_on && t.deliverable_id
-      ? { kind: 'feedback' as const, deliverableId: t.deliverable_id }
-      : { kind: 'task' as const, milestoneId: t.milestone_id },
+    /* A task on a document written in SciPath has one verb: read it. The
+       feedback is given at the foot of the document, where the rubric and
+       the Elder's part are, not in a box on the plate (2.8). */
+    actions: t.docHref ? [{ href: t.docHref, label: 'Read it', accent: true }] : [{ href: t.href, label: 'Open' }],
+    form: t.docHref
+      ? undefined
+      : t.feedback_on && t.deliverable_id
+        ? { kind: 'feedback' as const, deliverableId: t.deliverable_id }
+        : { kind: 'task' as const, milestoneId: t.milestone_id },
   })),
   ...(showWork
     ? myPlate.flatMap((d: any) => {
@@ -1462,16 +1535,22 @@ const plateRows = [
           kick: d.late ? 'Overdue' : 'Next up',
           group: d.projectTitle,
           sub: d.dueOn ? `due ${formatDate(d.dueOn, 'short')}` : undefined,
+          ask: askFor(d.id),
         };
         /* A step written in SciPath is a row per document, each with the
            one verb, so a step that wants two documents never puts two
            long buttons on one row (2.8). */
         if (d.docs.length > 0) {
-          return d.docs.map((doc: any) => ({
-            ...base,
-            title: d.docs.length > 1 ? doc.name : d.name,
-            actions: [{ href: doc.href, label: 'Submit', accent: true }],
-          }));
+          return d.docs.map((doc: any) => {
+            const st = docStandingOn(d.projectId, doc.id, doc.shape ?? null);
+            const waits: string[] = d.waitsOn ?? [];
+            return {
+              ...base,
+              title: d.docs.length > 1 ? doc.name : d.name,
+              sub: `${base.sub ? `${base.sub} · ` : ''}${waits.length ? `Waits on ${waits.join(', ')}` : st.label}`,
+              actions: [{ href: doc.href, label: waits.length ? 'Start' : st.verb, accent: true, waitsOn: waits.length ? waits.join(', ') : undefined }],
+            };
+          });
         }
         /* Recorded here, on the row, the same form the project page's
            plate folds open; the link goes to the ledger row for the
@@ -1486,16 +1565,7 @@ const plateRows = [
         }];
       })
     : []),
-  ...(showWork && myNotebookQuietWeek && notebookProject
-    ? [{
-        n: myNotebookAge,
-        unit: myNotebookAge === null ? 'no entries' : 'days quiet',
-        kick: 'Notebook',
-        title: myNotebookAge === null ? 'not started' : 'a week without an entry',
-        group: myNext?.projectTitle ?? myEntries[0]?.project?.title ?? undefined,
-        actions: [{ href: `/app/project/${notebookProject}/#observe`, label: 'Write an entry', accent: true }],
-      }]
-    : []),
+  /* No notebook row (2.8): the notebook has its page and its button. */
 ];
 const showCare = me.runsTheClub && watched.length > 0;
 
@@ -1507,13 +1577,18 @@ const showCare = me.runsTheClub && watched.length > 0;
    *Unclaimed* is gone from here: a project nobody has taken is the assign
    queue's business, and this page is where the work gets done. One line
    under the care list says how many there are and points at the queue. */
+/* The nudges that ask this person to chase somebody else; their own are on the plate. */
+const relayedNudges = myNudges.filter((n: any) => n.relay_to_id);
+/* A section the org file keeps off for the pilot (`hidden_until`), the
+   same rule the bars use; the page still answers for the rest. */
+const hidden = (key: string) => Boolean(org.hiddenUntil && org.hiddenUntil.surfaces.includes(key) && new Date().toISOString().slice(0, 10) < org.hiddenUntil.date);
 const jumps = [
-  myNudges.length > 0 && { id: 'asked', label: 'Asked of you', n: myNudges.length, late: true },
-  hasOwnWork && { id: 'research', label: 'My research', n: myEntries.length || null },
+  relayedNudges.length > 0 && { id: 'asked', label: 'Asked of you', n: relayedNudges.length, late: true },
   showCare && { id: 'care', label: 'In my care', n: mine.length || watched.length, late: careOverdue.length > 0 },
+  hasOwnWork && { id: 'research', label: 'My research', n: myEntries.length || null },
   hasOwnWork && myReviews.length > 0 && { id: 'review', label: 'To review', n: myReviews.length },
-  hasOwnWork && { id: 'join', label: 'Programs', n: null },
-  hasOwnWork && { id: 'past', label: 'Past seasons', n: null },
+  hasOwnWork && !hidden('programs') && { id: 'join', label: 'Programs', n: null },
+  hasOwnWork && !hidden('past') && { id: 'past', label: 'Past seasons', n: null },
 ].filter(Boolean) as { id: string; label: string; n: number | null; late?: boolean }[];
 
 /* The number a section head shows, read off the jump row so the two agree
@@ -1581,9 +1656,14 @@ const groupsOf = (rows: any[]) => {
     if (!t) return 1_000_000;
     return (t.days ?? 9999) + (t.late ? -100_000 : 0);
   };
+  /* The reader's own project last (2.8): the list is what is in their
+     care; their own is on the plate and the project page already. */
+  const ownIds = new Set(myEntries.map((e: any) => e.project?.id).filter(Boolean));
+  const ownLast = (w: any) => (ownIds.has(w.id) ? 1 : 0);
   for (const held of by.values()) {
     held.rows.sort(
       (a: any, b: any) =>
+        ownLast(a) - ownLast(b) ||
         myTaskRank(a) - myTaskRank(b) ||
         queueRank({ verdict: a.verdict, daysToNext: a.daysToNext }) -
           queueRank({ verdict: b.verdict, daysToNext: b.daysToNext }) ||
@@ -1691,6 +1771,36 @@ const grouped = () => {
     } as any);
   }
   return out;
+};
+
+/* Who fell back to polling in the last day, for the advisor's one line
+   (2.8). The policy answers with nothing for anybody else. */
+const fellBack: string[] = [];
+if (supabase && me.isAdvisor) {
+  const { data: inc } = await supabase
+    .from('transport_incidents')
+    .select('state, created_at, users:user_id(display_name)')
+    .eq('state', 'fallback')
+    .gt('created_at', new Date(Date.now() - 24 * 3600 * 1000).toISOString())
+    .order('created_at', { ascending: false })
+    .limit(200);
+  for (const r of inc ?? []) { const n = (r as any).users?.display_name ?? '?'; if (!fellBack.includes(n)) fellBack.push(n); }
+}
+
+/* Which arrangement the care list takes (2.8): `grid` (three across) for
+   an Elder's family, `wide` (one column) for a teacher's class, which is
+   longer and reads down the page. `?care=grid|wide` overrides and is kept
+   in a cookie, so the switch exists before any control for it does. */
+const careChoice = (() => {
+  const q = Astro.url.searchParams.get('care');
+  if (q === 'grid' || q === 'wide') { Astro.cookies.set('sp_care', q, { path: '/app/', sameSite: 'lax', maxAge: 60 * 60 * 24 * 365 }); return q; }
+  const c = Astro.cookies.get('sp_care')?.value;
+  return c === 'grid' || c === 'wide' ? c : null;
+})();
+const careLayout = (group: any): 'grid' | 'wide' => {
+  if (careChoice) return careChoice;
+  const runsIt = group.program?.id ? classesRun.some((c) => c.program_id === group.program.id) : false;
+  return runsIt || me.isAdvisor ? 'wide' : 'grid';
 };
 
 ---
@@ -1836,6 +1946,18 @@ const grouped = () => {
           {attached && <p class="note flash" role="status">{attached}</p>}
         </div>
 
+        {/* The advisor hears, on the page, that somebody's socket would not
+            carry today (2.8). One line; the log has the rest. */}
+        {me.isAdvisor && (
+          <div data-live="live-incidents">
+            {fellBack.length > 0 && (
+              <p class="note flash" role="status">
+                Live updates fell back to polling for {fellBack.length} {fellBack.length === 1 ? 'person' : 'people'} in the last day ({fellBack.join(', ')}). <a href="/app/live/">The log</a>
+              </p>
+            )}
+          </div>
+        )}
+
         {/**
           * **THE COVER.**
           *
@@ -1851,29 +1973,20 @@ const grouped = () => {
           * roles name, and `me.anywhere` is the same discriminator the
           * filter uses, so whoever the rows were chosen for is whoever the
           * sentence is about. 22.27. */}
-        <section class="cover">
-          <p class="kick">
-            {me.names.length ? me.names.map((n) => roleLabel[n]).join(' · ') : org.name}
-            {myMemberships.length > 0 ? ` · ${programTitle(myMemberships[0].programs)}` : ''}
+        {/* The cover with the name and the roles went (2.8): the plate is
+            the first thing on the page. The one line kept is for the case
+            where there is nothing on it. */}
+        {!showWork && !showCare && (
+          <p class="sub">
+            {me.runsTheClub
+              ? me.anywhere
+                ? 'No projects have been registered at this school yet.'
+                : 'No projects have been registered where you hold a role yet.'
+              : me.isStudent
+                ? 'Start a project below, or join a class.'
+                : 'You are signed in. A club role is granted by an officer or the club advisor.'}
           </p>
-          <h1>{account.display_name}</h1>
-          {/* No sentence under the name. It restated the cards below it,
-              and a reader had to read the same three numbers twice to be
-              sure they were the same three numbers. The one thing the
-              cards cannot say is the case where there is nothing to say,
-              so that is the only line kept. */}
-          {!showWork && !showCare && (
-            <p class="sub">
-              {me.runsTheClub
-                ? me.anywhere
-                  ? 'No projects have been registered at this school yet.'
-                  : 'No projects have been registered where you hold a role yet.'
-                : me.isStudent
-                  ? 'Start a project below, or join a class.'
-                  : 'You are signed in. A club role is granted by an officer or the club advisor.'}
-            </p>
-          )}
-        </section>
+        )}
 
         {/* **THE PLATE.** What this person can do right now, in the order to
             do it: the tasks that are theirs on the projects they look after,
@@ -1881,8 +1994,7 @@ const grouped = () => {
             student sees on their project; then what came back. The same
             component the project page uses, so it is one shape. */}
         {(showWork || showCare) && (
-          <section class="sec plate-sec" id="today">
-            <div class="sec-h"><b>On your plate</b><span></span></div>
+          <section class="sec plate-sec" id="today" data-live="today">
             {plateRows.length === 0 ? (
               <div class="allclear"><b>Clear</b>Nothing is waiting on you right now.</div>
             ) : (
@@ -1905,7 +2017,9 @@ const grouped = () => {
             who is both halves at once, and the count on each says which
             sections have anything in them. Only the sections this person
             actually has. */}
-        {jumps.length > 1 && (
+        {/* The jump row is off for the pilot (2.8): two sections do not
+            need a table of contents. `jumps` still numbers the sections. */}
+        {false && jumps.length > 1 && (
           <nav class="jumps" aria-label="On this page">
             {jumps.map((j) => (
               <a href={`#${j.id}`}>
@@ -1941,15 +2055,18 @@ const grouped = () => {
           * work being done rather than by being tidied — and a nudge about a
           * form signed yesterday never appears at all.
           */}
-        {myNudges.length > 0 && (
+        {/* Only what a teacher asked an Elder to chase (2.8). A nudge about
+            the reader's own step sits on that step's plate row, with
+            "Got it", and nowhere else. */}
+        {relayedNudges.length > 0 && (
           <section class="sec asked" id="asked">
             <div class="sec-h">
               <b><span class="sec-n">{no('asked')}</span>Asked of you</b>
-              <span>{myNudges.length === 1 ? '1 outstanding' : `${myNudges.length} outstanding`}</span>
+              <span>{relayedNudges.length === 1 ? '1 outstanding' : `${relayedNudges.length} outstanding`}</span>
             </div>
 
             <ul class="asked-list">
-              {myNudges.map((n: any) => (
+              {relayedNudges.map((n: any) => (
                 <li>
                   <a href={`/app/project/${n.project_id}/in/${n.program_id}/#deliverables`}>
                     {n.obligation}
@@ -2024,36 +2141,19 @@ const grouped = () => {
                       </a>
                     )}
 
-                    {/* "On it" for everybody who was asked. It used to be
-                        withheld from an Elder, on the grounds that the nudge
-                        button beside it was the real answer and this was a
-                        way of answering without answering. With a written
-                        reply under the card, saying you have it is one of
-                        three honest answers rather than the only one. */}
+                    {/* "Got it" for everybody who was asked: one word back,
+                        so whoever asked can tell waiting from chasing (2.8). */}
                     {n.acknowledged_at ? (
                       <span class="sub ack">You said you had this</span>
                     ) : (
                       <form method="POST" action="#outcome" class="inline">
                         <input type="hidden" name="action" value="ack" />
                         <input type="hidden" name="milestone_id" value={n.milestone_id} />
-                        <button class="btn btn-2 btn-sm" type="submit">On it</button>
+                        <button class="btn btn-2 btn-sm" type="submit">Got it</button>
                       </form>
                     )}
                   </div>
 
-                  {/* **The way back.** Nudging the student and saying "on it"
-                      are facts the sender's page can already read. What it
-                      could not read was a sentence: "spoke to her, the form
-                      is coming Friday". One line, to whoever asked. */}
-                  <form method="POST" action="#outcome" class="asked-reply">
-                    <input type="hidden" name="action" value="reply" />
-                    <input type="hidden" name="milestone_id" value={n.milestone_id} />
-                    <label class="asked-reply-l">
-                      <span>Reply to {String(n.asked_by ?? 'whoever asked').split(' ')[0]}</span>
-                      <input class="in" name="note" maxlength="500" />
-                    </label>
-                    <button class="btn btn-2 btn-sm" type="submit">Send</button>
-                  </form>
                 </li>
               ))}
             </ul>
@@ -2064,6 +2164,89 @@ const grouped = () => {
             reader's own projects, is gone: it was the project's own
             deadlines table again, and the project is where it is done. The
             cover card still says what is next and points at it. */}
+
+        {/* Oversight first (2.8): the page is driven by what is in the
+            reader's care; their own project follows. */}
+        {/* ---------------- OVERSIGHT ---------------- */}
+        {me.runsTheClub && (
+          watched.length > 0 ? (
+            <>
+              <div id="projects" tabindex="-1"></div>
+
+              {/* **One list, and a count.** 6.9 gives an officer exactly
+                  what they look after plus what nobody has taken, and the
+                  two are opposite jobs: one is work to chase, the other work
+                  to claim. The second list lives on the assign page now,
+                  where claiming is one click; this page carries the count
+                  and the link. */}
+              <section class="sec" id="care" data-live="care">
+                <div class="sec-h">
+                  <b><span class="sec-n">{no('care')}</span>In my care</b>
+                  <span>
+                    {careGroups.reduce((n: number, g: any) => n + g.rows.length, 0)}
+                    {' projects'}{careOverdue.length ? ` · ${careOverdue.length} behind` : ' · nothing late'}{careQuiet.length ? ` · ${careQuiet.length} ${careQuiet.length === 1 ? 'notebook' : 'notebooks'} quiet` : ''}
+                  </span>
+                </div>
+
+                {/* **What nobody has taken, said once and pointed at the
+                    queue.** The list itself lived here, under a heading
+                    whose purpose was to be empty, beside the list of work to
+                    chase. They are opposite jobs, and the assign page is
+                    where one project becomes somebody's with one click, so
+                    the list is there and this is the count. */}
+                {careGroups.length === 0 && (
+                  <div class="allclear"><b>Nothing assigned</b>Nothing is assigned to you here yet.</div>
+                )}
+
+                {careGroups.map((group: any) => (
+                <div class="care-group">
+                  <div class="group-h care-h">
+                    <span>{group.program ? programTitle(group.program) : 'In no program'}</span>
+                    <span class="t-num">{standingOf(group)}</span>
+                  </div>
+
+                  {/* **CARDS, NOT A TABLE (2.8).** One component, two
+                      arrangements: three across for an Elder's family, one
+                      column of wide cards for a teacher's class. The
+                      arrangement is a word on the wrapper (`careLayout`), so
+                      the switch is a query or a cookie away and a control
+                      for it can be surfaced later without touching the
+                      card. Everything the row carried is on the card:
+                      standing, names, the three counts, both next tasks with
+                      "Do it" where the Elder's is ready, the exports, the
+                      selection on a fair, and the nudge with its track. */}
+                  <div class:list={['care-cards', careLayout(group)]}>
+                    {group.rows.map((w: any) => (
+                      <CareCard
+                        w={w}
+                        nextTask={w.entry ? nextTaskFor.get(w.entry.id) ?? null : null}
+                        readyTask={w.entry ? readyTaskFor.get(w.entry.id) ?? null : null}
+                        elderWord={staffWord(group.program, 'singular')}
+                        selects={Boolean(me.isAdvisor && selects(group.program))}
+                        formatDate={formatDate}
+                        daysWord={daysWord}
+                      />
+                    ))}
+                  </div>
+                </div>
+                ))}
+              </section>
+
+            </>
+          ) : (
+            <section class="sec">
+              <div class="sec-h"><b>All projects</b><span>0</span></div>
+              <div class="note">
+                <h4>No projects yet</h4>
+                <p>Projects appear here as students register them.</p>
+              </div>
+            </section>
+          )
+        )}
+
+        {/* *Yours to do*, the Elder's task list, is a column of the care
+            table now (Next Elder Task): a task belongs on the row of the
+            project it is about. */}
 
         {/* ---------------- YOUR OWN WORK ----------------
 
@@ -2306,394 +2489,9 @@ const grouped = () => {
           </>
         )}
 
-        {/* *Yours to do*, the Elder's task list, is a column of the care
-            table now (Next Elder Task): a task belongs on the row of the
-            project it is about. */}
-
-        {/* ---------------- OVERSIGHT ---------------- */}
-        {me.runsTheClub && (
-          watched.length > 0 ? (
-            <>
-              <div id="projects" tabindex="-1"></div>
-
-              {/* **One list, and a count.** 6.9 gives an officer exactly
-                  what they look after plus what nobody has taken, and the
-                  two are opposite jobs: one is work to chase, the other work
-                  to claim. The second list lives on the assign page now,
-                  where claiming is one click; this page carries the count
-                  and the link. */}
-              <section class="sec" id="care">
-                <div class="sec-h">
-                  <b><span class="sec-n">{no('care')}</span>In my care</b>
-                  <span>
-                    {careGroups.reduce((n: number, g: any) => n + g.rows.length, 0)}
-                    {' projects'}{careOverdue.length ? ` · ${careOverdue.length} behind` : ' · nothing late'}{careQuiet.length ? ` · ${careQuiet.length} ${careQuiet.length === 1 ? 'notebook' : 'notebooks'} quiet` : ''}
-                  </span>
-                </div>
-
-                {/* **What nobody has taken, said once and pointed at the
-                    queue.** The list itself lived here, under a heading
-                    whose purpose was to be empty, beside the list of work to
-                    chase. They are opposite jobs, and the assign page is
-                    where one project becomes somebody's with one click, so
-                    the list is there and this is the count. */}
-                {careGroups.length === 0 && (
-                  <div class="allclear"><b>Nothing assigned</b>Nothing is assigned to you here yet.</div>
-                )}
-
-                {careGroups.map((group: any) => (
-                <div class="care-group">
-                  <div class="group-h care-h">
-                    <span>{group.program ? programTitle(group.program) : 'In no program'}</span>
-                    <span class="t-num">{standingOf(group)}</span>
-                  </div>
-
-                  <table class="tbl">
-                    <thead>
-                      <tr>
-                        {/* **FOUR COLUMNS, DOWN FROM TEN.**
-                        
-                            Project, Students, Elder, Sponsor, Next, Notebook,
-                            Obligations, Nudge, Standing — and Selection on a
-                            fair. Ten columns do not fit a laptop, so the page
-                            scrolled sideways and a teacher lost the verdict
-                            and the verb off the right-hand edge: the two
-                            things this screen exists for were the two she
-                            could not see.
-                        
-                            The cut is not by width, it is by question. This
-                            screen answers *which of these needs me today*.
-                            Students, the Elder, the sponsor and the notebook
-                            are facts about a project, and they are all on the
-                            project page one click away — carrying them here
-                            made the row a record card rather than a queue.
-                        
-                            Sponsor in particular was already said twice:
-                            `assess()` reports "No teacher sponsor" in
-                            Standing, so the column repeated a verdict the
-                            screen was already giving. */}
-                        {/* The verdict first: how late, on a fill, before
-                            the title. The table is sorted by it and a sort
-                            the reader cannot see is a sort they assume is
-                            alphabetical. */}
-                        <th scope="col"><span class="sr">Days</span></th>
-                        <th scope="col">Project</th>
-                        <th scope="col">Next Student Task</th>
-                        {/* The reader's own task on this place, in the
-                            program's word for the reader. */}
-                        <th scope="col">Next {staffWord(group.program, 'singular')} Task</th>
-                        <th scope="col">Nudge</th>
-                        {/* No Standing column: it said the next obligation
-                            over again, which the column beside it names. A
-                            disqualifying finding still shows, on the row. */}
-                        {/* Only where there is somewhere to go forward to. A
-                            class does not select, so the column is absent
-                            rather than present and inapplicable. */}
-                        {me.isAdvisor && selects(group.program) && (
-                          <th scope="col">Selection</th>
-                        )}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {group.rows.map((w: any) => (
-                        <tr class={w.worst?.severity === 'disqualifying' ? 'row-bad' : w.worst?.severity === 'planned' ? 'row-warn' : ''}>
-                          <td class="v">
-                            <span class:list={[
-                              'verdict',
-                              w.daysToNext === null
-                                ? ''
-                                : w.daysToNext < 0
-                                  ? 'late'
-                                  : w.daysToNext <= 7
-                                    ? 'soon'
-                                    : w.verdict.reasons.length === 0
-                                      ? 'ok'
-                                      : '',
-                            ]}>
-                              {w.daysToNext === null ? (w.next ? '—' : '✓') : Math.abs(w.daysToNext)}
-                              <small>
-                                {w.daysToNext === null
-                                  ? w.next ? 'no date' : 'in order'
-                                  : w.daysToNext < 0
-                                    ? Math.abs(w.daysToNext) === 1 ? 'day late' : 'days late'
-                                    : w.daysToNext === 0
-                                      ? 'today'
-                                      : w.daysToNext === 1 ? 'day left' : 'days left'}
-                              </small>
-                            </span>
-                          </td>
-                          <td>
-                            <a href={w.entry ? `/app/entry/${w.entry.id}/` : `/app/project/${w.id}/`}>
-                              {w.title}
-                            </a>
-                            {/* Export beside the notebook rather than on a
-                                row of its own: it is the notebook printed,
-                                and the reason it is offered here as well as
-                                on the participation page is that somebody
-                                assembling paperwork for several projects
-                                should not have to open each one to find it. */}
-                            {/* Who, under the title. A name is not worth a
-                                column of its own and it is what identifies
-                                the row to a teacher, who thinks in students
-                                rather than in project titles. */}
-                            {/* The authors, then whoever looks after them,
-                                said as what they are. Without the word an
-                                Elder read as a third author on a line whose
-                                first names are the students', which is the
-                                one distinction this row exists to make. The
-                                word is the program's own. */}
-                            <span class="sub">
-                              {w.authors.map((a: any) => a.users?.display_name).join(', ') || 'no author'}
-                              {w.officers.length > 0 ? (
-                                <>
-                                  {' · '}
-                                  <span class="role">
-                                    {staffWord(group.program, w.officers.length === 1 ? 'singular' : 'plural')}:
-                                  </span>{' '}
-                                  {w.officers.map((m: any) => m.users?.display_name).join(', ')}
-                                </>
-                              ) : w.selfManaged.length > 0 ? (
-                                ' · self-managed'
-                              ) : (
-                                ''
-                              )}
-                            </span>
-                            {/* **The notebook column went; the date it carried
-                                did not.** `tests/ordering.mjs` requires this
-                                and its reasoning is about the date rather
-                                than the column: being behind on a notebook
-                                means not having written in three weeks, and a
-                                link reading `notebook` gives no reason to open
-                                one. Cutting the column would have taken the
-                                only thing that says so, so it moves onto the
-                                link that was already here. */}
-                            <span class="sub">
-                              <a href={`/app/project/${w.id}/`}>
-                                {w.notebook.count > 0
-                                  ? `${w.notebook.count} ${w.notebook.count === 1 ? 'entry' : 'entries'}, last ${formatDate(w.notebook.last, 'short')}`
-                                  : 'notebook not started'}
-                              </a> ·{' '}
-                              <a href={`/app/project/${w.id}/notebook/`}>export</a> ·{' '}
-                              <a href={`/app/project/${w.id}/team/`}>who is on it</a>
-                            </span>
-                            {w.verdict.level === 'disqualifying' && w.verdict.reasons.map((r: string) => (
-                              <span class="sev bad">{r}</span>
-                            ))}
-                          </td>
-                          <td>
-                            {w.next ? (
-                              <>
-                                <span class="next">{w.next.name}</span>
-                                {/* The date, beside what. How late is the
-                                    verdict block at the start of the row;
-                                    this is the day itself, which a teacher
-                                    quotes to a student. */}
-                                <span class="sub">
-                                  {w.next.due_on ? `due ${formatDate(w.next.due_on, 'short')}` : 'no date set'}
-                                </span>
-                              </>
-                            ) : (
-                              <span class="none">Nothing outstanding</span>
-                            )}
-
-                            {/* **Progress under the obligation, not beside
-                                it.** `4 of 29` had a column and is a second
-                                fact about the same thing the cell already
-                                names: what is owed and how much of it is
-                                done. Kept rather than dropped — it is a
-                                gradebook figure and a teacher wants it — and
-                                folded, because it never needed a heading.
-                            
-                                The notebook count went entirely. It is on
-                                the project page, the title above already
-                                links to it, and it answers a question this
-                                screen is not asking. */}
-                            {w.total > 0 && (
-                              <span class="sub">{w.done} of {w.total} met</span>
-                            )}
-                          </td>
-                          <td>
-                            {w.entry && nextTaskFor.get(w.entry.id) ? (
-                              <>
-                                <span class:list={['next', nextTaskFor.get(w.entry.id).late && 'late']}>{nextTaskFor.get(w.entry.id).name}</span>
-                                <span class:list={['sub', nextTaskFor.get(w.entry.id).late && 'late']}>
-                                  {nextTaskFor.get(w.entry.id).ready
-                                    ? daysWord(nextTaskFor.get(w.entry.id).days)
-                                    : <>waiting on the student · <a href={nextTaskFor.get(w.entry.id).href}>open</a></>}
-                                </span>
-                                {!nextTaskFor.get(w.entry.id).ready && readyTaskFor.get(w.entry.id) && (
-                                  <span class="sub">ready now: {readyTaskFor.get(w.entry.id).name}</span>
-                                )}
-                                {/* The verb as a button, not a word at the end
-                                    of the third line: on a dense row the
-                                    thing to do is the thing to see. */}
-                                {readyTaskFor.get(w.entry.id) && (
-                                  <a class:list={['btn', 'btn-sm', 'task-do', readyTaskFor.get(w.entry.id).late ? 'accent' : 'ghost']} href={readyTaskFor.get(w.entry.id).href}>Do it</a>
-                                )}
-                              </>
-                            ) : (
-                              <span class="none">Nothing open</span>
-                            )}
-                          </td>
-
-                          {/* **THE VERB.**
-                          
-                              Every other cell on this row is a fact. This is
-                              the one place the screen lets somebody act on
-                              what it just told them, and without it a teacher
-                              learns a project is stuck and her only move is
-                              to close the laptop and find the student on
-                              Monday.
-                          
-                              Addressed to the Elder where one is assigned and
-                              to the student where none is — which is the same
-                              fact `assess()` already reports as "No club
-                              officer", so the verdict that flags an
-                              unattended project is the routing rule. No
-                              dropdown, because a choice with an obvious right
-                              answer is a choice nobody should have to make.
-                          
-                              Only where there is a dated obligation to name.
-                              A nudge about nothing in particular is the
-                              message people learn to filter. */}
-                          <td class="nudge-cell">
-                            {w.next && w.nudgeTos.length > 0 ? w.nudgeTos.map((to: any) => {
-                              const nudge = w.nudges?.get(to.id) ?? null;
-                              return (
-                              <form method="POST" action="#outcome" class="inline">
-                                <input type="hidden" name="action" value="nudge" />
-                                <input type="hidden" name="milestone_id" value={w.next.id} />
-                                <input type="hidden" name="recipient_id" value={to.id} />
-                                {/* **The button says what has already happened.**
-                                
-                                    Feedback used to be a flash at the top of
-                                    the page reading "Sent." — the right fact
-                                    in the wrong place. The action belongs to
-                                    one row among forty, and a notice above
-                                    the fold makes the reader carry it back
-                                    down to work out which. Worse, the button
-                                    underneath was unchanged, so the row still
-                                    read as though nothing had been done.
-                                
-                                    So the count moves onto the control.
-                                    "Nudged" tells a teacher nothing she did
-                                    not already know; "nudged twice, still
-                                    open" tells her to stop typing and walk
-                                    over, which is the right outcome and the
-                                    software should say it rather than imply
-                                    it. A row that met its obligation after a
-                                    nudge is the reason she presses it again.
-                                
-                                    Still a button once nudged, never a
-                                    disabled label. One a week is refused by
-                                    the unique index and answered plainly, and
-                                    a control that greys itself out is one
-                                    somebody cannot use next Monday either. */}
-                                <button class="btn btn-sm" type="submit">
-                                  {nudge
-                                    ? `Nudged ${to.first} ${nudge.nudges}×`
-                                    : `Nudge ${to.first}`}
-                                </button>
-
-                                {/* **THE TRACK, AND IT HAS FOUR STATES.**
-                                
-                                    It had two: nudged, and met. Between them
-                                    a teacher who asked on Monday saw the same
-                                    row on Wednesday whether the Elder had
-                                    read it and started, or had not opened the
-                                    app — situations needing opposite
-                                    responses, and the screen told her to do
-                                    the same thing in both.
-                                
-                                    Read worst first, so the row says the one
-                                    thing worth acting on rather than a
-                                    history:
-                                
-                                      met       the obligation is done
-                                      relayed   the Elder passed it to the
-                                                student, and named who
-                                      seen      somebody said they have it
-                                      not seen  nothing has come back
-                                
-                                    `relayed` above `seen` deliberately. An
-                                    Elder who passed it on has done the thing
-                                    that was asked of them, and saying only
-                                    "seen" would lose it. **A delegated nudge
-                                    that is not tracked to its second hop is a
-                                    way of doing nothing while feeling like
-                                    you did**, so the hop is the fact worth
-                                    surfacing. */}
-                                {nudge && (
-                                  <span
-                                    class={
-                                      nudge.met_after || nudge.relayed_at || nudge.acknowledged_at
-                                        ? 'sub'
-                                        : 'sub late'
-                                    }
-                                  >
-                                    {nudge.met_after
-                                      ? 'met'
-                                      : nudge.relayed_at
-                                        ? `passed to ${String(nudge.relayed_to ?? 'them').split(' ')[0]}`
-                                        : nudge.acknowledged_at
-                                          ? `${to.first} has it`
-                                          : `${to.first} · not seen`}
-                                  </span>
-                                )}
-                                {/* What they wrote back, on the row it is
-                                    about, so every exchange with a project
-                                    in somebody's care is in this list. */}
-                                {nudge?.reply && (
-                                  <span class="sub reply">
-                                    <i>{nudge.reply}</i> · {formatDate(String(nudge.replied_at).slice(0, 10), 'short')}
-                                  </span>
-                                )}
-                              </form>
-                              );
-                            }) : (
-                              <span class="none">—</span>
-                            )}
-                          </td>
-                          {me.isAdvisor && selects(group.program) && (
-                            <td>
-                              <form method="POST" action="#outcome" class="inline">
-                                <input type="hidden" name="action" value="select" />
-                                <input type="hidden" name="participation_id" value={w.entry.id} />
-                                <select
-                                  name="state"
-                                  aria-label={`Selection state for ${w.title}`}
-                                >
-                                  <option value="candidate" selected={w.entry.selection_state === 'candidate'}>Under consideration</option>
-                                  <option value="selected" selected={w.entry.selection_state === 'selected'}>Selected</option>
-                                  <option value="not_selected" selected={w.entry.selection_state === 'not_selected'}>Not selected</option>
-                                  <option value="withdrawn" selected={w.entry.selection_state === 'withdrawn'}>Withdrawn</option>
-                                </select>
-                                <button class="btn btn-sm" type="submit">Set</button>
-                              </form>
-                            </td>
-                          )}
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-                ))}
-              </section>
-
-            </>
-          ) : (
-            <section class="sec">
-              <div class="sec-h"><b>All projects</b><span>0</span></div>
-              <div class="note">
-                <h4>No projects yet</h4>
-                <p>Projects appear here as students register them.</p>
-              </div>
-            </section>
-          )
-        )}
-
         {hasOwnWork && (
           <>
+    {!hidden('programs') && (
     <section class="sec" id="join">
       {/* Not "Open fairs": a research class is not a fair, and "programs" is
           our word rather than a student's. The heading says what the list is
@@ -3086,13 +2884,16 @@ const grouped = () => {
         </div>
       )}
     </section>
+    )}
 
+            {!hidden('past') && (
             <section class="sec" id="past">
               <div class="sec-h"><b><span class="sec-n">{no('past')}</span>Past seasons</b><span>nothing yet</span></div>
               <p class="t-sm">
                 What you have done before appears here, with any placement.
               </p>
             </section>
+            )}
           </>
         )}
       </>
@@ -3429,8 +3230,6 @@ const grouped = () => {
      the second is the one somebody has not noticed yet. */
   .sev { display: block; font-family: var(--face-ui); font-size: 0.86rem; }
   .sev.bad { color: var(--alert); font-weight: 600; }
-  .row-bad td { background: var(--alert-bg); }
-  .row-warn td { background: var(--ready-bg); }
   .assign { display: flex; flex-wrap: wrap; gap: 14px; align-items: flex-end; }
   .assign label { display: block; }
   .assign label > span { display: block; margin-bottom: 5px; font-family: var(--face-ui); font-size: 0.9rem; }
@@ -3462,22 +3261,12 @@ const grouped = () => {
   .asked-ask { margin: 6px 0 0; font-family: var(--face-ui); font-size: 0.92rem; }
   .asked-do { display: flex; gap: 8px; margin-top: 8px; align-items: center; }
   .asked-do .btn { font-size: 0.86rem; padding: 5px 10px; }
-  .plate-sec { margin-top: 28px; }
+  .plate-sec { margin-top: 0; padding-top: 12px; }
   .plate-sec .alarm { margin-top: 0; }
   .came-back { margin: 14px 0 0; font-size: 0.95rem; }
   .came-back .sub { color: var(--ink-3); }
-  .nudge-cell .reply { display: block; max-width: 22em; white-space: normal; }
-  .task-do { display: inline-block; margin-top: 6px; }
-  .asked-reply { display: flex; gap: 8px; margin-top: 8px; max-width: 34em; }
-  .asked-reply-l { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; font-family: var(--face-ui); font-size: 0.82rem; color: var(--ink-3); }
-  .asked-reply { align-items: flex-end; }
   .sub.ack { margin: 0; }
 
-  .nudge-cell { white-space: nowrap; }
-  /* Two Elders on a place are two buttons, stacked. */
-  .nudge-cell form + form { margin-top: 6px; }
-  .nudge-cell form { display: block; margin: 0; }
-  .nudge-cell .btn { display: inline-block; min-width: 9.5em; text-align: center; font-size: 0.86rem; padding: 5px 10px; }
 
   /* Two states worth colour, and no more.
   

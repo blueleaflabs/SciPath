@@ -1,0 +1,57 @@
+---
+/**
+ * THE HEAD OF A PRINTED PAGE (2.8).
+ *
+ * The school's mark, then what this paper is (the document's name, large,
+ * since a stack of PDFs is told apart by it), then whose (the project's
+ * title, a size smaller), then the facts a reader wants under it as a
+ * definition list. One component for the single document's PDF and for
+ * the export of every deliverable, on `print-book.css`.
+ */
+import type { Org } from '../config/orgs';
+import { platform } from '../config/site';
+
+interface Props {
+  org: Org;
+  /** What the paper is: the document's name. */
+  what: string;
+  /** Whose: the project's title. */
+  title: string;
+  rows: { label: string; value: string; href?: string }[];
+  /** Without the lockup, for a paper that follows another in one export. */
+  bare?: boolean;
+}
+const { org, what, title, rows, bare = false } = Astro.props;
+---
+
+<header class:list={['title', bare && 'title-bare']}>
+  {!bare && (
+    <div class="lockup">
+      <span class="badge" data-len={String(org.mark.length)} aria-hidden="true">{org.mark}</span>
+      <span class="names">
+        <span class="org">{org.name}</span>
+        {!org.isPlatform && <span class="plat">{platform.lockupSuffix}</span>}
+      </span>
+    </div>
+  )}
+
+  <h1 class="what">{what}</h1>
+  <p class="whose">{title}</p>
+
+  <dl>
+    {rows.map((r) => (
+      <>
+        <dt>{r.label}</dt>
+        <dd>{r.href ? <a href={r.href}>{r.value}</a> : r.value}</dd>
+      </>
+    ))}
+  </dl>
+</header>
+
+<style is:global>
+  /* The document's name leads (2.8): it was the small kicker over a very
+     large project title, and a folder of PDFs could not be told apart. */
+  .title h1.what { font-size: 1.9rem; line-height: 1.2; margin: 0 0 6px; }
+  .title .whose { font-family: 'IBM Plex Sans', system-ui, sans-serif; font-size: 1.33rem; line-height: 1.25; font-weight: 600; margin: 0 0 14px; }
+  .title-bare { margin-top: 0; }
+</style>

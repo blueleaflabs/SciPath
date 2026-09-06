@@ -31,9 +31,10 @@ that makes it real is named in each entry.
 | --- | --- |
 | `npm run db:start` | Start the Supabase containers **with `.dev.vars` loaded**, so the Google client id reaches the auth container. `npx supabase start` typed by hand does not load the file, and Google then answers `invalid_client`. |
 | `npm run db:stop` | Stop them. |
+| `npm run live:policies` | Apply the two Realtime policies (`live_listen`, `live_speak`) once the Realtime service has recreated `realtime.messages`, which on a local `db reset` happens after the migrations ran. Idempotent; part of `reset`. `-- --cloud` for the hosted project, where the migration has usually already applied them. |
 | `npm run db:restart` / `npm run restart` | Stop everything and bring it back. The fix when `supabase status` prints healthy addresses and every seed says connection refused (Kong did not come back), and the fix after a Docker cold start left the auth container without its Google keys. |
 | `npm run supabase -- <args>` | The Supabase CLI with `.dev.vars` loaded. `db reset --linked` is refused unless `.cloud.vars` names the project. |
-| `npm run reset` | **Clean slate, local only.** Asks, then: `db reset` (schema from `0001`), empty the local file bucket, seed orgs, the demo tenant, programs from the templates, the thirteen scenarios, the fourteen cases, people (`--optional`), the published records, the journal back catalogue, and index the records. Run after any change to `0001` and before `pilot:load`. Refuses if a Cloudflare token is in the environment. |
+| `npm run reset` | **Clean slate, local only.** Asks, then: `db reset` (schema from `0001`), the live policies on `realtime.messages` (`live:policies`), empty the local file bucket, seed orgs, the demo tenant, programs from the templates, the thirteen scenarios, the fourteen cases, people (`--optional`), the published records, the journal back catalogue, and index the records. Run after any change to `0001` and before `pilot:load`. Refuses if a Cloudflare token is in the environment. |
 | `npm run reset:storage` | Empty the local file bucket alone. `-- --remote --bucket=<name>` empties a real R2 bucket and needs the four `R2_` variables; nothing else reaches production storage. |
 
 ## Seeding, one piece at a time
@@ -102,6 +103,8 @@ Every one of these reads `.cloud.vars` and checks `PILOT_PROJECT_REF`.
 | Command | What it does |
 | --- | --- |
 | `npm run backup` | Dump the local database. `-- --cloud` dumps the linked project. Take one before anything below. |
+| `npm run backup:media` | Mirror the R2 bucket (every photograph, journey map, drawn graphic, signed form and published record) into a dated folder under `local-data/backups/`, with a manifest. Needs the four `R2_` variables. `-- --cloud` reads `.cloud.vars`; `-- --into <folder>` continues an earlier mirror and copies only what changed. Read-only against the bucket. |
+| `npm run restore:db -- <base>` | Replay a `backup` set (roles, schema, data) into the **local** stack, resetting it first, through `psql` in the database container. Refuses `--cloud`: restoring the hosted project is done by hand with the commands `backup` prints. Run it once before you need it. |
 | `npm run verify:cloud` | Count every table on the hosted project and change nothing. |
 | `npm run reset:cloud` | **Destroys the hosted project's data**: `node scripts/reset-cloud.mjs --yes --project=<ref>`, and it will not run without both. `--keep-storage` leaves R2 alone. Not for a project holding real work (decision 71). |
 | `npm run wipe:demo` | Remove the demonstration tenant's rows. Says what it would remove; `--yes` removes it; `--force` also where a real account has touched it. |
@@ -128,6 +131,7 @@ failure. The four that have to be green before a drop: `npm test`,
 | `test:next` | `?next=` is a safe path. |
 | `test:status` | Status computation. |
 | `test:transport` | The mail transport's guards. |
+| `test:live` | Live updates: the socket first, the pulse only on fallback and paced by the school's class periods, broadcast triggers on every watched table, the document room's presence and soft lock. |
 | `test:config-sources` | Every configured variable has a source. |
 | `test:dates` | Date ordering rules. |
 | `test:reach` | Who reaches which program. |

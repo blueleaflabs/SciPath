@@ -1,0 +1,21 @@
+# A step with nothing to hand in: the record is the day it was done. One
+# page and one verb like every other step (2.8); Submit marks the step
+# done on that date.
+
+id: mark-done
+name: Done
+version: 1
+guidance: >-
+  Nothing to hand in for this one. Put the day it was done and submit.
+sections:
+  - id: done
+    name: Done
+    fields:
+      - id: on
+        kind: date
+        prompt: Done on
+        required: true
+      - id: note
+        kind: long
+        prompt: A line about it, if you like
+        tip: Optional.

@@ -1,0 +1,65 @@
+---
+
+import { orgPaths } from '../../../lib/tenant-paths';
+export const getStaticPaths = orgPaths;
+
+import Base from '../../../layouts/Base.astro';
+import PageHead from '../../../components/PageHead.astro';
+---
+
+<Base
+  title="Terms of use"
+  description="What SciPath is and is not, and what a record kept here does and does not prove."
+>
+  <PageHead
+    eyebrow="Policies"
+    title="Terms of use"
+    lede="What the software is for, what a record kept in it is, and who remains in charge."
+  />
+
+  <div class="wrap">
+    <div class="prose">
+      <h2>What SciPath is</h2>
+      <p>
+        SciPath is a planning and recordkeeping aid for student research. It keeps a
+        project's calendar, its notebook, the documents written for a class or a
+        fair, the feedback given on them, and the grades and outcomes recorded
+        against them. It is not itself an authority on any of those things.
+      </p>
+
+      <h2>Who remains authoritative</h2>
+      <p>
+        Your adult sponsor, your teacher, your school's review committee (SRC or
+        IRB where one applies), and the destination fair remain authoritative.
+        Nothing SciPath records, prints, or displays substitutes for their
+        approval, and a deadline, rubric, or rule shown here is a copy of theirs
+        and yields to theirs where the two differ.
+      </p>
+
+      <h2>What the notebook is</h2>
+      <p>
+        Notebook entries are recorded append only: each one is attributed, carries
+        the day the work happened, and is never edited afterwards. A correction
+        appears as a later entry naming the one it corrects. This is a record kept
+        in order, which is a discipline device rather than proof against a
+        determined author, and it is offered as no more than that.
+      </p>
+
+      <h2>What a printed copy is</h2>
+      <p>
+        A PDF or printed copy of a notebook or a document is the record as it
+        stood at the date and time printed on it. Later entries, later versions,
+        and later feedback are not on it.
+      </p>
+
+      <h2>Your account and your work</h2>
+      <p>
+        You keep the copyright in what you write here. A school that runs SciPath
+        may read the work its students record in the programs it runs, and the
+        people it names as Elders, officers, teachers, or sponsors see what their
+        role gives them. The privacy policy lists what is stored and how to have
+        it deleted.
+      </p>
+    </div>
+  </div>
+</Base>

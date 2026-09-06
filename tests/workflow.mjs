@@ -361,7 +361,7 @@ test('the entry page derives doneness rather than reading it', () => {
      derivation is the same. */
   assert.match(
     page,
-    /done: students\.filter\(\(m: any\) => satisfied\(m\)\)\.length/,
+    /stepProgress\(students, satisfied\)/,
     'the phase count reads the row again'
   );
   assert.doesNotMatch(

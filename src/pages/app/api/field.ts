@@ -22,6 +22,24 @@ const json = (body: unknown, status = 200) =>
     headers: { 'Content-Type': 'application/json', 'Cache-Control': 'private, no-store' },
   });
 
+/* One field, read: what a page asks for when a broadcast said a field
+   changed but was too big to ride along (2.8). The policies decide. */
+export const GET: APIRoute = async ({ request, cookies, locals, url }) => {
+  if (!(locals as any).session) return json({ ok: false }, 401);
+  const supabase = serverClient(request, cookies, (locals as any).runtime?.env);
+  const documentId = url.searchParams.get('document_id') ?? '';
+  const fieldId = url.searchParams.get('field_id') ?? '';
+  if (!documentId || !fieldId) return json({ ok: false, error: 'document and field' }, 400);
+  const { data, error } = await supabase
+    .from('document_fields')
+    .select('value, version, updated_at, updated_by')
+    .eq('document_id', documentId)
+    .eq('field_id', fieldId)
+    .maybeSingle();
+  if (error) return json({ ok: false, error: error.message }, 403);
+  return json({ ok: true, value: data?.value ?? null, version: data?.version ?? 0, at: data?.updated_at ?? null });
+};
+
 export const POST: APIRoute = async ({ request, cookies, locals }) => {
   const runtime = (locals as any).runtime?.env;
   const supabase = serverClient(request, cookies, runtime);

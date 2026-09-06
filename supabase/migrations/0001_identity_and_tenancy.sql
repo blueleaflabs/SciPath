@@ -2222,9 +2222,11 @@ create table public.program_milestones (
   -- The template step this came from, so a dependency can be resolved by
   -- id rather than by the name a teacher may later edit.
   step_id       text,
-  -- For a staff task: the student step that has to be met before the task
-  -- is actionable, and the deliverable the feedback is written on.
+  -- The steps that have to be met before this one may be started (2.8):
+  -- the template's `requires`, for a student step and a staff task alike.
+  -- `requires_step` is the first of them, kept for older readers.
   requires_step text,
+  requires_steps text[] not null default '{}',
   feedback_on   text,
 
   /* **Which deliverable this step asks for**, by the id the template uses.
@@ -2738,6 +2740,7 @@ create table public.entry_milestones (
   owner         text not null default 'student' check (owner in ('student', 'staff')),
   step_id       text,
   requires_step text,
+  requires_steps text[] not null default '{}',
   feedback_on   text
 );
 
@@ -2982,10 +2985,10 @@ begin
   insert into public.entry_milestones
     (org_id, participation_id, program_milestone_id, name, kind, due_on, required,
      blocks_experimentation, satisfied_by, sort_order, source, phase,
-     owner, step_id, requires_step, feedback_on)
+     owner, step_id, requires_step, requires_steps, feedback_on)
   select p_org_id, p_participation_id, m.id, m.name, m.kind, m.due_on, m.required,
          m.blocks_experimentation, m.satisfied_by, m.sort_order, m.source, m.phase,
-         m.owner, m.step_id, m.requires_step, m.feedback_on
+         m.owner, m.step_id, m.requires_step, m.requires_steps, m.feedback_on
     from public.program_milestones m
    where m.program_id = p_program_id
      and (m.org_id is null or m.org_id = p_org_id)
@@ -3912,19 +3915,19 @@ begin
 
       if v_constraint like 'assessments%' then
         raise exception
-          'there are grades recorded against this class. Removing it would delete them, so it is not done from here.';
+          'There is activity recorded against this class. Please contact your teacher for removal.';
       elsif v_constraint like 'deliverable_feedback%' then
         raise exception
-          'there is feedback recorded against this class. Removing it would delete it, so it is not done from here.';
+          'There is activity recorded against this class. Please contact your teacher for removal.';
       elsif v_constraint like 'project_sponsors%' then
         raise exception
           'a teacher is recorded as sponsoring this project here. Ask them, or an officer, to take that off first.';
       elsif v_constraint like 'deliverables%' then
         raise exception
-          'there are documents recorded against this class. Removing it would delete them, so it is not done from here.';
+          'There is activity recorded against this class. Please contact your teacher for removal.';
       else
         raise exception
-          'something recorded against this class is still attached to it, so it cannot be removed yet.';
+          'There is activity recorded against this class. Please contact your teacher for removal.';
       end if;
     end;
 
@@ -4755,7 +4758,12 @@ create table public.deliverable_feedback (
   document_id      uuid,
   field_id         text,
   field_version    int,
-  reply_to         uuid references public.deliverable_feedback on delete restrict
+  reply_to         uuid references public.deliverable_feedback on delete restrict,
+  -- A student's line that needs no reply, closed by an Elder or the
+  -- advisor from the Workbench (2.8): it leaves the plate and stays in
+  -- the thread. Null while it waits.
+  seen_at          timestamptz,
+  seen_by          uuid references public.users on delete restrict
 );
 create index if not exists deliverable_feedback_document_id_idx on public.deliverable_feedback (document_id);
 create index if not exists deliverable_feedback_reply_to_idx on public.deliverable_feedback (reply_to);
@@ -4776,6 +4784,58 @@ create policy deliverable_feedback_read on public.deliverable_feedback
 
 grant select on public.deliverable_feedback to authenticated, service_role;
 grant insert, update on public.deliverable_feedback to service_role;
+
+-- THE GATE (2.8). The names of the steps this one waits on that are not
+-- yet met, on the same place; empty when it may be started. The template's
+-- `requires` list, for a student step and a staff task alike. A required
+-- step that has no row on this place does not hold the gate shut: a
+-- template edited mid-season names steps some projects were seeded
+-- without.
+create or replace function app.gate_of(p_milestone_id uuid)
+returns text[]
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select coalesce(array_agg(r.name order by r.sort_order), '{}')
+    from public.entry_milestones m
+    join public.entry_milestones r
+      on r.participation_id = m.participation_id
+     and (r.step_id = any (m.requires_steps) or r.step_id = m.requires_step)
+     and r.completed_on is null
+   where m.id = p_milestone_id;
+$$;
+
+-- Whether a step may be started or a staff task done yet: everything it
+-- waits on is met, or it waits on nothing.
+create or replace function app.staff_task_ready(p_milestone_id uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select coalesce(array_length(app.gate_of(p_milestone_id), 1), 0) = 0;
+$$;
+
+-- Refuses in words when a step is still waiting on another.
+create or replace function app.assert_step_open(p_milestone_id uuid)
+returns void
+language plpgsql
+stable
+security definer
+set search_path = ''
+as $$
+declare
+  v_gate text[];
+begin
+  v_gate := app.gate_of(p_milestone_id);
+  if coalesce(array_length(v_gate, 1), 0) > 0 then
+    raise exception 'this step waits on %', array_to_string(v_gate, ', ');
+  end if;
+end;
+$$;
 
 create or replace function public.record_deliverable(
   p_participation_id     uuid,
@@ -4816,6 +4876,11 @@ begin
 
   if coalesce(trim(p_label), '') = '' then
     raise exception 'give the deliverable a name';
+  end if;
+
+  /* A step waiting on another is not recorded early (2.8). */
+  if p_milestone_id is not null then
+    perform app.assert_step_open(p_milestone_id);
   end if;
 
   /* **The one it replaces, if there is one.**
@@ -5318,7 +5383,10 @@ begin
     return 'self';
   end if;
 
-  v_week := to_char(now(), 'IYYY-"W"IW');
+  /* One a day per task and person (2.8): a nudge is "do this one", and a
+     second the same day is the same message. It was one a week, which
+     kept an Elder from asking again on Thursday about Monday's ask. */
+  v_week := to_char(now(), 'IYYY-MM-DD');
 
   insert into public.notifications
     (org_id, kind, recipient_id, actor_id, subject_kind, subject_id,
@@ -11678,8 +11746,9 @@ declare
   v_prev uuid;
   v_id   uuid;
   v_kind text;
+  v_done date;
 begin
-  select e.org_id, e.id into v_org, v_part
+  select e.org_id, e.id, m.completed_on into v_org, v_part, v_done
     from public.entry_milestones m
     join public.participations e on e.id = m.participation_id
    where m.id = p_milestone_id;
@@ -11698,6 +11767,12 @@ begin
     v_kind := 'elder';
   else
     raise exception 'the advisor grades; the Elder on the place scores';
+  end if;
+
+  /* A family score is a score on work handed in (2.8). The teacher may
+     grade an obligation that was never met; the Elder waits for it. */
+  if v_kind = 'elder' and v_done is null then
+    raise exception 'not handed in yet: the family score waits for the work';
   end if;
 
   if not exists (
@@ -11827,27 +11902,6 @@ $$;
 
 grant execute on function app.oversees(uuid) to authenticated;
 
--- Whether a staff task may be done yet: its required student step is met,
--- or it requires nothing.
-create or replace function app.staff_task_ready(p_milestone_id uuid)
-returns boolean
-language sql
-stable
-security definer
-set search_path = ''
-as $$
-  select case
-    when m.requires_step is null then true
-    else exists (
-      select 1 from public.entry_milestones r
-       where r.participation_id = m.participation_id
-         and r.step_id = m.requires_step
-         and r.completed_on is not null
-    )
-  end
-    from public.entry_milestones m
-   where m.id = p_milestone_id;
-$$;
 
 grant execute on function app.staff_task_ready(uuid) to authenticated;
 
@@ -12027,8 +12081,7 @@ set search_path = ''
 as $$
   select m.id, m.name, m.due_on, m.completed_on,
          app.staff_task_ready(m.id),
-         (select r.name from public.entry_milestones r
-           where r.participation_id = m.participation_id and r.step_id = m.requires_step limit 1),
+         array_to_string(app.gate_of(m.id), ', '),
          m.feedback_on,
          (select d.id from public.deliverables d
            where d.participation_id = m.participation_id and d.type = m.feedback_on and d.superseded_at is null
@@ -12047,7 +12100,9 @@ as $$
        select 1 from public.project_authors a
         where a.participation_id = e.id and a.user_id = auth.uid() and a.role = 'officer'
      )
-   order by m.completed_on nulls first, m.due_on nulls last;
+   /* The date, then the template's own order when dates tie (2.8), so
+      the Elder's list names the same next thing the student's does. */
+   order by m.completed_on nulls first, m.due_on nulls last, m.sort_order, m.id;
 $$;
 
 grant execute on function public.my_staff_tasks() to authenticated;
@@ -12661,6 +12716,29 @@ begin
     raise exception 'a document needs a deliverable and a shape';
   end if;
 
+  /* Not started early (2.8): when every open step on this project that
+     wants the deliverable is still waiting on another, the page does not
+     open. A step nobody seeded with the deliverable does not gate. */
+  if exists (
+       select 1 from public.entry_milestones e
+         join public.program_milestones pm on pm.id = e.program_milestone_id
+         join public.participations pt on pt.id = e.participation_id
+        where pt.project_id = p_project_id and pm.deliverable_ref = p_deliverable and e.completed_on is null)
+     and not exists (
+       select 1 from public.entry_milestones e
+         join public.program_milestones pm on pm.id = e.program_milestone_id
+         join public.participations pt on pt.id = e.participation_id
+        where pt.project_id = p_project_id and pm.deliverable_ref = p_deliverable and e.completed_on is null
+          and coalesce(array_length(app.gate_of(e.id), 1), 0) = 0)
+  then
+    raise exception 'this step waits on %', (
+      select array_to_string(app.gate_of(e.id), ', ') from public.entry_milestones e
+        join public.program_milestones pm on pm.id = e.program_milestone_id
+        join public.participations pt on pt.id = e.participation_id
+       where pt.project_id = p_project_id and pm.deliverable_ref = p_deliverable and e.completed_on is null
+       order by e.sort_order limit 1);
+  end if;
+
   select d.id into v_id from public.documents d
    where d.project_id = p_project_id and d.deliverable = p_deliverable;
   if v_id is not null then
@@ -12803,6 +12881,10 @@ begin
   select e.project_id into v_part_project from public.participations e where e.id = p_participation_id;
   if v_part_project is null or v_part_project <> v_doc.project_id then
     raise exception 'that place is not this project''s';
+  end if;
+  /* A step waiting on another is not submitted early (2.8). */
+  if p_milestone_id is not null then
+    perform app.assert_step_open(p_milestone_id);
   end if;
 
   select coalesce(jsonb_object_agg(f.field_id, f.value), '{}'::jsonb) into v_content
@@ -13063,6 +13145,41 @@ $$;
 revoke all on function public.resolve_ask(uuid) from public, anon;
 grant execute on function public.resolve_ask(uuid) to authenticated;
 
+-- A student's line seen by staff and needing no reply: off the plate,
+-- still in the thread. Anybody who may comment on the project and is
+-- not one of its authors may close one.
+create or replace function public.mark_feedback_seen(p_feedback_id uuid)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_row public.deliverable_feedback%rowtype;
+  v_project uuid;
+begin
+  if auth.uid() is null then
+    raise exception 'not authenticated';
+  end if;
+  select * into v_row from public.deliverable_feedback f where f.id = p_feedback_id;
+  if v_row.id is null or v_row.org_id is distinct from app.org_id() then
+    raise exception 'no such comment at this school';
+  end if;
+  select e.project_id into v_project from public.participations e where e.id = v_row.participation_id;
+  if app.authors_project(v_project) or not app.may_comment_on(v_project) then
+    raise exception 'the Elders on this project and the advisor close a question';
+  end if;
+  update public.deliverable_feedback
+     set seen_at = now(), seen_by = auth.uid()
+   where id = p_feedback_id and seen_at is null;
+  perform app.audit(v_row.org_id, 'feedback.seen', 'deliverable_feedback', p_feedback_id, null,
+    jsonb_build_object('document', v_row.document_id, 'field', v_row.field_id));
+end;
+$$;
+
+revoke all on function public.mark_feedback_seen(uuid) from public, anon;
+grant execute on function public.mark_feedback_seen(uuid) to authenticated;
+
 -- An image pasted into a field: the object is already in the bucket, this
 -- is the row that lets the media route serve it under the project's
 -- visibility. Authors only.
@@ -13093,5 +13210,490 @@ $$;
 
 revoke all on function public.add_document_media(uuid, text) from public, anon;
 grant execute on function public.add_document_media(uuid, text) to authenticated;
+
+-- ===========================================================================
+-- THE PULSE (2.8)
+--
+-- A page asks, every few seconds, whether anything it could show has
+-- changed, and re-reads its live regions when the answer is yes. One
+-- number answers for the whole app: the newest moment among the things
+-- this person may read (a line of feedback, a document submitted, a
+-- score, a step met; not a field saved, which is the writer's own
+-- keystrokes and would have every open page re-reading itself) and the newest notice addressed to them.
+--
+-- Two functions because the tables sit on opposite sides of row level
+-- security. The first runs as the caller, so every `max` is over the rows
+-- the policies already let them read and nothing is widened; the second is
+-- `security definer` over `notifications`, which is closed to sessions by
+-- design, and hard-codes `recipient_id = auth.uid()` so it cannot be
+-- pointed at anybody else.
+-- ===========================================================================
+
+create or replace function public.my_notice_pulse()
+returns timestamptz
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select greatest(max(n.created_at), max(n.acknowledged_at))
+    from public.notifications n
+   where n.recipient_id = auth.uid();
+$$;
+
+revoke all on function public.my_notice_pulse() from public, anon;
+grant execute on function public.my_notice_pulse() to authenticated;
+
+create or replace function public.my_pulse()
+returns timestamptz
+language sql
+stable
+security invoker
+set search_path = ''
+as $$
+  select greatest(
+    coalesce((select max(f.created_at) from public.deliverable_feedback f), 'epoch'::timestamptz),
+    coalesce((select max(f.seen_at) from public.deliverable_feedback f), 'epoch'::timestamptz),
+    coalesce((select max(d.submitted_at) from public.documents d), 'epoch'::timestamptz),
+    coalesce((select max(a.created_at) from public.assessments a), 'epoch'::timestamptz),
+    coalesce((select max(m.updated_at) from public.entry_milestones m), 'epoch'::timestamptz),
+    coalesce(public.my_notice_pulse(), 'epoch'::timestamptz)
+  );
+$$;
+
+revoke all on function public.my_pulse() from public, anon;
+grant execute on function public.my_pulse() to authenticated;
+
+notify pgrst, 'reload schema';
+
+-- ===========================================================================
+-- LIVE, OVER A SOCKET (2.8)
+--
+-- The pulse above is a question a page asks. This is the answer arriving
+-- unasked: a change to something a person may read is sent, by a trigger,
+-- down Supabase Realtime's broadcast channel for the place it happened,
+-- and the page listening there re-reads its live regions. The Worker sees
+-- nothing of it. The pulse stays as the backup for a browser whose
+-- socket a school network will not carry.
+--
+-- Four kinds of topic, each named after what it is about:
+--
+--   user:<id>       the notices addressed to one person
+--   project:<id>    feedback, submissions, scores and steps on one project
+--   program:<id>    the same, for whoever runs or looks after a class
+--   doc:<id>        one document: a field saved, and who is in which box
+--
+-- Every channel is private, so joining it is answered by `app.may_listen`
+-- through the policy on `realtime.messages`: the same `can_see_project`
+-- rule that decides every page, and nothing widened. A trigger sends and
+-- never fails the write that fired it: a broadcast that cannot be sent
+-- is a page that reads a little later, not a save that was lost.
+-- ===========================================================================
+
+-- Whether the caller may listen on (or speak into) a topic. Malformed
+-- topics are refused rather than raised, since a policy that errors is a
+-- join that hangs.
+create or replace function app.may_listen(p_topic text)
+returns boolean
+language plpgsql
+stable
+security definer
+set search_path = ''
+as $$
+declare
+  v_kind text;
+  v_rest text;
+  v_id   uuid;
+begin
+  if auth.uid() is null or p_topic is null then return false; end if;
+  v_kind := split_part(p_topic, ':', 1);
+  v_rest := split_part(p_topic, ':', 2);
+  if v_kind = 'user' then
+    return v_rest = auth.uid()::text;
+  end if;
+  if v_rest !~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' then
+    return false;
+  end if;
+  v_id := v_rest::uuid;
+  if v_kind = 'project' then
+    return app.can_see_project(v_id);
+  elsif v_kind = 'doc' then
+    return app.can_see_project((select d.project_id from public.documents d where d.id = v_id));
+  elsif v_kind = 'program' then
+    return exists (
+      select 1
+        from public.programs p
+        join public.user_roles r on r.user_id = auth.uid() and r.revoked_at is null
+       where p.id = v_id
+         and p.org_id = app.org_id()
+         and (r.scope_id = p.id or r.role = 'advisor')
+    );
+  end if;
+  return false;
+end;
+$$;
+
+grant execute on function app.may_listen(text) to authenticated;
+
+-- The topics one person listens on, for the page to join: their own, each
+-- project they write or look after, and each class they staff.
+create or replace function public.my_live_topics()
+returns text[]
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select array_agg(distinct t order by t)
+    from (
+      select 'user:' || auth.uid()::text as t
+      union all
+      select 'project:' || a.project_id::text
+        from public.project_authors a
+       where a.user_id = auth.uid()
+      union all
+      select 'program:' || p.id::text
+        from public.programs p
+        join public.user_roles r on r.user_id = auth.uid() and r.revoked_at is null
+       where p.org_id = app.org_id()
+         and p.current
+         and (r.scope_id = p.id or r.role = 'advisor')
+    ) s
+   where auth.uid() is not null;
+$$;
+
+revoke all on function public.my_live_topics() from public, anon;
+grant execute on function public.my_live_topics() to authenticated;
+
+-- The policy Realtime consults when a socket joins a private channel
+-- (select: listen and receive presence) or speaks into one (insert:
+-- presence and a client's own broadcast).
+--
+-- Written through a function rather than as two bare statements, because
+-- `realtime.messages` belongs to the Realtime service and is created by
+-- it: on the hosted project it is always there, but on a local `db reset`
+-- the service recreates it after the migrations have run, and a bare
+-- `create policy` here would fail the whole reset with "relation does
+-- not exist". So the migration applies the policies when the table is
+-- there and otherwise says so, and `npm run reset` calls
+-- `ensure_live_policies()` once the stack has settled (scripts/live-policies.mjs).
+create or replace function public.ensure_live_policies()
+returns text
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if to_regclass('realtime.messages') is null then
+    return 'realtime.messages is not here yet';
+  end if;
+  if not exists (select 1 from pg_catalog.pg_policies where schemaname = 'realtime' and tablename = 'messages' and policyname = 'live_listen') then
+    execute 'create policy live_listen on realtime.messages for select to authenticated using (app.may_listen(realtime.topic()))';
+  end if;
+  if not exists (select 1 from pg_catalog.pg_policies where schemaname = 'realtime' and tablename = 'messages' and policyname = 'live_speak') then
+    execute 'create policy live_speak on realtime.messages for insert to authenticated with check (app.may_listen(realtime.topic()))';
+  end if;
+  return 'live_listen and live_speak are on realtime.messages';
+end;
+$$;
+
+revoke all on function public.ensure_live_policies() from public, anon, authenticated;
+grant execute on function public.ensure_live_policies() to service_role;
+
+-- Applied now where the table is already there (the hosted project);
+-- `select` rather than a DO block, which this file's own checks cannot
+-- read.
+select public.ensure_live_policies();
+
+-- The topics a change on a project reaches: the project's own, and the
+-- program's for every place the project is entered.
+create or replace function app.live_project_topics(p_project_id uuid)
+returns text[]
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select array_agg(t)
+    from (
+      select 'project:' || p_project_id::text as t
+      union
+      select 'program:' || e.program_id::text
+        from public.participations e
+       where e.project_id = p_project_id
+         and e.status in ('entered', 'competed')
+    ) s;
+$$;
+
+-- One send per topic, and never an error: the write that fired the
+-- trigger is the thing that matters.
+create or replace function app.live_send(p_topics text[], p_event text, p_payload jsonb)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_topic text;
+begin
+  if p_topics is null then return; end if;
+  foreach v_topic in array p_topics loop
+    begin
+      perform realtime.send(p_payload, p_event, v_topic, true);
+    exception when others then
+      null;
+    end;
+  end loop;
+end;
+$$;
+
+-- Feedback written, seen or resolved: the project's pages.
+create or replace function app.live_feedback()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_project uuid;
+begin
+  select e.project_id into v_project from public.participations e where e.id = new.participation_id;
+  perform app.live_send(
+    app.live_project_topics(v_project),
+    'feedback',
+    jsonb_build_object('document_id', new.document_id, 'field_id', new.field_id, 'at', now())
+  );
+  return null;
+end;
+$$;
+
+drop trigger if exists live_feedback on public.deliverable_feedback;
+create trigger live_feedback
+  after insert or update on public.deliverable_feedback
+  for each row execute function app.live_feedback();
+
+-- A document submitted, reopened or reverted: the project's pages.
+create or replace function app.live_document()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  perform app.live_send(
+    app.live_project_topics(new.project_id),
+    'document',
+    jsonb_build_object('document_id', new.id, 'deliverable', new.deliverable, 'status', new.status, 'version_no', new.version_no, 'at', now())
+  );
+  return null;
+end;
+$$;
+
+drop trigger if exists live_document on public.documents;
+create trigger live_document
+  after update of status, submitted_at, version_no on public.documents
+  for each row execute function app.live_document();
+
+-- A field saved: the document's own channel, with the text when it is
+-- small enough to ride along (a page fetches a bigger one). This is the
+-- one broadcast per keystroke-burst, and it goes to the one room where
+-- somebody else may be reading the same box.
+create or replace function app.live_field()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_by   text;
+  v_text text;
+begin
+  select u.display_name into v_by from public.users u where u.id = new.updated_by;
+  v_text := new.value::text;
+  perform app.live_send(
+    array['doc:' || new.document_id::text],
+    'field',
+    jsonb_build_object(
+      'document_id', new.document_id,
+      'field_id', new.field_id,
+      'version', new.version,
+      'by_id', new.updated_by,
+      'by', v_by,
+      'at', new.updated_at,
+      'value', case when length(v_text) <= 60000 then new.value else null end,
+      'big', length(v_text) > 60000
+    )
+  );
+  return null;
+end;
+$$;
+
+drop trigger if exists live_field on public.document_fields;
+create trigger live_field
+  after insert or update on public.document_fields
+  for each row execute function app.live_field();
+
+-- A score written or released: the project's pages.
+create or replace function app.live_assessment()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_project uuid;
+begin
+  select e.project_id into v_project from public.participations e where e.id = new.participation_id;
+  perform app.live_send(
+    app.live_project_topics(v_project),
+    'assessment',
+    jsonb_build_object('milestone_id', new.milestone_id, 'at', now())
+  );
+  return null;
+end;
+$$;
+
+drop trigger if exists live_assessment on public.assessments;
+create trigger live_assessment
+  after insert or update on public.assessments
+  for each row execute function app.live_assessment();
+
+-- A step met, reopened or re-dated: the project's pages.
+create or replace function app.live_milestone()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_project uuid;
+begin
+  select e.project_id into v_project from public.participations e where e.id = new.participation_id;
+  perform app.live_send(
+    app.live_project_topics(v_project),
+    'milestone',
+    jsonb_build_object('milestone_id', new.id, 'completed_on', new.completed_on, 'at', now())
+  );
+  return null;
+end;
+$$;
+
+drop trigger if exists live_milestone on public.entry_milestones;
+create trigger live_milestone
+  after update on public.entry_milestones
+  for each row execute function app.live_milestone();
+
+-- A notice addressed to a person: their own channel.
+create or replace function app.live_notice()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if new.recipient_id is null then return null; end if;
+  perform app.live_send(
+    array['user:' || new.recipient_id::text],
+    'notice',
+    jsonb_build_object('kind', new.kind, 'at', now())
+  );
+  return null;
+end;
+$$;
+
+drop trigger if exists live_notice on public.notifications;
+create trigger live_notice
+  after insert or update on public.notifications
+  for each row execute function app.live_notice();
+
+-- ---------------------------------------------------------------------------
+-- WHEN THE SOCKET WOULD NOT CARRY (2.8)
+--
+-- A page whose socket fails falls back to the pulse and says so here,
+-- once an hour per person at most, so whoever runs the platform learns
+-- that a network is blocking it while the class is still in the room.
+-- The advisor reads the log; the row is written through the function.
+-- ---------------------------------------------------------------------------
+create table public.transport_incidents (
+  id         uuid primary key default gen_random_uuid(),
+  org_id     uuid not null references public.organizations on delete restrict,
+  user_id    uuid not null references public.users on delete restrict,
+  state      text not null check (state in ('fallback', 'recovered')),
+  page       text,
+  detail     text,
+  user_agent text,
+  created_at timestamptz not null default now()
+);
+
+create index transport_incidents_org_id_idx on public.transport_incidents (org_id, created_at desc);
+create index transport_incidents_user_id_idx on public.transport_incidents (user_id, created_at desc);
+
+alter table public.transport_incidents enable row level security;
+grant select on public.transport_incidents to authenticated, service_role;
+
+create policy transport_incidents_advisor_reads on public.transport_incidents
+  for select to authenticated
+  using (transport_incidents.org_id = app.org_id() and app.is_advisor());
+
+create or replace function public.report_transport_incident(
+  p_state  text,
+  p_page   text,
+  p_detail text,
+  p_agent  text
+)
+returns boolean
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_org uuid;
+begin
+  if auth.uid() is null then
+    raise exception 'not authenticated';
+  end if;
+  v_org := app.org_id();
+  if v_org is null then return false; end if;
+  if p_state not in ('fallback', 'recovered') then
+    raise exception 'which state';
+  end if;
+  /* One line an hour per person per state. A tab that flaps writes one. */
+  if exists (
+    select 1 from public.transport_incidents t
+     where t.user_id = auth.uid() and t.state = p_state
+       and t.created_at > now() - interval '1 hour'
+  ) then
+    return false;
+  end if;
+  insert into public.transport_incidents (org_id, user_id, state, page, detail, user_agent)
+  values (v_org, auth.uid(), p_state, left(coalesce(p_page, ''), 300), left(coalesce(p_detail, ''), 1000), left(coalesce(p_agent, ''), 300));
+  return true;
+end;
+$$;
+
+revoke all on function public.report_transport_incident(text, text, text, text) from public, anon;
+grant execute on function public.report_transport_incident(text, text, text, text) to authenticated;
+
+-- The log page updates as lines arrive: the school's class rooms, which
+-- the advisor listens on.
+create or replace function app.live_incident()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  perform app.live_send(
+    (select array_agg('program:' || p.id::text) from public.programs p where p.org_id = new.org_id and p.current),
+    'incident',
+    jsonb_build_object('state', new.state, 'at', new.created_at)
+  );
+  return null;
+end;
+$$;
+
+create trigger live_incident
+  after insert on public.transport_incidents
+  for each row execute function app.live_incident();
 
 notify pgrst, 'reload schema';

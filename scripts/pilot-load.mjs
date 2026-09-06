@@ -199,6 +199,25 @@ function person(row, kind, where) {
 for (const [i, t] of teachers.entries()) person(t, 'teacher', `teachers[${i}]`);
 if (teachers.length === 0) problems.push('no teachers listed');
 
+/* **The family scores, from the class tracker (2.8).** One row per student
+   per step: the Elder's number out of 4 and a comment. `student` and `by`
+   are keys from the groups (a full name is accepted too); `step` is the
+   step's id in the template; `on` is the day it was given. Loaded as the
+   Elder's assessment on that step, released at once, the way the tracker
+   page writes one. */
+const scores = Array.isArray(doc.scores) ? doc.scores : [];
+for (const [i, sc] of scores.entries()) {
+  const where = `scores[${i}]`;
+  if (!sc?.student) problems.push(`${where}: no student`);
+  if (!sc?.step) problems.push(`${where}: no step`);
+  if (sc?.score == null || Number.isNaN(Number(sc.score)) || Number(sc.score) < 0 || Number(sc.score) > 4) problems.push(`${where}: score must be 0 to 4`);
+  /* YAML reads a bare 2026-08-24 as a Date; `dayOf` takes either. */
+  if (sc?.on != null) {
+    sc.on = dayOf(sc.on);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(sc.on)) problems.push(`${where}: on "${sc.on}" is not a date (YYYY-MM-DD)`);
+  }
+}
+
 for (const [gi, g] of groups.entries()) {
   const where = `groups[${gi}]${g?.name ? ` (${g.name})` : ''}`;
   if (!g?.name) problems.push(`${where}: no name`);
@@ -234,6 +253,22 @@ for (const [pi, pr] of projects.entries()) {
 }
 for (const p of people.values()) {
   if (p.kind === 'student' && !authored.has(p.key)) problems.push(`${p.key} (${p.name}) has no project`);
+}
+/* Two rows with one title are two projects with one name, which is
+   almost never what was meant: a pair working together is one row with
+   two keys in `authors`, and everything that belongs to the project (the
+   documents, the notebook, the calendar, the showcase card, the Elders)
+   is then shared, while the scores and grades stay per student (2.8). */
+{
+  const byTitle = new Map();
+  for (const pr of projects) byTitle.set(pr.title.toLowerCase(), [...(byTitle.get(pr.title.toLowerCase()) ?? []), pr]);
+  for (const [, same] of byTitle) {
+    if (same.length > 1) {
+      problems.push(
+        `"${same[0].title}" appears ${same.length} times. Partners share one project: one row, authors: [${same.flatMap((x) => x.authors).join(', ')}]`
+      );
+    }
+  }
 }
 
 if (problems.length > 0) {
@@ -320,7 +355,7 @@ if (cohort.program_role !== 'cohort') fail(`${cohort.name} is not a cohort, and 
 const milestoneRows = await must(
   db
     .from('program_milestones')
-    .select('id, name, kind, due_on, required, blocks_experimentation, satisfied_by, sort_order, source, phase, org_id, owner, step_id, requires_step, feedback_on')
+    .select('id, name, kind, due_on, required, blocks_experimentation, satisfied_by, sort_order, source, phase, org_id, owner, step_id, requires_step, requires_steps, feedback_on')
     .eq('program_id', cohort.id)
     .order('sort_order'),
   'reading the class calendar'
@@ -507,6 +542,9 @@ function findProject(title, firstAuthorId) {
   );
 }
 
+/* Each student's place in the class, for the scores below. */
+const placeOf = new Map();
+
 for (const pr of projects) {
   const authors = pr.authors.map((k) => people.get(k));
   const group = groups.find((g) => g.name === authors[0].group);
@@ -606,6 +644,7 @@ for (const pr of projects) {
       owner: m.owner ?? 'student',
       step_id: m.step_id ?? null,
       requires_step: m.requires_step ?? null,
+      requires_steps: m.requires_steps ?? [],
       feedback_on: m.feedback_on ?? null,
     }));
   if (copies.length > 0) {
@@ -769,10 +808,62 @@ for (const pr of projects) {
     counts.granted = (counts.granted ?? 0) + grantedHere;
   }
 
+  for (const a of authors) placeOf.set(a.key, { participation, project: pr.title, elders });
+
   console.log(
     `  ${pr.title.slice(0, 48).padEnd(50)} ${authors.map((a) => a.name).join(', ')}` +
       `  · Elders ${names.join(', ')}${made ? '' : ' · already'}${copies.length ? ` · ${copies.length} deadlines` : ''}${grantedHere ? ` · ${grantedHere} granted` : ''}`
   );
+}
+
+/* ── The family scores ─────────────────────────────────────────────── */
+if (scores.length > 0) {
+  console.log(`\nFamily scores\n`);
+  const byName = new Map([...people.values()].map((p) => [p.name.toLowerCase(), p]));
+  const who = (ref) => people.get(String(ref)) ?? byName.get(String(ref).replace(/\s+/g, ' ').trim().toLowerCase()) ?? null;
+  let written = 0, kept = 0, skipped = 0;
+  for (const sc of scores) {
+    const student = who(sc.student);
+    const place = student ? placeOf.get(student.key) : null;
+    if (!student || !place) { console.log(`  skipped: no student "${sc.student}" in a project`); skipped += 1; continue; }
+    const grader = sc.by ? who(sc.by) : place.elders[0];
+    if (!grader) { console.log(`  skipped: no Elder "${sc.by}" for ${student.name}`); skipped += 1; continue; }
+    const milestone = await must(
+      db.from('entry_milestones').select('id, name').eq('participation_id', place.participation.id).eq('step_id', String(sc.step)).maybeSingle(),
+      `finding step ${sc.step} on "${place.project}"`
+    );
+    if (!milestone) { console.log(`  skipped: "${place.project}" has no step ${sc.step}`); skipped += 1; continue; }
+    const score = Number(sc.score);
+    const comment = String(sc.comment ?? '').trim() || null;
+    const { data: current } = await db
+      .from('assessments')
+      .select('id, score, feedback_md')
+      .eq('milestone_id', milestone.id).eq('student_id', student.id).eq('grader_id', grader.id).eq('kind', 'elder')
+      .is('superseded_by', null)
+      .maybeSingle();
+    if (current && Number(current.score) === score && (current.feedback_md ?? null) === comment) { kept += 1; continue; }
+    const row = await must(
+      db.from('assessments').insert({
+        org_id: org.id,
+        participation_id: place.participation.id,
+        milestone_id: milestone.id,
+        student_id: student.id,
+        grader_id: grader.id,
+        score,
+        out_of: 4,
+        feedback_md: comment,
+        released_at: sc.on ? `${sc.on}T12:00:00Z` : now,
+        created_at: sc.on ? `${sc.on}T12:00:00Z` : now,
+        kind: 'elder',
+      }).select('id').single(),
+      `scoring ${milestone.name} for ${student.name}`
+    );
+    if (current) await must(db.from('assessments').update({ superseded_by: row.id }).eq('id', current.id), 'superseding the earlier score');
+    written += 1;
+    console.log(`  ${student.name.padEnd(28)} ${milestone.name.slice(0, 36).padEnd(38)} ${score} / 4${comment ? '  ' + comment.slice(0, 40) : ''}  by ${grader.name}`);
+  }
+  counts.scores = written;
+  console.log(`\n  ${written} scores written, ${kept} already there, ${skipped} skipped.`);
 }
 
 console.log(

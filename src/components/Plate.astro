@@ -19,6 +19,8 @@ export interface PlateAction {
   href: string;
   label: string;
   accent?: boolean;
+  /** Not yet: the step waits on another, named here (2.8). */
+  waitsOn?: string;
 }
 
 export interface PlateRow {
@@ -54,12 +56,12 @@ export interface PlateRow {
       }
     | { kind: 'done'; participationId: string; milestoneId: string; name: string; milestoneKind: string; today: string };
   /**
-   * Somebody has asked for this one. The nudge's sender and the two
-   * answers the student has: *On it*, and a written line back. Shown on
-   * the row the ask is about, so the request and the way to meet it are
-   * one thing.
+   * Somebody has asked for this one. The nudge's sender, when, and the
+   * one answer the student has: *Got it* (2.8). Shown on the row the ask
+   * is about, so the request and the way to meet it are one thing; a
+   * nudged step is the plate's row whatever its date.
    */
-  ask?: { milestoneId: string; askedBy: string | null; times: number; acknowledged: boolean };
+  ask?: { milestoneId: string; askedBy: string | null; askedOn: string | null; times: number; acknowledged: boolean };
   /** Anchor, so a link can land on the row. */
   id?: string;
   /**
@@ -80,7 +82,7 @@ const first = rows[0];
 ---
 
 {rows.length > 0 && (
-  <div class:list={['alarm', 'plate', !first?.late && 'soon']} role="status">
+  <div class:list={['alarm', 'plate', !first?.late && 'soon']} role="status" data-live="plate">
     {rows.map((row, i) => (
       <>
         {row.group && row.group !== rows[i - 1]?.group && <p class="plate-group">{row.group}</p>}
@@ -150,32 +152,31 @@ const first = rows[0];
               )}
             </details>
           )}
+          {/* A nudge is "do this one" (2.8): who asked and when, on the
+              row it is about, and one word back. Anything with content
+              goes through the document's questions. */}
           {row.ask && (
             <div class="plate-ask">
               <p class="plate-ask-l">
-                <b>{row.ask.askedBy ?? 'Somebody'} asked{row.ask.times > 1 ? ` ${row.ask.times} times` : ''}.</b>
+                <b>{String(row.ask.askedBy ?? 'Somebody').split(' ')[0]} asked for this{row.ask.askedOn ? ` on ${row.ask.askedOn}` : ''}{row.ask.times > 1 ? ` (${row.ask.times} times)` : ''}.</b>
                 {row.ask.acknowledged ? (
-                  <span> You said you had this.</span>
+                  <span>You said you have it.</span>
                 ) : (
                   <form method="POST" action="#outcome" class="inline">
                     <input type="hidden" name="action" value="ack" />
                     <input type="hidden" name="milestone_id" value={row.ask.milestoneId} />
-                    <button class="btn btn-sm ghost" type="submit">On it</button>
+                    <button class="btn btn-sm ghost" type="submit">Got it</button>
                   </form>
                 )}
               </p>
-              <form method="POST" action="#outcome" class="plate-reply">
-                <input type="hidden" name="action" value="reply" />
-                <input type="hidden" name="milestone_id" value={row.ask.milestoneId} />
-                <label><span>Reply to {String(row.ask.askedBy ?? 'whoever asked').split(' ')[0]}</span><input class="in" name="note" maxlength="500" /></label>
-                <button class="btn btn-sm ghost" type="submit">Send</button>
-              </form>
             </div>
           )}
         </div>
         {(row.actions ?? []).length > 0 && (
           <div class="act">
-            {(row.actions ?? []).map((a) => (
+            {(row.actions ?? []).map((a) => a.waitsOn ? (
+              <span class="btn ghost is-off" aria-disabled="true" title={`Waits on ${a.waitsOn}`}>{a.label}</span>
+            ) : (
               <a class:list={['btn', a.accent ? 'accent' : 'ghost']} href={a.href}>{a.label}</a>
             ))}
           </div>
@@ -198,9 +199,6 @@ const first = rows[0];
   .plate-ask { margin-top: 10px; padding-top: 8px; border-top: 1px dashed var(--cover-rule); display: grid; gap: 6px; max-width: var(--measure-form); }
   .plate-ask-l { margin: 0; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; font-family: var(--face-ui); font-size: 0.88rem; color: var(--brand-contrast); }
   .plate-ask .inline { display: inline; }
-  .plate-reply { display: flex; gap: 8px; align-items: end; flex-wrap: wrap; }
-  .plate-reply label { display: grid; gap: 4px; flex: 1 1 200px; font-family: var(--face-ui); font-size: 0.82rem; color: var(--brand-contrast); }
-  .plate-reply .in { background: var(--card); color: var(--ink); }
   .plate-n { margin: 0; font-family: var(--face-ui); font-size: 0.88rem; font-weight: 600; color: var(--brand-contrast); }
   .plate-tpl { display: grid; gap: 6px; margin: 0; justify-items: start; }
   .plate-tpl span { font-family: var(--face-ui); font-size: 0.82rem; color: var(--brand-contrast); }

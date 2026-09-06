@@ -22,7 +22,7 @@ export function wordCount(text: string | null | undefined): number {
 export function textOf(field: ShapeField, value: any): string {
   if (value == null) return '';
   if (field.kind === 'choices') return Array.isArray(value) ? value.join(', ') : String(value);
-  if (field.kind === 'file') return value?.name ?? value?.path ?? '';
+  if (field.kind === 'file' || field.kind === 'graphic') return value?.name ?? value?.path ?? '';
   return String(value);
 }
 
@@ -30,23 +30,95 @@ export function isFilled(field: ShapeField, value: any): boolean {
   if (field.kind === 'note') return true;
   if (value == null) return false;
   if (field.kind === 'choices') return Array.isArray(value) && value.length > 0;
-  if (field.kind === 'file') return Boolean(value?.path);
+  if (field.kind === 'file' || field.kind === 'graphic') return Boolean(value?.path);
+  /* A table counts when any cell is written; a rubric when any row is marked.
+     `String({})` is "[object Object]", which counted an empty grid as done. */
+  if (Array.isArray(value)) return value.some((row) => (Array.isArray(row) ? row.some((c) => String(c ?? '').trim()) : String(row ?? '').trim()));
+  if (typeof value === 'object') return Object.keys(value).length > 0;
   return String(value).trim().length > 0;
 }
 
 /** How far along a document is: filled of asked, and which required ones are missing. */
 export function progressOf(shape: Shape, values: Record<string, any>) {
   const asked = askedOf(shape);
-  const filled = asked.filter((f) => isFilled(f, values[f.id]));
-  const missing = asked.filter((f) => f.required && !isFilled(f, values[f.id]));
+  /* The count is of what is required, because that is what Submit waits
+     on. A shape's optional fields (a part filled in later, in the family
+     session) are not in it: "8 of 9" with the ninth not required read as
+     one thing still missing (2.8). */
+  const required = asked.filter((f) => f.required);
+  const filled = required.filter((f) => isFilled(f, values[f.id]));
+  const missing = required.filter((f) => !isFilled(f, values[f.id]));
   const over = asked.filter((f) => f.max_words != null && wordCount(textOf(f, values[f.id])) > (f.max_words ?? 0));
-  return { asked: asked.length, filled: filled.length, missing, over };
+  return { asked: required.length, filled: filled.length, missing, over };
 }
 
 export type DocState = 'not_started' | 'in_progress' | 'submitted' | 'revising';
 
 export function stateLabel(state: DocState): string {
-  return state === 'not_started' ? 'Not started' : state === 'in_progress' ? 'In progress' : state === 'submitted' ? 'Submitted' : 'Revising';
+  return state === 'not_started' ? 'Not Started' : state === 'in_progress' ? 'In Progress' : state === 'submitted' ? 'Submitted' : 'Revising';
+}
+
+/**
+ * WHERE A DOCUMENT STANDS, SAID ONCE (2.8).
+ *
+ * The verb on its row, the state, and the sentence under it, the same on
+ * the project page, the Workbench, the Class page, the exports and the
+ * notebook. A document is started the moment its row is opened
+ * (`opened_at`, which is the Start click), so the sentence carries when
+ * it was started, and, once submitted, how long it took.
+ *
+ * `open`: the step this row is for is still open although the document
+ * was submitted for an earlier step that wanted it (the journey map's
+ * draft): update it and submit again.
+ */
+export interface DocRowLike {
+  status?: string | null;
+  version_no?: number | null;
+  opened_at?: string | null;
+  submitted_at?: string | null;
+  updated_at?: string | null;
+  document_fields?: { field_id: string; value: any }[] | null;
+}
+export interface DocStanding {
+  state: DocState;
+  verb: 'Start' | 'Continue' | 'Update' | 'Open';
+  label: string;
+  filled: number;
+  asked: number;
+  startedAt: string | null;
+  submittedAt: string | null;
+  tookDays: number | null;
+}
+const dayDiff = (a: string | null | undefined, b: string | null | undefined): number | null => {
+  if (!a || !b) return null;
+  const from = Date.parse(a), to = Date.parse(b);
+  if (Number.isNaN(from) || Number.isNaN(to)) return null;
+  return Math.max(0, Math.round((to - from) / 86_400_000));
+};
+export function docStanding(
+  doc: DocRowLike | null | undefined,
+  shape: Shape | null | undefined,
+  fmt: (iso: string) => string,
+  opts: { open?: boolean } = {}
+): DocStanding {
+  const asked = shape ? progressOf(shape, {}).asked : 0;
+  if (!doc) return { state: 'not_started', verb: 'Start', label: 'Not Started', filled: 0, asked, startedAt: null, submittedAt: null, tookDays: null };
+  const values: Record<string, any> = {};
+  for (const f of doc.document_fields ?? []) values[f.field_id] = f.value;
+  const p = shape ? progressOf(shape, values) : { asked: 0, filled: 0, missing: [], over: [] };
+  const started = doc.opened_at ? ` · started ${fmt(doc.opened_at)}` : '';
+  const base = { filled: p.filled, asked: p.asked, startedAt: doc.opened_at ?? null, submittedAt: doc.submitted_at ?? null };
+  if (doc.status === 'submitted' && opts.open) {
+    return { ...base, state: 'in_progress', verb: 'Update', label: `Submitted for the earlier deadline${started} · update and submit again`, tookDays: null };
+  }
+  if (doc.status === 'submitted') {
+    const took = dayDiff(doc.opened_at, doc.submitted_at);
+    const version = (doc.version_no ?? 0) > 1 ? ` (version ${doc.version_no})` : '';
+    const tookWords = took === null ? '' : ` · took ${took} ${took === 1 ? 'day' : 'days'}`;
+    return { ...base, state: 'submitted', verb: 'Open', label: `Submitted${doc.submitted_at ? ` ${fmt(doc.submitted_at)}` : ''}${version}${started}${tookWords}`, tookDays: took };
+  }
+  const word = doc.status === 'revising' ? 'Revising' : 'In Progress';
+  return { ...base, state: doc.status === 'revising' ? 'revising' : 'in_progress', verb: 'Continue', label: `${word}${started} · ${p.filled} of ${p.asked} answered`, tookDays: null };
 }
 
 /** A place on this project that wants this deliverable: the program, the step, its milestone row. */
@@ -61,6 +133,8 @@ export interface WantingPlace {
   milestoneName: string;
   dueOn: string | null;
   completedOn: string | null;
+  /** The steps this one waits on that are not met; empty when it may start (2.8). */
+  waitsOn: string[];
   isCohort: boolean;
 }
 
@@ -94,9 +168,19 @@ export async function placesWanting(
 
     const { data: rows } = await supabase
       .from('entry_milestones')
-      .select('id, name, due_on, completed_on')
+      .select('id, name, due_on, completed_on, step_id, requires_steps, requires_step')
       .eq('participation_id', part.id)
       .in('name', steps.map((st: any) => st.name));
+    /* The gate (2.8): which of the steps this one waits on are not met,
+       read from the same place's rows in one further query. */
+    const wantedIds = [...new Set((rows ?? []).flatMap((r: any) => [...(r.requires_steps ?? []), ...(r.requires_step ? [r.requires_step] : [])]))];
+    const { data: needed } = wantedIds.length
+      ? await supabase.from('entry_milestones').select('step_id, name, completed_on, sort_order').eq('participation_id', part.id).in('step_id', wantedIds).order('sort_order')
+      : { data: [] as any[] };
+    const gateOf = (row: any): string[] => {
+      const ids = new Set<string>([...(row?.requires_steps ?? []), ...(row?.requires_step ? [row.requires_step] : [])]);
+      return (needed ?? []).filter((n: any) => ids.has(n.step_id) && !n.completed_on).map((n: any) => n.name);
+    };
 
     for (const step of steps) {
       const wants = deliverablesFor(resolved, step, facts);
@@ -114,6 +198,7 @@ export async function placesWanting(
         milestoneName: row?.name ?? step.name,
         dueOn: row?.due_on ?? null,
         completedOn: row?.completed_on ?? null,
+        waitsOn: gateOf(row),
         isCohort: program.program_role === 'cohort',
       });
     }

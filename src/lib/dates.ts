@@ -130,3 +130,9 @@ export function todayIn(timezone: string, at: Date = new Date()): string {
     return at.toISOString().slice(0, 10);
   }
 }
+
+/** A month named in a template window (`august`), as a word on a page (`August`). */
+export function monthWord(name: string | null | undefined): string {
+  const w = String(name ?? '').trim();
+  return w ? w[0].toUpperCase() + w.slice(1) : '';
+}

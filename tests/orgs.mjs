@@ -282,7 +282,7 @@ test('a tab hidden for a pilot has a date, and the date has not passed', () => {
      suite goes red and somebody decides, on that day, whether the tab comes
      back or the date moves. Nothing hidden by an org file is ever hidden
      with no end. */
-  const known = ['editorial', 'publish', 'assign', 'roles', 'showcase', 'guides'];
+  const known = ['editorial', 'publish', 'assign', 'roles', 'showcase', 'guides', 'programs', 'past'];
   const today = new Date().toISOString().slice(0, 10);
   for (const file of files) {
     const doc = yaml.load(fs.readFileSync(path.join(dir, file), 'utf8'));

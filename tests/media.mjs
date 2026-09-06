@@ -107,14 +107,18 @@ test('the exported notebook carries everything the project has', () => {
 test('the printed page has a margin of its own', () => {
   /* Without an @page rule the browser uses its default, which puts the first
      line against the edge and leaves a judge nowhere to write. */
+  /* The paper's rules moved to `print-book.css` when the document PDF
+     started printing on the same paper (2.8); the export imports it. */
   const notebook = fs.readFileSync('src/pages/app/project/[id]/notebook.astro', 'utf8');
-  assert.match(notebook, /@page\s*\{[^}]*margin/);
+  const paper = fs.readFileSync('src/styles/print-book.css', 'utf8');
+  assert.match(notebook, /print-book\.css/, 'the export has to bring the paper in');
+  assert.match(paper, /@page\s*\{[^}]*margin/);
 });
 
 test('and prints the address behind a link', () => {
   /* A link is useless on paper unless the address is on the paper. */
-  const notebook = fs.readFileSync('src/pages/app/project/[id]/notebook.astro', 'utf8');
-  assert.match(notebook, /a\[href\^='http'\]::after/);
+  const paper = fs.readFileSync('src/styles/print-book.css', 'utf8');
+  assert.match(paper, /a\[href\^='http'\]::after/);
 });
 
 /* ── Deadlines are grouped by phase ──────────────────────────────────────── */

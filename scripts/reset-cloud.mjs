@@ -296,6 +296,7 @@ const TABLES = [
   'org_domains',
   'audit_log',
   'feedback',
+  'transport_incidents',
   'assessments',
   'deliverable_feedback',
   'document_media',
@@ -636,6 +637,10 @@ if (!report(await census())) {
  * where the club has no officers and nothing errored.
  */
 const SEEDS = [
+  /* The two Realtime policies (2.8). The migration applies them itself
+     where `realtime.messages` is present, which on a hosted project it
+     always is; this is the same idempotent call, so the run says so. */
+  ['Live policies', ['scripts/live-policies.mjs', '--cloud'], {}],
   ['Organizations', ['scripts/seed-orgs.mjs'], {}],
   [
     'Demonstration fixtures',

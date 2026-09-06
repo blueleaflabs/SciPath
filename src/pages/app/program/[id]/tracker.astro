@@ -19,6 +19,7 @@ import AppShell from '../../../../components/AppShell.astro';
 import { activeOrg } from '../../../../lib/tenant';
 import { serverClient } from '../../../../lib/supabase';
 import { standing } from '../../../../lib/roles';
+import { scoreBand } from '../../../../lib/score-band';
 import { programTitle, staffWord } from '../../../../lib/program-names';
 import { formatDate, todayIn } from '../../../../lib/dates';
 import { afterPost, outcomeFrom } from '../../../../lib/post-redirect';
@@ -45,7 +46,37 @@ let { error, note } = outcomeFrom(Astro.url);
 
 if (Astro.request.method === 'POST') {
   const form = await Astro.request.formData();
-  if (String(form.get('action') ?? '') === 'score') {
+  if (String(form.get('action') ?? '') === 'score_all') {
+    /* Every cell on the page in one form (2.8): the ones that changed are
+       written, one `grade_milestone` each; the rest are left alone. A
+       cell's original score and comment travel with it so a page opened
+       an hour ago does not rewrite what somebody else saved since. */
+    let saved = 0;
+    const failed: string[] = [];
+    for (const [name, value] of form.entries()) {
+      if (!name.startsWith('s:')) continue;
+      const key = name.slice(2);
+      const [milestoneId, studentId] = key.split(':');
+      const score = String(value ?? '').trim();
+      const comment = String(form.get(`c:${key}`) ?? '').trim();
+      const was = String(form.get(`o:${key}`) ?? '');
+      if (`${score}|${comment}` === was) continue;
+      if (score === '' && comment === '') continue;
+      const { error: e } = await supabase.rpc('grade_milestone', {
+        p_milestone_id: milestoneId,
+        p_student_id: studentId,
+        p_score: score === '' ? null : Number(score),
+        p_out_of: 4,
+        p_feedback_md: comment,
+        p_rubric: null,
+        p_release: false,
+      });
+      if (e) failed.push(`${String(form.get(`n:${key}`) ?? 'a cell')}: ${e.message}`);
+      else saved += 1;
+    }
+    if (failed.length) error = failed.join(' · ');
+    note = saved ? `${saved} ${saved === 1 ? 'score' : 'scores'} saved.` : 'Nothing changed.';
+  } else if (String(form.get('action') ?? '') === 'score') {
     const raw = String(form.get('score') ?? '').trim();
     const { error: e } = await supabase.rpc('grade_milestone', {
       p_milestone_id: String(form.get('milestone_id') ?? ''),
@@ -148,6 +179,7 @@ const milestoneOf = (row: Row, col: Col) => (milestones ?? []).find((m: any) => 
 const label = program.short_name ?? program.name;
 const fmt = (d: string | null) => (d ? formatDate(String(d).slice(0, 10), 'short') : '');
 const LEVELS = ['4', '3.5', '3', '2.5', '2', '1.5', '1'];
+const anyWritable = families.some((f) => f.rows.some((r) => r.mine || (me.isAdvisor && r.elders.length === 0)));
 ---
 
 <Base title={`${label} tracker`} noindex={true}>
@@ -173,8 +205,11 @@ const LEVELS = ['4', '3.5', '3', '2.5', '2', '1.5', '1'];
       <a class="btn btn-sm ghost" href={showAll ? `/app/program/${id}/tracker/` : `/app/program/${id}/tracker/?all=1`}>{showAll ? 'Only the ones reached' : 'Every assignment'}</a>
       {me.isAdvisor && <a class="btn btn-sm ghost" href={`/app/program/${id}/grade/`}>Grade a deadline</a>}
       {me.isAdvisor && <a class="btn btn-sm ghost" href={`/app/program/${id}/class/`}>Class page</a>}
+      {anyWritable && <button class="btn btn-sm" type="submit" form="scoreall">Save all</button>}
     </div>
 
+    <form method="POST" action="#outcome" id="scoreall">
+    <input type="hidden" name="action" value="score_all" />
     <div class="tracker-wrap">
       <table class="tracker">
         <thead>
@@ -199,40 +234,41 @@ const LEVELS = ['4', '3.5', '3', '2.5', '2', '1.5', '1'];
                 {shown.map((c) => {
                   const m = milestoneOf(r, c);
                   const sc = m ? scoreFor.get(`${m.id}:${r.student.id}`) ?? null : null;
-                  const canWrite = Boolean(m) && (r.mine || (me.isAdvisor && r.elders.length === 0));
+                  /* Writable once the work is in (2.8): a score on nothing
+                     is refused by the function too. */
+                  const canWrite = Boolean(m?.completed_on) && (r.mine || (me.isAdvisor && r.elders.length === 0));
                   return (
-                    <td class:list={[sc ? 'has' : m?.completed_on ? 'in' : 'none']}>
+                    <td class:list={[sc ? 'has' : m?.completed_on ? 'is-in' : 'none', sc ? scoreBand(sc.score) : '']}>
                       {!m ? (
                         <span class="dash">—</span>
                       ) : canWrite ? (
-                        <details class="cell">
-                          <summary>
-                            <b>{sc ? sc.score ?? '—' : '·'}</b>
-                            {sc?.feedback_md && <span class="cmt" title={sc.feedback_md}>{sc.feedback_md}</span>}
-                            {!sc && <span class="cstate">{m.completed_on ? 'submitted' : 'not in'}</span>}
-                          </summary>
-                          <form method="POST" action="#outcome" class="cform">
-                            <input type="hidden" name="action" value="score" />
-                            <input type="hidden" name="milestone_id" value={m.id} />
-                            <input type="hidden" name="student_id" value={r.student.id} />
-                            <input type="hidden" name="student_name" value={r.student.name} />
-                            <label><span>Score</span>
-                              <select class="se" name="score">
-                                <option value="" selected={!sc || sc.score == null}>—</option>
-                                {LEVELS.map((l) => <option value={l} selected={sc && String(sc.score) === l}>{l}</option>)}
-                              </select>
-                            </label>
-                            <label><span>Comment</span><textarea class="ta" name="feedback" rows="2">{sc?.feedback_md ?? ''}</textarea></label>
-                            <button class="btn btn-sm" type="submit">Save</button>
-                          </form>
-                        </details>
+                        (() => {
+                          const key = `${m.id}:${r.student.id}`;
+                          const scoreNow = sc?.score == null ? '' : String(sc.score);
+                          const commentNow = sc?.feedback_md ?? '';
+                          return (
+                            <div class="cell edit">
+                              <input type="hidden" name={`o:${key}`} value={`${scoreNow}|${commentNow.trim()}`} />
+                              <input type="hidden" name={`n:${key}`} value={`${r.student.name}, ${c.name}`} />
+                              <label class="fwrap"><span class="sr">Score for {r.student.name} on {c.name}</span>
+                                <select class="se cscore" name={`s:${key}`}>
+                                  <option value="" selected={scoreNow === ''}>—</option>
+                                  {LEVELS.map((l) => <option value={l} selected={scoreNow === l}>{l}</option>)}
+                                </select>
+                              </label>
+                              <label class="fwrap"><span class="sr">Comment for {r.student.name} on {c.name}</span>
+                                <input class="in ccmt" name={`c:${key}`} value={commentNow} />
+                              </label>
+                            </div>
+                          );
+                        })()
                       ) : sc ? (
                         <span class="cell read">
                           <b>{sc.score ?? '—'}</b>
                           {sc.feedback_md && <span class="cmt" title={sc.feedback_md}>{sc.feedback_md}</span>}
                         </span>
                       ) : (
-                        <span class="cstate">{m.completed_on ? 'submitted' : 'not in'}</span>
+                        <span class="cstate">{m.completed_on ? 'submitted, not scored' : 'not in'}</span>
                       )}
                     </td>
                   );
@@ -243,14 +279,22 @@ const LEVELS = ['4', '3.5', '3', '2.5', '2', '1.5', '1'];
         ))}
       </table>
     </div>
+    {anyWritable && (
+      <p class="tsave"><button class="btn" type="submit">Save all</button><span class="t-sm">Only the cells you changed are written.</span></p>
+    )}
+    </form>
   </div>
 </Base>
 
 <style>
   .tbar { display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: center; margin: 0 0 14px; }
-  .tracker-wrap { overflow-x: auto; border: 1px solid var(--rule-fine); background: var(--card); }
-  .tracker { border-collapse: separate; border-spacing: 0; min-width: 100%; font-size: 0.86rem; }
-  .tracker th, .tracker td { border-bottom: 1px solid var(--rule-fine); border-right: 1px solid var(--rule-fine); padding: 6px 8px; vertical-align: top; text-align: left; min-width: 150px; }
+  .tracker-wrap { overflow-x: auto; background: var(--card); }
+  /* One grid, every cell ruled the same (2.8). `separate` stays for the
+     sticky column and header, so each cell draws its own right and bottom
+     rule and the table draws the top and left. */
+  .tracker { border-collapse: separate; border-spacing: 0; min-width: 100%; font-size: 0.86rem; border-top: 1px solid var(--rule); border-left: 1px solid var(--rule); }
+  .tracker th, .tracker td { border-bottom: 1px solid var(--rule); border-right: 1px solid var(--rule); padding: 6px 8px; vertical-align: top; text-align: left; min-width: 150px; }
+  .tracker tr.fam th { border-right: 1px solid var(--rule); }
   .tracker thead th { background: var(--sunk); position: sticky; top: 0; z-index: 2; }
   .tracker .stick { position: sticky; left: 0; background: var(--card); z-index: 1; min-width: 200px; }
   .tracker thead th.stick { z-index: 3; background: var(--sunk); }
@@ -259,15 +303,19 @@ const LEVELS = ['4', '3.5', '3', '2.5', '2', '1.5', '1'];
   .tracker tr.fam th { background: var(--accent-pale); font-family: var(--face-ui); font-size: 0.82rem; letter-spacing: 0.03em; text-transform: uppercase; }
   .tracker tbody.mine tr.fam th { background: var(--accent); color: var(--accent-ink); }
   .fcount { margin-left: 8px; font-weight: 400; opacity: 0.8; }
-  .tracker td.has { background: color-mix(in srgb, var(--stage-comp) 10%, transparent); }
+  .tracker td.has { background: var(--ok-bg); }
   .tracker td.none { color: var(--ink-3); }
-  .cell > summary { list-style: none; cursor: pointer; display: grid; gap: 2px; }
-  .cell > summary::-webkit-details-marker { display: none; }
   .cell b { font-size: 1.05rem; }
   .cmt { display: block; font-size: 0.78rem; color: var(--ink-2); max-width: 220px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .cstate { font-family: var(--face-ui); font-size: 0.74rem; color: var(--ink-3); }
+  .cstate { font-family: var(--face-ui); font-size: 0.72rem; color: var(--ink-3); }
   .dash { color: var(--ink-3); }
-  .cform { display: grid; gap: 6px; margin-top: 6px; min-width: 200px; }
-  .cform label { display: grid; gap: 2px; font-family: var(--face-ui); font-size: 0.78rem; }
   .cell.read { display: grid; gap: 2px; }
+  /* A writable cell is its two fields, nothing folded (2.8): the score
+     and the comment, saved with the rest by Save all. */
+  .cell.edit { display: grid; grid-template-columns: 5rem minmax(0, 1fr); gap: 4px 6px; align-items: center; min-width: 220px; }
+  .cell.edit .cstate { grid-column: 1 / -1; }
+  .cell.edit .se, .cell.edit .in { padding: 4px 6px; font-size: 0.86rem; width: 100%; box-sizing: border-box; }
+  .cell.edit .fwrap { display: block; min-width: 0; }
+  .tsave { display: flex; align-items: center; gap: 12px; margin: 14px 0 0; }
+  .tracker th, .tracker td { padding: 5px 8px; }
 </style>

@@ -50,8 +50,27 @@ editorial_review: true
 # <template> open --cloud`, not a reseed (COMMANDS.md).
 hidden_until:
   date: 2027-01-15
-  surfaces: [editorial, publish, roles, assign, showcase]
+  # `guides` is the masthead link; `programs` and `past` are the Workbench's
+  # Programs and Past seasons sections, off for the pilot and back for the
+  # club (2.8).
+  surfaces: [editorial, publish, roles, assign, showcase, guides, programs, past]
   programs: [scvsefa-2027, csef-2027, mvhs-scvsefa-2027, grant-mvhs-micro-2027, mvrj-2027]
+# **When the class meets, and how the backup pulse is paced (2.8).**
+# Live updates arrive over a socket and cost the edge nothing. A browser
+# whose socket a network will not carry falls back to polling, and the
+# pacing below is that backup's: inside a period it asks every
+# `in_class_seconds` while the person is working and every
+# `in_class_idle_seconds` once they pause; outside a period, once an hour.
+# Times are this school's clock (`timezone` above). Fill the periods in
+# from the bell schedule: every meeting of the class, for the year.
+live:
+  class_periods:
+    - { days: [Mon, Tue, Wed, Thu, Fri], from: "08:00", to: "15:30" }
+  fallback:
+    in_class_seconds: 8
+    in_class_idle_seconds: 30
+    off_hours_seconds: 3600
+
 showcase_note: >-
   Work by students at this school, published as a permanent, citable record.
 

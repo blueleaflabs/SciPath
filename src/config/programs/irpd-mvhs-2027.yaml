@@ -194,20 +194,23 @@ anchor_specs:
 # in their Drive, and records its address back here. Fill them in as the
 # teachers share the documents.
 deliverables:
-  - { id: green_sheet, name: Green sheet, kind: form, owner: student, requirement: required }
-  - { id: project_idea, name: Project idea form, kind: form, owner: student, requirement: required }
-  - { id: topic_narrowing, name: Narrowing down your research topic, kind: link, owner: student, requirement: required }
+  - { id: green_sheet, name: Green Sheet, kind: form, owner: student, requirement: required, shape: drive-link }
+  - { id: project_idea, name: Project Idea Form, kind: text, owner: student, requirement: required, shape: impact-feasibility }
+  - { id: top_strengths, name: Top 3 Strengths, kind: form, owner: student, requirement: required, shape: drive-link }
+  - { id: topic_narrowing, name: Narrow Down the Research Topic, kind: link, owner: student, requirement: required, shape: drive-link }
   # Written in SciPath from a shape (6.16): the row opens the document,
   # the Elder reads it there, and Submit records it.
-  - { id: interview_protocol_handout, name: Interview protocol, kind: text, owner: student, requirement: required, shape: interview-protocol }
-  - { id: interview_consent, name: Consent to be interviewed, kind: form, owner: student, per: participant, requirement: conditional, applies_when: humans, before_work: true }
-  - { id: interview_synthesis, name: What the interviews said, kind: link, owner: student, requirement: required }
+  - { id: interview_protocol_handout, name: Interview Protocol, kind: text, owner: student, requirement: required, shape: interview-protocol }
+  # One page for the interviews (2.8): the Drive folder with the signed
+  # consent forms and the write-up of what was heard.
+  - { id: interview_synthesis, name: Empathy Interviews, kind: link, owner: student, requirement: required, shape: drive-link }
 
   - id: question
-    name: Research question and Research Graphic
+    name: Research Question and Research Graphic
     kind: text
     owner: student
     requirement: required
+    shape: research-question
     guidance: ""
 
   - id: literature_review
@@ -227,44 +230,58 @@ deliverables:
     kind: link
     owner: student
     requirement: required
+    shape: drive-link
     guidance: ""
 
   - id: literature_review_worksheet
-    name: Literature review worksheet with self-reflection
+    name: Literature Review Worksheet with Self-Reflection
     kind: text
     owner: student
     requirement: required
     shape: literature-review-worksheet
 
-  - { id: project_summary, name: Project summary, kind: text, owner: student, requirement: required, shape: project-summary }
-  - { id: journey_map_1, name: Journey map, kind: link, owner: student, requirement: required }
-  - { id: wbs, name: Work breakdown structure, kind: link, owner: student, requirement: required }
-  - { id: oral_pitch, name: Two minute oral pitch, kind: link, owner: student, requirement: required }
+  - { id: project_summary, name: Project Summary, kind: text, owner: student, requirement: required, shape: project-summary }
+  # One document for both journey map deadlines (2.8): the draft is
+  # uploaded on the first, updated and submitted again on the second.
+  - { id: journey_map, name: Journey Map, kind: file, owner: student, requirement: required, shape: journey-map }
+  - { id: wbs, name: Work Breakdown Structure, kind: link, owner: student, requirement: required, shape: drive-link }
+  - { id: oral_pitch, name: Two Minute Oral Pitch, kind: link, owner: student, requirement: required, shape: drive-link }
 
   - id: research_plan
-    name: Project plan
+    name: Project Plan
     kind: link
     owner: student
     requirement: required
+    shape: drive-link
     guidance: ""
 
-  - { id: grants_scan, name: Grants and competitions to apply for, kind: link, owner: student, requirement: optional }
-  - { id: prototype_plan, name: Prototype implementation and testing, kind: link, owner: student, requirement: required }
-  - { id: journey_map_2, name: Journey map 2.0, kind: link, owner: student, requirement: required }
-  - { id: project_presentation, name: Project presentation, kind: link, owner: student, requirement: required }
-  - { id: lessons_learned, name: Lessons learned, kind: link, owner: student, requirement: required }
+  - { id: grants_scan, name: Grants and Competitions to Apply For, kind: link, owner: student, requirement: required, shape: drive-link }
+  - { id: prototype_plan, name: Prototype Implementation and Testing Plan, kind: link, owner: student, requirement: required, shape: drive-link }
+  - { id: journey_map_2, name: Journey Map 2.0, kind: link, owner: student, requirement: required, shape: drive-link }
+  - { id: project_presentation, name: Project Presentation to the Class, kind: link, owner: student, requirement: required, shape: drive-link }
+  - { id: lessons_learned, name: Lessons Learned, kind: link, owner: student, requirement: required, shape: drive-link }
 
   - id: project_site
-    name: Researcher profile
+    name: Researcher Profile
     kind: link
     owner: student
     requirement: required
+    shape: drive-link
     guidance: ""
 
-  - { id: showcase_presentation, name: Showcase presentation, kind: link, owner: student, requirement: required }
+  - { id: showcase_presentation, name: Showcase Presentation, kind: link, owner: student, requirement: required, shape: drive-link }
+  # Steps with nothing to hand in: one page and one verb like every other
+  # (2.8), the day it was done as the record.
+  - { id: researcher_profile_draft_done, name: First Draft of the Researcher Profile, kind: text, owner: student, requirement: required, shape: mark-done }
+  - { id: feedback_session_done, name: Feedback Session, kind: text, owner: student, requirement: required, shape: mark-done }
+  - { id: nsta_done, name: Present at the NSTA Conference, kind: text, owner: student, requirement: optional, shape: mark-done }
+  - { id: grants_applications_done, name: Apply for the Grants and Competitions, kind: text, owner: student, requirement: optional, shape: mark-done }
+  - { id: exploravision_done, name: ExploraVision Entry, kind: text, owner: student, requirement: optional, shape: mark-done }
+  - { id: sigma_xi_done, name: Sigma Xi Virtual Research Showcase, kind: text, owner: student, requirement: optional, shape: mark-done }
+  - { id: quest_fair_done, name: Quest Innovation Fair, kind: text, owner: student, requirement: optional, shape: mark-done }
 
   - id: manuscript
-    name: The write-up
+    name: The Write-Up
     kind: link
     owner: student
     requirement: optional
@@ -277,7 +294,7 @@ steps:
 
   # ── 01 Research topic ────────────────────────────────────────────────────
   - id: green_sheet
-    name: Green sheet
+    name: Green Sheet
     phase: irpd_topic
     order: 10
     owner: student
@@ -286,7 +303,7 @@ steps:
       - { ref: green_sheet }
 
   - id: project_idea
-    name: Project idea form
+    name: Project Idea Form
     phase: irpd_topic
     order: 20
     owner: student
@@ -294,8 +311,17 @@ steps:
     deliverables:
       - { ref: project_idea }
 
+  - id: strengths
+    name: Top 3 Strengths
+    phase: irpd_topic
+    order: 25
+    owner: student
+    due: { on: 2026-08-24 }
+    deliverables:
+      - { ref: top_strengths }
+
   - id: topic_narrowing
-    name: Narrow down the research topic
+    name: Narrow Down the Research Topic
     phase: irpd_topic
     order: 30
     owner: student
@@ -327,7 +353,6 @@ steps:
     requires: [literature_review_draft]
     deliverables:
       - { ref: literature_review }
-      - { ref: literature_review_worksheet }
     note: ""
     # The class's own rubric, from the literature review template: four
     # levels, an overall score out of 4 (the mean of the rows chosen, so a
@@ -340,59 +365,70 @@ steps:
         - id: question
           name: Research question
           levels:
-            - { id: exemplary, label: Exemplary, points: 4, description: Research question is clear, focused, and realistic. }
-            - { id: accomplished, label: Accomplished, points: 3, description: Research question is generally clear, focused, and realistic. }
-            - { id: developing, label: Developing, points: 2, description: Includes a research question. }
-            - { id: beginning, label: Beginning, points: 1, description: Has a research topic. }
+            - { id: exemplary, label: Exemplary, points: 4, description: "Research question is clear, focused, and realistic." }
+            - { id: accomplished, label: Accomplished, points: 3, description: "Research question is generally clear, focused, and realistic." }
+            - { id: developing, label: Developing, points: 2, description: "Includes a research question." }
+            - { id: beginning, label: Beginning, points: 1, description: "Has a research topic." }
         - id: introduction
           name: Introduction
           levels:
             - { id: exemplary, label: Exemplary, points: 4, description: "Grabs the reader's attention. Includes problem statement or importance of topic. If appropriate, it includes the gap in the research. Includes research question. Writing is clear and well-organized." }
-            - { id: accomplished, label: Accomplished, points: 3, description: Includes problem statement or importance of topic. If appropriate, it includes the gap in the research. Includes research question. Writing is generally clear and well-organized. }
-            - { id: developing, label: Developing, points: 2, description: Introduces research question, with some context. }
-            - { id: beginning, label: Beginning, points: 1, description: Introduces research question. }
+            - { id: accomplished, label: Accomplished, points: 3, description: "Includes problem statement or importance of topic. If appropriate, it includes the gap in the research. Includes research question. Writing is generally clear and well-organized." }
+            - { id: developing, label: Developing, points: 2, description: "Introduces research question, with some context." }
+            - { id: beginning, label: Beginning, points: 1, description: "Introduces research question." }
         - id: background
           name: Background and literature review
           levels:
-            - { id: exemplary, label: Exemplary, points: 4, description: Includes thorough background information in the field. Background information informs the research question. Defines key terms. Writing is clear and well-organized. }
-            - { id: accomplished, label: Accomplished, points: 3, description: Includes background information in the field. Background information informs the research question. Defines key terms. Writing is generally clear and well-organized. }
-            - { id: developing, label: Developing, points: 2, description: Includes some background information in the field. In general, the background information informs the research. }
-            - { id: beginning, label: Beginning, points: 1, description: Includes some background information in the field. }
+            - { id: exemplary, label: Exemplary, points: 4, description: "Includes thorough background information in the field. Background information informs the research question. Defines key terms. Writing is clear and well-organized." }
+            - { id: accomplished, label: Accomplished, points: 3, description: "Includes background information in the field. Background information informs the research question. Defines key terms. Writing is generally clear and well-organized." }
+            - { id: developing, label: Developing, points: 2, description: "Includes some background information in the field. In general, the background information informs the research." }
+            - { id: beginning, label: Beginning, points: 1, description: "Includes some background information in the field." }
         - id: corner
           name: Looking around the corner
           levels:
-            - { id: exemplary, label: Exemplary, points: 4, description: Clear, thorough, and complete. }
-            - { id: accomplished, label: Accomplished, points: 3, description: Clear and complete. }
-            - { id: beginning, label: Beginning, points: 1, description: Complete. }
+            - { id: exemplary, label: Exemplary, points: 4, description: "Clear, thorough, and complete." }
+            - { id: accomplished, label: Accomplished, points: 3, description: "Clear and complete." }
+            - { id: beginning, label: Beginning, points: 1, description: "Complete." }
         - id: audience
           name: Audience
           levels:
-            - { id: exemplary, label: Exemplary, points: 4, description: Written for an educated, curious, academic reader who only knows a little about the topic. }
-            - { id: accomplished, label: Accomplished, points: 3, description: With a few exceptions, written for an educated, curious, academic reader who only knows a little about the topic. }
-            - { id: beginning, label: Beginning, points: 1, description: Too informal and simplistic, or so academic the writing is difficult to understand for anyone who is not an expert. }
+            - { id: exemplary, label: Exemplary, points: 4, description: "Written for an educated, curious, academic reader who only knows a little about the topic." }
+            - { id: accomplished, label: Accomplished, points: 3, description: "With a few exceptions, written for an educated, curious, academic reader who only knows a little about the topic." }
+            - { id: beginning, label: Beginning, points: 1, description: "Too informal and simplistic, or so academic the writing is difficult to understand for anyone who is not an expert." }
         - id: citations
           name: In-text citations
           levels:
-            - { id: exemplary, label: Exemplary, points: 4, description: All information properly cited. }
-            - { id: accomplished, label: Accomplished, points: 3, description: All information cited, with a few mechanical errors. }
-            - { id: developing, label: Developing, points: 2, description: Some information cited, with some mechanical errors. }
-            - { id: beginning, label: Beginning, points: 1, description: Information not cited. }
+            - { id: exemplary, label: Exemplary, points: 4, description: "All information properly cited." }
+            - { id: accomplished, label: Accomplished, points: 3, description: "All information cited, with a few mechanical errors." }
+            - { id: developing, label: Developing, points: 2, description: "Some information cited, with some mechanical errors." }
+            - { id: beginning, label: Beginning, points: 1, description: "Information not cited." }
         - id: references
           name: Reference page
           levels:
             - { id: exemplary, label: Exemplary, points: 4, description: "Properly formatted reference page: titled, double spaced, alphabetized, hanging indents, citations in proper form." }
-            - { id: developing, label: Developing, points: 2, description: Some formatting errors in the reference page. }
-            - { id: beginning, label: Beginning, points: 1, description: Only the URLs included. }
+            - { id: developing, label: Developing, points: 2, description: "Some formatting errors in the reference page." }
+            - { id: beginning, label: Beginning, points: 1, description: "Only the URLs included." }
         - id: mechanics
           name: Mechanics
           guidance: This does not have to be perfect this round.
           levels:
-            - { id: exemplary, label: Exemplary, points: 4, description: Spellcheck and grammar check run, and perhaps somebody checked the paper. }
-            - { id: developing, label: Developing, points: 2, description: Mechanical errors detract from the reading experience. }
-            - { id: beginning, label: Beginning, points: 1, description: Mechanical errors make the paper difficult to understand. }
+            - { id: exemplary, label: Exemplary, points: 4, description: "Spellcheck and grammar check run, and perhaps somebody checked the paper." }
+            - { id: developing, label: Developing, points: 2, description: "Mechanical errors detract from the reading experience." }
+            - { id: beginning, label: Beginning, points: 1, description: "Mechanical errors make the paper difficult to understand." }
+
+  # Its own deadline (2.8): one document per deadline, so a row's verb is
+  # one verb and a submission is never hidden behind its sibling.
+  - id: literature_review_worksheet
+    name: Literature Review Worksheet with Self-Reflection
+    phase: irpd_empathy
+    order: 25
+    owner: student
+    due: { on: 2026-09-08 }
+    deliverables:
+      - { ref: literature_review_worksheet }
 
   - id: project_summary
-    name: Project summary
+    name: Project Summary
     phase: irpd_empathy
     order: 30
     owner: student
@@ -401,7 +437,7 @@ steps:
       - { ref: project_summary }
 
   - id: research_question
-    name: Research question and Research Graphic
+    name: Research Question and Research Graphic
     phase: irpd_empathy
     order: 40
     owner: student
@@ -428,16 +464,16 @@ steps:
 
   # ── 03 Interviews ────────────────────────────────────────────────────────
   - id: interview_protocol_handout
-    name: Interview protocol
+    name: Interview Protocol
     phase: irpd_question
     order: 10
     owner: student
-    due: { on: 2026-09-15 }
+    due: { on: 2026-09-14 }
     deliverables:
       - { ref: interview_protocol_handout }
 
   - id: interviews
-    name: Empathy interviews
+    name: Empathy Interviews
     phase: irpd_question
     order: 20
     owner: student
@@ -445,44 +481,45 @@ steps:
     consequence: blocks_human_participants
     applies_when: humans
     deliverables:
-      - { ref: interview_consent }
       - { ref: interview_synthesis }
     risk: ""
 
   # ── 04 Project design ────────────────────────────────────────────────────
-  # No deliverable. The first draft is made on binder paper in class and read
-  # by the family the same period, so there is nothing to hand in and nothing
-  # to link. It is here because the final is a week later and a student who
-  # missed this one has missed the feedback, not the deadline.
+  # The first draft is made on binder paper in class and read by the
+  # family the same period; a photo of it goes on the journey map page,
+  # which is the same page the final is submitted from a week later.
   - id: journey_map_draft
-    name: Journey Map v1
+    name: "Journey Map - First Draft, Binder Paper"
     phase: irpd_design
     order: 10
     owner: student
     due: { on: 2026-09-17 }
+    deliverables:
+      - { ref: journey_map }
 
   - id: elder_journey_map_feedback
-    name: "Elder Feedback: Journey Map v1"
+    name: "Elder Feedback: Journey Map - First Draft"
     phase: irpd_design
     order: 15
     owner: staff
     due: { on: 2026-09-17 }
     requires: [journey_map_draft]
+    feedback_on: journey_map
 
   - id: journey_map
-    name: Journey map
+    name: Journey Map
     phase: irpd_design
     order: 20
     owner: student
     due: { on: 2026-09-24 }
-    requires: [journey_map_draft]
+    requires: [elder_journey_map_feedback]
     deliverables:
-      - { ref: journey_map_1 }
+      - { ref: journey_map }
 
   # Waits on the journey map: a pitch is made from the design, so an Elder
   # with nothing to read had this open from the first day of the class.
   - id: elder_pitch_help
-    name: Help the family prepare their two minute pitches
+    name: Help the Family Prepare Their Two Minute Pitches
     phase: irpd_design
     order: 30
     owner: staff
@@ -490,16 +527,17 @@ steps:
     requires: [journey_map]
 
   - id: oral_pitch
-    name: Two minute oral pitch
+    name: Two Minute Oral Pitch
     phase: irpd_design
     order: 40
     owner: student
     due: { on: 2026-09-29 }
+    requires: [journey_map]
     deliverables:
       - { ref: oral_pitch }
 
   - id: wbs
-    name: Work breakdown structure
+    name: Work Breakdown Structure
     phase: irpd_design
     order: 50
     owner: student
@@ -509,44 +547,48 @@ steps:
       - { ref: wbs }
 
   - id: project_plan
-    name: Project plan
+    name: Project Plan
     phase: irpd_design
     order: 60
     owner: student
     due: { on: 2026-10-06 }
-    requires: [wbs]
+    requires: [wbs, journey_map]
     deliverables:
       - { ref: research_plan }
 
   # ── 05 Implementation ────────────────────────────────────────────────────
   - id: grants_scan
-    name: Find the grants and competitions worth entering
+    name: Grants and Competitions to Apply For
     phase: irpd_impact
     order: 10
     owner: student
     due: { on: 2026-10-06 }
+    requires: [journey_map]
     deliverables:
       - { ref: grants_scan }
 
   - id: prototype_plan
-    name: Prototype implementation and testing plan
+    name: Prototype Implementation and Testing Plan
     phase: irpd_impact
     order: 20
     owner: student
     due: { on: 2026-10-08 }
-    requires: [project_plan]
+    requires: [project_plan, journey_map]
     deliverables:
       - { ref: prototype_plan }
 
   - id: researcher_profile_draft
-    name: First draft of the researcher profile
+    name: First Draft of the Researcher Profile
     phase: irpd_impact
     order: 30
     owner: student
     due: { on: 2026-10-15 }
+    requires: [journey_map]
+    deliverables:
+      - { ref: researcher_profile_draft_done }
 
   - id: journey_map_2
-    name: Journey map 2.0
+    name: Journey Map 2.0
     phase: irpd_impact
     order: 40
     owner: student
@@ -556,81 +598,96 @@ steps:
       - { ref: journey_map_2 }
 
   - id: project_presentation
-    name: Project presentation to the class
+    name: Project Presentation to the Class
     phase: irpd_impact
     order: 50
     owner: student
     due: { on: 2026-10-29 }
-    requires: [prototype_plan]
+    requires: [prototype_plan, journey_map]
     deliverables:
       - { ref: project_presentation }
 
   - id: feedback_session
-    name: Feedback session
+    name: Feedback Session
     phase: irpd_impact
     order: 60
     owner: student
     due: { anchor: feedback_session, days: 0 }
+    requires: [journey_map]
     review: formative
     note: ""
+    deliverables:
+      - { ref: feedback_session_done }
 
   # ── 06 Scaling ───────────────────────────────────────────────────────────
   - id: nsta
-    name: Present at the NSTA conference
+    name: Present at the NSTA Conference
     phase: irpd_scaling
     order: 10
     owner: student
     due: { on: 2026-11-10 }
+    requires: [journey_map]
     requirement: optional
+    deliverables:
+      - { ref: nsta_done }
 
   - id: grants_applications
-    name: Apply for the grants and competitions
+    name: Apply for the Grants and Competitions
     phase: irpd_scaling
     order: 20
     owner: student
     due: { on: 2026-11-19 }
-    requires: [grants_scan]
+    requires: [grants_scan, journey_map]
     requirement: optional
+    deliverables:
+      - { ref: grants_applications_done }
 
   - id: exploravision
-    name: ExploraVision entry
+    name: ExploraVision Entry
     phase: irpd_scaling
     order: 30
     owner: student
     due: { on: 2026-11-24 }
+    requires: [journey_map]
     requirement: optional
     note: ""
+    deliverables:
+      - { ref: exploravision_done }
 
   - id: lessons_learned
-    name: Lessons learned
+    name: Lessons Learned
     phase: irpd_scaling
     order: 40
     owner: student
     due: { on: 2026-12-17 }
+    requires: [journey_map]
     deliverables:
       - { ref: lessons_learned }
 
   - id: researcher_profile
-    name: Researcher profile published
+    name: Researcher Profile Published
     phase: irpd_scaling
     order: 50
     owner: student
     due: { on: 2027-02-26 }
-    requires: [researcher_profile_draft]
+    requires: [researcher_profile_draft, journey_map]
     deliverables:
       - { ref: project_site }
 
   - id: sigma_xi
-    name: Sigma Xi virtual research showcase
+    name: Sigma Xi Virtual Research Showcase
     phase: irpd_scaling
     order: 60
     owner: student
     due: { on: 2027-03-31 }
+    requires: [journey_map]
     requirement: optional
     # [VERIFY] The calendar gives March and a link, no day. The 31st is the
     # end of the month standing in for a date, which is the one kind of
     # invented deadline worth removing: read it off Sigma Xi's own page, or
     # carry the step with no date until somebody has.
+    deliverables:
+      - { ref: sigma_xi_done }
 
   - id: quest_fair
     name: Quest Innovation Fair
@@ -638,14 +695,18 @@ steps:
     order: 70
     owner: student
     due: { on: 2027-04-18 }
+    requires: [journey_map]
     requirement: optional
+    deliverables:
+      - { ref: quest_fair_done }
 
   - id: community_showcase
-    name: Mountain View Library showcase
+    name: Mountain View Library Showcase
     phase: irpd_scaling
     order: 80
     owner: student
     due: { anchor: community_showcase, days: 0 }
+    requires: [journey_map]
     review: formative
     deliverables:
       - { ref: showcase_presentation }

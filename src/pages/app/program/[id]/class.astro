@@ -32,7 +32,7 @@ import { afterPost, outcomeFrom } from '../../../../lib/post-redirect';
 import { signInWith } from '../../../../lib/next-path';
 import { allRows } from '../../../../lib/all-rows';
 import { resolveProgram, shape as shapeOf } from '../../../../lib/templates';
-import { progressOf, documentPath } from '../../../../lib/documents';
+import { progressOf, documentPath, docStanding } from '../../../../lib/documents';
 
 const { session, account, roles } = Astro.locals;
 const org = activeOrg(Astro);
@@ -286,7 +286,7 @@ const { data: docRows } = projectIds.length
   ? await allRows(() =>
       supabase
         .from('documents')
-        .select('id, project_id, deliverable, status, version_no, updated_at, submitted_at, document_fields(field_id, value)')
+        .select('id, project_id, deliverable, status, version_no, opened_at, updated_at, submitted_at, document_fields(field_id, value)')
         .in('project_id', projectIds)
         .order('id')
     )
@@ -314,15 +314,13 @@ const docCell = (place: Place, deliverable: any, completed: boolean): DocCell =>
   const doc = docOf.get(`${place.projectId}:${deliverable.id}`) ?? null;
   const href = documentPath(place.projectId, deliverable.id);
   const sh = shapeOf(deliverable.shape);
-  if (!doc) return { state: 'not_started', label: 'Not started', filled: 0, asked: sh ? progressOf(sh, {}).asked : 0, updatedAt: null, comments: 0, asks: 0, href, version: 0 };
-  const values: Record<string, any> = {};
-  for (const f of doc.document_fields ?? []) values[f.field_id] = f.value;
-  const p = sh ? progressOf(sh, values) : { asked: 0, filled: 0, missing: [], over: [] };
+  /* The one sentence for where a document stands (documents.ts, 2.8). */
+  const st = docStanding(doc, sh, (iso) => formatDate(String(iso).slice(0, 10), 'short'));
+  if (!doc) return { state: 'not_started', label: st.label, filled: 0, asked: st.asked, updatedAt: null, comments: 0, asks: 0, href, version: 0 };
   const c = commentsOn.get(doc.id) ?? { n: 0, asks: 0 };
-  const base = { filled: p.filled, asked: p.asked, updatedAt: doc.updated_at, comments: c.n, asks: c.asks, href, version: doc.version_no };
-  if (doc.status === 'submitted' || completed) return { ...base, state: 'submitted', label: `Submitted${doc.version_no > 1 ? ` · v${doc.version_no}` : ''}` };
-  if (doc.status === 'revising') return { ...base, state: 'revising', label: `Revising · ${p.filled} of ${p.asked}` };
-  return { ...base, state: 'in_progress', label: `In progress · ${p.filled} of ${p.asked}` };
+  const base = { filled: st.filled, asked: st.asked, updatedAt: doc.updated_at, comments: c.n, asks: c.asks, href, version: doc.version_no };
+  if (doc.status === 'submitted' || completed) return { ...base, state: 'submitted', label: st.label };
+  return { ...base, state: st.state, label: st.label };
 };
 /* Per deadline: the shaped deliverables and the counts by state. */
 const boardFor = (d: Deadline) => {

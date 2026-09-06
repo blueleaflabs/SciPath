@@ -9,13 +9,18 @@ import ProjectCover from '../../../../../components/ProjectCover.astro';
 import Plate from '../../../../../components/Plate.astro';
 import { activeOrg } from '../../../../../lib/tenant';
 import { resolveProgram, deliverablesFor, stepApplies, shape, scoreRubric } from '../../../../../lib/templates';
+import { byDueThenOrder } from '../../../../../lib/milestone-order';
+import { stepProgress, remainingWords, doneWords } from '../../../../../lib/step-progress';
+import { monthWord } from '../../../../../lib/dates';
 import { programTitle, staffWord } from '../../../../../lib/program-names';
 import { one, serverClient } from '../../../../../lib/supabase';
 import { checkDateOrder, worstFinding } from '../../../../../lib/dateOrder';
 import { standing, isAuthorOf, reachesProgram } from '../../../../../lib/roles';
 import { afterPost, outcomeFrom } from '../../../../../lib/post-redirect';
 import { nextUpNote } from '../../../../../lib/next-up';
-import { documentPath, progressOf } from '../../../../../lib/documents';
+import { scoreBand } from '../../../../../lib/score-band';
+import { platform } from '../../../../../config/site';
+import { documentPath, docStanding } from '../../../../../lib/documents';
 import { linkDomain, renderNote } from '../../../../../lib/notes';
 import { blobStore, projectImagePath, MAX_UPLOAD_BYTES } from '../../../../../lib/blob';
 import { parseVideo } from '../../../../../lib/video';
@@ -518,7 +523,7 @@ const processFor =
 
 const { data: allMilestones } = await supabase
   .from('entry_milestones')
-  .select('id, name, kind, due_on, required, blocks_experimentation, completed_on, completed_by, satisfied_by, sort_order, source, phase, owner, step_id, requires_step, feedback_on')
+  .select('id, name, kind, due_on, required, blocks_experimentation, completed_on, completed_by, satisfied_by, sort_order, source, phase, owner, step_id, requires_step, requires_steps, feedback_on')
   .eq('participation_id', id)
   /* By date, not by the template's sequence.
    
@@ -546,10 +551,17 @@ const { data: allMilestones } = await supabase
 const milestones = (allMilestones ?? []).filter((m: any) => m.owner !== 'staff');
 const staffTasks = (allMilestones ?? []).filter((m: any) => m.owner === 'staff');
 
+/* The gate (2.8): the steps this one waits on that are not yet met, by
+   name, on this place. Empty when it may be started. */
+const gateOf = (m: any): string[] => {
+  const ids = new Set<string>([...(m.requires_steps ?? []), ...(m.requires_step ? [m.requires_step] : [])]);
+  if (ids.size === 0) return [];
+  return (allMilestones ?? []).filter((x: any) => ids.has(x.step_id) && !x.completed_on).sort((a: any, b: any) => (a.sort_order ?? 0) - (b.sort_order ?? 0)).map((x: any) => x.name);
+};
+
 /* Whether a staff task may be done yet: the student step it requires is
    met. Resolved here by step id, the same way the function does. */
-const taskReady = (t: any) =>
-  !t.requires_step || (allMilestones ?? []).some((m: any) => m.step_id === t.requires_step && m.completed_on);
+const taskReady = (t: any) => gateOf(t).length === 0;
 
 /* Feedback on this place: on a deliverable, or on a task with none. */
 const { data: feedbackRows } = await supabase
@@ -980,20 +992,12 @@ for (const d of deliverables ?? []) recorded.set(d.type, d);
    and opens it. */
 const { data: docRows } = await supabase
   .from('documents')
-  .select('id, deliverable, status, version_no, updated_at, submitted_at, document_fields(field_id, value)')
+  .select('id, deliverable, status, version_no, opened_at, updated_at, submitted_at, document_fields(field_id, value)')
   .eq('project_id', project?.id ?? '');
 const docFor = (deliverableId: string) => (docRows ?? []).find((d: any) => d.deliverable === deliverableId) ?? null;
-const docState = (d: any): { label: string; verb: string; state: string } => {
-  const doc = docFor(d.id);
-  const sh = shape(d.shape);
-  if (!doc) return { label: 'Not started', verb: 'Submit', state: 'not_started' };
-  const values: Record<string, any> = {};
-  for (const f of doc.document_fields ?? []) values[f.field_id] = f.value;
-  const p = sh ? progressOf(sh, values) : { asked: 0, filled: 0, missing: [], over: [] };
-  if (doc.status === 'submitted') return { label: `Submitted${doc.version_no > 1 ? ` (version ${doc.version_no})` : ''}`, verb: 'Open', state: 'submitted' };
-  if (doc.status === 'revising') return { label: `Revising · ${p.filled} of ${p.asked} answered`, verb: 'Continue', state: 'revising' };
-  return { label: `In progress · ${p.filled} of ${p.asked} answered`, verb: p.filled ? 'Continue' : 'Submit', state: 'in_progress' };
-};
+/* One sentence for where a document stands (documents.ts), the same on
+   every page. */
+const docState = (d: any, open = false) => docStanding(docFor(d.id), shape(d.shape), (iso) => fmt(String(iso).slice(0, 10)), { open });
 
 /**
  * The phases, from the resolved template rather than from the seeded row.
@@ -1062,6 +1066,22 @@ const phaseList: any[] = (() => {
  * `completed_on` still answers for a step that hands over nothing — a board
  * measured, judging practised — because there is nothing else to read.
  */
+/* One deliverable, two steps (2.8): the journey map is uploaded on the
+   draft's deadline and submitted again on the final's. A record counts
+   for a step when the step is met, when the record is that step's own
+   (`milestone_id`), when it carries no step (a seeded row), or when no
+   other step wants the same deliverable. Otherwise the draft's record
+   would satisfy the final a week early. */
+const stepsWanting = (deliverableId: string) =>
+  (template?.steps ?? []).filter((st: any) => (st.deliverables ?? []).some((d: any) => (d.ref ?? d.id) === deliverableId)).length;
+const countsFor = (m: any, rec: any): boolean =>
+  Boolean(rec) && (Boolean(m.completed_on) || rec.milestone_id == null || rec.milestone_id === m.id || stepsWanting(rec.type) <= 1);
+const recFor = (m: any): Map<string, any> => {
+  const out = new Map<string, any>();
+  for (const [id, rec] of recorded) if (countsFor(m, rec)) out.set(id, rec);
+  return out;
+};
+
 const satisfied = (m: any): boolean => {
   const step = stepFor(m.name);
   const wants = step ? deliverablesFor(template!, step, facts) : [];
@@ -1073,7 +1093,7 @@ const satisfied = (m: any): boolean => {
   const needed = wants.filter((d) => d.requirement !== 'optional');
   if (needed.length === 0) return Boolean(m.completed_on);
 
-  return needed.every((d) => recorded.has(d.id));
+  return needed.every((d) => recFor(m).has(d.id));
 };
 
 const grouped = (() => {
@@ -1098,7 +1118,7 @@ const grouped = (() => {
         /* Every row, for the table; the student's rows, for the counts. */
         rows: rows.sort((a: any, b: any) => (a.due_on ?? '9999').localeCompare(b.due_on ?? '9999') || a.sort_order - b.sort_order),
         students,
-        done: students.filter((m: any) => satisfied(m)).length,
+        ...(({ done: metCount, total: countedSteps }) => ({ done: metCount, counted: countedSteps }))(stepProgress(students, satisfied)),
       };
     })
     /* In the program's own order, with the leftovers last. */
@@ -1175,9 +1195,12 @@ const derived = (m: any) => {
 /* Derived, like every other count of doneness on this page. Reading
    `completed_on` here would have disagreed with the phase headings the
    moment a shared deliverable satisfied a step. */
-const done = (milestones ?? []).filter((m: any) => satisfied(m)).length;
-const total = milestones?.length ?? 0;
-const openCount = total - done;
+/* One count for the whole app (src/lib/step-progress.ts): the student's
+   own steps that are things to do, done when dated. */
+const progressAll = stepProgress(allMilestones ?? [], satisfied);
+const done = progressAll.done;
+const total = progressAll.total;
+const openCount = progressAll.open;
 
 const now = new Date();
 const todayIso = todayIn(org.timezone, now);
@@ -1201,7 +1224,9 @@ const daysUntil = (iso: string | null) =>
  */
 const outstanding = (milestones ?? []).filter((m: any) => !m.completed_on && m.due_on);
 
-const byDate = (a: any, b: any) => a.due_on.localeCompare(b.due_on);
+/* The date, then the template's order when dates tie (2.8), so this page
+   and the Workbench name the same next step. */
+const byDate = byDueThenOrder;
 
 const nextOpen =
   outstanding.filter((m: any) => m.kind !== 'event').sort(byDate)[0] ??
@@ -1255,31 +1280,6 @@ const notebookAge = lastNote
   : null;
 const notebookQuiet = notebookAge === null || notebookAge <= -7;
 
-const plate = (() => {
-  const soon = (milestones ?? [])
-    .filter((m: any) => !satisfied(m) && m.due_on && m.kind !== 'event' && m.due_on >= todayIso)
-    .sort(byDate)
-    .filter((m: any) => (daysUntil(m.due_on) ?? 99) <= 7);
-  /* One thing next (2.8): the latest of the late, else the nearest due.
-     Three rows of "next up" read as a list of chores, not a next step. */
-  const rows = [...overdue, ...soon].slice(0, 1).map((m: any) => {
-    const days = daysUntil(m.due_on);
-    return { kind: 'step' as const, m, days, late: days !== null && days < 0 };
-  });
-  if (rows.length === 0 && nextOpen) {
-    rows.push({ kind: 'step' as const, m: nextOpen, days: toNext, late: false });
-  }
-  return rows;
-})();
-const alarm = plate[0] ?? null;
-
-/**
- * The form a plate row folds open, so the student records the thing where
- * they read that it is due rather than being sent down to the ledger for
- * it. A step with deliverables gets one short form per deliverable still
- * missing (the ledger's own fields); a step with nothing to hand in gets
- * *Done* with a date. The same two actions the ledger posts.
- */
 /**
  * What has been asked of the reader about this project. `my_nudges()` is
  * the recipient's own list (the outbox is closed to sessions), one row per
@@ -1299,21 +1299,41 @@ if (iAuthor) {
 const askOn = (milestoneId: string) => {
   const n = asksFor.get(milestoneId);
   if (!n) return undefined;
-  return { milestoneId, askedBy: n.asked_by ?? null, times: Number(n.times ?? 1), acknowledged: Boolean(n.acknowledged_at) };
+  return { milestoneId, askedBy: n.asked_by ?? null, askedOn: n.asked_at ? formatDate(String(n.asked_at).slice(0, 10), 'short') : null, times: Number(n.times ?? 1), acknowledged: Boolean(n.acknowledged_at) };
 };
-/* Asks about obligations the plate does not already carry (due more than
-   a week out), as rows of their own, so an ask is never below the fold. */
-const askedRows = [...asksFor.values()]
-  .filter((n: any) => !plate.some((row: any) => row.m.id === n.milestone_id))
-  .map((n: any) => (milestones ?? []).find((m: any) => m.id === n.milestone_id))
-  .filter(Boolean)
-  .map((m: any) => {
+
+const plate = (() => {
+  const soon = (milestones ?? [])
+    .filter((m: any) => !satisfied(m) && m.due_on && m.kind !== 'event' && m.due_on >= todayIso)
+    .sort(byDate)
+    .filter((m: any) => (daysUntil(m.due_on) ?? 99) <= 7);
+  /* One thing next (2.8): what an Elder asked for, else the latest of
+     the late, else the nearest due. Three rows of "next up" read as a
+     list of chores, not a next step; and the ask sits on the row it is
+     about, so a nudged step is the row. */
+  const asked = (milestones ?? [])
+    .filter((m: any) => !satisfied(m) && asksFor.has(m.id))
+    .sort((a: any, b: any) => String(asksFor.get(b.id)?.asked_at ?? '').localeCompare(String(asksFor.get(a.id)?.asked_at ?? '')));
+  const rows = [...asked, ...overdue, ...soon].slice(0, 1).map((m: any) => {
     const days = daysUntil(m.due_on);
     return { kind: 'step' as const, m, days, late: days !== null && days < 0 };
   });
+  if (rows.length === 0 && nextOpen) {
+    rows.push({ kind: 'step' as const, m: nextOpen, days: toNext, late: false });
+  }
+  return rows;
+})();
+const alarm = plate[0] ?? null;
 
+/**
+ * The form a plate row folds open, so the student records the thing where
+ * they read that it is due rather than being sent down to the ledger for
+ * it. A step with deliverables gets one short form per deliverable still
+ * missing (the ledger's own fields); a step with nothing to hand in gets
+ * *Done* with a date. The same two actions the ledger posts.
+ */
 const recordFormFor = (m: any) => {
-  const wants = wantedBy(m).filter((d: any) => !recorded.has(d.id));
+  const wants = wantedBy(m).filter((d: any) => !recFor(m).has(d.id));
   if (wantedBy(m).length > 0) {
     if (wants.length === 0) return undefined;
     /* Written in SciPath: the plate opens the document rather than
@@ -1396,13 +1416,14 @@ const sections = [
      (2.8). The date still exists on the project for the fair's page. */
   { id: 'start', label: 'Project Start Date', show: !isCourse },
   { id: 'deadlines', label: 'Deadlines', show: true },
-  { id: 'notebook', label: 'Notebook', show: true },
-  { id: 'showcase', label: 'Showcase', show: true },
-  { id: 'documents', label: 'Documents', show: true },
+  { id: 'documents', label: 'Documents', show: platform.linkedDocuments },
   { id: 'money', label: 'The money', show: isGrant },
   { id: 'result', label: 'Result', show: hasResult },
   { id: 'grades', label: 'Grades', show: myGrades.length > 0 },
-  { id: 'manuscript', label: 'Manuscript', show: true },
+  /* A class publishes through the showcase; the manuscript is the fair's
+     write-up and stays on a fair's page (2.8). Not read from the template:
+     it follows the program's kind, as the start date does. */
+  { id: 'manuscript', label: 'Manuscript', show: !isCourse },
 ].filter((section) => section.show);
 
 /* The number a heading shows, looked up rather than written out. Four of
@@ -1422,6 +1443,8 @@ const sectionNo = new Map(sections.map((section, i) => [section.id, String(i + 1
     <ProjectCover
       kick={programTitle(program)}
       title={project?.title ?? ''}
+      nav={{ projectId: project?.id ?? '', programId, showcase: Boolean(program?.showcase && program.showcase !== 'none'), here: 'deliverables' }}
+      rename={iAuthor && project ? { projectId: project.id, title: project.title ?? '' } : undefined}
       people={[
         { label: authors.length === 1 ? 'Author' : 'Authors', value: authors.length > 0 ? authors.map((a: any) => a.users?.display_name).join(', ') : 'None yet' },
         /* Every Elder on the place. This read `officer`, the first
@@ -1433,18 +1456,12 @@ const sectionNo = new Map(sections.map((section, i) => [section.id, String(i + 1
           value: eldersHere.length > 0
             ? eldersHere.map((a: any) => one(a.users)?.display_name ?? '').filter(Boolean).join(', ')
             : officer?.self_managed_at
-              ? `${one(officer.users)?.display_name ?? ''}, self managed`
+              ? `${one(officer.users)?.display_name ?? ''}`
               : 'None assigned',
         },
-        { label: 'Sponsor', value: sponsor ? sponsor.teacher_name : 'None named' },
+        { label: sponsors.length > 1 ? 'Sponsors' : 'Sponsor', value: sponsors.length ? sponsors.map((x: any) => x.teacher_name).join(', ') : 'None named' },
       ]}
     >
-      <a class="btn btn-sm ghost" href="#notebook">Notebook</a>
-      {/* The student's own card on the class showcase: summary, video,
-          shown or hidden. It was reachable only from the showcase page. */}
-      {program?.showcase && program.showcase !== 'none' && (
-        <a class="btn btn-sm ghost" href={`/app/project/${project?.id}/showcase/`}>Showcase card</a>
-      )}
       {/* A class whose template says `people: staff` sets the sponsor and
           the roster itself; the students see the names and have nothing to
           update. Staff always can. */}
@@ -1469,18 +1486,21 @@ const sectionNo = new Map(sections.map((section, i) => [section.id, String(i + 1
         year, this is today. */}
     <Plate
       rows={[
-        ...[...plate, ...askedRows].flatMap((row: any, i: number) => {
-          const docs = wantedBy(row.m).filter((d: any) => d.shape && !recorded.has(d.id));
+        ...plate.flatMap((row: any, i: number) => {
+          const docs = wantedBy(row.m).filter((d: any) => d.shape && !recFor(row.m).has(d.id));
           const one = {
           id: `p-${row.m.id}`,
           n: row.days,
           unit: row.days === null ? 'no date' : row.late ? 'days late' : row.days === 0 ? 'due today' : 'days left',
           late: row.late,
-          kick: row.late ? 'Overdue' : i < plate.length ? 'Next up' : 'Asked of you',
+          kick: row.late ? 'Overdue' : 'Next up',
           ask: askOn(row.m.id),
           title: row.m.name,
+          /* The same standing the deliverables table shows (2.8): not
+             started, in progress and how many answered. */
           sub:
             (row.m.due_on ? `Due ${fmt(row.m.due_on)}.` : '') +
+            (docs.length === 1 ? ` ${gateOf(row.m).length ? `Waits on ${gateOf(row.m).join(', ')}` : docState(docs[0], true).label}.` : '') +
             (i === 0 && overdue.length > plate.filter((r: any) => r.late).length
               ? ` ${overdue.length - plate.filter((r: any) => r.late).length} more late in the ledger.`
               : ''),
@@ -1489,7 +1509,7 @@ const sectionNo = new Map(sections.map((section, i) => [section.id, String(i + 1
              ledger row, which is where the record is read. */
           form: iAuthor ? recordFormFor(row.m) : undefined,
           actions: docs.length === 1
-            ? [{ href: documentPath(project?.id ?? '', docs[0].id), label: iAuthor ? docState(docs[0]).verb : 'Read', accent: iAuthor }]
+            ? [{ href: documentPath(project?.id ?? '', docs[0].id), label: iAuthor ? (gateOf(row.m).length ? 'Start' : docState(docs[0], true).verb) : 'Read', accent: iAuthor, waitsOn: iAuthor && gateOf(row.m).length ? gateOf(row.m).join(', ') : undefined }]
             : iAuthor ? [{ href: `#m-${row.m.id}`, label: 'In the ledger' }] : [{ href: `#m-${row.m.id}`, label: 'See the row', accent: row.late }],
           };
           /* A step that wants two documents is two rows, one verb each,
@@ -1502,21 +1522,13 @@ const sectionNo = new Map(sections.map((section, i) => [section.id, String(i + 1
             return [{
               ...one,
               title: d.name,
-              actions: [{ href: documentPath(project?.id ?? '', d.id), label: iAuthor ? docState(d).verb : 'Read', accent: iAuthor }],
+              actions: [{ href: documentPath(project?.id ?? '', d.id), label: iAuthor ? (gateOf(row.m).length ? 'Start' : docState(d, true).verb) : 'Read', accent: iAuthor, waitsOn: iAuthor && gateOf(row.m).length ? gateOf(row.m).join(', ') : undefined }],
             }];
           }
           return [one];
         }),
-        ...(iAuthor && notebookQuiet
-          ? [{
-              n: notebookAge,
-              unit: notebookAge === null ? 'no entries' : 'days quiet',
-              kick: 'Notebook',
-              title: notebookAge === null ? 'not started' : 'a week without an entry',
-              sub: 'A line about what happened this week is enough.',
-              actions: [{ href: '#observe', label: 'Write an entry', accent: true }],
-            }]
-          : []),
+        /* No notebook row (2.8): the cover's Notebook button is the way in,
+           and a chore on the plate read as a deadline. */
       ]}
     />
 
@@ -1535,8 +1547,8 @@ const sectionNo = new Map(sections.map((section, i) => [section.id, String(i + 1
               <a href={`#phase-${g.id || 'rest'}`}>
                 <span class="n">Phase {i + 1}{state === 'now' ? ' · now' : ''}</span>
                 <span class="t">{g.name}</span>
-                {g.window && <span class="w">{g.window.from} to {g.window.to}</span>}
-                <span class="c">{g.done} of {g.students.length}</span>
+                {g.window && <span class="w">{monthWord(g.window.from)} to {monthWord(g.window.to)}</span>}
+                <span class="c">{g.done} of {g.counted}</span>
               </a>
             </li>
           );
@@ -1659,8 +1671,10 @@ const sectionNo = new Map(sections.map((section, i) => [section.id, String(i + 1
         button there and on the bar, and the manuscript is the last
         section. */}
 
-    <section class="sec" id="deadlines">
-      <div class="sec-h"><b><span class="sec-n">{sectionNo.get('deadlines')}</span>Deadlines</b><span>{total - done} of {total} remaining</span></div>
+    <section class="sec" id="deadlines" data-live="deadlines">
+      <div class="sec-h"><b><span class="sec-n">{sectionNo.get('deadlines')}</span>Deadlines</b><span>{remainingWords(progressAll)}{' '}
+        {/* Every document written in SciPath, as it stands, on one paper (2.8). */}
+        <a class="btn btn-sm btn-2 sec-act" href={`/app/project/${project?.id}/documents/print/?go=1`} target="_blank" rel="noopener noreferrer">Export All Deliverables</a></span></div>
 
       {/* Grouped by phase, which is what the phases were for: a list of
           nineteen rows is a list, and five named stretches with two or three
@@ -1689,13 +1703,13 @@ const sectionNo = new Map(sections.map((section, i) => [section.id, String(i + 1
                 <th colspan="3" scope="colgroup">
                   <span class="phase-name">{group.name}</span>
                   {group.window && (
-                    <span class="phase-when">{group.window.from} to {group.window.to}</span>
+                    <span class="phase-when">{monthWord(group.window.from)} to {monthWord(group.window.to)}</span>
                   )}
                   <span class="phase-count">
                     {/* The same sentence whether or not it is finished.
                         "All done" makes somebody scanning five phases read
                         two different shapes to compare them. */}
-                    {`${group.done} of ${group.students.length} done`}
+                    {doneWords({ done: group.done, total: group.counted, open: group.counted - group.done })}
                   </span>
                 </th>
               </tr>
@@ -1708,9 +1722,7 @@ const sectionNo = new Map(sections.map((section, i) => [section.id, String(i + 1
             if (m.owner === 'staff') {
               const ready = taskReady(m);
               const target = m.feedback_on ? recorded.get(m.feedback_on) ?? null : null;
-              const requiredName = m.requires_step
-                ? (allMilestones ?? []).find((x: any) => x.step_id === m.requires_step)?.name ?? 'the step before it'
-                : null;
+              const requiredName = gateOf(m).length ? gateOf(m).join(', ') : null;
               const notes = feedbackOnTask(m.id);
               const canDo = oversees && ready && !m.completed_on;
               return (
@@ -1846,12 +1858,19 @@ const sectionNo = new Map(sections.map((section, i) => [section.id, String(i + 1
                        the date anything was done. The record itself, read
                        only, and the verb where there is one. */
                     <div class="rec-done">
-                      {wantedBy(m).filter((d: any) => recorded.has(d.id)).map((d: any) => {
-                        const have = recorded.get(d.id);
+                      {wantedBy(m).filter((d: any) => recFor(m).has(d.id)).map((d: any) => {
+                        const have = recFor(m).get(d.id);
                         return (
                           <p class="rec-one">
                             {wantedBy(m).length > 1 && <span class="rec-n">{d.name}</span>}
-                            <a class="linkish" href={`#d-${d.id}`}>Submitted {have?.signed_on ? fmt(have.signed_on) : ''}</a>
+                            {/* A document written in SciPath opens; a paper form has
+                                nowhere to go, so it is a plain word (2.8: the anchor it
+                                pointed at had left with the ledger). */}
+                            {d.shape ? (
+                              <a class="linkish" href={documentPath(project?.id ?? '', d.id)}>Submitted {have?.signed_on ? fmt(have.signed_on) : ''}</a>
+                            ) : (
+                              <span>Submitted {have?.signed_on ? fmt(have.signed_on) : ''}</span>
+                            )}
                             {have?.external_url && (
                               <a class="rec-at" href={have.external_url} target="_blank" rel="noopener noreferrer">{linkDomain(have.external_url)}</a>
                             )}
@@ -1868,7 +1887,7 @@ const sectionNo = new Map(sections.map((section, i) => [section.id, String(i + 1
                           </p>
                         );
                       })}
-                      {wantedBy(m).every((d: any) => !recorded.has(d.id)) && m.completed_on && (
+                      {wantedBy(m).every((d: any) => !recFor(m).has(d.id)) && m.completed_on && (
                         <span class="rec-ok">Done {fmt(m.completed_on)}</span>
                       )}
                     </div>
@@ -1888,7 +1907,7 @@ const sectionNo = new Map(sections.map((section, i) => [section.id, String(i + 1
                          artifact existing (11.8b). Closed by default, because
                          twenty-nine open forms is not a table anybody can
                          scan. */
-                      wantedBy(m).every((d: any) => recorded.has(d.id)) ? (
+                      wantedBy(m).every((d: any) => recFor(m).has(d.id)) ? (
                         /* **What was recorded, not that something was.**
                         
                            This said *Recorded* and nothing else, so the one
@@ -1906,7 +1925,7 @@ const sectionNo = new Map(sections.map((section, i) => [section.id, String(i + 1
                            one fact reads as a second fact. */
                         <div class="rec-done">
                           {wantedBy(m).map((d: any) => {
-                            const have = recorded.get(d.id);
+                            const have = recFor(m).get(d.id);
                             return (
                               <p class="rec-one">
                                 {wantedBy(m).length > 1 && <span class="rec-n">{d.name}</span>}
@@ -1933,9 +1952,9 @@ const sectionNo = new Map(sections.map((section, i) => [section.id, String(i + 1
                               said about what was recorded, newest first,
                               with the way to answer it: a new version, which
                               supersedes the old row and resolves the ask. */}
-                          {wantedBy(m).flatMap((d: any) => feedbackOnDeliverable(recorded.get(d.id)?.id ?? '')).length > 0 && (
+                          {wantedBy(m).flatMap((d: any) => feedbackOnDeliverable(recFor(m).get(d.id)?.id ?? '')).length > 0 && (
                             <ul class="fb-list">
-                              {wantedBy(m).flatMap((d: any) => feedbackOnDeliverable(recorded.get(d.id)?.id ?? '')).map((n: any) => (
+                              {wantedBy(m).flatMap((d: any) => feedbackOnDeliverable(recFor(m).get(d.id)?.id ?? '')).map((n: any) => (
                                 <li class:list={[n.needs_revision && !n.resolved_at && 'asks']}>
                                   <b>{n.author?.display_name ?? staffWord(program)}</b> {n.body_md}
                                   <span class="fb-when">{fmt(String(n.created_at).slice(0, 10))}{n.resolved_at ? ' · answered' : n.needs_revision ? ' · revision asked' : ''}</span>
@@ -1943,11 +1962,11 @@ const sectionNo = new Map(sections.map((section, i) => [section.id, String(i + 1
                               ))}
                             </ul>
                           )}
-                          {iAuthor && wantedBy(m).some((d: any) => recorded.get(d.id) && openRevision(recorded.get(d.id).id)) && (
+                          {iAuthor && wantedBy(m).some((d: any) => recFor(m).get(d.id) && openRevision(recFor(m).get(d.id).id)) && (
                             <details class="rec">
                               <summary class="btn btn-sm accent">Submit a new version</summary>
                               {wantedBy(m)
-                                .filter((d: any) => recorded.get(d.id) && openRevision(recorded.get(d.id).id))
+                                .filter((d: any) => recFor(m).get(d.id) && openRevision(recFor(m).get(d.id).id))
                                 .map((d: any) => d.shape ? (
                                   <p class="rec-doc"><a class="btn btn-sm btn-2" href={documentPath(project?.id ?? '', d.id)}>Revise the document{wantedBy(m).length > 1 ? `: ${d.name}` : ''}</a></p>
                                 ) : (
@@ -1966,15 +1985,19 @@ const sectionNo = new Map(sections.map((section, i) => [section.id, String(i + 1
                           )}
                         </div>
                       ) : (
-                        wantedBy(m).filter((d: any) => !recorded.has(d.id)).every((d: any) => d.shape) ? (
+                        wantedBy(m).filter((d: any) => !recFor(m).has(d.id)).every((d: any) => d.shape) ? (
                           /* Written in SciPath (6.16): the row opens the
                              document and says where it stands; Submit is
                              on the document itself. */
                           <div class="rec-docs">
-                            {wantedBy(m).filter((d: any) => !recorded.has(d.id)).map((d: any) => (
+                            {wantedBy(m).filter((d: any) => !recFor(m).has(d.id)).map((d: any) => (
                               <p class="rec-doc">
-                                <a class="btn btn-sm btn-2" href={documentPath(project?.id ?? '', d.id)}>{docState(d).verb}{wantedBy(m).length > 1 ? `: ${d.name}` : ''}</a>
-                                <span class:list={['rec-docstate', docState(d).state]}>{docState(d).label}</span>
+                                {gateOf(m).length > 0 && !m.completed_on ? (
+                                  <span class="btn btn-sm btn-2 is-off" aria-disabled="true" title={`Waits on ${gateOf(m).join(', ')}`}>Start{wantedBy(m).length > 1 ? `: ${d.name}` : ''}</span>
+                                ) : (
+                                  <a class="btn btn-sm btn-2" href={documentPath(project?.id ?? '', d.id)}>{docState(d, true).verb}{wantedBy(m).length > 1 ? `: ${d.name}` : ''}</a>
+                                )}
+                                <span class:list={['rec-docstate', gateOf(m).length > 0 && !m.completed_on ? 'waits' : docState(d, true).state]}>{gateOf(m).length > 0 && !m.completed_on ? `Waits on ${gateOf(m).join(', ')}` : docState(d, true).label}</span>
                               </p>
                             ))}
                           </div>
@@ -1986,11 +2009,15 @@ const sectionNo = new Map(sections.map((section, i) => [section.id, String(i + 1
                               said twice: the row asks, the form saves. */}
                           <summary class="btn btn-sm btn-2">Submit</summary>
                           {wantedBy(m)
-                            .filter((d: any) => !recorded.has(d.id))
+                            .filter((d: any) => !recFor(m).has(d.id))
                             .map((d: any) => d.shape ? (
                               <p class="rec-doc">
-                                <a class="btn btn-sm btn-2" href={documentPath(project?.id ?? '', d.id)}>{docState(d).verb}: {d.name}</a>
-                                <span class:list={['rec-docstate', docState(d).state]}>{docState(d).label}</span>
+                                {gateOf(m).length > 0 && !m.completed_on ? (
+                                  <span class="btn btn-sm btn-2 is-off" aria-disabled="true" title={`Waits on ${gateOf(m).join(', ')}`}>Start: {d.name}</span>
+                                ) : (
+                                  <a class="btn btn-sm btn-2" href={documentPath(project?.id ?? '', d.id)}>{docState(d, true).verb}: {d.name}</a>
+                                )}
+                                <span class:list={['rec-docstate', gateOf(m).length > 0 && !m.completed_on ? 'waits' : docState(d, true).state]}>{gateOf(m).length > 0 && !m.completed_on ? `Waits on ${gateOf(m).join(', ')}` : docState(d, true).label}</span>
                               </p>
                             ) : (
                               <form method="POST" action="#outcome" class="recf">
@@ -2040,9 +2067,9 @@ const sectionNo = new Map(sections.map((section, i) => [section.id, String(i + 1
                       satisfied(m) ? (
                         <div class="rec-done">
                           {wantedBy(m)
-                            .filter((d: any) => recorded.has(d.id))
+                            .filter((d: any) => recFor(m).has(d.id))
                             .map((d: any) => {
-                              const have = recorded.get(d.id);
+                              const have = recFor(m).get(d.id);
                               return (
                                 <p class="rec-one">
                                   <a class="linkish" href={`#d-${d.id}`}>
@@ -2119,12 +2146,21 @@ const sectionNo = new Map(sections.map((section, i) => [section.id, String(i + 1
                       {/* The family's score: written by the Elder on the
                           place, read by every Elder of the class, the
                           teachers and the student. */}
-                      {oversees && !me.isAdvisor ? (
+                      {oversees && !me.isAdvisor && !m.completed_on ? (
+                        /* Nothing handed in: nothing to score yet (2.8). */
+                        <div class="grade shown family quiet">
+                          {gradeRows.length > 1 && <span class="g-who">{student?.display_name}</span>}
+                          <span class="pill quiet">{score ? `Family score ${score.score ?? '—'} / ${score.out_of ?? 4}` : 'not scored'}</span>
+                          <span class="g-by">Waiting for deliverable to be submitted</span>
+                        </div>
+                      ) : oversees && !me.isAdvisor ? (
                         <details class="grade" open={false}>
                           <summary>
-                            <span class="g-who">{student?.display_name}</span>
+                            {/* The name only where a project has more than one author:
+                                on one student's page it said the obvious four times. */}
+                            {gradeRows.length > 1 && <span class="g-who">{student?.display_name}</span>}
                             {score ? (
-                              <span class="pill ok">Family score {score.score ?? '—'}{score.out_of ? ` / ${score.out_of}` : ''}</span>
+                              <span class:list={['pill', scoreBand(score.score) || 'ok']}>Family score {score.score ?? '—'}{score.out_of ? ` / ${score.out_of}` : ''}</span>
                             ) : (
                               <span class="pill quiet">not scored</span>
                             )}
@@ -2136,14 +2172,16 @@ const sectionNo = new Map(sections.map((section, i) => [section.id, String(i + 1
                             <input type="hidden" name="step_name" value="" />
                             <label><span>Score out of 4</span><input class="in" type="number" step="0.5" min="0" max="4" name="score" value={score?.score ?? ''} /></label>
                             <input type="hidden" name="out_of" value="4" />
-                            <label class="g-fb"><span>Comment</span><textarea class="ta" name="feedback" rows="2">{score?.feedback_md ?? ''}</textarea></label>
+                            <label class="g-fb"><span>Comment</span><textarea class="ta" name="feedback" rows="1">{score?.feedback_md ?? ''}</textarea></label>
                             <button class="btn btn-sm" type="submit">{score ? 'Save score' : 'Score'}</button>
                           </form>
                         </details>
-                      ) : score && (me.isAdvisor || iAuthor) ? (
+                      ) : score && (me.isAdvisor || (iAuthor && platform.familyScoresToStudents)) ? (
+                        /* The student's view of it waits on the class's say
+                           (`platform.familyScoresToStudents`, 2.8). */
                         <div class="grade shown family">
                           <span class="g-who">Family score</span>
-                          <span class="pill ok">{score.score ?? '—'}{score.out_of ? ` / ${score.out_of}` : ''}</span>
+                          <span class:list={['pill', scoreBand(score.score) || 'ok']}>{score.score ?? '—'}{score.out_of ? ` / ${score.out_of}` : ''}</span>
                           {score.feedback_md && <p class="g-text">{score.feedback_md}</p>}
                           <span class="g-by">{score.grader?.display_name ? `${score.grader.display_name}, ` : ''}{fmt(String(score.created_at).slice(0, 10))}</span>
                         </div>
@@ -2237,163 +2275,12 @@ const sectionNo = new Map(sections.map((section, i) => [section.id, String(i + 1
         For the pilot the project is one page: what is owed, the notebook,
         the showcase. An entry is one box here; the full notebook, with
         images and the export, is one link away and unchanged. */}
-    <section class="sec" id="notebook">
-      <div class="sec-h">
-        <b><span class="sec-n">{sectionNo.get('notebook')}</span>Notebook</b>
-        <span>{noteCount ?? 0} {noteCount === 1 ? 'entry' : 'entries'}{notebookAge !== null && notebookAge < 0 ? ` · last ${Math.abs(notebookAge)} ${Math.abs(notebookAge) === 1 ? 'day' : 'days'} ago` : ''}</span>
-      </div>
+    {/* The notebook and the showcase have pages of their own (the cover's
+        buttons); the sections that stood here duplicated them (2.8). */}
 
-      {iAuthor && (
-        <form method="POST" action="#outcome" class="nbform" id="observe">
-          <input type="hidden" name="action" value="note" />
-          <label class="nb-body">
-            <span>What happened, in a line or a paragraph</span>
-            <textarea class="ta" name="body_md" rows="3" required></textarea>
-          </label>
-          <div class="nb-row">
-            <label class="nb-date"><span>On</span><input class="in" type="date" name="occurred_on" value={todayIso} /></label>
-            <button class="btn btn-sm" type="submit">Save entry</button>
-            <a class="linkish" href={`/app/project/${project?.id}/`}>Full notebook, images and export</a>
-          </div>
-        </form>
-      )}
-
-      {(recentNotes ?? []).length === 0 ? (
-        <p class="t-sm">Nothing written yet. The notebook is the record of the year; a line a week is enough.</p>
-      ) : (
-        <ol class="nblist">
-          {(recentNotes ?? []).map((n: any) => (
-            <li>
-              <span class="nb-when">{fmt(n.occurred_on)}<span class="nb-who">{n.users?.display_name ? ` · ${n.users.display_name}` : ''}</span></span>
-              <div class="nb-text" set:html={renderNote(n.body_md)} />
-            </li>
-          ))}
-          {(noteCount ?? 0) > (recentNotes ?? []).length && (
-            <li class="nb-more"><a href={`/app/project/${project?.id}/`}>{(noteCount ?? 0) - (recentNotes ?? []).length} earlier {((noteCount ?? 0) - (recentNotes ?? []).length) === 1 ? 'entry' : 'entries'} in the full notebook</a></li>
-          )}
-        </ol>
-      )}
-    </section>
-
-    {/* What the work produced, and where the rest of it lives.
-    
-        Under the deliverables rather than beside them, because that is what
-        these are: the images, the recording and the documents a project
-        hands over. They were on the notebook page, which is a chronological
-        record and had no business holding them. */}
-    <section class="sec" id="showcase">
-      <div class="sec-h">
-        <b><span class="sec-n">{sectionNo.get('showcase')}</span>Showcase</b>
-        <span>{(images ?? []).length} of 4</span>
-      </div>
-
-      <p class="aside">
-        What the work looked like. These sit at the top of the published page,
-        above the abstract, so somebody arriving can see the thing before
-        reading about it. Four is the limit, which is a choice rather than a
-        constraint: a gallery of twenty is a scroll.
-      </p>
-
-      {(images ?? []).length > 0 && (
-        <ul class="shots">
-          {(images ?? []).map((img: any) => (
-            <li>
-              <img src={mediaUrl(img.storage_path)} alt={img.alt} loading="lazy" />
-              <p>{img.caption}</p>
-              {iAuthor && (
-                <form method="POST" action="#outcome">
-                  <input type="hidden" name="action" value="image_remove" />
-                  <input type="hidden" name="image_id" value={img.id} />
-                  <button class="btn btn-q" type="submit">Remove</button>
-                </form>
-              )}
-            </li>
-          ))}
-        </ul>
-      )}
-
-      {iAuthor && (images ?? []).length < 4 && (
-        <form method="POST" action="#outcome" enctype="multipart/form-data" class="mform" style="margin-top:22px">
-          <input type="hidden" name="action" value="image" />
-          <label>
-            <span>Image</span>
-            <input class="in" type="file" name="image" accept="image/*" required />
-          </label>
-          <div class="row-2">
-            <label>
-              <span>Caption</span>
-              <input class="in" name="caption" required />
-              <small>What it shows, in a line.</small>
-            </label>
-            <label>
-              <span>Alt text</span>
-              <input class="in" name="alt" required />
-              <small>
-                For somebody who cannot see it. Describe the content, not the
-                fact that it is a photograph.
-              </small>
-            </label>
-          </div>
-          <button class="btn" type="submit">Add the image</button>
-        </form>
-      )}
-
-      <h3 class="sub-h">Video</h3>
-      <p class="aside">
-        One, on YouTube or Vimeo. We store the address and never fetch it, and
-        the published page shows a still until somebody presses play, so
-        nothing is requested from a video host on behalf of a reader who did
-        not ask for it.
-      </p>
-
-      {/* What was saved, where it was saved.
-       
-          The images have the gallery above and the video had nothing: a
-          student pasted an address, pressed save, and the only evidence was
-          the field still containing what they typed. The rest of it lives on
-          the published page, which does not exist yet for a project still
-          being written. */}
-      {savedVideo && (
-        <div class="vsaved">
-          {savedVideo.poster ? (
-            <img src={savedVideo.poster} alt="" loading="lazy" />
-          ) : (
-            <div class="vblank"></div>
-          )}
-          <div>
-            <p class="vhost">
-              {savedVideo.host === 'vimeo' ? 'Vimeo' : 'YouTube'} · saved
-            </p>
-            <p class="t-sm">
-              It appears at the top of the published page, above the abstract.
-              <a href={savedVideo.watch} target="_blank" rel="noopener noreferrer"> Watch it there</a>.
-            </p>
-          </div>
-        </div>
-      )}
-
-      {project?.video_url && !savedVideo && (
-        <div class="note">
-          <p>
-            That address is saved and is not one we can show. YouTube and
-            Vimeo only, and it has to start with https.
-          </p>
-        </div>
-      )}
-
-      {iAuthor ? (
-        <form method="POST" action="#outcome" class="mform">
-          <input type="hidden" name="action" value="video" />
-          <label>
-            <span>Address</span>
-            <input class="in" name="video_url" value={project?.video_url ?? ''} />
-            <small>Leave it empty to remove the one that is there.</small>
-          </label>
-          <button class="btn" type="submit">Save the video</button>
-        </form>
-      ) : null}
-    </section>
-
+    {/* Off for the pilot (`platform.linkedDocuments`): each deliverable
+        carries its own Drive link now. The section stays for later. */}
+    {platform.linkedDocuments && (
     <section class="sec" id="documents">
       <div class="sec-h"><b><span class="sec-n">{sectionNo.get('documents')}</span>Linked documents</b><span>{links?.length ?? 0}</span></div>
 
@@ -2435,6 +2322,7 @@ const sectionNo = new Map(sections.map((section, i) => [section.id, String(i + 1
       )}
 
     </section>
+    )}
 
     {/* ── The money, where the program is a grant ─────────────────────────
      
@@ -2569,7 +2457,7 @@ const sectionNo = new Map(sections.map((section, i) => [section.id, String(i + 1
         Each row is also under its obligation in the deadlines table; this
         is the place to read them together. */}
     {myGrades.length > 0 && (
-      <section class="sec" id="grades">
+      <section class="sec" id="grades" data-live="grades">
         <div class="sec-h">
           <b><span class="sec-n">{sectionNo.get('grades')}</span>Grades</b>
           <span>{myGrades.length} released · {gradeTotal} of {gradeOutOf}</span>
@@ -2599,10 +2487,11 @@ const sectionNo = new Map(sections.map((section, i) => [section.id, String(i + 1
         it has happened. It used to sit with the people and the notebook as
         a third fact about the work, where a student in September read
         "Not started" as one more thing owed. */}
+    {!isCourse && (
     <section class="sec" id="manuscript">
       <div class="sec-h">
         <b><span class="sec-n">{sectionNo.get('manuscript')}</span>Manuscript</b>
-        <span>{manuscript ? manuscript.title || 'Started' : 'Not started'}</span>
+        <span>{manuscript ? manuscript.title || 'Started' : 'Not Started'}</span>
       </div>
       <p>
         <a class="btn btn-sm" href={`/app/project/${project?.id}/manuscript/`}>
@@ -2610,6 +2499,7 @@ const sectionNo = new Map(sections.map((section, i) => [section.id, String(i + 1
         </a>
       </p>
     </section>
+    )}
   </div>
 </Base>
 
@@ -2786,6 +2676,20 @@ const sectionNo = new Map(sections.map((section, i) => [section.id, String(i + 1
 
   .phased tbody .phase-row:first-child th { padding-top: 10px; border-top: 0; }
 
+  /* The three tracks on a wide screen (2.8). The date on one line, never
+     wrapped under itself; the deliverable takes the room; the status
+     column holds a button and a short standing and no more. Set on the
+     head, which sizes a fixed table's tracks; the body cells follow. */
+  @media (min-width: 641px) {
+    .phased { table-layout: fixed; }
+    .phased thead th:nth-child(1) { width: 18%; white-space: nowrap; }
+    .phased thead th:nth-child(2) { width: 52%; }
+    .phased thead th:nth-child(3) { width: 30%; }
+    .phased tbody td[data-label='Due'] { white-space: nowrap; }
+    .phased tbody td[data-label='Deliverable'],
+    .phased tbody td[data-label='Status'] { overflow-wrap: anywhere; }
+  }
+
   /* ── The deadlines table on a phone ───────────────────────────────────
   
      Four columns, one of which holds a date, one a sentence, and one a form
@@ -2889,7 +2793,7 @@ const sectionNo = new Map(sections.map((section, i) => [section.id, String(i + 1
 
   /* Grades under an obligation. Folded for the advisor, who has forty of
      them; open for the student, who has one. */
-  .phased tbody tr.grade-row td { background: var(--sunk); padding: 8px 12px 8px 20px; }
+  .phased tbody tr.grade-row td { background: var(--sunk); padding: 4px 12px 4px 20px; }
   .g-student { display: grid; gap: 6px; }
   .g-student + .g-student { margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--rule-fine); }
   .grade.shown.family { border-left: 3px solid var(--accent); padding-left: 8px; }
@@ -2900,14 +2804,18 @@ const sectionNo = new Map(sections.map((section, i) => [section.id, String(i + 1
   .grade summary::before { content: '\25B8'; color: var(--ink-3); }
   .grade[open] summary::before { content: '\25BE'; }
   .g-who { font-weight: 600; }
-  .gform { display: grid; grid-template-columns: 8rem 8rem; gap: 10px 14px; align-items: end; margin: 10px 0 4px; max-width: var(--measure-form); }
-  .gform label > span { display: block; font-family: var(--face-ui); font-size: 0.8rem; color: var(--ink-3); margin-bottom: 4px; }
-  .gform .g-fb { grid-column: 1 / -1; }
-  .gform .g-fb .ta { width: 100%; resize: vertical; }
+  /* One row where it fits (2.8): the score, the comment wide, the button. */
+  .gform { display: grid; grid-template-columns: 6rem minmax(16rem, 1fr) auto; gap: 6px 12px; align-items: end; margin: 6px 0 2px; max-width: none; }
+  .gform label > span { display: block; font-family: var(--face-ui); font-size: 0.8rem; color: var(--ink-3); margin-bottom: 2px; }
+  .gform .g-fb { grid-column: auto; }
+  .gform .g-fb .ta { width: 100%; resize: vertical; min-height: 2.4em; }
+  .gform .in, .gform .ta { padding: 6px 8px; }
+  @media (max-width: 720px) { .gform { grid-template-columns: 6rem 1fr; } .gform .g-fb { grid-column: 1 / -1; } }
   .gform .g-rel { grid-column: 1 / -1; display: flex; align-items: center; gap: 8px; }
   .gform .g-rel span { display: inline; margin: 0; font-size: 0.9rem; color: var(--ink); }
-  .grade.shown { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; font-family: var(--face-ui); font-size: 0.9rem; }
-  .grade.shown .g-text { flex-basis: 100%; margin: 0; font-family: var(--face-ed); font-size: 0.98rem; }
+  .grade.shown { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 12px; font-family: var(--face-ui); font-size: 0.9rem; }
+  /* The comment on the same line as the score where it fits (2.8). */
+  .grade.shown .g-text { flex: 1 1 24ch; margin: 0; font-family: var(--face-ed); font-size: 0.95rem; }
   .grade.shown .g-by { color: var(--ink-3); font-size: 0.82rem; }
   .g-rubric { grid-column: 1 / -1; display: grid; gap: 8px; }
   .g-crit > span { display: block; font-family: var(--face-ui); font-size: 0.86rem; margin-bottom: 4px; }
@@ -3133,9 +3041,15 @@ const sectionNo = new Map(sections.map((section, i) => [section.id, String(i + 1
   .rec-done { display: flex; flex-direction: column; gap: 4px; }
   .rec-docs { display: flex; flex-direction: column; gap: 6px; }
   .rec-doc { margin: 0; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .sec-h .sec-act { margin-left: 12px; vertical-align: middle; }
+  /* One width for every verb on this column: Submit, Continue, Revise,
+     "Submit a new version" all sit on the same left edge and end on the
+     same right edge, so the rows read as a column of the same control. */
+  .rec-doc > .btn, .rec > summary.btn { min-width: var(--row-btn); box-sizing: border-box; justify-content: center; text-align: center; }
   .rec-docstate { font-family: var(--face-ui); font-size: 0.8rem; color: var(--ink-3); }
   .rec-docstate.in_progress, .rec-docstate.revising { color: var(--accent-deep); }
   .rec-docstate.submitted { color: var(--stage-comp); }
+  .rec-docstate.waits { color: var(--ink-3); }
   .rec-one { margin: 0; display: flex; flex-direction: column; gap: 2px; }
   .rec-n {
     font-family: var(--face-ui);

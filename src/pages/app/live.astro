@@ -1,0 +1,84 @@
+---
+export const prerender = false;
+
+/**
+ * THE LIVE LOG (2.8).
+ *
+ * Every time a browser's socket would not connect and the page fell back
+ * to polling, one line: who, which page, why, and what browser. For the
+ * advisor, so a network that blocks WebSockets is found on the day rather
+ * than guessed at afterward. A recovery is a line too.
+ */
+
+import Base from '../../layouts/Base.astro';
+import AppShell from '../../components/AppShell.astro';
+import { activeOrg } from '../../lib/tenant';
+import { serverClient } from '../../lib/supabase';
+import { standing } from '../../lib/roles';
+import { signInWith } from '../../lib/next-path';
+
+const { session, account, roles } = Astro.locals;
+const org = activeOrg(Astro);
+
+if (!session) return Astro.redirect(signInWith(Astro.url));
+if (!account) return Astro.redirect('/app/welcome/');
+
+const me = standing(roles, account?.population);
+const supabase = serverClient(Astro.request, Astro.cookies, (Astro.locals as any).runtime?.env);
+
+const { data: rows } = me.isAdvisor
+  ? await supabase
+      .from('transport_incidents')
+      .select('id, state, page, detail, user_agent, created_at, users:user_id(display_name)')
+      .order('created_at', { ascending: false })
+      .limit(200)
+  : { data: [] as any[] };
+
+const when = (iso: string) => new Date(iso).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZone: org.timezone });
+const dayAgo = Date.now() - 24 * 3600 * 1000;
+const people = new Set((rows ?? []).filter((r: any) => r.state === 'fallback' && new Date(r.created_at).getTime() > dayAgo).map((r: any) => r.users?.display_name ?? '?'));
+---
+
+<Base title="Live updates" noindex={true}>
+  <div class="wrap">
+    <AppShell org={org} account={account} roles={roles} here="/app/live/" />
+
+    {!me.isAdvisor ? (
+      <section class="sec"><p class="note">Only the advisor reads this log.</p></section>
+    ) : (
+      <>
+        <section class="hero">
+          <p class="t-lbl">Live updates</p>
+          <h1 class="t-big">When the socket would not carry</h1>
+          <p class="lede">
+            {people.size === 0
+              ? 'Every browser in the last day has had its socket. Nothing fell back.'
+              : `${people.size} ${people.size === 1 ? 'person' : 'people'} fell back to polling in the last day: ${[...people].join(', ')}.`}
+          </p>
+        </section>
+
+        <section class="sec" data-live="incidents">
+          {(rows ?? []).length === 0 ? (
+            <p class="t-sm">No lines yet.</p>
+          ) : (
+            <table class="tbl">
+              <thead><tr><th>When</th><th>Who</th><th>What</th><th>Page</th><th>Why</th><th>Browser</th></tr></thead>
+              <tbody>
+                {(rows ?? []).map((r: any) => (
+                  <tr>
+                    <td>{when(r.created_at)}</td>
+                    <td>{r.users?.display_name ?? '?'}</td>
+                    <td><span class:list={['pill', r.state === 'fallback' ? 'late' : 'ok']}>{r.state === 'fallback' ? 'Fell back' : 'Recovered'}</span></td>
+                    <td>{r.page}</td>
+                    <td>{r.detail}</td>
+                    <td class="t-sm">{r.user_agent}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </section>
+      </>
+    )}
+  </div>
+</Base>

@@ -19,14 +19,41 @@ interface Props {
   kick: string;
   title: string;
   people: { label: string; value: string }[];
+  /**
+   * The three ways around a project (2.8): its deliverables (the program
+   * page), its notebook, its showcase. The same three on every project
+   * page, in the same place, so the head of a project reads as one thing
+   * wherever you are; the one for the page you are on is marked current.
+   * `programId` is the program the deliverables live under; `showcase`
+   * says the class has one.
+   */
+  nav?: { projectId: string; programId?: string | null; showcase?: boolean; here: 'deliverables' | 'notebook' | 'showcase' | 'document' };
+  /**
+   * Renaming, on the title it renames, on every page that shows it (2.8).
+   * A small button at the top right of the title opens the field; the
+   * form posts to the notebook page, which holds the handler.
+   */
+  rename?: { projectId: string; title: string };
 }
 
-const { kick, title, people } = Astro.props;
+const { kick, title, people, nav, rename } = Astro.props;
 ---
 
 <section class="cover pcover">
   <p class="kick">{kick}</p>
-  <h1>{title}</h1>
+  <div class="cover-title">
+    <h1>{title}</h1>
+    {rename && (
+      <details class="rename">
+        <summary class="btn btn-xs">Rename</summary>
+        <form method="POST" action={`/app/project/${rename.projectId}/#outcome`} class="renamef">
+          <input type="hidden" name="action" value="rename" />
+          <label class="fwrap"><span class="sr">New title</span><input name="title" value={rename.title} required maxlength="200" /></label>
+          <button class="btn btn-sm" type="submit">Save</button>
+        </form>
+      </details>
+    )}
+  </div>
   <slot name="under" />
 
   <div class="cover-who">
@@ -38,17 +65,53 @@ const { kick, title, people } = Astro.props;
         </li>
       ))}
     </ul>
-    <p class="cover-do"><slot /></p>
+    <p class="cover-do">
+      {nav && nav.programId && (
+        <a class="btn btn-sm accent" href={`/app/project/${nav.projectId}/in/${nav.programId}/`} aria-current={nav.here === 'deliverables' ? 'page' : undefined}>Deliverables</a>
+      )}
+      {nav && (
+        <a class="btn btn-sm accent" href={`/app/project/${nav.projectId}/`} aria-current={nav.here === 'notebook' ? 'page' : undefined}>Notebook</a>
+      )}
+      {nav && nav.showcase && (
+        <a class="btn btn-sm accent" href={`/app/project/${nav.projectId}/showcase/`} aria-current={nav.here === 'showcase' ? 'page' : undefined}>Showcase</a>
+      )}
+      <slot />
+    </p>
   </div>
 </section>
 
 <style>
   /* A project title is a subject line, not a poster: fourteen words at
      poster size was a screen of purple before anything to do appeared. */
-  .pcover h1 { max-width: 40ch; font-size: clamp(1.4rem, 2.6vw, 1.9rem); font-weight: 700; line-height: 1.15; }
+  .pcover h1 { max-width: 40ch; font-size: clamp(1.4rem, 2.6vw, 1.9rem); font-weight: 700; line-height: 1.15; margin: 0; }
+  /* Above the people and the buttons under it: the rename form drops
+     over them, and `.cover > *` gives every child the same z-index, so
+     the later sibling painted over the form and no click reached the
+     box (2.8). The form is a child of this, so this has to be the one
+     that stands higher. */
+  .cover-title { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px 24px; z-index: 3 !important; }
+  .rename { position: relative; flex: 0 0 auto; margin-top: 4px; }
+  .rename > summary { list-style: none; cursor: pointer; }
+  .rename > summary::-webkit-details-marker { display: none; }
+  .btn-xs { padding: 4px 10px; font-size: 0.78rem; background: transparent; color: var(--cover-ink); border-color: var(--cover-ink-2); }
+  .btn-xs:hover { background: var(--cover-ink); color: var(--cover); border-color: var(--cover-ink); }
+  .renamef { position: absolute; right: 0; top: calc(100% + 6px); z-index: 2; display: flex; gap: 8px; align-items: center; width: min(32rem, 80vw); padding: 10px; background: var(--card); border: 1px solid var(--rule); box-shadow: var(--lift-2); }
+  .renamef .fwrap { flex: 1 1 auto; }
+  .renamef input { width: 100%; box-sizing: border-box; padding: 8px 11px; border: 1px solid var(--rule); background: var(--card); color: var(--ink); font: inherit; font-size: 1rem; }
   .pcover .kick { font-size: 0.7rem; }
-  .cover-who { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 10px 24px; margin-top: 14px; }
+  /* Tighter than the site's cover (2.8): this one sits over working pages. */
+  .pcover { padding-top: 18px; padding-bottom: 22px; }
+  .cover-who { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 10px 24px; margin-top: 8px; }
   .cover-who .people { flex: 1 1 30ch; margin: 0; }
   .cover-do { display: flex; flex-wrap: wrap; gap: 8px; margin: 0; }
   .cover-do:empty { display: none; }
+  .cover-do :global(a.btn[aria-current="page"]) { opacity: 0.55; pointer-events: none; }
+  /* Every button on the purple is the accent (2.8). The pages hand in
+     `ghost` here and there; on the cover they all read the same. */
+  .cover-do :global(a.btn.ghost), .cover-do :global(a.btn.ghost:link), .cover-do :global(a.btn.ghost:visited) {
+    background: var(--accent); color: var(--accent-ink); border-color: var(--accent);
+  }
+  .cover-do :global(a.btn.ghost:hover), .cover-do :global(a.btn.ghost:focus) {
+    background: var(--accent-ink); color: var(--accent); border-color: var(--accent-ink);
+  }
 </style>

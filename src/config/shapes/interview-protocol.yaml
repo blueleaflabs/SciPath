@@ -1,49 +1,222 @@
-# The interview protocol, due September 15, completed in class after
-# "Interview Like a Pro". The questions were read by an Elder a week
-# before; this is the plan for actually doing the interviews.
+# The interview protocol, due September 14, completed in class after
+# "Interview Like a Pro". The class's own handout ("Interdisciplinary
+# Research Class: Empathy User Interviews Guidelines") is read first, in
+# its own words; then the plan for actually doing the interviews, the
+# fifteen blanks for the questions, the interview itself, and the follow
+# up. Version 3 (2.8): the email draft box is gone (the email is not this
+# deliverable), no word limits (the handout sets none), consent asks
+# "How will you obtain consent" with Not Applicable, and the sections run
+# Before, Your interview questions, Conduct the interview, Follow up.
 
 id: interview-protocol
 name: Interview protocol
-version: 1
+version: 3
 guidance: >-
   Everything you will do from the moment you sit down to the moment you
   say thank you, so that every interview is done the same way.
 sections:
+  - id: guidelines
+    name: "Interdisciplinary Research Class: Empathy User Interviews Guidelines"
+    fields:
+      - id: guidelines
+        kind: note
+        text: |-
+          In research based on human centered design, user interviews provide key insights into user pain points that are instrumental in the design of the prototype. You will be conducting user interviews with your peers and sometimes subject matter experts. Here are a few guidelines for conducting the interview.
+  - id: etiquette
+    name: Email Étiquettes IRPD
+    fields:
+      - id: dos
+        kind: note
+        text: |-
+          **Dos:**
+
+          1. Use your school email and not personal email. CC Teachers on any emails you send to any adults (teachers, administrators and/or other advisors)
+          2. Use a clear subject line: Use a clear and concise subject line that accurately reflects the content of your email.
+          3. Use a formal greeting: Start your email with a formal greeting, such as "Dear [recipient's name],".
+          4. Keep your email brief and to the point: Focus on the main purpose of your message. Not more than 5-6 lines in all. The purpose of your email should be stated clearly in the first couple of sentences.
+          5. Use proper grammar and spelling: Use proper grammar and spelling, and avoid using slang or text messaging abbreviations. Create a draft on word doc and do spell check.
+          6. Be respectful and polite: Use a respectful and polite tone, and avoid using demanding language. "I" messages are better than "you" messages.
+          7. Use a professional closing: End your email with a professional closing, such as "Sincerely," or "Best regards," followed by your name.
+      - id: donts
+        kind: note
+        text: |-
+          **Don'ts:**
+
+          1. Using informal language: An email that uses overly casual or informal language, such as "Hey!" or "wassup" can be considered unprofessional.
+          2. Not addressing the recipient properly: An email that doesn't address the recipient properly or uses a generic salutation, such as "To Whom It May Concern," instead of addressing the recipient by name, can also be considered unprofessional.
+          3. Ignoring basic email etiquette: An email that ignores basic email etiquette, such as not including a subject line, not using proper capitalization, or using multiple exclamation points, can be considered unprofessional.
+          4. Being rude or disrespectful: An email that is rude, disrespectful, or uses offensive language is not only unprofessional but can also be hurtful and damaging to relationships.
+          5. Sending a poorly written email: An email that is poorly written with spelling and grammar errors, run-on sentences or fragmented thoughts, can be considered unprofessional and might convey that the writer is not serious or not interested in taking the email seriously.
+  - id: drafting
+    name: I. Drafting the email
+    fields:
+      - id: drafting
+        kind: note
+        text: |-
+          1. Be sure to first write a draft and get the approval from your teachers if you are writing an email to an adult (teacher, admin or guides) before sending the actual email. Be sure to cc the teachers on the actual email.
+          2. Go with a mindset of gratitude for interviewee's time and expertise.
+          3. Proofread your emails for scheduling the interviews before hitting send.
+  - id: follow_up_email
+    name: II. Follow up after sending the email
+    fields:
+      - id: follow_up_email
+        kind: note
+        text: |-
+          1. After sending the email, wait for a couple of days and then send a polite reminder. If they still don't respond, it is time to interview another user.
+  - id: drafting_questions
+    name: III. Drafting interview questions
+    fields:
+      - id: drafting_questions
+        kind: note
+        text: |-
+          1. No leading questions, no yes or no questions, keep questions open ended.
+          2. Be open to add new questions as the situation arises.
+          3. Document interview responses using otter.ai and fill out one of the interview forms given below for each interviewee and have them sign it.
+
+          **Each interview should be documented, as a recording or a written document and each interviewee must sign the interview form given below.**
+  - id: scheduling
+    name: IV. Scheduling an interview
+    fields:
+      - id: scheduling
+        kind: note
+        text: |-
+          1. Find the right interviewee: A good user is one who might be able to provide the best perspectives and insights. Be respectful of their time and share the questions ahead of time.
+          2. Reach out to the interviewee via email using your school email ahead of time and set up a date/time for the interview. You may use an email script like this:
+
+          > Subject: Request for an interview for Interdisciplinary Research Course
+          >
+          > Dear ___________,
+          >
+          > I am a sophomore/junior/senior at Monta Vista High School and am conducting interdisciplinary research on the topic of _________________. I am using Empathy Design Framework for my research and during the empathize phase, I need to conduct interviews with my peers and experts to understand the perspectives of my users and experts. Through my research, I have gathered that your input will be valuable in providing a unique perspective.
+          >
+          > Would you be willing for a 15-minute interview via zoom or in person? I will be recording or taking notes for this interview. If you are willing to be interviewed, I am happy to share the questions ahead of time with you.
+          >
+          > Thank you for your consideration.
+          >
+          > Your name and Contact info.
   - id: setup
     name: Before the interview
     fields:
       - id: intro
         kind: long
         prompt: How you will introduce yourself and the project, in the words you will say
-        max_words: 120
         required: true
       - id: consent
         kind: choice
-        prompt: How consent is obtained
-        options: [Signed consent form before we start, Verbal consent recorded at the start, Guardian's signed consent before we start]
+        prompt: How will you obtain consent
+        options: [Signed consent form before we start, Verbal consent recorded at the start, Guardian's signed consent before we start, Not Applicable]
         required: true
       - id: recording
         kind: choice
         prompt: How you will keep the record
         options: [Notes by hand, Audio recording with permission, Both]
         required: true
-  - id: during
-    name: During the interview
+  - id: blanks
+    name: Your interview questions
     fields:
+      - id: blanks_note
+        kind: note
+        text: The class's question sheet has fifteen blanks. Five are here; Add more opens the next. The ones you leave empty are left off the printed sheet.
+      - id: q1
+        kind: text
+        prompt: Question 1
+      - id: q2
+        kind: text
+        prompt: Question 2
+      - id: q3
+        kind: text
+        prompt: Question 3
+      - id: q4
+        kind: text
+        prompt: Question 4
+      - id: q5
+        kind: text
+        prompt: Question 5
+      - id: q6
+        kind: text
+        prompt: Question 6
+        extra: true
+      - id: q7
+        kind: text
+        prompt: Question 7
+        extra: true
+      - id: q8
+        kind: text
+        prompt: Question 8
+        extra: true
+      - id: q9
+        kind: text
+        prompt: Question 9
+        extra: true
+      - id: q10
+        kind: text
+        prompt: Question 10
+        extra: true
+      - id: q11
+        kind: text
+        prompt: Question 11
+        extra: true
+      - id: q12
+        kind: text
+        prompt: Question 12
+        extra: true
+      - id: q13
+        kind: text
+        prompt: Question 13
+        extra: true
+      - id: q14
+        kind: text
+        prompt: Question 14
+        extra: true
+      - id: q15
+        kind: text
+        prompt: Question 15
+        extra: true
+  - id: conduct
+    name: VI. Conduct the interview
+    fields:
+      - id: conduct
+        kind: note
+        text: |-
+          1. Come across as professional, be on time, dress properly and show gratitude for their time.
+          2. Send an email reminder the day before with the questions.
+      - id: interview_form
+        kind: note
+        text: |-
+          **Interview Form for Interdisciplinary Research Class**
+
+          Name of the Interviewee ______________________
+
+          Name of the Interviewer ______________________
+
+          Job title/grade ______________________
+
+          Contact Information of the interviewee (email, phone ______________________
+
+          Date, Time, Place for the interview ______________________
+
+          Qualifications/Why did you choose this interviewee?
+
+          I, ______________________ certify that ______________________ (student researcher's name) has interviewed me on ______________________ (this date).
+
+          Interviewee signature ______________________
       - id: questions
         kind: long
         prompt: The final questions, in order, after the Elder's feedback
-        min_words: 80
         required: true
       - id: probes
         kind: long
         prompt: Follow-up probes you will use when an answer is short
         tip: 'Can you tell me more about that? What happened next?'
-        max_words: 120
         required: true
-  - id: after
-    name: After
+  - id: thank_you
+    name: VII. Follow up from the interview and write a thank you note.
     fields:
+      - id: thank_you
+        kind: note
+        text: |-
+          1. After the interview, write a couple of lines of thank you email to the interviewee. Make sure to proofread the email.
+          2. Share your research to show how their interview impacted your research.
       - id: closing
         kind: text
         prompt: How you will close, and what you will tell them happens next
@@ -52,5 +225,4 @@ sections:
         kind: long
         prompt: How you will write up what you heard, the same day
         tip: What goes in the notebook, what goes in the family folder.
-        max_words: 120
         required: true

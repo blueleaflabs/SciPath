@@ -1,0 +1,24 @@
+# A deliverable that lives in Google Drive: the address is the record.
+# Every deliverable without a template of its own uses this (2.8), so a
+# student meets one page and one verb everywhere; the Elder reads the
+# link on the same page and comments there.
+
+id: drive-link
+name: Google Drive link
+version: 1
+guidance: >-
+  Paste the Google Drive address of your work and submit. Make sure the
+  sharing is set so your Elders and teachers can open it.
+sections:
+  - id: link
+    name: The work
+    fields:
+      - id: url
+        kind: link
+        prompt: Google Drive address
+        tip: Enter URL; make sure sharing is set correctly.
+        required: true
+      - id: note
+        kind: long
+        prompt: Anything your Elder should know about it
+        tip: Optional.

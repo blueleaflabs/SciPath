@@ -1,0 +1,42 @@
+# "3. Project Idea Impact & Feasibility", the IRPD handout: the grid on
+# the first page and the two sentences on the second, drawn as one
+# picture on the page with Generate.
+
+id: impact-feasibility
+name: Project idea impact and feasibility
+version: 1
+guidance: >-
+  Say what your project idea is, choose where it sits on impact and
+  feasibility, and say why. Generate draws the grid with your idea in its
+  quadrant.
+sections:
+  - id: idea
+    name: Project Topic/Idea
+    fields:
+      - id: idea
+        kind: long
+        prompt: My project idea is to.....
+        required: true
+      - id: feasibility
+        kind: choice
+        prompt: My project idea has ________ feasibility
+        options: [high, low]
+        required: true
+      - id: impact
+        kind: choice
+        prompt: and ________ impact
+        options: [high, low]
+        required: true
+      - id: because
+        kind: long
+        prompt: because
+        required: true
+  - id: graphic
+    name: The graphic
+    fields:
+      - id: graphic
+        kind: graphic
+        graphic: impact
+        sources: [idea, feasibility, impact, because]
+        prompt: Your impact and feasibility grid
+        required: true

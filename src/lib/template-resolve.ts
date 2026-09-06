@@ -72,7 +72,13 @@ export type FieldKind =
   /** A fixed grid of short answers: `rows` by `columns`. */
   | 'table'
   /** The step's rubric as a self-evaluation: one level per criterion. */
-  | 'rubric';
+  | 'rubric'
+  /**
+   * A picture drawn from other fields on the page (the class's research
+   * graphic, the impact and feasibility grid): a Generate button makes
+   * it in the browser and it is kept like a `file`.
+   */
+  | 'graphic';
 
 export interface ShapeField {
   id: string;
@@ -95,11 +101,24 @@ export interface ShapeField {
   tip?: string;
   min_words?: number;
   max_words?: number;
+  /** For `number`: the bounds and the step the box accepts. */
+  min?: number;
+  max?: number;
+  step?: number;
   /** For `choice` and `choices`. */
   options?: string[];
   required?: boolean;
   /** For `file`: `image` limits it to pictures. */
   accept?: 'image' | 'any';
+  /**
+   * `extra`: a blank offered on demand rather than shown at once (the
+   * interview sheet's questions 6 to 15). Hidden while empty behind the
+   * section's *Add more*, revealed one at a time, and never required.
+   */
+  extra?: boolean;
+  /** For `graphic`: which picture, and the fields it is drawn from. */
+  graphic?: 'summary' | 'impact';
+  sources?: string[];
 }
 
 export interface ShapeSection {
@@ -120,6 +139,8 @@ export interface Shape {
   answers?: string[];
   /** The full form: sections of fields with kinds. */
   sections?: ShapeSection[];
+  /** Once hid the Google Doc slot; the slot is gone (2.8) and this is kept so older shapes still parse. */
+  doc_link?: boolean;
 }
 
 /**
@@ -178,7 +199,8 @@ export function staffFieldsOf(shape: Shape): string[] {
   return fieldsOf(shape).filter((f) => f.kind !== 'note' && f.owner === 'staff').map((f) => f.id);
 }
 
-const FIELD_KINDS: FieldKind[] = ['note', 'text', 'long', 'choice', 'choices', 'number', 'date', 'link', 'file', 'table', 'rubric'];
+const FIELD_KINDS: FieldKind[] = ['note', 'text', 'long', 'choice', 'choices', 'number', 'date', 'link', 'file', 'table', 'rubric', 'graphic'];
+const GRAPHICS = ['summary', 'impact'];
 
 /**
  * What is wrong with a shape, as a list of sentences; empty when nothing
@@ -221,8 +243,16 @@ export function validateShape(shape: Shape): string[] {
       if (f.kind === 'table' && !(f.rows && f.rows.length > 0 && f.columns && f.columns.length > 0)) {
         problems.push(`${at}: a table needs rows and columns`);
       }
+      if (f.kind === 'graphic') {
+        if (!f.graphic || !GRAPHICS.includes(f.graphic)) problems.push(`${at}: a graphic is one of ${GRAPHICS.join(', ')}`);
+        if (!(f.sources && f.sources.length > 0)) problems.push(`${at}: a graphic names the fields it is drawn from`);
+        for (const src of f.sources ?? []) if (!fieldsOf(shape).some((g) => g.id === src && g.kind !== 'note' && g.kind !== 'graphic')) problems.push(`${at}: drawn from "${src}", which is not a field here`);
+      }
       if (f.owner && f.owner !== 'student' && f.owner !== 'staff') {
         problems.push(`${at}: owner is student or staff`);
+      }
+      if (f.extra && f.required) {
+        problems.push(`${at}: a blank offered on demand cannot be required`);
       }
       if (f.owner === 'staff' && f.required) {
         problems.push(`${at}: the Elder's field cannot be required of the student`);

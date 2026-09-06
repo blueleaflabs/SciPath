@@ -876,7 +876,9 @@ test('every shared class a page uses is defined somewhere', () => {
      defined in its own style block and this would drown in them. */
   const shared = fs.readFileSync('src/styles/ui.css', 'utf8')
     + fs.readFileSync('src/styles/base.css', 'utf8')
-    + fs.readFileSync('src/styles/tokens.css', 'utf8');
+    + fs.readFileSync('src/styles/tokens.css', 'utf8')
+    /* The printed paper: the notebook export and the document PDF share it. */
+    + fs.readFileSync('src/styles/print-book.css', 'utf8');
 
   const problems = [];
 
@@ -1216,9 +1218,11 @@ test('a public page can greet somebody the server cannot ask about', () => {
 
 test('the workbench link is called the same thing to everybody', () => {
   /* Some pages said Sign in and some said Workbench, for the same person in
-     the same state. One name for one destination. */
+     the same state. One name for one destination: "Login" to somebody not
+     signed in (the pilot's word, September 2026), their name once in. */
   const masthead = fs.readFileSync('src/components/Masthead.astro', 'utf8');
   assert.doesNotMatch(masthead, /'Sign in'|>Sign in</, 'the masthead still says Sign in somewhere');
+  assert.match(masthead, />\s*Login\s*</, 'the door is called Login');
 
   const built = 'dist/montavista/guides/index.html';
   if (fs.existsSync(built)) {
@@ -1513,9 +1517,12 @@ test('somebody who is not an author is offered the way to write', () => {
   /* An elder or a teacher may write in a notebook, and the form sits below a
      block that can run to three cohorts and three entries. Reaching it by
      scrolling past the record is how an observation goes unwritten. */
+  /* The pilot's friction pass (September 2026) took the cover link off:
+     the form is now full width with its Save button at the top, so nothing
+     needs scrolling past. The anchor stays, because the plate and the
+     participation page still point at it. */
   const notebook = fs.readFileSync('src/pages/app/project/[id].astro', 'utf8');
-  assert.match(notebook, /href="#observe"/, 'the hero needs a way to the form');
-  assert.match(notebook, /id="observe"/, 'and the form needs the anchor');
+  assert.match(notebook, /id="observe"/, 'the form needs the anchor');
 });
 
 test('the export separates the authors\' record from observations', () => {
@@ -1582,10 +1589,13 @@ test('the oversight table says when the notebook was last written in', () => {
      notebook was last written in, and that is still checked. */
   const overview = fs.readFileSync('src/pages/app/index.astro', 'utf8');
   assert.match(overview, /from\('field_notes'\)/, 'the count has to be read');
+  /* The row is a card now (CareCard.astro, 2.8), and the date is on the
+     notebook metric. */
+  const card = fs.readFileSync('src/components/CareCard.astro', 'utf8');
   assert.match(
-    overview,
+    card,
     /formatDate\(w\.notebook\.last/,
-    'and the date has to be rendered somewhere on the row'
+    'and the date has to be rendered somewhere on the card'
   );
 });
 
@@ -1612,10 +1622,14 @@ test('the printed notebook says whose school it is', () => {
      list. Not `Masthead.astro` itself, which carries navigation and a
      sign-out form: the same two elements, restated for paper. */
   const exported = fs.readFileSync('src/pages/app/project/[id]/notebook.astro', 'utf8');
+  /* The paper's rules live in the shared print stylesheet since the
+     document PDF started printing on the same paper (2.8). */
+  const paper = fs.readFileSync('src/styles/print-book.css', 'utf8');
 
   assert.match(exported, /class="lockup"/, 'the title page needs the lockup');
   assert.match(exported, /data-len=\{String\(org\.mark\.length\)\}/, 'sized by mark length');
-  assert.match(exported, /\.lockup \.badge\[data-len='6'\]/, 'and a rule for the longest mark');
+  assert.match(paper, /\.lockup \.badge\[data-len='6'\]/, 'and a rule for the longest mark');
+  assert.match(exported, /print-book\.css/, 'and the export has to bring the paper in');
 });
 
 test('the printed page holds its margins where a print dialog cannot reach', () => {
@@ -1624,7 +1638,7 @@ test('the printed page holds its margins where a print dialog cannot reach', () 
      stylesheet. Top and bottom have to stay in `@page`, because only a page
      margin repeats on every sheet; left and right live on the block, where
      nothing in the dialog can remove them. */
-  const exported = fs.readFileSync('src/pages/app/project/[id]/notebook.astro', 'utf8');
+  const exported = fs.readFileSync('src/styles/print-book.css', 'utf8');
 
   const page = exported.match(/@page \{\s*margin: ([^;]+);/);
   assert.ok(page, 'the export needs an @page rule');
@@ -1752,9 +1766,11 @@ test('every compliance surface says who is actually authoritative', () => {
 
      The participation page carried it under its deliverables until the
      pilot's friction pass took it off (September 2026): a student reads
-     that page daily and the sentence had become furniture there. It stays
-     on the program page, which is where the rulebook is described, and on
-     the printed record; where it goes next is an open item. */
+     that page daily and the sentence had become furniture there. The
+     printed notebook carried it as a disclaimer until the same pass moved
+     it to the Terms of use page (September 2026), which every printed page
+     points at through the policies. It stays on the program page, which is
+     where the rulebook is described, and on the Terms of use. */
   const surfaces = [
     'src/pages/app/program/[id].astro',
   ];
@@ -1767,8 +1783,10 @@ test('every compliance surface says who is actually authoritative', () => {
     );
   }
 
+  const terms = fs.readFileSync('src/pages/[org]/policies/terms.astro', 'utf8');
+  assert.match(terms, /remain authoritative/, 'the Terms of use carry it now that the printed notebook does not');
   const printed = fs.readFileSync('src/pages/app/project/[id]/notebook.astro', 'utf8');
-  assert.match(printed, /remain authoritative/, 'the printed record needs it on the paper');
+  assert.doesNotMatch(printed, /remain authoritative/, 'the disclaimer left the printed notebook for the Terms of use');
 
   /* And the sentence is one sentence. A second copy that drifts says
      something slightly weaker than the one beside it. */

@@ -157,8 +157,14 @@ const isCurrent = (href: string) => here === href || (href !== '/' && here.start
           </li>
           {signedIn && account ? (
             <>
+              {/* Signed in, the bar reads Feedback, Workbench, the name
+                  (which opens the profile), Sign out (2.8). Workbench is
+                  the way in; the name is who. */}
+              <li>
+                <a href="/app/" aria-current={here.startsWith('/app/') && here !== '/app/profile/' ? 'page' : undefined}>Workbench</a>
+              </li>
               <li class="mnav-who">
-                <a href="/app/profile/" aria-current={here === '/app/profile/' ? 'page' : undefined}>
+                <a href="/app/profile/" aria-current={here === '/app/profile/' ? 'page' : undefined} title="My profile">
                   {account.display_name}
                 </a>
                 {consentNote && <span class="mnav-flag">{consentNote}</span>}
@@ -176,8 +182,10 @@ const isCurrent = (href: string) => here === href || (href !== '/' && here.start
                   is hidden rather than built by script, because a sign out
                   is a POST form and markup is the honest place for it. */}
               <li class="mnav-cta" data-anon>
+                {/* "Login" to somebody not signed in: the standard word for
+                    the door. The page behind it is still the Workbench. */}
                 <a href="/app/" aria-current={here.startsWith('/app/') ? 'page' : undefined}>
-                  Workbench
+                  Login
                 </a>
               </li>
 
@@ -186,8 +194,11 @@ const isCurrent = (href: string) => here === href || (href !== '/' && here.start
                   in script: markup written by JavaScript is markup no test
                   reads, and the flag has a shape the stylesheet has to know
                   about either way. */}
+              <li data-known hidden>
+                <a href="/app/">Workbench</a>
+              </li>
               <li class="mnav-who" data-known hidden>
-                <a href="/app/" data-name></a>
+                <a href="/app/profile/" data-name title="My profile"></a>
                 <span class="mnav-flag" data-consent hidden></span>
               </li>
               <li data-known hidden>

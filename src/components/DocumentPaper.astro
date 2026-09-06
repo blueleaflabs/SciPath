@@ -1,0 +1,112 @@
+---
+/**
+ * A DOCUMENT ON PAPER (2.8).
+ *
+ * The body of a document written from a shape, section by section, as
+ * the printed page shows it: notes, prompts, the writing, tables,
+ * rubric marks, pictures, and the threads under each field when asked.
+ * One component, so the single document's PDF and the export of every
+ * deliverable print the same thing; a change here is a change on both.
+ *
+ * Styles ride on `print-book.css`, which the page brings in. Nothing here
+ * reads the database: the page reads and this draws.
+ */
+import type { Shape } from '../lib/template-resolve';
+import { sectionsOf, textOf, isFilled } from '../lib/documents';
+import { renderMarkdown } from '../lib/notes';
+import { staffWord } from '../lib/program-names';
+
+interface Props {
+  shape: Shape;
+  values: Record<string, any>;
+  rubric?: any;
+  program?: any;
+  /** The threads, already filtered to this document; shown when given. */
+  comments?: any[];
+  /** A date and time in the school's zone, the page's own formatter. */
+  when: (iso: string | null | undefined) => string;
+}
+
+const { shape, values, rubric = null, program = null, comments = [], when } = Astro.props;
+const sections = sectionsOf(shape);
+const withComments = comments.length > 0;
+---
+
+{sections.map((section) => (
+  <section class="appendix docsec">
+    {section.name && <h2>{section.name}</h2>}
+    {section.fields.filter((f) => !(f.extra && !isFilled(f, values[f.id]))).map((f) => {
+      const v = values[f.id];
+      const fieldComments = comments.filter((c: any) => c.field_id === f.id);
+      return (
+        <div class="field">
+          {f.kind === 'note' ? (
+            <div class="note" set:html={renderMarkdown(f.text ?? '')} />
+          ) : (
+            <>
+              <p class="prompt">{f.prompt}{f.owner === 'staff' && <span class="owner"> · {staffWord(program)}'s part</span>}</p>
+              {f.kind === 'long' ? (
+                isFilled(f, v) ? <div class="prose" set:html={renderMarkdown(String(v))} /> : <p class="empty">Not written</p>
+              ) : f.kind === 'table' && Array.isArray(v) ? (
+                <table>
+                  <thead><tr><th></th>{(f.columns ?? []).map((c) => <th>{c}</th>)}</tr></thead>
+                  <tbody>{(f.rows ?? []).map((r, ri) => <tr><th scope="row">{r}</th>{(f.columns ?? []).map((_, ci) => <td set:html={renderMarkdown(Array.isArray(v[ri]) ? String(v[ri][ci] ?? '') : '')} />)}</tr>)}</tbody>
+                </table>
+              ) : f.kind === 'rubric' && rubric && v && typeof v === 'object' ? (
+                <ul class="levels">
+                  {rubric.criteria.map((c: any) => {
+                    const level = c.levels.find((l: any) => l.id === v[c.id]);
+                    return <li><b>{c.name}:</b> {level ? `${level.label} (${level.points})` : 'not marked'}</li>;
+                  })}
+                </ul>
+              ) : (f.kind === 'file' || f.kind === 'graphic') && v?.path ? (
+                String(v.path).match(/\.(png|jpe?g|gif|webp)$/i) ? <img src={`/app/media/${v.path}`} alt={v.name ?? ''} /> : <p>{v.name ?? v.path}</p>
+              ) : isFilled(f, v) ? (
+                <p>{textOf(f, v)}</p>
+              ) : (
+                <p class="empty">Not answered</p>
+              )}
+              {fieldComments.length > 0 && (
+                <ul class="comments">
+                  {fieldComments.map((c: any) => (
+                    <li class:list={[c.needs_revision && 'asks']}><b>{c.author?.display_name}</b> ({when(c.created_at)}): {c.body_md}</li>
+                  ))}
+                </ul>
+              )}
+            </>
+          )}
+        </div>
+      );
+    })}
+  </section>
+))}
+
+{withComments && comments.some((c: any) => !c.field_id) && (
+  <section class="appendix">
+    <h2>On the whole document</h2>
+    <ul class="comments">
+      {comments.filter((c: any) => !c.field_id).map((c: any) => (
+        <li class:list={[c.needs_revision && 'asks']}><b>{c.author?.display_name}</b> ({when(c.created_at)}): {c.body_md}</li>
+      ))}
+    </ul>
+  </section>
+)}
+
+<style is:global>
+  /* The document's own parts, on the notebook's paper. Global, because
+     the page's `print-book.css` is global too and the two share a page. */
+  .docsec .field { margin: 0 0 18px; page-break-inside: avoid; }
+  .docsec .prompt { font-family: 'IBM Plex Sans', system-ui, sans-serif; font-weight: 600; font-size: 0.95rem; margin: 0 0 4px; }
+  .docsec .owner { font-weight: 400; color: var(--ink-3); }
+  .docsec .note { color: var(--ink-2); }
+  .docsec .empty { color: var(--ink-3); font-style: italic; margin: 0; }
+  .docsec .prose p { margin: 0 0 8px; }
+  .docsec .prose img, .docsec .field > img { max-width: 100%; }
+  .docsec table { border-collapse: collapse; width: 100%; font-size: 0.86rem; margin: 4px 0; }
+  .docsec th, .docsec td { border: 1px solid var(--rule); padding: 4px 6px; vertical-align: top; text-align: left; }
+  .docsec th[scope=row] { width: 150px; background: var(--sunk); }
+  .docsec .levels { list-style: none; padding: 0; margin: 0; }
+  .comments { margin: 6px 0 0 14px; padding: 0; list-style: none; font-size: 0.9rem; }
+  .comments li { border-left: 2px solid var(--rule); padding: 2px 8px; margin: 3px 0; }
+  .comments .asks { border-left-color: var(--alert); }
+</style>

@@ -1,0 +1,71 @@
+---
+/**
+ * The formatting bar: the eleven buttons of the notebook editor. Drawn by
+ * `MarkdownEditor.astro` over its own surface, and by a page once over a
+ * group of editors that share one bar (`shared`), where a click on the
+ * page's bar is forwarded to the same button on whichever editor was last
+ * in. `controls` names the field for assistive technology.
+ */
+import { TOOLS } from '../lib/markdown-tools';
+
+interface Props {
+  controls?: string;
+  /** The page's bar over a group: marked so the editors' script can find it. */
+  shared?: boolean;
+}
+const { controls, shared = false } = Astro.props;
+---
+
+<div class="mdx-bar" role="toolbar" aria-label="Formatting" aria-controls={controls} data-shared-bar={shared ? '1' : undefined}>
+    {TOOLS.map((t) => (
+      <button
+        type="button"
+        class:list={['mdx-btn', t.cls && `mdx-${t.cls}`]}
+        data-cmd={t.cmd}
+        data-keys={t.keys}
+        data-title={t.title}
+        title={t.title}
+        aria-label={t.title}
+        aria-pressed="false"
+      >{t.label}</button>
+    ))}
+</div>
+
+<style>
+  .mdx-bar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 2px;
+    padding: 4px;
+    border: 1px solid var(--rule);
+    border-bottom: 0;
+    background: var(--paper);
+  }
+  .mdx-btn {
+    min-width: 2.2em;
+    padding: 4px 8px;
+    border: 1px solid transparent;
+    background: transparent;
+    color: var(--ink);
+    font-family: var(--face-ui);
+    font-size: 0.86rem;
+    line-height: 1.4;
+    cursor: pointer;
+    border-radius: 2px;
+  }
+  .mdx-btn:hover,
+  .mdx-btn:focus-visible {
+    border-color: var(--rule);
+    background: var(--card);
+  }
+  /* Pressed reads as a key held down: the ink and the paper swap. */
+  .mdx-btn[aria-pressed='true'] {
+    background: var(--ink);
+    border-color: var(--ink);
+    color: var(--card);
+  }
+  .mdx-b { font-weight: 700; }
+  .mdx-i { font-style: italic; }
+  .mdx-s { text-decoration: line-through; }
+
+</style>

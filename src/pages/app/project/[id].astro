@@ -312,13 +312,15 @@ const fmt = (d: string | null) =>
 
     <ProjectCover
       kick={
-        entries && entries.length > 0
-          ? entries.map((e: any) => programTitle(e.programs)).join(' · ')
-          : (cohorts ?? []).length > 0
-            ? (cohorts ?? []).map((c: any) => programTitle(c.programs)).join(' · ')
+        (cohorts ?? []).length > 0
+          ? (cohorts ?? []).map((c: any) => programTitle(c.programs)).join(' · ')
+          : entries && entries.length > 0
+            ? entries.map((e: any) => programTitle(e.programs)).join(' · ')
             : 'Not in a class, and not entered anywhere'
       }
       title={project.title}
+      nav={{ projectId: project.id, programId: (cohorts ?? [])[0]?.program_id ?? null, showcase: (cohorts ?? []).some((c: any) => c.programs?.showcase && c.programs.showcase !== 'none'), here: 'notebook' }}
+      rename={iAuthor ? { projectId: project.id, title: project.title } : undefined}
       people={[
         { label: authors.length === 1 ? 'Author' : 'Authors', value: authors.map((a: any) => a.users?.display_name).join(', ') || 'No authors' },
         ...(officers.length > 0
@@ -330,27 +332,6 @@ const fmt = (d: string | null) =>
       {/* Renaming, on the title it renames. A working title changes
           weekly in the first month, and a control that lives on a settings
           page is one nobody finds. */}
-      <Fragment slot="under">
-        {iAuthor && (
-          <details class="rename">
-            <summary class="linkish">Rename</summary>
-            <form method="POST" action="#outcome" class="renamef">
-              <input type="hidden" name="action" value="rename" />
-              <label>
-                <input name="title" value={project.title} required maxlength="200" aria-label="New title" />
-              </label>
-              <button class="btn btn-sm" type="submit">Save</button>
-            </form>
-          </details>
-        )}
-      </Fragment>
-      <a class="btn btn-sm ghost" href={`/app/project/${project.id}/notebook/`}>Export notebook</a>
-      {/* The student's own card on a class showcase, beside the notebook
-          here as on the participation page's cover. */}
-      {(cohorts ?? []).some((c: any) => c.programs?.showcase && c.programs.showcase !== 'none') && (
-        <a class="btn btn-sm ghost" href={`/app/project/${project.id}/showcase/`}>Showcase card</a>
-      )}
-      {!iAuthor && <a class="btn btn-sm ghost" href="#observe">Add an observation</a>}
     </ProjectCover>
 
     {/* ── Where this work belongs, and where it went ──────────────────────
@@ -369,7 +350,7 @@ const fmt = (d: string | null) =>
         <span>
           {(cohorts ?? []).length === 0 && (entries ?? []).length === 0
             ? 'nowhere yet'
-            : `${(cohorts ?? []).length} ${(cohorts ?? []).length === 1 ? 'cohort' : 'cohorts'} · ${(entries ?? []).length} ${(entries ?? []).length === 1 ? 'entry' : 'entries'}`}
+            : `${(cohorts ?? []).length} ${(cohorts ?? []).length === 1 ? 'class' : 'classes'}${(entries ?? []).length ? ` · ${(entries ?? []).length} fair ${(entries ?? []).length === 1 ? 'entry' : 'entries'}` : ''}`}
         </span>
       </div>
 
@@ -399,14 +380,8 @@ const fmt = (d: string | null) =>
                     Open
                   </a>
                 )}
-                {iAuthor && (
-                  <form method="POST" action="#outcome" class="inline">
-                    <input type="hidden" name="action" value="cohort" />
-                    <input type="hidden" name="cohort_id" value={c.program_id} />
-                    <input type="hidden" name="leave" value="yes" />
-                    <button class="btn btn-sm" type="submit">Remove</button>
-                  </form>
-                )}
+                {/* Leaving a class is the teacher's to do (2.8); the Remove
+                    that stood here refused anyway once anything was recorded. */}
               </span>
             </li>
           ))}
@@ -504,8 +479,8 @@ const fmt = (d: string | null) =>
         run to several screens, and an outcome rendered at the top after
         a click three screens down reads as nothing having happened. */}
     <div id="outcome" tabindex="-1">
-    {error && <p class="note" role="alert">{error}</p>}
-    {noted && !error && <p class="note" role="status">Recorded.</p>}
+    {error && <p class="note flash" role="alert">{error}</p>}
+    {noted && !error && <p class="note flash" role="status">Recorded.</p>}
     </div>
 
     {!iAuthor && (
@@ -519,10 +494,11 @@ const fmt = (d: string | null) =>
     <section class="sec" id="observe">
       <div class="sec-h">
         <b>{iAuthor ? 'Add to the notebook' : 'Add an observation'}</b>
-        <span>Nothing is ever edited</span>
+        <span>No edits; append only</span>
       </div>
       <form method="POST" action="#outcome" enctype="multipart/form-data" class="notef">
         <input type="hidden" name="action" value="note" />
+        <p class="notef-top"><button class="btn" type="submit">{iAuthor ? 'Save entry' : 'Add the observation'}</button></p>
 
         {/* A label wrapping the editor would make the toolbar's buttons
             part of the label, so a click on Bold would focus the field and
@@ -562,7 +538,6 @@ const fmt = (d: string | null) =>
           </label>
         </div>
 
-        <button class="btn" type="submit">{iAuthor ? 'Record this' : 'Add the observation'}</button>
         {/* Said plainly, because the export default changed under this
             sentence. Promising somebody their observation is printed, and
             then leaving it out of the copy most people print, would be worse
@@ -583,7 +558,7 @@ const fmt = (d: string | null) =>
     </section>
 
     <section class="sec">
-      <div class="sec-h"><b>The notebook</b><span>{notes?.length ?? 0} entries</span></div>
+      <div class="sec-h"><b>The notebook</b><span>{notes?.length ?? 0} entries · <a class="btn btn-sm" href={`/app/project/${project.id}/notebook/`}>Export notebook</a></span></div>
 
       {notes && notes.length > 0 ? (
         <ol class="notes">
@@ -702,9 +677,6 @@ const fmt = (d: string | null) =>
   .who .lede,
   .who .t-lbl { max-width: 74ch; }
   .hero .t-lbl { margin-bottom: 8px; }
-  .rename { margin-top: 6px; }
-  .rename > summary { list-style: none; display: inline; }
-  .rename > summary::-webkit-details-marker { display: none; }
   .renamef { display: flex; gap: 8px; align-items: center; margin-top: 8px; max-width: var(--measure-form); }
   .renamef label { flex: 1 1 auto; margin: 0; }
   .renamef input {
@@ -736,11 +708,12 @@ const fmt = (d: string | null) =>
   /* Wider than 64ch. Two columns inside it left each field about thirty
      characters across, which turned every line of help into three, while
      half the page sat empty to the right. */
-  .notef { max-width: var(--measure-form); }
-  .notef label { display: block; margin-bottom: 16px; }
-  .notef .field { margin-bottom: 16px; }
+  .notef { max-width: none; }
+  .notef label { display: block; margin-bottom: 8px; }
+  .notef .field { margin-bottom: 8px; }
   .notef .field label { margin-bottom: 0; }
-  .notef label > span { display: block; margin-bottom: 6px; font-family: var(--face-ui); font-size: 0.92rem; }
+  .notef label > span { display: block; margin-bottom: 4px; font-family: var(--face-ui); font-size: 0.92rem; font-weight: 700; }
+  .notef-top { margin: 0 0 10px; }
   .notef textarea,
   .notef input,
   .notef select {
@@ -753,7 +726,7 @@ const fmt = (d: string | null) =>
   }
   .notef textarea { font-family: var(--face-num); font-size: 0.95rem; line-height: 1.55; }
 
-  .notef small { display: block; margin-top: 5px; color: var(--ink-3); font-size: 0.86rem; }
+  .notef small { display: block; margin-top: 3px; color: var(--ink-3); font-size: 0.86rem; }
   .notef button,
   .linkf button {
     padding: 10px 18px;
@@ -763,7 +736,7 @@ const fmt = (d: string | null) =>
     font-family: var(--face-ui); font-size: 1rem; font-weight: 600;
     cursor: pointer;
   }
-  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 16px; }
   @media (max-width: 640px) { .grid2 { grid-template-columns: 1fr; } }
 
   .linkf { display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap; }
@@ -874,6 +847,7 @@ const fmt = (d: string | null) =>
   /* Where this work belongs, and where it went. One row per cohort and per
      entry, because a project in three clubs is three blocks rather than a
      sentence trying to hold all three (22.9). */
+  .sec { padding-top: 28px; }
   .belongs { list-style: none; margin: 0 0 4px; padding: 0; }
 
   /* Three columns rather than a flex row that wraps where it likes: the
@@ -884,7 +858,7 @@ const fmt = (d: string | null) =>
     grid-template-columns: minmax(0, 1fr) 7rem max-content;
     gap: 10px 18px;
     align-items: center;
-    padding: 12px 0;
+    padding: 8px 0;
     border-bottom: 1px solid var(--rule-fine);
   }
 

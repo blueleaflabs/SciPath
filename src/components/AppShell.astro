@@ -11,6 +11,17 @@ interface Props {
 const { org, account, here, roles = [] } = Astro.props;
 
 import { standing } from '../lib/roles';
+import { env } from '../lib/supabase';
+import { inClass } from '../lib/live-plan';
+
+/* The socket's address and public key, for the browser (2.8). Read from
+   the request's environment, since the Worker gets its variables at
+   request time and a build cannot bake them in. */
+const runtimeEnv = (Astro.locals as any).runtime?.env;
+const liveUrl = env('PUBLIC_SUPABASE_URL', runtimeEnv);
+const liveKey = env('PUBLIC_SUPABASE_PUBLISHABLE_KEY', runtimeEnv);
+const livePlan = JSON.stringify({ ...org.live, timezone: org.timezone });
+const classNow = inClass(org.live, new Date(), org.timezone);
 
 const me = standing(roles, account?.population);
 
@@ -104,7 +115,7 @@ const nav = [
 });
 ---
 
-<nav class="appnav" aria-label="Working surface">
+<nav class="appnav" aria-label="Working surface" data-live-url={liveUrl} data-live-key={liveKey} data-live-me={account?.id ?? ''} data-live-plan={livePlan} data-live-class={classNow ? '1' : '0'}>
   <ul>
     {nav.map((n) => (
       <li>
@@ -113,6 +124,147 @@ const nav = [
     ))}
   </ul>
 </nav>
+
+<script>
+  import { live, join, myTopics, onMessage, onHealth, fail, type Health } from '../lib/live-client';
+  import { inClass, fallbackDelay } from '../lib/live-plan';
+  /**
+   * LIVE REGIONS (2.8).
+   *
+   * A page marks the parts of itself that other people change (a thread
+   * under a field, the plate, the care table) with `data-live="name"`.
+   * When a change arrives, the page is fetched again and each live region
+   * is replaced by its newer self, unless the reader is typing inside it.
+   * Nothing else on the page moves, the editors keep their text, and a
+   * reply to a question arrives where the question was asked. A region
+   * that gains new markup announces `live:updated` so a page's script can
+   * rebind what it needs. Server-rendered pages need no other work.
+   *
+   * HOW A CHANGE ARRIVES. Over the socket, first: the browser joins the
+   * person's own channel and the rooms of their projects and classes, and
+   * the database broadcasts into those rooms from triggers. The edge sees
+   * nothing of it. Only when the socket will not connect (a school network
+   * that drops WebSockets, most often) does this fall back to asking the
+   * pulse, paced by the school's clock: quickly during a class period,
+   * once an hour outside one. The fallback is announced on the page, and
+   * reported once so whoever runs the platform hears about the network.
+   */
+  const regions = () => Array.from(document.querySelectorAll<HTMLElement>('[data-live]'));
+  const nav = document.querySelector<HTMLElement>('.appnav');
+  const plan = (() => { try { return JSON.parse(nav?.dataset.livePlan ?? ''); } catch { return null; } })();
+
+  let busy = false;
+  let queued = false;
+  const refresh = async () => {
+    if (regions().length === 0) return;
+    if (busy) { queued = true; return; }
+    busy = true;
+    try {
+      const res = await fetch(location.pathname + location.search, { credentials: 'same-origin', cache: 'no-store', headers: { 'X-Live': '1' } });
+      if (!res.ok) return;
+      const fresh = new DOMParser().parseFromString(await res.text(), 'text/html');
+      for (const el of regions()) {
+        const key = el.dataset.live!;
+        const next = fresh.querySelector<HTMLElement>(`[data-live="${CSS.escape(key)}"]`);
+        if (!next || next.innerHTML === el.innerHTML) continue;
+        const active = document.activeElement;
+        if (active && active !== document.body && el.contains(active)) continue;
+        /* Open disclosures stay open across the swap. */
+        const open = new Set(Array.from(el.querySelectorAll<HTMLDetailsElement>('details[open]')).map((d) => d.id || d.dataset.key || ''));
+        el.innerHTML = next.innerHTML;
+        for (const d of el.querySelectorAll<HTMLDetailsElement>('details')) if (open.has(d.id || d.dataset.key || '') && (d.id || d.dataset.key)) d.open = true;
+        el.dispatchEvent(new CustomEvent('live:updated', { bubbles: true }));
+      }
+    } catch { /* the next message or tick tries again */ }
+    finally {
+      busy = false;
+      if (queued) { queued = false; window.setTimeout(() => refresh(), 400); }
+    }
+  };
+  /* A burst of messages (a save and its broadcasts) is one re-read. */
+  let coalesce: number | undefined;
+  const refreshSoon = () => { window.clearTimeout(coalesce); coalesce = window.setTimeout(() => refresh().catch(() => {}), 350); };
+  /* A page that just wrote something asks for its regions now. */
+  document.addEventListener('live:refresh', () => { refresh().catch(() => {}); });
+
+  /* ── The socket ─────────────────────────────────────────────────────── */
+  const st = live();
+  if (st) {
+    onMessage((m) => {
+      /* A field broadcast is the document page's business (it updates the
+         one box); everything else is a region re-read. */
+      if (m.event === 'field') return;
+      refreshSoon();
+    });
+    document.addEventListener('live:reconnected', () => refreshSoon());
+    myTopics().then((topics) => {
+      if (topics.length === 0) { fail('no topics for this session'); return; }
+      for (const t of topics) join(t);
+    }).catch((e) => fail(`topics: ${e?.message ?? e}`));
+  }
+
+  /* ── The backup: the pulse, on the school's clock ───────────────────── */
+  let last: string | null = null;
+  let pollBusy = false;
+  const tick = async () => {
+    if (document.hidden || pollBusy) return;
+    pollBusy = true;
+    try {
+      const res = await fetch('/app/api/pulse/', { credentials: 'same-origin', cache: 'no-store' });
+      if (res.ok) {
+        const out = await res.json();
+        const at = out?.at ? String(out.at) : null;
+        if (last !== null && at !== null && at !== last) await refresh();
+        if (at !== null) last = at;
+      }
+    } catch { /* the next tick tries again */ }
+    pollBusy = false;
+  };
+  let lastTouch = Date.now();
+  let timer: number | undefined;
+  let polling = false;
+  const classNow = () => (plan ? inClass(plan, new Date(), plan.timezone) : false);
+  const delay = () => (plan ? fallbackDelay(plan, Date.now() - lastTouch, classNow()) : (Date.now() - lastTouch < 15 * 60 * 1000 ? 30000 : null));
+  const loop = async () => {
+    if (!polling) return;
+    const d = delay();
+    if (d === null) { timer = undefined; return; }
+    await tick();
+    if (polling) timer = window.setTimeout(loop, d);
+  };
+  const startPolling = () => { if (polling) return; polling = true; last = null; loop(); };
+  const stopPolling = () => { polling = false; window.clearTimeout(timer); timer = undefined; };
+  const touch = () => { lastTouch = Date.now(); if (polling && timer === undefined) loop(); };
+  for (const ev of ['keydown', 'pointerdown', 'pointermove', 'scroll', 'focus']) window.addEventListener(ev, touch, { passive: true });
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) { touch(); if (polling) tick(); } });
+
+  /* ── The strip, and the report ──────────────────────────────────────── */
+  const strip = document.createElement('div');
+  strip.className = 'live-strip';
+  strip.hidden = true;
+  strip.setAttribute('role', 'status');
+  document.body.appendChild(strip);
+  const report = (state: 'fallback' | 'recovered', detail: string) => {
+    try {
+      fetch('/app/api/live-incident/', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ state, page: location.pathname, detail }) }).catch(() => {});
+    } catch {}
+  };
+  let wasFallback = false;
+  onHealth((h: Health, detail: string) => {
+    if (h === 'fallback' || h === 'off') {
+      startPolling();
+      const every = classNow() ? `every ${plan?.fallback?.inClass ?? 8} seconds while you work` : 'once an hour outside class';
+      strip.textContent = `Live updates are on the backup path (checking ${every}). Your work still saves as you type.`;
+      strip.hidden = false;
+      if (h === 'fallback' && !wasFallback) { wasFallback = true; report('fallback', detail); }
+    } else if (h === 'live') {
+      stopPolling();
+      strip.hidden = true;
+      if (wasFallback) { wasFallback = false; report('recovered', ''); }
+    }
+    /* `starting`: nothing yet; the deadline decides. */
+  });
+</script>
 
 
 <style>

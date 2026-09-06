@@ -382,6 +382,7 @@ async function main() {
         owner: d.step.owner === 'staff' ? 'staff' : 'student',
         step_id: d.step.id ?? null,
         requires_step: d.step.owner === 'staff' ? (d.step.requires?.[0] ?? null) : null,
+        requires_steps: d.step.requires ?? [],
         feedback_on: d.step.owner === 'staff' ? (d.step.feedback_on ?? null) : null,
       }));
 
@@ -661,6 +662,7 @@ async function main() {
         owner: d.step.owner === 'staff' ? 'staff' : 'student',
         step_id: d.step.id ?? null,
         requires_step: d.step.owner === 'staff' ? (d.step.requires?.[0] ?? null) : null,
+        requires_steps: d.step.requires ?? [],
         feedback_on: d.step.owner === 'staff' ? (d.step.feedback_on ?? null) : null,
       }));
 

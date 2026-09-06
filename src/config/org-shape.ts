@@ -140,7 +140,32 @@ export interface Org {
    * forever.
    */
   hiddenUntil?: { date: string; surfaces: string[]; programs: string[] };
+  /**
+   * When the school's class meets and how the backup pulse is paced (2.8).
+   * Live updates arrive over a socket; the pulse polls only when the socket
+   * will not connect, quickly inside a class period and once an hour
+   * outside one. Periods are in the school's own timezone.
+   */
+  live: LivePlan;
 }
+
+export interface ClassPeriod {
+  /** Three-letter weekdays: Mon, Tue, Wed, Thu, Fri, Sat, Sun. */
+  days: string[];
+  /** 24-hour HH:MM, inclusive. */
+  from: string;
+  /** 24-hour HH:MM, exclusive. */
+  to: string;
+}
+
+export interface LivePlan {
+  classPeriods: ClassPeriod[];
+  /** The backup pulse's pacing, in seconds. */
+  fallback: { inClass: number; inClassIdle: number; offHours: number };
+}
+
+/** The pacing when a school's file says nothing (2.8). */
+export const DEFAULT_LIVE: LivePlan = { classPeriods: [], fallback: { inClass: 8, inClassIdle: 30, offHours: 3600 } };
 
 /**
  * A parsed `orgs/*.yaml` document, as the record every page expects.
@@ -182,5 +207,34 @@ export function shapeOrg(doc: any): Org {
           programs: doc.hidden_until.programs ?? [],
         }
       : undefined,
+    live: shapeLive(doc.live),
+  };
+}
+
+const DAY = /^(Mon|Tue|Wed|Thu|Fri|Sat|Sun)$/;
+const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
+
+/** The `live` block of an org file, checked: a period with a bad day or
+    time is a class that never meets, so it fails loudly here. */
+export function shapeLive(doc: any): LivePlan {
+  if (!doc) return DEFAULT_LIVE;
+  const classPeriods: ClassPeriod[] = (doc.class_periods ?? []).map((p: any, i: number) => {
+    const days = (p.days ?? []).map(String);
+    const from = String(p.from ?? ''), to = String(p.to ?? '');
+    for (const d of days) if (!DAY.test(d)) throw new Error(`live.class_periods[${i}]: day ${d} is not Mon..Sun`);
+    if (!HHMM.test(from) || !HHMM.test(to)) throw new Error(`live.class_periods[${i}]: times are HH:MM`);
+    if (from >= to) throw new Error(`live.class_periods[${i}]: from must be before to`);
+    if (days.length === 0) throw new Error(`live.class_periods[${i}]: no days`);
+    return { days, from, to };
+  });
+  const f = doc.fallback ?? {};
+  const num = (v: any, d: number) => (Number.isFinite(Number(v)) && Number(v) > 0 ? Number(v) : d);
+  return {
+    classPeriods,
+    fallback: {
+      inClass: num(f.in_class_seconds, DEFAULT_LIVE.fallback.inClass),
+      inClassIdle: num(f.in_class_idle_seconds, DEFAULT_LIVE.fallback.inClassIdle),
+      offHours: num(f.off_hours_seconds, DEFAULT_LIVE.fallback.offHours),
+    },
   };
 }

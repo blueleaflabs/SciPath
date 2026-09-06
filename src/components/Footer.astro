@@ -94,12 +94,15 @@ const columns = [
     <div class="ft-c">
       <div>
         <p class="t-mark">{platform.name}</p>
-        <p class="t-sm" style="color:var(--masthead-ink); margin-top:10px; max-width:32ch">
+        {/* Unwrapped by us (2.8): the line runs the width of the page and
+            breaks where the page does. */}
+        <p class="t-sm" style="color:var(--masthead-ink); margin-top:10px">
           {platform.tagline}
         </p>
       </div>
       {
-        columns.map((col) => (
+        /* The directory, when the platform shows one (`platform.footerLinks`). */
+        platform.footerLinks && columns.map((col) => (
           <div>
             <p class="t-lbl">{col.label}</p>
             <ul>

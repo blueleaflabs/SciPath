@@ -1,0 +1,31 @@
+# The journey map: one page, two deadlines. The first draft (binder paper,
+# photographed) and the final a week later are the same document, updated
+# and submitted again; both steps in irpd-mvhs-2027.yaml point at the
+# `journey_map` deliverable, and the page submits for whichever of the
+# two is next. The description is the class's; the words in the note are
+# a placeholder until the handout's text is in hand.
+
+id: journey-map
+name: Journey map
+version: 1
+guidance: >-
+  Upload a picture of your journey map. Update it and submit again when
+  the final is due.
+sections:
+  - id: about
+    name: The journey map
+    fields:
+      - id: about
+        kind: note
+        text: |-
+          A journey map traces one user's path through the problem your project addresses, step by step, from the moment the need appears to the moment it is met or missed: what they do, what they use, what they feel, and where it goes wrong. The first draft is made on binder paper in class; the final is the same map, cleaned up after the family's feedback.
+      - id: map
+        kind: file
+        accept: image
+        prompt: Your journey map
+        tip: A photo of the binder paper is fine for the first draft. Choose the file and it uploads at once; choose another to replace it.
+        required: true
+      - id: changes
+        kind: long
+        prompt: What changed since the first draft, if this is the final
+        tip: Leave it empty on the first draft.

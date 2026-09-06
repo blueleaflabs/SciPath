@@ -76,7 +76,7 @@ const label = program.short_name ?? program.name;
     <p class="back"><a href={`/app/program/${id}/showcase/`}>← {label} Showcase</a></p>
 
     <section class="cover">
-      <p class="kick">{programTitle(program)} · {phases[at]?.name ?? (card.total > 0 && card.done === card.total ? 'Complete' : 'In progress')}</p>
+      <p class="kick">{programTitle(program)} · {phases[at]?.name ?? (card.total > 0 && card.done === card.total ? 'Complete' : 'In Progress')}</p>
       <h1>{card.title}</h1>
       <ul class="people">
         <li><b>{(card.authors ?? []).length === 1 ? 'Author' : 'Authors'}</b><span>{(card.authors ?? []).join(', ') || 'Nobody yet'}</span></li>

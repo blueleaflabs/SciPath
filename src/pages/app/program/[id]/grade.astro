@@ -21,6 +21,7 @@ import AppShell from '../../../../components/AppShell.astro';
 import { activeOrg } from '../../../../lib/tenant';
 import { serverClient } from '../../../../lib/supabase';
 import { standing } from '../../../../lib/roles';
+import { scoreBand } from '../../../../lib/score-band';
 import { programTitle, staffWord } from '../../../../lib/program-names';
 import { formatDate, todayIn } from '../../../../lib/dates';
 import { daysUntil } from '../../../../lib/attention';
@@ -165,7 +166,7 @@ const { data: deliverables } = milestoneIds.length
 /* And the in-progress document where nothing was submitted, so the row
    can say "in progress" rather than "nothing". */
 const { data: docs } = docDeliverable && projectIds.length
-  ? await supabase.from('documents').select('id, project_id, status, version_no, updated_at').in('project_id', projectIds).eq('deliverable', docDeliverable.id)
+  ? await supabase.from('documents').select('id, project_id, status, version_no, opened_at, updated_at').in('project_id', projectIds).eq('deliverable', docDeliverable.id)
   : { data: [] as any[] };
 const docIds = (docs ?? []).map((d: any) => d.id);
 const { data: comments } = docIds.length
@@ -283,7 +284,7 @@ const counts = {
               <div class="g-head">
                 <span class="g-name"><a href={`/app/project/${r.project.id}/in/${id}/#m-${r.milestone.id}`}>{r.student.display_name}</a><span class="sub">{r.project.title}{r.elders.length ? ` · ${staffWord(program)}: ${r.elders.map((e: any) => e.users.display_name.split(' ')[0]).join(', ')}` : ''}</span></span>
                 <span class:list={['pill', st === 'released' ? 'ok' : st === 'graded' ? 'soon' : st === 'submitted' ? 'soon' : 'late']}>
-                  {st === 'released' ? `${grade.score ?? 'feedback'}${grade.out_of ? ` / ${grade.out_of}` : ''} · released` : st === 'graded' ? `${grade.score ?? 'feedback'}${grade.out_of ? ` / ${grade.out_of}` : ''} · not released` : st === 'submitted' ? `Submitted ${fmt(r.milestone.completed_on)}` : st === 'in_progress' ? `In progress${r.doc?.updated_at ? ` · last edit ${fmt(r.doc.updated_at)}` : ''}` : 'Nothing yet'}
+                  {st === 'released' ? `${grade.score ?? 'feedback'}${grade.out_of ? ` / ${grade.out_of}` : ''} · released` : st === 'graded' ? `${grade.score ?? 'feedback'}${grade.out_of ? ` / ${grade.out_of}` : ''} · not released` : st === 'submitted' ? `Submitted ${fmt(r.milestone.completed_on)}` : st === 'in_progress' ? `In Progress${r.doc?.opened_at ? ` · started ${fmt(r.doc.opened_at)}` : ''}${r.doc?.updated_at ? ` · last edit ${fmt(r.doc.updated_at)}` : ''}` : 'Nothing yet'}
                 </span>
                 {r.changedSinceGrade && <span class="pill late">Submitted again since graded</span>}
               </div>
@@ -377,7 +378,7 @@ const counts = {
                       ))}
                     </ul>
                   ) : r.doc ? (
-                    <p class="t-sm">In progress, not submitted. <a href={documentPath(r.project.id, docDeliverable?.id ?? '')}>Read it as it stands</a>.</p>
+                    <p class="t-sm">In Progress, not submitted. <a href={documentPath(r.project.id, docDeliverable?.id ?? '')}>Read it as it stands</a>.</p>
                   ) : (
                     <p class="t-sm">Nothing submitted.</p>
                   )}
@@ -386,7 +387,7 @@ const counts = {
                 <form method="POST" action={`#g-${r.milestone.id}-${r.student.id}`} class="gform">
                   {r.score && (
                     <p class="g-family">
-                      <b>Family score {r.score.score ?? '—'}{r.score.out_of ? ` / ${r.score.out_of}` : ''}</b>
+                      <b class:list={['pill', scoreBand(r.score.score) || 'ok']}>Family score {r.score.score ?? '—'}{r.score.out_of ? ` / ${r.score.out_of}` : ''}</b>
                       {r.score.grader?.display_name ? ` · ${r.score.grader.display_name}` : ''}
                       {r.score.feedback_md && <span class="g-family-c">{r.score.feedback_md}</span>}
                     </p>

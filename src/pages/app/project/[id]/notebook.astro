@@ -3,9 +3,13 @@ export const prerender = false;
 
 import { platform } from '../../../../config/site';
 import { activeOrg } from '../../../../lib/tenant';
-import { toDate } from '../../../../lib/dates';
+import { toDate, monthWord } from '../../../../lib/dates';
 import { parseVideo } from '../../../../lib/video';
 import { programTitle } from '../../../../lib/program-names';
+import { resolveProgram, deliverablesFor, shape } from '../../../../lib/templates';
+import { docStanding } from '../../../../lib/documents';
+import { stepProgress, doneWords } from '../../../../lib/step-progress';
+import { exportName } from '../../../../lib/export-names';
 import { serverClient } from '../../../../lib/supabase';
 import { renderNote, linkDomain } from '../../../../lib/notes';
 import { signInWith } from '../../../../lib/next-path';
@@ -27,7 +31,7 @@ const supabase = serverClient(
 
 const { data: project } = await supabase
   .from('projects')
-  .select('id, title, question, started_on, created_at, video_url, project_authors(role, users(id, display_name))')
+  .select('id, title, question, started_on, created_at, video_url, facts, process_id, project_authors(role, users(id, display_name))')
   .eq('id', id)
   .maybeSingle();
 
@@ -73,7 +77,7 @@ const { data: links } = await supabase
  */
 const { data: places } = await supabase
   .from('participations')
-  .select('id, program_id, programs(id, name, season_year, kind, phases, fair_date, program_role)')
+  .select('id, program_id, programs(id, name, short_name, season_year, kind, phases, fair_date, program_role, template_id, process_id)')
   .eq('project_id', id);
 
 /* Sorted so the paper reads the same way twice: the class before the fair it
@@ -88,6 +92,8 @@ const participations = [...(places ?? [])].sort((a: any, b: any) => {
 });
 
 const entryIds = participations.map((e: any) => e.id);
+
+/* What the saved PDF is called: program, who, "Research notebook", when. */
 
 /* Where a row came from, so a table spanning two programs can say which one
    each line belongs to. A judge handed one sheet of thirty obligations with
@@ -267,6 +273,33 @@ const attachments = project.project_authors ?? [];
 const authors = attachments.filter((a: any) => a.role === 'author');
 const officers = attachments.filter((a: any) => a.role === 'officer');
 
+/* What the saved PDF is called: program, the author (whose notebook it
+   is, whoever exports it), "Research notebook", when. */
+const exportTitle = exportName((participations[0] as any)?.programs ?? null, authors.map((a: any) => a.users?.display_name).filter(Boolean).join(', '), 'Research notebook', new Date(), org.timezone);
+
+/* The standing of each document written in SciPath (2.8), the same words
+   the deliverables page shows: not started, in progress with how many
+   answered, submitted. One read for the project's documents; the shape
+   comes from the class's template. */
+const { data: docRows } = await supabase
+  .from('documents')
+  .select('deliverable, status, version_no, opened_at, submitted_at, document_fields(field_id, value)')
+  .eq('project_id', id);
+const docOf = new Map<string, any>((docRows ?? []).map((d: any) => [d.deliverable, d]));
+const shapeIdOf = new Map<string, string>();
+for (const e of participations as any[]) {
+  if (!e.programs?.template_id) continue;
+  try {
+    const resolved = resolveProgram(e.programs.template_id, e.programs.process_id ?? project.process_id ?? null);
+    for (const step of resolved.steps) for (const d of deliverablesFor(resolved, step, project.facts ?? {})) if (d.shape) shapeIdOf.set(d.id, d.shape);
+  } catch { /* a template that fails to resolve leaves the column empty */ }
+}
+const standingOf = (deliverableRef: string | null | undefined, completedOn: string | null): string => {
+  if (!deliverableRef || !shapeIdOf.has(deliverableRef)) return completedOn ? `Done ${fmt(completedOn)}` : '—';
+  return docStanding(docOf.get(deliverableRef) ?? null, shape(shapeIdOf.get(deliverableRef)!), (iso) => fmt(String(iso).slice(0, 10))).label;
+};
+const deadlineTotals = stepProgress(placeBlocks.flatMap((b) => b.milestones));
+
 const { data: sponsor } = await supabase
   .from('project_sponsors')
   /* Any current sponsor on any of this project's participations. The
@@ -323,9 +356,13 @@ const fmt = (d: string | null) =>
     year: 'numeric', month: 'long', day: 'numeric',
   }) : '—';
 
-const printedOn = new Date().toLocaleDateString('en-US', {
-  year: 'numeric', month: 'long', day: 'numeric',
+const printedOn = new Date().toLocaleString('en-US', {
+  year: 'numeric', month: 'long', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZone: org.timezone,
 });
+/* When an entry was written, to the minute, in the school's time. The day
+   the work happened is the entry's own date; this is the record's. */
+const stamp = (iso: string | null) =>
+  iso ? new Date(iso).toLocaleString('en-US', { year: 'numeric', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZone: org.timezone }) : '';
 ---
 
 <html lang="en" data-surface="print">
@@ -333,7 +370,7 @@ const printedOn = new Date().toLocaleDateString('en-US', {
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="robots" content="noindex, nofollow" />
-    <title>{project.title} · Research notebook</title>
+    <title>{exportTitle}</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
@@ -414,6 +451,9 @@ const printedOn = new Date().toLocaleDateString('en-US', {
           <dt>Work began</dt>
           <dd>{fmt(project.started_on)}</dd>
 
+          {deadlineTotals.total > 0 && (<><dt>Deadlines</dt>
+          <dd>{doneWords(deadlineTotals)}</dd></>)}
+
           <dt>Entries</dt>
           {/* One expression, not two on two lines. Adjacent expressions are
               separated by the newline between them, which printed as
@@ -439,88 +479,10 @@ const printedOn = new Date().toLocaleDateString('en-US', {
           <dd>{printedOn}</dd>
         </dl>
 
-        <p class="honest">
-          Entries are recorded append only: each one is attributed, carries the
-          day the work happened, and is never edited afterwards. A correction
-          appears as a later entry naming the one it corrects. This is a record
-          kept in order, which is a discipline device rather than proof against
-          a determined author, and it is offered as no more than that.
-        </p>
-
-        {/* On the paper, because paper is what a judge is handed and the
-            screen is not there to qualify it. Restated rather than shared:
-            this document carries only its own styles, and a component whose
-            CSS lives elsewhere would print unstyled. */}
-        <p class="authority">
-          SciPath is a planning and recordkeeping aid. Your Adult Sponsor,
-          SRC/IRB and destination fair remain authoritative.
-        </p>
+        {/* The append-only and who-is-authoritative paragraphs that stood
+            here are the terms of use (/policies/terms/), not the title
+            page (2.8). */}
       </header>
-
-      <section class="entries">
-        <h2>Entries</h2>
-
-        {shown.map((n: any, i: number) => {
-          const mine = (media ?? []).filter((m: any) => m.note_id === n.id);
-          const corrected = n.corrects_id ? noteById.get(n.corrects_id) : null;
-          return (
-            <div class="entry">
-              <div class="meta">
-                <span class="no">{i + 1}</span>
-                <b>{fmt(n.occurred_on)}</b>
-                <span>{n.users?.display_name}</span>
-                {isObservation(n) && (
-                  <span class="cap">
-                    {roleOf.get(n.author_id) === 'officer' ? 'officer note' : 'observation'}
-                  </span>
-                )}
-              </div>
-              {corrected && (
-                <p class="corrects">Corrects the entry of {fmt(corrected.occurred_on)}.</p>
-              )}
-              <div class="body" set:html={renderNote(n.body_md)} />
-              {mine.map((m: any) => (
-                <figure>
-                  <img src={mediaUrl(m.storage_path)} alt={m.caption ?? 'Notebook image'} />
-                  {m.caption && <figcaption>{m.caption}</figcaption>}
-                </figure>
-              ))}
-            </div>
-          );
-        })}
-
-        {(!notes || notes.length === 0) && <p class="empty">No entries recorded.</p>}
-      </section>
-
-      {/* The showcase, before the paperwork. A judge holding this should see
-          what the work looked like near the front rather than after two
-          tables. */}
-      {images && images.length > 0 && (
-        <section class="appendix">
-          <h2>Showcase</h2>
-          <ul class="shots">
-            {images.map((img: any) => (
-              <li class="shot">
-                <img src={`/app/media/${img.storage_path}`} alt={img.alt} />
-                <p>{img.caption}</p>
-              </li>
-            ))}
-          </ul>
-        </section>
-      )}
-
-      {savedVideo && (
-        <section class="appendix">
-          <h2>Video</h2>
-          {/* No player on paper. The address is the useful thing, and the
-              print rule prints it after the link anyway. */}
-          <p>
-            <a href={savedVideo.watch} target="_blank" rel="noopener noreferrer">
-              {savedVideo.host === 'vimeo' ? 'Vimeo' : 'YouTube'}
-            </a>
-          </p>
-        </section>
-      )}
 
       {placeBlocks.map((block) => (
         <>
@@ -532,15 +494,15 @@ const printedOn = new Date().toLocaleDateString('en-US', {
               </h2>
               <table>
                 <thead>
-                  <tr><th>Due</th><th>Obligation</th><th>Set by</th><th>Done</th></tr>
+                  <tr><th>Due</th><th>Obligation</th><th>Status</th></tr>
                 </thead>
                 <tbody>
                   {block.groups.map((group) => (
                     <>
                       <tr class="phase-row">
-                        <th colspan="4" scope="colgroup">
+                        <th colspan="3" scope="colgroup">
                           {group.name}
-                          {group.window && ` · ${group.window.from} to ${group.window.to}`}
+                          {group.window && ` · ${monthWord(group.window.from)} to ${monthWord(group.window.to)}`}
                         </th>
                       </tr>
                       {group.rows.map((m: any) => (
@@ -565,8 +527,7 @@ const printedOn = new Date().toLocaleDateString('en-US', {
                               </span>
                             )}
                           </td>
-                          <td>{block.whose[m.source] ?? 'The program'}</td>
-                          <td>{m.completed_on ? fmt(m.completed_on) : '—'}</td>
+                          <td>{standingOf((m.program_milestones as any)?.deliverable_ref ?? null, m.completed_on ?? null)}</td>
                         </tr>
                       ))}
                     </>
@@ -637,6 +598,72 @@ const printedOn = new Date().toLocaleDateString('en-US', {
         </>
       ))}
 
+      <section class="entries">
+        <h2>Entries</h2>
+
+        {shown.map((n: any, i: number) => {
+          const mine = (media ?? []).filter((m: any) => m.note_id === n.id);
+          const corrected = n.corrects_id ? noteById.get(n.corrects_id) : null;
+          return (
+            <div class="entry">
+              <div class="meta">
+                <span class="no">{i + 1}</span>
+                <b>{fmt(n.occurred_on)}</b>
+                <span>{n.users?.display_name}</span>
+                <span class="stamp">recorded {stamp(n.created_at)}</span>
+                {isObservation(n) && (
+                  <span class="cap">
+                    {roleOf.get(n.author_id) === 'officer' ? 'officer note' : 'observation'}
+                  </span>
+                )}
+              </div>
+              {corrected && (
+                <p class="corrects">Corrects the entry of {fmt(corrected.occurred_on)}.</p>
+              )}
+              <div class="body" set:html={renderNote(n.body_md)} />
+              {mine.map((m: any) => (
+                <figure>
+                  <img src={mediaUrl(m.storage_path)} alt={m.caption ?? 'Notebook image'} />
+                  {m.caption && <figcaption>{m.caption}</figcaption>}
+                </figure>
+              ))}
+            </div>
+          );
+        })}
+
+        {(!notes || notes.length === 0) && <p class="empty">No entries recorded.</p>}
+      </section>
+
+      {/* The showcase, before the paperwork. A judge holding this should see
+          what the work looked like near the front rather than after two
+          tables. */}
+      {images && images.length > 0 && (
+        <section class="appendix">
+          <h2>Showcase</h2>
+          <ul class="shots">
+            {images.map((img: any) => (
+              <li class="shot">
+                <img src={`/app/media/${img.storage_path}`} alt={img.alt} />
+                <p>{img.caption}</p>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
+      {savedVideo && (
+        <section class="appendix">
+          <h2>Video</h2>
+          {/* No player on paper. The address is the useful thing, and the
+              print rule prints it after the link anyway. */}
+          <p>
+            <a href={savedVideo.watch} target="_blank" rel="noopener noreferrer">
+              {savedVideo.host === 'vimeo' ? 'Vimeo' : 'YouTube'}
+            </a>
+          </p>
+        </section>
+      )}
+
       {links && links.length > 0 && (
         <section class="appendix">
           <h2>External documents</h2>
@@ -656,329 +683,5 @@ const printedOn = new Date().toLocaleDateString('en-US', {
 </html>
 
 <style is:global>
-  @import '../../../../styles/tokens.css';
-
-  * { box-sizing: border-box; }
-  body {
-    margin: 0;
-    background: var(--desk);
-    color: var(--ink);
-    font-family: 'IBM Plex Serif', Georgia, serif;
-    font-size: 16px;
-    line-height: 1.6;
-  }
-  .toolbar {
-    display: flex;
-    gap: 14px;
-    align-items: center;
-    justify-content: space-between;
-    max-width: 46rem;
-    margin: 18px auto 0;
-    padding: 0 24px;
-    font-family: 'IBM Plex Sans', system-ui, sans-serif;
-    font-size: 0.92rem;
-  }
-  /* Between the two existing controls, so `space-between` keeps the way back
-     at one end and the print button at the other. */
-  .opt {
-    display: flex;
-    gap: 8px;
-    align-items: center;
-    margin-right: auto;
-    margin-left: 14px;
-    color: var(--ink-2, inherit);
-  }
-  .opt input { margin: 0; }
-
-  .toolbar button {
-    padding: 8px 14px;
-    border: 1px solid var(--ink);
-    background: var(--ink);
-    color: var(--paper);
-    font-family: inherit;
-    font-size: 0.92rem;
-    cursor: pointer;
-  }
-  .book {
-    max-width: 46rem;
-    margin: 18px auto 60px;
-    padding: 56px 64px;
-    background: var(--paper);
-    border: 1px solid var(--rule);
-  }
-  .kicker {
-    font-family: 'IBM Plex Mono', monospace;
-    text-transform: uppercase;
-    letter-spacing: 0.12em;
-    font-size: 0.8rem;
-    color: var(--ink-3);
-    margin: 0 0 10px;
-  }
-  .title h1 { font-size: 1.9rem; line-height: 1.2; margin: 0 0 10px; }
-  .title .q { font-style: italic; color: var(--ink-3); margin: 0 0 22px; }
-  .title dl {
-    display: grid;
-    grid-template-columns: 10rem 1fr;
-    gap: 4px 16px;
-    margin: 0 0 22px;
-    font-size: 0.92rem;
-  }
-  .title dt {
-    font-family: 'IBM Plex Sans', sans-serif;
-    font-size: 0.84rem;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    color: var(--ink-3);
-    padding-top: 2px;
-  }
-  .title dd { margin: 0; }
-  .honest {
-    border-top: 1px solid var(--rule);
-    padding-top: 14px;
-    font-size: 0.92rem;
-    color: var(--ink-3);
-  }
-  h2 {
-    font-family: 'IBM Plex Sans', sans-serif;
-    font-size: 0.88rem;
-    text-transform: uppercase;
-    letter-spacing: 0.1em;
-    border-bottom: 2px solid var(--ink);
-    padding-bottom: 6px;
-    margin: 44px 0 22px;
-  }
-  .entry { margin-bottom: 30px; page-break-inside: avoid; }
-
-  .phase-row th {
-    padding: 16px 0 5px;
-    text-align: left;
-    font-family: var(--face-ui);
-    font-weight: 600;
-    font-size: 0.92rem;
-    border-bottom: 1px solid var(--ink);
-  }
-
-  /* Two across on paper, which fits four images on half a page rather than
-     four pages. */
-  .shots {
-    list-style: none;
-    margin: 0;
-    padding: 0;
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 18px 22px;
-  }
-  .shot img {
-    width: 100%;
-    aspect-ratio: 4 / 3;
-    object-fit: cover;
-    border: 1px solid var(--rule-fine);
-  }
-  .shot p {
-    margin: 6px 0 0;
-    font-size: 0.88rem;
-    line-height: 1.4;
-    color: var(--ink-2);
-  }
-  .entry .meta {
-    display: flex;
-    gap: 12px;
-    align-items: baseline;
-    font-family: 'IBM Plex Sans', sans-serif;
-    font-size: 0.86rem;
-    color: var(--ink-3);
-    border-bottom: 1px solid var(--rule);
-    padding-bottom: 5px;
-    margin-bottom: 10px;
-  }
-  .entry .meta .no { font-family: 'IBM Plex Mono', monospace; }
-  .entry .meta .cap {
-    font-family: 'IBM Plex Sans', sans-serif;
-    font-size: 0.8rem;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    border: 1px solid var(--rule);
-    padding: 1px 6px;
-  }
-  .entry .meta b { color: var(--ink); font-size: 0.95rem; }
-  .entry .corrects { font-size: 0.9rem; font-style: italic; color: var(--ink-3); margin: 0 0 8px; }
-  .entry .body p { margin: 0 0 10px; }
-  .entry .body pre {
-    background: var(--wash);
-    border: 1px solid var(--rule);
-    padding: 10px 12px;
-    font-family: 'IBM Plex Mono', monospace;
-    font-size: 0.88rem;
-    overflow-x: auto;
-  }
-  .entry .body table { border-collapse: collapse; font-size: 0.95rem; }
-  .entry .body th, .entry .body td { border: 1px solid var(--rule); padding: 5px 9px; text-align: left; }
-  .entry figure { margin: 12px 0 0; page-break-inside: avoid; }
-  .entry figure img { max-width: 100%; border: 1px solid var(--rule); }
-  .entry figcaption {
-    font-family: 'IBM Plex Sans', sans-serif;
-    font-size: 0.86rem;
-    color: var(--ink-3);
-    margin-top: 5px;
-  }
-  .appendix table { border-collapse: collapse; width: 100%; font-size: 0.95rem; }
-  .appendix th, .appendix td { border-bottom: 1px solid var(--rule); padding: 7px 4px; text-align: left; }
-  .appendix ul { margin: 0; padding-left: 1.2rem; }
-
-  /* Which class or fair this block belongs to, quieter than the heading it
-     qualifies: the reader is looking for "Deliverables" and then for which. */
-  .appendix h2 .place { font-weight: 400; color: var(--ink-3); }
-
-  /* What satisfied an obligation, under it. Quieter than the obligation and
-     indented off it, so the eye reads the calendar first and the evidence
-     second rather than a table of forty equal lines. */
-  .appendix .met {
-    display: block;
-    margin-top: 3px;
-    padding-left: 12px;
-    border-left: 2px solid var(--rule);
-    font-size: 0.85rem;
-    color: var(--ink-3);
-  }
-  .appendix .met a { word-break: break-all; }
-
-  /* A replaced row stays legible rather than being struck through. It is a
-     fact about what happened, not a deletion, and a judge reading a struck
-     line reads it as withdrawn. */
-  .appendix .row-old td { color: var(--ink-3); }
-  .appendix .replaced {
-    display: block;
-    font-size: 0.85rem;
-    font-style: italic;
-    color: var(--ink-3);
-  }
-
-  /* An address is long and must not push the dates around, so it wraps
-     anywhere rather than widening the column. */
-  .appendix .where {
-    font-family: var(--face-num);
-    font-size: 0.8rem;
-    word-break: break-all;
-    max-width: 26ch;
-  }
-  /* The lockup, on paper.
-  
-     `ui.css` is not loaded here — this document is its own page and carries
-     only what it needs — so the two elements are restated rather than
-     imported. Same shape, sized for print: a mark that reads at arm's length
-     across a judging hall rather than at a screen's distance.
-  
-     The step down by mark length is the same rule and for the same reason. A
-     six character mark at the two character size stops being a block and
-     becomes a bar. */
-  .lockup {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    margin: 0 0 22px;
-  }
-  .lockup .badge {
-    min-width: 34px;
-    padding-inline: 5px;
-    height: 34px;
-    box-sizing: border-box;
-    background: var(--ink);
-    color: var(--paper);
-    flex: none;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-family: var(--face-ui);
-    font-weight: 800;
-    font-size: 0.86rem;
-    letter-spacing: -0.03em;
-  }
-  .lockup .badge[data-len='4'] { font-size: 0.78rem; letter-spacing: -0.04em; }
-  .lockup .badge[data-len='5'] { font-size: 0.68rem; letter-spacing: -0.05em; }
-  .lockup .badge[data-len='6'] { font-size: 0.6rem; letter-spacing: -0.05em; }
-  .lockup .names {
-    display: flex;
-    flex-direction: column;
-    line-height: 1.2;
-  }
-  .lockup .org {
-    font-family: var(--face-ui);
-    font-weight: 600;
-    font-size: 1rem;
-  }
-  .lockup .plat {
-    font-family: var(--face-ui);
-    font-size: 0.72rem;
-    color: var(--ink-3);
-  }
-
-  .authority {
-    margin: 14px 0 0;
-    padding-top: 10px;
-    border-top: 1px solid var(--rule-fine);
-    font-family: var(--face-ui);
-    font-size: 0.82rem;
-    line-height: 1.5;
-    color: var(--ink-3);
-  }
-
-  .fine { font-size: 0.9rem; color: var(--ink-3); }
-  .empty { color: var(--ink-3); }
-
-  /* THE PRINTED PAGE, AND WHY THE MARGIN IS IN TWO PLACES.
-  
-     An `@page` margin was here and the first line still printed against the
-     edge. The rule is in the built stylesheet and the stylesheet is served —
-     so the rule is not the thing that failed. What can still override it is
-     the browser: Chrome remembers the margin setting from whatever was
-     printed last, and `More settings -> Margins -> None` wins over any
-     stylesheet.
-  
-     So the two edges are held differently. Top and bottom stay in `@page`,
-     because only a page margin repeats on every sheet — padding on a block
-     applies once at its start and once at its end, and the middle pages of a
-     six page notebook would have neither.
-  
-     Left and right move into the block, where nothing in a print dialog can
-     take them away. `@page` gives up its horizontal margin at the same time,
-     so the two never add up to an inch and a half of white. */
-  @page {
-    margin: 20mm 0 18mm;
-  }
-
-  @media print {
-    body { background: var(--paper); }
-    .toolbar { display: none; }
-
-    /* The frame around the block was there to look like paper on a screen.
-       The horizontal padding is not decoration: it is the left and right
-       margin of the printed page, kept here because a page margin can be
-       overridden from the print dialog and a block's padding cannot. */
-    .book {
-      max-width: none;
-      margin: 0;
-      padding: 0 18mm;
-      border: 0;
-      box-shadow: none;
-    }
-
-    h2 { page-break-after: avoid; }
-
-    /* A heading alone at the foot of a page, or one line of an entry
-       stranded at the top of the next, both read as damage. */
-    .entry, .shot, tr { page-break-inside: avoid; }
-    .title { page-break-after: avoid; }
-
-    /* Links are useless in print unless the address is on the paper. */
-    a[href^='http']::after {
-      content: ' (' attr(href) ')';
-      font-size: 0.82em;
-      color: var(--ink-3);
-      word-break: break-all;
-    }
-
-    /* Except in the deliverables column, where the address *is* the link
-       text. Without this every row prints it twice. */
-    .where a[href^='http']::after { content: none; }
-  }
+  @import '../../../../styles/print-book.css';
 </style>

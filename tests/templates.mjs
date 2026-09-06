@@ -504,4 +504,40 @@ test('no override is left with nothing to target', () => {
   assert.deepEqual(problems, [], 'an override with no target is a typo');
 });
 
+test('a rubric level is id, label, points and description, and nothing else', () => {
+  /* Inside `{ }` a comma ends the entry, so an unquoted "clear, focused, and
+     realistic." parsed as a description of "clear" plus two keys nobody
+     meant. The grid then showed one word. A level with any other key is a
+     description that split; quote it. */
+  const problems = [];
+  for (const t of library.programs.values()) {
+    for (const step of Array.isArray(t.steps) ? t.steps : []) {
+      for (const c of Array.isArray(step.rubric?.criteria) ? step.rubric.criteria : []) {
+        for (const level of Array.isArray(c.levels) ? c.levels : []) {
+          const extra = Object.keys(level ?? {}).filter((k) => !['id', 'label', 'points', 'description'].includes(k));
+          if (extra.length) problems.push(`${t.id} · ${step.id} · ${c.id} · ${level.id}: "${extra.join('", "')}"`);
+        }
+      }
+    }
+  }
+  assert.deepEqual(problems, [], 'a comma in an unquoted description inside { }');
+});
+
+test('a step asks for at most one document written in SciPath', () => {
+  /* One document per deadline (2.8). A step that wanted two put two verbs
+     on one row and, once the first was in, showed only the second, so a
+     submission read as gone. A second document is a second step. */
+  const problems = [];
+  for (const id of library.programs.keys()) {
+    let program;
+    try { program = resolveProgram(id, library, DEFAULT_PROCESS); } catch { continue; }
+    const byId = program.deliverables instanceof Map ? program.deliverables : new Map((program.deliverables ?? []).map((d) => [d.id, d]));
+    for (const step of program.steps ?? []) {
+      const docs = (step.deliverables ?? []).map((r) => byId.get(r.ref)).filter((d) => d?.shape);
+      if (docs.length > 1) problems.push(`${id} · ${step.id}: ${docs.map((d) => d.id).join(', ')}`);
+    }
+  }
+  assert.deepEqual(problems, [], 'a step with two documents');
+});
+
 console.log(`${passed} template assertions passed.`);

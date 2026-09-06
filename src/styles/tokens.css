@@ -81,6 +81,26 @@
   --measure-form: 72ch;
   --shell: 1080px;
   --shell-pad: 20px;
+  /* The verb on a deliverable row (Submit, Continue, Revise): one width, so a column of them lines up. */
+  --row-btn: 8.5rem;
+  /* Score bands on the IRPD tracker and project page: 1 red, 2 yellow,
+     3 green, 4 blue, all light. */
+  --band-1-bg: #f9e3e0;
+  --band-1-ink: #7a2419;
+  --band-2-bg: #fbf1c7;
+  --band-2-ink: #6b5300;
+  --band-3-bg: #e0f0e4;
+  --band-3-ink: #1e5a3a;
+  --band-4-bg: #dfe9f8;
+  --band-4-ink: #1f3f7a;
+  /* The class's handout graphics, drawn on a canvas (research-graphics.ts):
+     the handout's light blue shapes on white, whatever the page's theme. */
+  --graphic-fill: #cfe2f3;
+  --graphic-line: #1a1a1a;
+  --graphic-ink: #111111;
+  --graphic-paper: #ffffff;
+  /* Page numbers on printed paper. */
+  --print-folio: #6b6b6b;
 }
 
 /* ───────────────────────────────────────────────────────────────

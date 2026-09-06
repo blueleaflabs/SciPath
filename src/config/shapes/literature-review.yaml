@@ -4,12 +4,10 @@
 # oral feedback. The rubric the student self-evaluates against is the
 # step's rubric in irpd-mvhs-2027.yaml, which is also what the teacher
 # grades with.
-#
-# The resource links are placeholders until the addresses are pasted in.
 
 id: literature-review
 name: Literature review
-version: 2
+version: 3
 guidance: >-
   Synthesize and summarize what is known about your question and what it
   is worth to your research. Cite your sources in the text. Define any
@@ -20,23 +18,27 @@ sections:
     fields:
       - id: resources
         kind: note
-        text: >-
-          **MVHS Library Databases with Passwords** (ask your teacher for the
-          link) · **What is an annotated bibliography?** · **IRPD sample
-          literature reviews from 2025-26** (five, in the class folder).
+        text: |-
+          - [MVHS Library Databases with Passwords](https://docs.google.com/document/d/1pBZ_eliiji3Dr1_pzZDX96ZBkDfx6cIX_YBJtLByxSM/edit?usp=sharing)
+          - [What is an annotated bibliography?](https://sites.google.com/fuhsd.org/senior-annotated-project/annotated-bibliography?authuser=0)
+          - IRPD sample lit reviews
+            - [Toni Chen's Lit Review 2025-2026](https://docs.google.com/document/d/1LVHYEJtP95Hb8ueMYUL8oQCCLQf-snStZnsAM7BzYyk/edit?usp=sharing)
+            - [Rohan Agarwal's Lit Review 2025-2026](https://docs.google.com/document/d/1e0_lrhbw2L0ub6eH6RTKNimOj7ivrQ1a6NRTNjiUgKU/edit?usp=sharing)
+            - [Anish Durve's Lit Review 2025-2026](https://docs.google.com/document/d/13gKotyHBBH7pOAV4Mr-26lN6cghzEC0ap0Xj-OiWef4/edit?tab=t.0)
+            - [Aanya Padhi's Lit Review 2025-2026](https://docs.google.com/document/d/1W-O8DlFT4IuqLj2e5aYCXP-W_Am_5JOC97WJBFAp-9E/edit?usp=sharing)
+            - [Elaina Pan's Lit Review 2025-2026](https://docs.google.com/document/d/1DnHiLxGRhdfZ2EU1EhIJOmUmiUHpcKIGzwtvpHYJrm8/edit?usp=sharing)
   - id: part1
     name: "Part I: to be filled by the researcher"
     fields:
       - id: introduction
         kind: long
         prompt: "I. Introduction"
-        tip: Introduce your reader to your research question and topic, explain the importance of your topic and any gaps in the research, and introduce your research question. Cite your sources using in-text citations.
-        min_words: 150
+        tip: "Introduce your reader to your research question and topic, explain the importance of your topic and any gaps in the research, and introduce your research question. Don't forget to cite your sources using [in-text citations](https://www.scribbr.com/category/apa-style/)!"
         required: true
       - id: sources
         kind: table
-        prompt: "II. Literature review: the organizer"
-        tip: One column per source. Use it if it helps your organization, or adapt it to your liking.
+        prompt: "II. Literature review"
+        tip: "Background: as you conduct literature review, you will synthesize and summarize themes and its value in your research. Define any terms/[vocabulary](https://www.merriam-webster.com/) that your reader may not know. Cite your sources using [in-text citations](https://www.scribbr.com/category/apa-style/). If it's helpful for your organization, you might want to use this organizer or adapt it to your liking."
         rows:
           - Methods, or why is this source relevant to your research?
           - Findings
@@ -45,15 +47,12 @@ sections:
         columns: [Source 1, Source 2, Source 3, Source 4, Source 5]
       - id: beginning
         kind: long
-        prompt: The beginning of your literature review
-        tip: At least three paragraphs. You may provide a detailed outline of the rest of your content. Define any terms your reader may not know, and cite your sources using in-text citations.
-        min_words: 300
+        prompt: Below, include a minimum of a three-paragraph beginning to your literature review. You may provide a detailed outline of the rest of your content.
         required: true
       - id: references
         kind: long
         prompt: "III. References"
-        tip: Properly format your references page and include a minimum of five solid sources. Alphabetize. Notice the spacing and the indentation. A citation generator helps.
-        min_words: 40
+        tip: "Properly format your references page and include a minimum of 5 solid sources. See below for a model of formatting. Here is a [citation generator](https://www.scribbr.com/apa-citation-generator/?scr_source=Apa%20Generator%20cta&scr_medium=Scribbr%20services%20cta%20OLD&scr_campaign=Knowledgebase%20alternative%20header&frm=22895). Alphabetize. Notice the spacing and the indentation!"
         required: true
   - id: self
     name: "IV. Self-evaluate on your rubric"
@@ -66,17 +65,18 @@ sections:
       - id: self_score
         kind: number
         prompt: "a) Give yourself an overall score out of 4"
-        tip: You can give yourself a score between numbers, such as 3.5.
+        tip: Between 1 and 4; a score between numbers, such as 3.5, is fine.
+        min: 1
+        max: 4
+        step: 0.01
         required: true
       - id: proud
         kind: long
         prompt: "b) What are you most proud of in terms of the independent research you are conducting?"
-        max_words: 200
         required: true
       - id: growth
         kind: long
         prompt: "c) What are the areas of growth?"
-        max_words: 200
         required: true
   - id: part2
     name: "Part II: to be filled by the family Elder"
@@ -84,9 +84,12 @@ sections:
       - id: elder_note
         kind: note
         text: >-
-          **Family Elder score.** What score would you assign, as a researcher,
-          in the categories above? Make a few bullet points to help you explain
-          the rationale for your score through oral feedback to the researcher.
+          **Family Elder Score:** What score would you assign as a researcher in
+          the above 2 categories? (4, 3, 2, 1 or something in between). Make a few
+          bullet points to help you in explaining the rationale for your score
+          through an oral feedback to the researcher. You may find some of these
+          [sentence frames](https://drive.google.com/file/d/1KvXXDLxv75ezhtojVu2yLslTTkcYxq6y/view)
+          helpful in providing the oral feedback.
       - id: elder_score
         kind: choice
         owner: staff
@@ -102,5 +105,4 @@ sections:
     fields:
       - id: oral_feedback
         kind: long
-        prompt: Record the feedback you received
-        tip: In your words, as it was said. This is not required to submit; it is filled in during the family session.
+        prompt: "Writers, please record the feedback in the space below:"

@@ -98,7 +98,7 @@ const fileOf = (index) => {
  */
 const kinds = [
   { what: 'function', pattern: /^create or replace function ((?:app|public)\.\w+)\s*\(([\s\S]*?)\)\s*\n?returns/gim },
-  { what: 'policy', pattern: /^create policy (\w+) on (public\.\w+)/gim },
+  { what: 'policy', pattern: /^create policy (\w+) on ((?:public|realtime)\.\w+)/gim },
   { what: 'trigger', pattern: /^create trigger (\w+)/gim },
   { what: 'table', pattern: /^create table (public\.\w+)/gim },
   { what: 'view', pattern: /^create (?:or replace )?view (public\.\w+)/gim },
