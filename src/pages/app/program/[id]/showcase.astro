@@ -27,6 +27,7 @@ import { programTitle } from '../../../../lib/program-names';
 import { parseVideo } from '../../../../lib/video';
 import { formatDate } from '../../../../lib/dates';
 import { signInWith } from '../../../../lib/next-path';
+import { loadShowcases } from '../../../../lib/showcase-load';
 
 const { session, account, roles } = Astro.locals;
 const org = activeOrg(Astro);
@@ -70,6 +71,22 @@ const mediaUrl = (path: string) => `/app/media/${path}`;
 const label = program.short_name ?? program.name;
 const rows = (cards ?? []) as any[];
 const mineFirst = rows.find((c) => c.mine) ?? null;
+
+/* Each tile's picture and line come from the deliverables when the card
+   has none of its own (2.8), so the gallery fills in as the class submits;
+   the phase strip and the count are the same for every tile. */
+const shows = template ? await loadShowcases(supabase, template, id!, rows.map((c) => c.project_id)) : new Map();
+const showOf = (c: any) => shows.get(c.project_id) ?? { sections: [], coming: [], picture: null, line: null, days: [], total: 0, have: 0 };
+const phases = (template?.phases ?? []) as any[];
+const phaseAt = (c: any) => phases.findIndex((p: any) => p.id === c.next_phase);
+/* Sorted by what changed last, so the room sees its own momentum. */
+const by = Astro.url.searchParams.get('by') === 'phase' ? 'phase' : 'recent';
+const sorted = [...rows].sort((a, b) => {
+  const la = showOf(a).sections.at(-1)?.at ?? a.updated_at ?? '';
+  const lb = showOf(b).sections.at(-1)?.at ?? b.updated_at ?? '';
+  return Number(b.mine) - Number(a.mine) || lb.localeCompare(la);
+});
+const fmtDay = (d: string | null) => (d ? formatDate(String(d).slice(0, 10), 'short') : '');
 ---
 
 <Base title={`${label} Showcase`} noindex={true}>
@@ -88,23 +105,61 @@ const mineFirst = rows.find((c) => c.mine) ?? null;
 
     <div class="showcase-bar">
       <span class="t-num">{rows.length} {rows.length === 1 ? 'project' : 'projects'} shown</span>
+      <span class="seg" role="tablist" aria-label="Arrangement">
+        <a class="seg-b" role="tab" aria-selected={by === 'recent' ? 'true' : 'false'} href={`/app/program/${id}/showcase/`}>Latest first</a>
+        <a class="seg-b" role="tab" aria-selected={by === 'phase' ? 'true' : 'false'} href={`/app/program/${id}/showcase/?by=phase`}>By phase</a>
+      </span>
       {mineFirst ? (
         <a class="btn btn-sm ghost" href={`/app/project/${mineFirst.project_id}/showcase/`}>My showcase</a>
       ) : null}
     </div>
 
+    {/* Latest first, or the board: the class's phases across the top and
+        every card in the column of the phase it is in, the teacher's
+        "where is everyone" as a picture (2.8). */}
     {rows.length === 0 ? (
       <div class="allclear" style="margin-top:20px">
         <b>Nothing shown yet</b>
         Cards appear here as people put them up. Yours is on your project page, under My showcase.
       </div>
+    ) : by === 'phase' ? (
+      <div class="board" data-live="gallery">
+        {phases.map((p: any, pi: number) => {
+          const here = sorted.filter((c) => phaseAt(c) === pi || (pi === phases.length - 1 && phaseAt(c) === -1 && c.total > 0 && c.done === c.total));
+          return (
+            <section class="bcol">
+              <h2 class="bcol-h"><span class="n">Phase {pi + 1}</span>{p.name}<span class="bcount">{here.length}</span></h2>
+              <ul class="blist">
+                {here.map((c: any) => {
+                  const sh = showOf(c);
+                  const pic = (c.images ?? [])[0] ?? sh.picture;
+                  return (
+                    <li class:list={['bcard', c.mine && 'is-mine']}>
+                      <a href={`/app/program/${id}/showcase/${c.project_id}/`}>
+                        {pic ? <img src={mediaUrl(pic.path)} alt={pic.alt ?? ''} loading="lazy" /> : <span class="bblank" aria-hidden="true">{String(c.title ?? '?').trim().charAt(0)}</span>}
+                        <b>{c.title}</b>
+                      </a>
+                      <span class="who">{(c.authors ?? []).join(', ')}</span>
+                      <span class="bmeta">{sh.have} of {sh.total} sections{sh.sections.at(-1)?.at ? ` · ${fmtDay(sh.sections.at(-1)!.at)}` : ''}</span>
+                    </li>
+                  );
+                })}
+                {here.length === 0 && <li class="bnone">Nobody here yet</li>}
+              </ul>
+            </section>
+          );
+        })}
+      </div>
     ) : (
-      <ul class="gallery">
-        {rows.map((c: any) => {
+      <ul class="gallery" data-live="gallery">
+        {sorted.map((c: any) => {
           const video = parseVideo(c.video_url);
           const images = (c.images ?? []) as any[];
           const links = (c.links ?? []) as any[];
-          const hero = images[0] ?? null;
+          const sh = showOf(c);
+          const hero = images[0] ?? sh.picture;
+          const at = phaseAt(c);
+          const last = sh.sections.at(-1) ?? null;
           return (
             <li class:list={['gcard', c.mine && 'is-mine']}>
               {hero ? (
@@ -114,9 +169,15 @@ const mineFirst = rows.find((c) => c.mine) ?? null;
                   <img class="ghero" src={video.poster} alt="" loading="lazy" />
                 </a>
               ) : (
-                <div class="ghero gblank"><span>{String(c.title ?? '').slice(0, 1)}</span></div>
+                <a class="ghero gblank" href={`/app/program/${id}/showcase/${c.project_id}/`} aria-hidden="true">{String(c.title ?? '?').trim().charAt(0)}</a>
               )}
-
+              {/* The phase strip: one segment per phase, filled through the
+                  one the project is in (2.8). */}
+              {phases.length > 0 && (
+                <ol class="gstrip" aria-label="Phases">
+                  {phases.map((p: any, i: number) => <li class:list={[i < at && 'done', i === at && 'now']} title={p.name}></li>)}
+                </ol>
+              )}
               <div class="gbody">
                 <p class="ord">
                   <span>{c.next_phase ? phaseName(c.next_phase) ?? 'In Progress' : c.total > 0 && c.done === c.total ? 'Complete' : 'In Progress'}</span>
@@ -126,8 +187,10 @@ const mineFirst = rows.find((c) => c.mine) ?? null;
                 <p class="who">{(c.authors ?? []).join(', ')}</p>
                 {c.summary ? (
                   <p class="gsum">{c.summary}</p>
+                ) : sh.line ? (
+                  <p class="gsum">{sh.line}</p>
                 ) : (
-                  <p class="gsum quiet">{c.mine ? 'Write a few lines about it on My showcase.' : 'No summary yet.'}</p>
+                  <p class="gsum quiet">{c.mine ? 'Submit a deliverable and this card fills in.' : 'Nothing submitted yet.'}</p>
                 )}
 
                 {images.length > 1 && (
@@ -152,7 +215,7 @@ const mineFirst = rows.find((c) => c.mine) ?? null;
                 )}
 
                 <p class="gfoot">
-                  <span>{c.next_name ? `Next: ${c.next_name}` : 'Nothing outstanding'}</span>
+                  <span>{last ? `Latest: ${last.title}${last.at ? `, ${fmtDay(last.at)}` : ''}` : c.next_name ? `Next: ${c.next_name}` : 'Nothing outstanding'}</span>
                   <a class="t-num" href={`/app/program/${id}/showcase/${c.project_id}/`}>Open →</a>
                 </p>
                 {c.mine && (
@@ -218,6 +281,28 @@ const mineFirst = rows.find((c) => c.mine) ?? null;
   }
 
   .gbody { display: flex; flex-direction: column; gap: 8px; padding: 16px 18px 16px; flex: 1; }
+
+  /* The phase strip under the picture (2.8). */
+  .gstrip { list-style: none; margin: 0; padding: 0; display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 3px; height: 6px; background: var(--card); }
+  .gstrip li { background: var(--rule-fine); }
+  .gstrip li.done { background: var(--brand); }
+  .gstrip li.now { background: var(--accent); }
+
+  /* The board: a column per phase. */
+  .board { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(240px, 1fr); gap: 14px; overflow-x: auto; padding-bottom: 8px; }
+  .bcol { background: var(--sunk); border: 1px solid var(--rule); min-width: 0; }
+  .bcol-h { margin: 0; padding: 10px 12px; background: var(--brand-deep); color: var(--brand-contrast); font-family: var(--face-ed); font-size: 0.98rem; font-weight: 600; display: flex; align-items: baseline; gap: 8px; }
+  .bcol-h .n { font-family: var(--face-num); font-size: 0.66rem; letter-spacing: 0.1em; text-transform: uppercase; opacity: 0.8; }
+  .bcol-h .bcount { margin-left: auto; font-family: var(--face-num); font-size: 0.8rem; opacity: 0.9; }
+  .blist { list-style: none; margin: 0; padding: 10px; display: grid; gap: 10px; }
+  .bcard { background: var(--card); border: 1px solid var(--rule); box-shadow: var(--lift); padding: 0 0 10px; display: grid; gap: 4px; }
+  .bcard.is-mine { outline: 3px solid var(--accent); outline-offset: -3px; }
+  .bcard a { text-decoration: none; display: grid; gap: 8px; }
+  .bcard img { display: block; width: 100%; aspect-ratio: 16 / 9; object-fit: cover; background: var(--sunk); }
+  .bcard .bblank { display: flex; align-items: center; justify-content: center; aspect-ratio: 16 / 9; background: var(--brand); color: var(--cover-ink); font-family: var(--face-ui); font-weight: 800; font-size: 2.4rem; }
+  .bcard b { padding: 0 10px; font-size: 0.95rem; line-height: 1.25; }
+  .bcard .who, .bcard .bmeta { padding: 0 10px; font-family: var(--face-ui); font-size: 0.8rem; color: var(--ink-3); }
+  .bnone { color: var(--ink-3); font-style: italic; font-size: 0.9rem; padding: 6px 2px; }
 
   .ord {
     display: flex;

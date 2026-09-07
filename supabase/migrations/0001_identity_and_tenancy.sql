@@ -1156,7 +1156,7 @@ grant select, insert, update, delete on public.role_reservations
 
 create policy role_reservations_read on public.role_reservations
   for select to authenticated
-  using (org_id = (select app.org_id()) and (select app.is_staff()));
+  using (org_id = (select app.org_id()) and (select app.is_advisor()));
 
 create policy role_reservations_write on public.role_reservations
   for insert to authenticated
@@ -1666,12 +1666,10 @@ begin
     return new;
   end if;
 
-  if (select app.is_staff()) then
-    return new;
-  end if;
-
-  /* A function in this migration acting on the caller's behalf, marked by
-     the transaction-local flag only a SECURITY DEFINER function sets. */
+  /* Staff no longer pass here unasked (2.9): an officer is a student, and
+     the columns below say who a person is to the school. A function in
+     this migration acting on the caller's behalf is marked by the
+     transaction-local flag only a SECURITY DEFINER function sets. */
   if coalesce(current_setting('app.system_grant', true), '') = 'on' then
     return new;
   end if;
@@ -1680,7 +1678,11 @@ begin
      or new.status is distinct from old.status
      or new.population is distinct from old.population
      or new.affiliation_state is distinct from old.affiliation_state
+     or new.affiliation_verified_at is distinct from old.affiliation_verified_at
      or new.consent_state is distinct from old.consent_state
+     or new.consent_requested_at is distinct from old.consent_requested_at
+     or new.age_band is distinct from old.age_band
+     or new.age_attested_at is distinct from old.age_attested_at
      or (old.author_slug is not null and new.author_slug is distinct from old.author_slug)
   then
     raise exception 'field is not self editable';
@@ -1819,17 +1821,22 @@ create policy users_read_org on public.users
   for select to authenticated
   using (org_id = (select app.org_id()));
 
+-- One's own row only (2.9): staff wrote other people's rows here, and
+-- with the authority columns no longer grantable to a session, a teacher's
+-- edits to somebody else go through the functions written for them.
 create policy users_update_self on public.users
   for update to authenticated
-  using (id = (select auth.uid()) or (select app.is_staff()))
-  with check (org_id = (select app.org_id()));
+  using (id = (select auth.uid()))
+  with check (id = (select auth.uid()) and org_id = (select app.org_id()));
 
 -- identities ----------------------------------------------------------------
+-- The person and the teacher (2.9): an officer is a student and does not
+-- read a classmate's sign-in address.
 create policy identities_read_self on public.identities
   for select to authenticated
   using (
     user_id = (select auth.uid())
-    or (org_id = (select app.org_id()) and (select app.is_staff()))
+    or (org_id = (select app.org_id()) and (select app.is_advisor()))
   );
 -- No insert, update, or delete policy. Written only by sync_identities().
 
@@ -1859,21 +1866,16 @@ create policy user_roles_revoke on public.user_roles
 -- confirmed_at is written only by the unauthenticated confirmation endpoint,
 -- which runs as service role. A student may correct a mistyped address,
 -- which 18.3 names as the most common cause of a stuck account.
+-- The person and the teacher (2.9): a classmate's parent is nobody else's
+-- to read. And no session writes a consent: requested, confirmed and
+-- revoked by the functions written for it, which carry the token and the
+-- audit; confirmed_at was on the row a minor could update.
 create policy guardian_consents_read on public.guardian_consents
   for select to authenticated
   using (
     user_id = (select auth.uid())
-    or (org_id = (select app.org_id()) and (select app.is_staff()))
+    or (org_id = (select app.org_id()) and (select app.is_advisor()))
   );
-
-create policy guardian_consents_insert on public.guardian_consents
-  for insert to authenticated
-  with check (user_id = (select auth.uid()) and org_id = (select app.org_id()));
-
-create policy guardian_consents_update_own on public.guardian_consents
-  for update to authenticated
-  using (user_id = (select auth.uid()) and confirmed_at is null)
-  with check (user_id = (select auth.uid()));
 
 -- confirmation_tokens -------------------------------------------------------
 -- No policies at all. Service role only. Row level security is row level, so
@@ -1883,12 +1885,12 @@ create policy guardian_consents_update_own on public.guardian_consents
 -- pending_role_grants -------------------------------------------------------
 create policy pending_role_grants_read on public.pending_role_grants
   for select to authenticated
-  using (org_id = (select app.org_id()) and (select app.is_staff()));
+  using (org_id = (select app.org_id()) and (select app.is_advisor()));
 
 -- audit_log -----------------------------------------------------------------
 create policy audit_log_read_staff on public.audit_log
   for select to authenticated
-  using (org_id = (select app.org_id()) and (select app.is_staff()));
+  using (org_id = (select app.org_id()) and (select app.is_advisor()));
 
 -- Append only, enforced by the grant rather than by the absence of a policy,
 -- so a later migration that adds a policy cannot quietly make it writable.
@@ -3267,6 +3269,20 @@ comment on column public.projects.is_private is
 -- A graduated officer sees nothing, because they hold a role in an edition
 -- that has ended and no current edition has granted them anything.
 -- ---------------------------------------------------------------------------
+-- Suspended is suspended everywhere (2.9): the two predicates every
+-- project policy stands on begin with this, so a suspended account keeps
+-- neither its authorship nor its roles for as long as it is suspended.
+create or replace function app.is_active()
+returns boolean
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select exists (select 1 from public.users u where u.id = auth.uid() and u.status <> 'suspended');
+$$;
+grant execute on function app.is_active() to authenticated;
+
 create or replace function app.can_see_project(p_project_id uuid)
 returns boolean
 language sql
@@ -3275,6 +3291,7 @@ security definer
 set search_path = ''
 as $$
   select
+    app.is_active() and (
     -- Its authors, always. Authorship is independent of every role and
     -- survives graduation.
     exists (
@@ -3373,6 +3390,7 @@ as $$
                 and a.role = 'officer'
            )
          )
+    )
     );
 $$;
 
@@ -3389,6 +3407,7 @@ security definer
 set search_path = ''
 as $$
   select
+    app.is_active() and (
     exists (
       select 1 from public.project_authors a
        where a.project_id = p_project_id
@@ -3402,7 +3421,8 @@ as $$
       select 1 from public.projects p
        where p.id = p_project_id and p.created_by = auth.uid()
     )
-    or app.is_advisor();
+    or app.is_advisor()
+    );
 $$;
 
 grant execute on function app.can_edit_project(uuid) to authenticated;
@@ -5339,6 +5359,12 @@ begin
      somebody to ignore them. */
   if v_m.completed_on is not null then
     return 'done';
+  end if;
+
+  /* Not yet due: nothing to chase either (2.8). The screens show the
+     button only on a late task; this is the rule for whatever posts. */
+  if v_m.due_on is not null and v_m.due_on >= current_date then
+    return 'early';
   end if;
 
   select p.* into v_project from public.projects p where p.id = v_m.project_id;
@@ -8315,9 +8341,10 @@ create policy review_findings_write on public.review_findings
   for insert to authenticated
   with check (org_id = (select app.org_id()) and (select app.is_editor()));
 
+-- The editor's (2.9): the author answers through respond_to_finding.
 create policy review_findings_update on public.review_findings
   for update to authenticated
-  using (org_id = (select app.org_id()));
+  using (org_id = (select app.org_id()) and (select app.is_editor()));
 
 
 -- ---------------------------------------------------------------------------
@@ -12378,7 +12405,7 @@ alter table public.feedback enable row level security;
 
 create policy feedback_read_staff on public.feedback
   for select to authenticated
-  using (org_id = app.org_id() and app.is_staff());
+  using (org_id = app.org_id() and app.is_advisor());
 
 grant select on public.feedback to authenticated, service_role;
 grant insert, update on public.feedback to service_role;
@@ -12591,6 +12618,29 @@ create index document_fields_org_id_idx on public.document_fields (org_id);
 create index document_fields_document_id_idx on public.document_fields (document_id);
 create index document_fields_updated_by_idx on public.document_fields (updated_by);
 
+-- Every draft a field has been, between submissions (2.8). `save_field`
+-- appends a row each time a value actually changes (the same text saved
+-- again on a blur writes nothing), so a paragraph can be put back to any
+-- earlier draft, and the History section can say what moved today. The
+-- picture kinds store their small {path, name} value, never the picture.
+-- Pruned by `prune_field_history`: after thirty days only the last draft
+-- before each submitted version is kept, which is the one anybody would
+-- restore from.
+create table public.document_field_history (
+  id          uuid primary key default gen_random_uuid(),
+  org_id      uuid not null references public.organizations on delete restrict,
+  -- Cascade: a draft has no life apart from its document.
+  document_id uuid not null references public.documents on delete cascade,
+  field_id    text not null,
+  value       jsonb not null default 'null'::jsonb,
+  version     int  not null,
+  saved_by    uuid not null references public.users on delete restrict,
+  saved_at    timestamptz not null default now()
+);
+
+create index document_field_history_org_id_idx on public.document_field_history (org_id);
+create index document_field_history_document_id_idx on public.document_field_history (document_id, field_id, saved_at desc);
+
 -- A snapshot each time it is submitted. A grade and a comment refer to
 -- text that does not change under them.
 create table public.document_versions (
@@ -12658,6 +12708,43 @@ create policy document_versions_read on public.document_versions
 create policy document_media_read on public.document_media
   for select to authenticated
   using ((select app.can_see_project((select d.project_id from public.documents d where d.id = document_media.document_id))));
+
+alter table public.document_field_history enable row level security;
+grant select on public.document_field_history to authenticated, service_role;
+
+create policy document_field_history_read on public.document_field_history
+  for select to authenticated
+  using ((select app.can_see_project((select d.project_id from public.documents d where d.id = document_field_history.document_id))));
+
+-- After thirty days, only the last draft before each submitted version
+-- stays (2.8): the drafts between are the typing, and the endpoints are
+-- the record. Run by the Worker's clock; safe to run any time.
+create or replace function public.prune_field_history(p_days int default 30)
+returns int
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_n int;
+begin
+  with keep as (
+    select distinct on (h.document_id, h.field_id, v.id) h.id
+      from public.document_versions v
+      join public.document_field_history h
+        on h.document_id = v.document_id and h.saved_at <= v.submitted_at
+     order by h.document_id, h.field_id, v.id, h.saved_at desc
+  )
+  delete from public.document_field_history h
+   where h.saved_at < now() - make_interval(days => greatest(1, coalesce(p_days, 30)))
+     and h.id not in (select id from keep);
+  get diagnostics v_n = row_count;
+  return v_n;
+end;
+$$;
+
+revoke all on function public.prune_field_history(int) from public, anon, authenticated;
+grant execute on function public.prune_field_history(int) to service_role;
 
 grant select on public.documents, public.document_fields, public.document_versions, public.document_media to authenticated, service_role;
 grant insert, update on public.documents, public.document_fields, public.document_versions, public.document_media to service_role;
@@ -12823,12 +12910,20 @@ begin
     return jsonb_build_object('ok', false, 'version', v_row.version, 'value', v_row.value, 'by', v_by,
                               'at', v_row.updated_at);
   else
+    /* The same text again (a blur after nothing typed) is not a draft. */
+    if v_row.value is not distinct from coalesce(p_value, 'null'::jsonb) then
+      return jsonb_build_object('ok', true, 'version', v_row.version, 'at', v_row.updated_at, 'same', true);
+    end if;
     update public.document_fields
        set value = coalesce(p_value, 'null'::jsonb), version = v_row.version + 1,
            updated_at = now(), updated_by = auth.uid()
      where id = v_row.id
      returning * into v_row;
   end if;
+
+  /* The draft, kept (2.8). */
+  insert into public.document_field_history (org_id, document_id, field_id, value, version, saved_by, saved_at)
+  values (v_org, p_document_id, p_field_id, v_row.value, v_row.version, auth.uid(), v_row.updated_at);
 
   update public.documents
      set updated_at = now(),
@@ -13019,8 +13114,12 @@ begin
     raise exception 'that is not a comment on this document';
   end if;
 
-  /* The Elder's task this answers, if the caller looks after the place. */
-  if not v_author and app.looks_after(v_part) then
+  /* The Elder's task this answers, if the caller looks after the place
+     and the line is on the whole document (2.9): the feedback given from
+     the Elder's part arrives here as one. A reply in a field's thread,
+     an answer to a student's question, is not the feedback and leaves
+     the task open. */
+  if not v_author and p_field_id is null and app.looks_after(v_part) then
     select m.id into v_task
       from public.entry_milestones m
      where m.participation_id = v_part
@@ -13119,6 +13218,99 @@ $$;
 
 revoke all on function public.comment_on_document(uuid, text, text, boolean, uuid) from public, anon;
 grant execute on function public.comment_on_document(uuid, text, text, boolean, uuid) to authenticated;
+
+-- The Elder's feedback on a document written in SciPath, given (2.9).
+-- The Elder's part of the handout (a score, a rationale) is saved as it
+-- is written, like any field, and nothing about saving says "done". This
+-- is the verb: the rationale becomes the line on the whole document
+-- (which completes the Elder's task, tells the authors and writes the
+-- notebook's line, all as comment_on_document does), and the score, where
+-- the shape has one, becomes the family's score on the student step this
+-- task answers, one per author, as grade_milestone records it. Refused
+-- when nothing is waiting: the work is not in yet, or the feedback was
+-- already given.
+create or replace function public.give_document_feedback(
+  p_document_id uuid,
+  p_score       numeric,
+  p_body_md     text
+)
+returns uuid
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_doc   public.documents%rowtype;
+  v_part  uuid;
+  v_task  public.entry_milestones%rowtype;
+  v_step  uuid;
+  v_id    uuid;
+  v_who   uuid;
+begin
+  if auth.uid() is null then
+    raise exception 'not authenticated';
+  end if;
+  select * into v_doc from public.documents d where d.id = p_document_id;
+  if v_doc.id is null or v_doc.org_id is distinct from app.org_id() then
+    raise exception 'no such document at this school';
+  end if;
+  if app.authors_project(v_doc.project_id) then
+    raise exception 'the Elder gives the feedback, not the author';
+  end if;
+  if coalesce(btrim(p_body_md), '') = '' then
+    raise exception 'write the rationale first';
+  end if;
+
+  /* The task waiting on this document, on whichever of the project's
+     places carries it; the place must be one the caller looks after. */
+  select m.* into v_task
+    from public.entry_milestones m
+    join public.participations e on e.id = m.participation_id
+   where e.project_id = v_doc.project_id
+     and m.owner = 'staff'
+     and m.feedback_on = v_doc.deliverable
+     and m.completed_on is null
+     and app.staff_task_ready(m.id)
+   order by m.due_on nulls last
+   limit 1;
+  if v_task.id is null then
+    if exists (select 1 from public.entry_milestones m
+                join public.participations e on e.id = m.participation_id
+                where e.project_id = v_doc.project_id and m.owner = 'staff'
+                  and m.feedback_on = v_doc.deliverable and m.completed_on is not null) then
+      raise exception 'the feedback on this one has been given';
+    end if;
+    raise exception 'not handed in yet: the feedback waits for the work';
+  end if;
+  v_part := v_task.participation_id;
+  if not app.looks_after(v_part) then
+    raise exception 'the Elder on this project gives feedback; the advisor only where there is none';
+  end if;
+
+  /* The line on the whole document: completes the task, tells the authors. */
+  v_id := public.comment_on_document(p_document_id, null, p_body_md, false, null);
+
+  /* The family's score, on the student step the task answers, per author. */
+  if p_score is not null and v_task.requires_step is not null then
+    select m.id into v_step from public.entry_milestones m
+     where m.participation_id = v_part and m.step_id = v_task.requires_step
+     limit 1;
+    if v_step is not null then
+      for v_who in
+        select a.user_id from public.project_authors a
+         where a.project_id = v_doc.project_id and a.role = 'author'
+      loop
+        perform public.grade_milestone(v_step, v_who, p_score, 4, p_body_md, null, false);
+      end loop;
+    end if;
+  end if;
+
+  return v_id;
+end;
+$$;
+
+revoke all on function public.give_document_feedback(uuid, numeric, text) from public, anon;
+grant execute on function public.give_document_feedback(uuid, numeric, text) to authenticated;
 
 -- An ask on a document, withdrawn by the person who asked it, without a
 -- new version: the student answered in the thread and that was enough.
@@ -13533,7 +13725,9 @@ create trigger live_field
   after insert or update on public.document_fields
   for each row execute function app.live_field();
 
--- A score written or released: the project's pages.
+-- A score written or released: the project's pages, and the class's
+-- tracker, which updates the one cell from the payload. The row being
+-- superseded is not news (its replacement is), so it is skipped.
 create or replace function app.live_assessment()
 returns trigger
 language plpgsql
@@ -13542,12 +13736,26 @@ set search_path = ''
 as $$
 declare
   v_project uuid;
+  v_by      text;
 begin
+  if new.superseded_by is not null then return null; end if;
   select e.project_id into v_project from public.participations e where e.id = new.participation_id;
+  select u.display_name into v_by from public.users u where u.id = new.grader_id;
   perform app.live_send(
     app.live_project_topics(v_project),
     'assessment',
-    jsonb_build_object('milestone_id', new.milestone_id, 'at', now())
+    jsonb_build_object(
+      'id', new.id,
+      'milestone_id', new.milestone_id,
+      'student_id', new.student_id,
+      'kind', new.kind,
+      'score', new.score,
+      'comment', left(coalesce(new.feedback_md, ''), 1000),
+      'by_id', new.grader_id,
+      'by', v_by,
+      'released', new.released_at is not null,
+      'at', new.created_at
+    )
   );
   return null;
 end;
@@ -13696,4 +13904,190 @@ create trigger live_incident
   after insert on public.transport_incidents
   for each row execute function app.live_incident();
 
+notify pgrst, 'reload schema';
+
+-- ===========================================================================
+-- HARDENING (2.9): WHAT A BROWSER MAY DO DIRECTLY
+--
+-- Every page reaches the database through the person's own session, and so
+-- can the person, from the browser's console, with the same key. The rules
+-- above were written for the pages; this section closes what the pages
+-- never did but the session could. The principle, stated once: a table
+-- cannot express a state its function would refuse. Where a function is
+-- the only honest way to change something (a role, a consent, an author,
+-- a place's decision), the session cannot write the table at all, and the
+-- functions, which run as their definer, are unaffected.
+--
+-- Placed last, after every function, because the first rule below reaches
+-- across all of them.
+-- ===========================================================================
+
+-- 1. FUNCTIONS: NOTHING FOR THE ANONYMOUS KEY BUT THE FIVE THAT SERVE IT.
+--
+-- Supabase grants execute on every new function in `public` to anon and
+-- authenticated alike. Most of the functions here begin by refusing a null
+-- caller, but "most" is a review away from "not this one". The anonymous
+-- key keeps the consent answer, the tracking page, the feedback form and
+-- nothing else; everything else is the signed-in person's.
+revoke execute on all functions in schema public from public, anon;
+revoke execute on all functions in schema app from public, anon;
+grant execute on function public.guardian_consent_request(text) to anon;
+grant execute on function public.answer_guardian_consent(text, boolean) to anon;
+grant execute on function public.track_submission(uuid) to anon;
+grant execute on function public.send_feedback(text, text, text, text, text, text, jsonb) to anon;
+grant execute on function public.feedback_mailed(uuid, text) to anon;
+alter default privileges in schema public revoke execute on functions from anon;
+alter default privileges in schema public revoke execute on functions from public;
+
+-- Whether an address may reset a password was answerable by anybody, which
+-- made it a list of who has an account. The reset page asks with the
+-- service key now; the session and the anonymous key get no answer.
+revoke execute on function public.may_reset_password(text) from public, anon, authenticated;
+
+-- 2. VIEWS RUN AS THE READER, NOT AS THEIR OWNER.
+--
+-- A view is owned by postgres, and without this a view reads its tables
+-- with postgres's eyes: every participation at every school, to anybody
+-- signed in anywhere. The invoker's policies apply through them now.
+alter view public.cohort_participations set (security_invoker = true);
+alter view public.opportunity_participations set (security_invoker = true);
+
+-- 3. THE PERSON: A ROSTER LINE FOR THE SCHOOL, THE RECORD FOR THE PERSON
+--    AND THE TEACHER.
+--
+-- A club may see who is in it, by name. What it may not see is a
+-- classmate's age band, guardian-consent state, standing, or suspension:
+-- those columns leave the session's reach altogether. The person reads
+-- their own through my_account(); the teacher through account_records();
+-- both run as definer. A session may update its own profile columns and
+-- no other.
+revoke select, insert, update on public.users from authenticated;
+grant select (id, org_id, display_name, grad_year, school_name, school_runs_a_fair, entered_before,
+              orcid, photo_path, photo_consent, outbound_url, author_slug, page_archived_at,
+              created_at, updated_at)
+  on public.users to authenticated;
+grant update (display_name, grad_year, school_name, school_runs_a_fair, entered_before,
+              orcid, photo_path, photo_consent, outbound_url)
+  on public.users to authenticated;
+
+-- The person's own record, whole, with their school's slug beside it: what
+-- the middleware attaches to every request.
+create or replace function public.my_account()
+returns jsonb
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select to_jsonb(u) || jsonb_build_object('org_slug', o.slug)
+    from public.users u
+    join public.organizations o on o.id = u.org_id
+   where u.id = auth.uid();
+$$;
+revoke all on function public.my_account() from public, anon;
+grant execute on function public.my_account() to authenticated;
+
+-- The school's records, whole, for the advisor: the roster page, the
+-- consent page. An officer is a student and reads the roster line.
+create or replace function public.account_records()
+returns setof public.users
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select * from public.users u
+   where u.org_id = app.org_id() and app.is_advisor();
+$$;
+revoke all on function public.account_records() from public, anon;
+grant execute on function public.account_records() to authenticated;
+
+-- 4. SIGN-IN ADDRESSES AND GUARDIANS: THE PERSON AND THE TEACHER ONLY.
+--
+-- An officer is a student. A student does not read a classmate's email or
+-- a classmate's parent's name and address, whatever project they share.
+revoke insert, update on public.identities from authenticated;
+
+revoke insert, update on public.guardian_consents from authenticated;
+
+-- Role reservations and pending grants carry the addresses of people who
+-- have not signed in yet; the teacher's business. The audit log and the
+-- feedback people sent likewise.
+-- (The reads of pending grants, reservations, the audit log and the
+--  feedback people sent are the advisor's now; edited where they stand.)
+
+-- 5. ROLES ARE GRANTED AND REVOKED BY grant_club_role AND revoke_club_role.
+--
+-- The update policy was named "revoke" and permitted everything: an
+-- officer could turn their own row into the advisor's, because the guard
+-- against granting advisor watched inserts only. The session writes no
+-- role row now; the two functions do, and the insert guard keeps its rule
+-- for them.
+revoke insert, update on public.user_roles from authenticated;
+create or replace function app.guard_role_update()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if new.role is distinct from old.role
+     or new.user_id is distinct from old.user_id
+     or new.org_id is distinct from old.org_id
+     or new.scope_id is distinct from old.scope_id
+     or new.granted_by is distinct from old.granted_by
+     or new.granted_at is distinct from old.granted_at
+  then
+    raise exception 'a role is revoked and granted again, never rewritten';
+  end if;
+  return new;
+end;
+$$;
+drop trigger if exists user_roles_guard_update on public.user_roles;
+create trigger user_roles_guard_update
+  before update on public.user_roles
+  for each row execute function app.guard_role_update();
+
+-- 6. WHO IS ON A PROJECT, AND WHAT A PLACE DECIDED, ARE THE FUNCTIONS'.
+--
+-- An author could insert a second author already accepted, or set their
+-- own place's decision, placement and selection, because the write
+-- policies asked only "may you edit the project". Authorship moves through
+-- attach_to_project, assign_officer and detach_from_project; a place's
+-- decision through decide_place, set_selection and record_entry_result.
+-- The one raw write a page makes on a place, the money it asked for and
+-- was given, keeps those two columns.
+revoke insert, update on public.project_authors from authenticated;
+revoke insert, update, delete on public.participations from authenticated;
+grant update (requested_amount, awarded_amount) on public.participations to authenticated;
+
+-- What was given is the reviewer's line, never the applicant's.
+create or replace function app.guard_participation_money()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if auth.uid() is null or coalesce(current_setting('app.system_grant', true), '') = 'on' then
+    return new;
+  end if;
+  if new.awarded_amount is distinct from old.awarded_amount and not app.looks_after(old.id) then
+    raise exception 'what was awarded is recorded by whoever looks after the place';
+  end if;
+  return new;
+end;
+$$;
+drop trigger if exists participations_guard_money on public.participations;
+create trigger participations_guard_money
+  before update on public.participations
+  for each row execute function app.guard_participation_money();
+
+-- 7. A REVIEWER'S FINDING IS THE EDITOR'S TO CHANGE; THE AUTHOR ANSWERS
+--    THROUGH respond_to_finding.
+-- 7. A reviewer's finding is the editor's to change (edited where it
+--    stands); the author answers through respond_to_finding.
+
+-- 8. A SUSPENDED ACCOUNT IS SUSPENDED EVERYWHERE: app.is_active(), defined
+--    beside can_see_project and can_edit_project, which now begin with it.
 notify pgrst, 'reload schema';

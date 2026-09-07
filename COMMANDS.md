@@ -23,6 +23,8 @@ that makes it real is named in each entry.
 | `npm run build` | Production build plus the search index (`scripts/index-search.mjs`, one Pagefind index per tenant). What CI and the deploy run. |
 | `npm run build:public-only` | The same build; kept as a named alias for a deploy of the public pages alone. |
 | `npm run preview` | Serve the built `dist/` locally, the way Cloudflare would. |
+| `npm run walk` | Every workflow, walked: `-- --student <email> --elder <email> --elder2 <email> --teacher <email> --password '<phrase>'` signs in as each in turn and does what they do (write, ask, submit; answer, score, give the feedback; see it handled; notebook, showcase, exports; teacher score, tracker, class, live log), one picture per step into `local-data/walk/<scenario>/`, and `local-data/walk/report.md` saying which expectations held. Against a freshly loaded pilot; `--base <url>` for the hosted site, `--only <scenario>` for one. Exits non-zero when anything failed. |
+| `npm run shots` | Every page as a picture at phone, tablet and laptop widths (390, 768, 1280), into `local-data/shots/<width>/<who>/`, driving the Chrome already on the machine (or `CHROME=/path`). Public pages alone by default; `-- --as <email> --password '<phrase>'` (repeatable) signs in and shoots that person's Workbench, project, deadlines, first document, class, tracker, profile and live log; `--base <url>` for the hosted site; `--pages /a/,/b/` and `--widths 390,1280` narrow it. Prints any element wider than the screen. Look through the folder before a drop. |
 | `npm run check` | `astro check`: the TypeScript and template checker, every severity. |
 
 ## The local stack
@@ -108,7 +110,7 @@ Every one of these reads `.cloud.vars` and checks `PILOT_PROJECT_REF`.
 | `npm run verify:cloud` | Count every table on the hosted project and change nothing. |
 | `npm run reset:cloud` | **Destroys the hosted project's data**: `node scripts/reset-cloud.mjs --yes --project=<ref>`, and it will not run without both. `--keep-storage` leaves R2 alone. Not for a project holding real work (decision 71). |
 | `npm run wipe:demo` | Remove the demonstration tenant's rows. Says what it would remove; `--yes` removes it; `--force` also where a real account has touched it. |
-| `npm run load -- --base <url>` | Load test: `--users` (30), `--seconds` (120), `--routes /a/,/b/`, `--password` for the fixture accounts. |
+| `npm run load -- --pilot <pilot file> --password '<phrase>'` | The whole class at once: signs in as the pilot's roster (or `--as <email>` repeated), everyone within `--ramp` seconds (90), then `--seconds` (120) of each person reading their own Workbench, project, deadlines, first document and tracker, saving a box on the document as they type, and asking the pulse; `--users` (40) seats, `--think` (1500) ms between clicks, `--base` for the hosted site (the pilot's real database: before the students, or the demonstration tenant). Reports per route requests, errors, p50/p95/p99 and the database's share from Server-Timing, and writes the same to `local-data/load/<when>.json` to compare runs before and after a plan change. |
 
 ## Tests
 
@@ -131,6 +133,13 @@ failure. The four that have to be green before a drop: `npm test`,
 | `test:next` | `?next=` is a safe path. |
 | `test:status` | Status computation. |
 | `test:transport` | The mail transport's guards. |
+| `test:history` | Every draft kept: the history table and the write in `save_field`, the page's earlier drafts with Use this, the Worker's clock pruning old drafts to the last before each version. |
+| `test:showcase` | The showcase that writes itself: a submitted deliverable becomes a section by its shape's `showcase` block, the tile takes the newest picture and the first headline, drafts are not read, the pages assemble from one loader. |
+| `test:tracker` | The tracker: shared arithmetic, three views over one grid, the key map, one cell saved at a time with the id it opened on, the broadcast updating a cell, the Elder writing and the teacher reading on one page. |
+| `test:hosts` | Which hostnames the deployment answers for: the root, www, a tenant's label, local names and previews; a stranger's host is refused. |
+| `test:plate` | The plate's one order over rows from three assemblies: the sort key read from the page and run against rows missing an id, a number or a late flag. |
+| `test:mobile` | The phone guards: the body clips sideways overflow, the masthead and the working-surface bar have their narrow-screen rules, touch targets key on the pointer, wide tables scroll in their own box. |
+| `test:back` | An export's Back link returns to the page it was opened from (care list, class, project) when the browser says so, else to the page's fallback. |
 | `test:live` | Live updates: the socket first, the pulse only on fallback and paced by the school's class periods, broadcast triggers on every watched table, the document room's presence and soft lock. |
 | `test:config-sources` | Every configured variable has a source. |
 | `test:dates` | Date ordering rules. |

@@ -206,7 +206,7 @@ deliverables:
   - { id: interview_synthesis, name: Empathy Interviews, kind: link, owner: student, requirement: required, shape: drive-link }
 
   - id: question
-    name: Research Question and Research Graphic
+    name: Research Question
     kind: text
     owner: student
     requirement: required
@@ -233,14 +233,10 @@ deliverables:
     shape: drive-link
     guidance: ""
 
-  - id: literature_review_worksheet
-    name: Literature Review Worksheet with Self-Reflection
-    kind: text
-    owner: student
-    requirement: required
-    shape: literature-review-worksheet
-
-  - { id: project_summary, name: Project Summary, kind: text, owner: student, requirement: required, shape: project-summary }
+  # Renamed Research Graphic on September 7 (the four boxes and the picture
+  # drawn from them); the id stays, and the showcase's "Use my Research
+  # Graphic" reads it by that id.
+  - { id: project_summary, name: Research Graphic, kind: text, owner: student, requirement: required, shape: project-summary }
   # One document for both journey map deadlines (2.8): the draft is
   # uploaded on the first, updated and submitted again on the second.
   - { id: journey_map, name: Journey Map, kind: file, owner: student, requirement: required, shape: journey-map }
@@ -308,6 +304,8 @@ steps:
     order: 20
     owner: student
     due: { on: 2026-08-19 }
+    # On the class tracker (2.8): the family's score, out of 4.
+    tracker: { column: true }
     deliverables:
       - { ref: project_idea }
 
@@ -317,6 +315,7 @@ steps:
     order: 25
     owner: student
     due: { on: 2026-08-24 }
+    tracker: { column: true }
     deliverables:
       - { ref: top_strengths }
 
@@ -327,6 +326,7 @@ steps:
     owner: student
     due: { on: 2026-08-27 }
     requires: [project_idea]
+    tracker: { column: true }
     deliverables:
       - { ref: topic_narrowing }
     note: ""
@@ -338,6 +338,7 @@ steps:
     order: 10
     owner: student
     due: { on: 2026-09-03 }
+    tracker: { column: true }
     deliverables:
       - { ref: literature_review_draft }
     note: ""
@@ -351,6 +352,10 @@ steps:
     # pilot starts on the 8th. The Elders' reading of it keeps the 14th.
     due: { on: 2026-09-08 }
     requires: [literature_review_draft]
+    # The one column whose score and comment the student sees (the
+    # teacher's call, September 2026); every other column waits on the
+    # platform switch.
+    tracker: { column: true, students: true }
     deliverables:
       - { ref: literature_review }
     note: ""
@@ -416,28 +421,19 @@ steps:
             - { id: developing, label: Developing, points: 2, description: "Mechanical errors detract from the reading experience." }
             - { id: beginning, label: Beginning, points: 1, description: "Mechanical errors make the paper difficult to understand." }
 
-  # Its own deadline (2.8): one document per deadline, so a row's verb is
-  # one verb and a submission is never hidden behind its sibling.
-  - id: literature_review_worksheet
-    name: Literature Review Worksheet with Self-Reflection
-    phase: irpd_empathy
-    order: 25
-    owner: student
-    due: { on: 2026-09-08 }
-    deliverables:
-      - { ref: literature_review_worksheet }
-
+  # The worksheet with self-reflection left the calendar on September 7,
+  # at the teacher's word; its shape stays on file.
   - id: project_summary
-    name: Project Summary
+    name: Research Graphic
     phase: irpd_empathy
     order: 30
     owner: student
-    due: { on: 2026-09-08 }
+    due: { on: 2026-09-10 }
     deliverables:
       - { ref: project_summary }
 
   - id: research_question
-    name: Research Question and Research Graphic
+    name: Research Question
     phase: irpd_empathy
     order: 40
     owner: student
@@ -450,8 +446,12 @@ steps:
   # the student's: it sits on the project's calendar so the student can see
   # feedback is coming, and on no student surface as something they owe.
   # `requires` names the student step it waits on; `feedback_on` the
-  # deliverable the feedback is written on, and the Elder's first comment
-  # on that document completes the task.
+  # deliverable the feedback is written on. The Elder fills their part of
+  # that document (the rating, the rationale) and presses "Give the
+  # feedback" under it (2.9): that completes the task, puts the rating on
+  # the tracker as the family's score, and tells the researcher. A comment
+  # on the whole document does the same; a reply in a field's thread is a
+  # reply and leaves the task open.
   - id: elder_literature_review_feedback
     name: "Elder Feedback: Lit Review"
     phase: irpd_empathy

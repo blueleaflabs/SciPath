@@ -64,7 +64,7 @@ if (Astro.request.method === 'POST') {
       p_recipient_id: String(form.get('recipient_id') ?? ''),
     });
     if (e) error = e.message;
-    else note = data === 'already' ? 'Already nudged this week.' : data === 'sent' ? 'Nudged.' : 'Nothing to send.';
+    else note = data === 'already' ? 'Already nudged this week.' : data === 'sent' ? 'Nudged.' : data === 'early' ? 'Not due yet, so nothing was sent.' : 'Nothing to send.';
   } else if (action === 'release') {
     const { data, error: e } = await supabase.rpc('release_grades', { p_program_id: id });
     if (e) error = e.message;
@@ -869,7 +869,8 @@ const dayWord = (d: number | null) =>
                   {s.notes > 0 ? <>{s.notes} · last {fmtWhen(s.lastNote)}</> : <span class="none">not started</span>}
                 </td>
                 <td class="nudge-cell">
-                  {s.next && s.place ? nudgeTargets(s.place).map((t) => {
+                  {/* A nudge only once the task is late (2.8). */}
+                  {s.next && s.place && s.next.days !== null && s.next.days < 0 ? nudgeTargets(s.place).map((t) => {
                     const v = nudgeView(s.next!.milestoneId, t.id);
                     return v.thisWeek ? (
                       <span class:list={['ntrack', v.st.acknowledged_at && 'seen', v.st.relayed_at && 'relayed']}>{t.name.split(' ')[0]}: {v.line}</span>
@@ -921,7 +922,7 @@ const dayWord = (d: number | null) =>
                       <span class="none">{e.waiting > 0 ? `${e.waiting} waiting on students` : 'nothing open'}</span>
                     )}
                   </span>
-                  {e.next && (
+                  {e.next && e.next.days !== null && e.next.days < 0 && (
                     <form method="POST" action="#outcome" class="inline">
                       <input type="hidden" name="action" value="nudge" />
                       <input type="hidden" name="milestone_id" value={e.next.milestoneId} />
@@ -1092,4 +1093,13 @@ const dayWord = (d: number | null) =>
   .a-what .sub { display: block; font-size: 0.86rem; color: var(--ink-3); }
   .a-note { display: block; margin-top: 4px; font-style: italic; }
   .calldo .btn { flex: 1; text-align: center; white-space: nowrap; }
+
+  /* On a phone (2.8): the call cards fill the width, the row's buttons
+     drop under the names, and the answers list stacks its two columns. */
+  @media (max-width: 640px) {
+    .callgrid { grid-template-columns: minmax(0, 1fr); }
+    .callgroup li { grid-template-columns: minmax(0, 1fr); }
+    .calldo { min-width: 0; }
+    .answers li { grid-template-columns: minmax(0, 1fr); gap: 4px; }
+  }
 </style>

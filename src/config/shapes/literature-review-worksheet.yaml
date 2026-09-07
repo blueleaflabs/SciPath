@@ -4,6 +4,15 @@
 id: literature-review-worksheet
 name: Literature review worksheet
 version: 1
+# On the class showcase (2.8): the strongest source as the headline, and
+# how the search went.
+showcase:
+  title: Finding the sources
+  headline: strongest
+  show:
+    - { field: search, as: prose, label: Where we searched }
+    - { field: kept, as: prose, label: What we kept }
+
 sections:
   - id: worksheet
     name: Worksheet

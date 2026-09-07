@@ -135,6 +135,13 @@
   margin: 0 0 18px;
 }
 
+/* On a phone the head stacks: the title, then the count and any control
+   under it, left-aligned (2.8). */
+@media (max-width: 640px) {
+  .sec-h { flex-wrap: wrap; gap: 6px 14px; }
+  .sec-h span { text-align: left; }
+}
+
 /* **The title at the size of a title.** It was small caps at 0.86rem, which
    is the weight of a column heading, so a page of six sections read as one
    long table. A heading in the interface face at heading size separates the
@@ -197,9 +204,12 @@
    The lockup keeps its width — it is the school's name and mark, and a
    masthead that abbreviates those is a masthead that has given up. Everything
    to the right of it shrinks instead, down to the search field, which is the
-   only element in the bar that loses nothing but characters. Below 720px the
-   wrap above is the only honest behavior and stands. */
-@media (min-width: 721px) {
+   only element in the bar that loses nothing but characters. Below 860px the
+   wrap above is the only honest behavior and stands. 860 is where the
+   signed-in bar's content (lockup, search, Feedback, Workbench, a name,
+   Sign out) stops fitting on one line, measured, not a device; an iPad in
+   portrait (768) gets the stacked bar because it does not fit there. */
+@media (min-width: 861px) {
   .mast-in { flex-wrap: nowrap; }
   .mast-in .lockup { flex: 0 0 auto; }
   .mast-in .mnav-bar { flex: 1 1 auto; justify-content: flex-end; }
@@ -959,6 +969,34 @@ select {
   box-shadow: var(--lift);
   font-family: var(--face-ui);
   font-size: 0.92rem;
+}
+
+/* ── A WIDE TABLE ON A PHONE (2.8) ──────────────────────────────
+   A table is wide by nature (the class page, the assign queue, the roles
+   list) and a phone is not. Rather than crush its columns, the table
+   scrolls sideways inside its own box, edge to edge, and the page does
+   not move. `display: block` on the table makes it its own scroll
+   container; the browser wraps the rows in an anonymous table, so the
+   rows still lay out as rows. The deadlines table (`.phased`) is the one
+   with a layout of its own for a phone and is left to it.
+
+   Up to the tablet width (2.9): the class board ran 86px past a 768
+   screen, clipped, because this began at 720. A table that scrolls on a
+   tablet is better than one cut off. */
+@media (max-width: 860px) {
+  .tbl:not(.phased) {
+    display: block;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    max-width: calc(100% + 2 * var(--shell-pad));
+    margin-inline: calc(-1 * var(--shell-pad));
+    width: auto;
+    border-left: 0;
+    border-right: 0;
+  }
+  .tbl:not(.phased) th,
+  .tbl:not(.phased) td { white-space: nowrap; }
+  .tbl:not(.phased) td { white-space: normal; min-width: 9rem; }
 }
 
 .tbl th,
@@ -2054,7 +2092,7 @@ td.band-1, td.band-2, td.band-3, td.band-4 { color: inherit; }
 
 @media (max-width: 640px) {
   .ledger > li { grid-template-columns: 72px minmax(0, 1fr); }
-  .ledger .do { grid-column: 2; padding: 0 0 12px; }
+  .ledger .do { grid-column: 2; padding: 0 0 12px; white-space: normal; flex-wrap: wrap; }
   .verdict { min-width: 72px; }
 }
 
@@ -2323,7 +2361,9 @@ td.band-1, td.band-2, td.band-3, td.band-4 { color: inherit; }
 .alarm.plate .plate-row > .act .btn { text-align: center; white-space: nowrap; min-width: var(--row-btn); box-sizing: border-box; }
 @media (max-width: 720px) {
   .alarm.plate .plate-row { grid-template-columns: minmax(0, 1fr); }
-  .alarm.plate .plate-row > .act { justify-self: stretch; }
+  .alarm.plate .plate-row > .act { justify-self: stretch; white-space: normal; }
+  .alarm .act { padding: 14px 16px; }
+  .alarm .body { padding-inline: 16px; }
 }
 
 /* A ghost on a dark surface takes the surface's ink; the brand outline it
@@ -2400,6 +2440,92 @@ a.btn.ghost:focus {
   letter-spacing: 0.12em;
   text-transform: uppercase;
   color: var(--stage-comp);
+}
+
+/* ── THE TRACKER'S CONTROLS (2.8) ─────────────────────────────
+   Shared here rather than on the page, so a second page with a view
+   switch, a filter chip, a score row or a picker takes them as they are. */
+/* A view switch: its segments side by side in one border. */
+.seg { display: inline-flex; border: 1px solid var(--brand-deep); }
+/* One segment of a view switch (Grid · By assignment · By student). */
+.seg-b {
+  font: inherit;
+  font-family: var(--face-ui);
+  font-size: 0.86rem;
+  padding: 6px 14px;
+  border: 0;
+  background: transparent;
+  color: var(--brand-deep);
+  cursor: pointer;
+  text-decoration: none;
+}
+.seg-b[aria-selected='true'] { background: var(--brand-deep); color: var(--brand-contrast); }
+/* A filter that presses. */
+.tfilter {
+  font: inherit;
+  font-family: var(--face-num);
+  font-size: 0.72rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 5px 10px;
+  border: 1px solid var(--rule);
+  background: var(--card);
+  color: var(--ink-2);
+  cursor: pointer;
+}
+.tfilter[aria-pressed='true'] { border-color: var(--accent); background: var(--accent-pale); color: var(--accent-deep); }
+/* A picker's arrows, the field's own edges. */
+.car {
+  font: inherit;
+  font-family: var(--face-num);
+  font-size: 1.1rem;
+  width: 40px;
+  height: 40px;
+  border: 1px solid var(--rule);
+  background: var(--card);
+  color: var(--ink-2);
+  cursor: pointer;
+}
+/* A score, one of eight in a row, tinted by its band. */
+.sc {
+  font: inherit;
+  font-family: var(--face-num);
+  font-weight: 700;
+  font-size: 0.95rem;
+  height: 44px;
+  border: 1px solid var(--rule);
+  background: var(--card);
+  cursor: pointer;
+  color: var(--ink-2);
+  padding: 0;
+}
+.sc.band-1 { background: var(--band-1-bg); color: var(--band-1-ink); }
+.sc.band-2 { background: var(--band-2-bg); color: var(--band-2-ink); }
+.sc.band-3 { background: var(--band-3-bg); color: var(--band-3-ink); }
+.sc.band-4 { background: var(--band-4-bg); color: var(--band-4-ink); }
+.sc[aria-pressed='true'] { outline: 3px solid var(--brand-deep); outline-offset: -3px; }
+.sc:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* ── TOUCH (2.8) ────────────────────────────────────────────────
+   A finger, not a pointer: every control is at least 44px tall, which
+   is the size a thumb hits reliably, on any screen that is touched (a
+   phone, a tablet, a laptop with a touchscreen) and on no screen driven
+   by a mouse, where the compact rows stay. Keyed on the pointer, not the
+   width, because a tablet is wide and touched. */
+@media (pointer: coarse) {
+  .btn,
+  .btn-sm,
+  button:not(.mdx-btn):not(.mnav-go),
+  select,
+  input:not([type='checkbox']):not([type='radio']):not([type='file']),
+  .mnav a,
+  .appnav a {
+    min-height: 44px;
+  }
+  .btn-sm { padding-block: 9px; }
+  .mnav a, .appnav a { display: inline-flex; align-items: center; }
+  input[type='checkbox'], input[type='radio'] { width: 22px; height: 22px; }
+  /* Hover states do nothing under a finger; the tap is the state. */
 }
 
 /* The backup-path strip (2.8): shown only while live updates poll

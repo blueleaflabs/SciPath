@@ -16,6 +16,32 @@ html {
   scroll-behavior: smooth;
 }
 
+/* ── PHONES (2.8) ──────────────────────────────────────────────
+   The scale steps down a little on a narrow screen: 19.5px of body
+   type at 390px wide fits nine words a line, and every heading, button
+   and label scaled with it. Fluid between 17 and 19.5, on the viewport,
+   so there is no width at which it jumps; above 424px it is the desktop
+   scale unchanged. Never below 17: an input under 16px makes iOS zoom the
+   page on focus, and the smallest control here is 0.78rem of the root. */
+@media (max-width: 720px) {
+  html {
+    font-size: clamp(17px, 4.6vw, 19.5px);
+  }
+}
+
+/* Nothing may widen the document. A max-width and `min-width: 0` on the
+   shell contain what they hold; this is the guard for anything they do
+   not (a bar that would not wrap, a table nobody wrapped). An element
+   that overflows is clipped at the edge rather than scrolling the whole
+   page sideways, masthead and all, which is the failure a phone shows
+   first. `clip` rather than `hidden`, because `hidden` would also make
+   the root a scroll container and break `position: sticky` and anchor
+   scrolling. */
+html,
+body {
+  overflow-x: clip;
+}
+
 body {
   margin: 0;
   background: var(--paper);

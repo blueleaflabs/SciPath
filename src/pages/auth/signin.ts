@@ -1,7 +1,7 @@
 export const prerender = false;
 
 import type { APIRoute } from 'astro';
-import { serverClient, isConfigured } from '../../lib/supabase';
+import { serverClient, isConfigured, env } from '../../lib/supabase';
 import { activeOrg } from '../../lib/tenant';
 import { originFor, apexOrigin } from '../../lib/deployment';
 import { safeNext, HOME } from '../../lib/next-path';
@@ -12,6 +12,26 @@ import { safeNext, HOME } from '../../lib/next-path';
  * documents are stored as URLs instead.
  */
 const SCOPES = 'openid email profile';
+
+/**
+ * What Google is asked for, settable without a build (2.9).
+ *
+ * `OAUTH_PROMPT` defaults to `select_account`: a school account would
+ * otherwise be sent straight through on whichever Google considers
+ * current, and a student whose personal account went first is refused by
+ * the domain rule with no way to choose the other. Google's own
+ * re-authentication after a district's session-length policy signs
+ * people out has been seen to fail at the password step ("Something went
+ * wrong · Restart") on this flow; `prompt=login` and a hosted-domain hint
+ * (`OAUTH_HD=fuhsd.org`) are the two parameters that change that step,
+ * and both can be tried from the environment while it is happening.
+ */
+function oauthParams(runtime?: Record<string, unknown>): Record<string, string> {
+  const params: Record<string, string> = { prompt: env('OAUTH_PROMPT', runtime) || 'select_account' };
+  const hd = env('OAUTH_HD', runtime);
+  if (hd) params.hd = hd;
+  return params;
+}
 
 export const GET: APIRoute = async ({ request, cookies, url, locals, redirect }) => {
   const runtime = (locals as Record<string, any>).runtime?.env;
@@ -78,7 +98,7 @@ export const GET: APIRoute = async ({ request, cookies, url, locals, redirect })
          account went first is refused by the domain rule with no way to
          choose the other. `select_account` puts the choice on screen every
          time, which costs one click and removes the question. */
-      queryParams: { prompt: 'select_account' },
+      queryParams: oauthParams(runtime),
     },
   });
 

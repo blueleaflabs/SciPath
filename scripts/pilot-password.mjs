@@ -114,11 +114,23 @@ if (!roles.includes('advisor')) {
 
 /* ── The password ─────────────────────────────────────────────────────── */
 
-/* Four words from a short list and a number: long enough to be strong,
-   short enough to read out over a phone. */
-const WORDS = 'river maple stone amber cedar harbor meadow copper falcon ember willow orchid quartz summit tundra violet'.split(' ');
+/* Readable over a phone, and strong (2.9): sixteen words gave four picks
+   and a number 22 bits, which is a lunch break for a machine. Six words
+   from a list of 1,296 (six picks of six, the EFF short list's shape) give
+   62 bits, and a number on the end. Still words; still a phone call. */
+const WORDS = (() => {
+  /* A list built from syllables rather than shipped: 6 x 6 x 6 x 6 = 1,296
+     distinct, pronounceable, four-letter words, no two alike. */
+  const c1 = ['b', 'd', 'g', 'k', 'm', 'p'];
+  const v1 = ['a', 'e', 'i', 'o', 'u', 'y'];
+  const c2 = ['l', 'n', 'r', 's', 't', 'v'];
+  const v2 = ['a', 'e', 'i', 'o', 'u', 'y'];
+  const out = [];
+  for (const a of c1) for (const b of v1) for (const c of c2) for (const d of v2) out.push(a + b + c + d);
+  return out;
+})();
 const generated = () =>
-  `${[0, 1, 2, 3].map(() => WORDS[crypto.randomInt(WORDS.length)]).join('-')}-${crypto.randomInt(10, 99)}`;
+  `${[0, 1, 2, 3, 4, 5].map(() => WORDS[crypto.randomInt(WORDS.length)]).join('-')}-${crypto.randomInt(10, 99)}`;
 
 const password = given ?? generated();
 

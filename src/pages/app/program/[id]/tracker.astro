@@ -2,16 +2,34 @@
 export const prerender = false;
 
 /**
- * THE TRACKER (6.13, 2.7).
+ * THE TRACKER (6.13, 2.8).
  *
- * The class's shared spreadsheet, brought in: one row per student grouped
- * by family (the Elders on their place), one column per assignment, and in
- * each cell the family's score out of 4 with the Elder's comment. Every
- * Elder of the class reads every family's scores, the teachers read all of
- * it, and an Elder writes the cells of their own family here, on the grid,
- * the way the spreadsheet was filled in. The teacher's grades are not on
- * this page (an Elder never reads a classmate's grade, decision 78); they
- * are on Grade a deadline.
+ * The class's family scores, three ways from one set of cells. The GRID
+ * is the glance: one row per student under their family, one column per
+ * assignment, each cell a chip in its band with a dot for a comment, a
+ * bar for "in, not scored", a dash for "not in"; sticky on both axes;
+ * the family's, the student's and the assignment's averages on the
+ * edges. Click or key into a cell and it opens in the PANEL beside the
+ * grid: the score as buttons, the comment with the shared formatting
+ * bar, saved as it changes through `/app/api/score/`, one cell at a
+ * time, with the id it opened on so two Elders cannot overwrite each
+ * other unseen. BY ASSIGNMENT is the Elder's scoring view and the phone's
+ * default: one assignment, your family first, a row per student with the
+ * buttons inline. BY STUDENT is one student's assignments down the page.
+ * The three views are one toggle over the same cells, and every saved
+ * score reaches every open tracker over the socket.
+ *
+ * Every Elder of the class reads every family's scores and the teacher
+ * reads all of it, on the same page laid out the same way; an Elder
+ * writes their own family's cells. The teacher's grades are not here (an
+ * Elder never reads a classmate's grade, decision 78); they are on Grade
+ * a deadline.
+ *
+ * Keys, in the grid: arrows move; Home and End go to the first and last
+ * assignment; PageUp and PageDown move a family; Tab visits the next
+ * cell that is yours to score; 1 to 4 score the cell where it stands,
+ * h adds or removes the half point, 0 or Backspace clears; Enter opens
+ * the panel, Escape returns; ? lists them.
  */
 
 import Base from '../../../../layouts/Base.astro';
@@ -22,9 +40,12 @@ import { standing } from '../../../../lib/roles';
 import { scoreBand } from '../../../../lib/score-band';
 import { programTitle, staffWord } from '../../../../lib/program-names';
 import { formatDate, todayIn } from '../../../../lib/dates';
-import { afterPost, outcomeFrom } from '../../../../lib/post-redirect';
+import { outcomeFrom } from '../../../../lib/post-redirect';
 import { signInWith } from '../../../../lib/next-path';
 import { allRows } from '../../../../lib/all-rows';
+import { resolveProgram } from '../../../../lib/templates';
+import { meanWord, scoreWord, LEVELS } from '../../../../lib/tracker-math';
+import MarkdownEditor from '../../../../components/MarkdownEditor.astro';
 
 const { session, account, roles } = Astro.locals;
 const org = activeOrg(Astro);
@@ -42,60 +63,12 @@ if (!(me.isAdvisor && runsThis) && !elderHere) return Astro.redirect('/app/');
 const supabase = serverClient(Astro.request, Astro.cookies, (Astro.locals as any).runtime?.env);
 const today = todayIn(org.timezone);
 
-let { error, note } = outcomeFrom(Astro.url);
+const { error, note } = outcomeFrom(Astro.url);
 
-if (Astro.request.method === 'POST') {
-  const form = await Astro.request.formData();
-  if (String(form.get('action') ?? '') === 'score_all') {
-    /* Every cell on the page in one form (2.8): the ones that changed are
-       written, one `grade_milestone` each; the rest are left alone. A
-       cell's original score and comment travel with it so a page opened
-       an hour ago does not rewrite what somebody else saved since. */
-    let saved = 0;
-    const failed: string[] = [];
-    for (const [name, value] of form.entries()) {
-      if (!name.startsWith('s:')) continue;
-      const key = name.slice(2);
-      const [milestoneId, studentId] = key.split(':');
-      const score = String(value ?? '').trim();
-      const comment = String(form.get(`c:${key}`) ?? '').trim();
-      const was = String(form.get(`o:${key}`) ?? '');
-      if (`${score}|${comment}` === was) continue;
-      if (score === '' && comment === '') continue;
-      const { error: e } = await supabase.rpc('grade_milestone', {
-        p_milestone_id: milestoneId,
-        p_student_id: studentId,
-        p_score: score === '' ? null : Number(score),
-        p_out_of: 4,
-        p_feedback_md: comment,
-        p_rubric: null,
-        p_release: false,
-      });
-      if (e) failed.push(`${String(form.get(`n:${key}`) ?? 'a cell')}: ${e.message}`);
-      else saved += 1;
-    }
-    if (failed.length) error = failed.join(' · ');
-    note = saved ? `${saved} ${saved === 1 ? 'score' : 'scores'} saved.` : 'Nothing changed.';
-  } else if (String(form.get('action') ?? '') === 'score') {
-    const raw = String(form.get('score') ?? '').trim();
-    const { error: e } = await supabase.rpc('grade_milestone', {
-      p_milestone_id: String(form.get('milestone_id') ?? ''),
-      p_student_id: String(form.get('student_id') ?? ''),
-      p_score: raw === '' ? null : Number(raw),
-      p_out_of: 4,
-      p_feedback_md: String(form.get('feedback') ?? ''),
-      p_rubric: null,
-      p_release: false,
-    });
-    if (e) error = e.message;
-    else note = `${String(form.get('student_name') ?? 'Scored')}: saved.`;
-  }
-  return afterPost(Astro.url, { error, note });
-}
-
+/* Saving is `/app/api/score/`, a cell at a time; nothing posts here. */
 const { data: program } = await supabase
   .from('programs')
-  .select('id, name, short_name, season_year, kind, program_role, roles, template_id')
+  .select('id, name, short_name, season_year, kind, program_role, roles, template_id, process_id')
   .eq('id', id)
   .maybeSingle();
 if (!program) return Astro.redirect('/app/');
@@ -107,14 +80,21 @@ const { data: parts } = await supabase
   .in('status', ['entered', 'competed']);
 const partIds = (parts ?? []).map((p: any) => p.id);
 
-const { data: milestones } = partIds.length
+/* The columns come from the template: the steps marked `tracker.column`
+   (2.8), so everything on the tracker is an assignment the class named,
+   and an assignment the class did not name (a first draft, an Elder's
+   task, an event) is not a column. */
+const template = program.template_id ? (() => { try { return resolveProgram(program.template_id, program.process_id ?? null); } catch { return null; } })() : null;
+const trackedSteps = (template?.steps ?? []).filter((st: any) => st.tracker?.column);
+const trackedIds = new Set(trackedSteps.map((st: any) => st.id));
+
+const { data: milestones } = partIds.length && trackedIds.size
   ? await allRows(() =>
       supabase
         .from('entry_milestones')
-        .select('id, participation_id, name, due_on, completed_on, kind, owner')
+        .select('id, participation_id, name, due_on, completed_on, kind, owner, step_id')
         .in('participation_id', partIds)
-        .eq('owner', 'student')
-        .neq('kind', 'event')
+        .in('step_id', [...trackedIds])
         .order('due_on', { ascending: true, nullsFirst: false })
         .order('id')
     )
@@ -133,21 +113,20 @@ const { data: scores } = partIds.length
   : { data: [] as any[] };
 const scoreFor = new Map<string, any>((scores ?? []).map((a: any) => [`${a.milestone_id}:${a.student_id}`, a]));
 
-/* Columns: every assignment, dated, in order. */
-type Col = { key: string; name: string; dueOn: string | null };
-const cols: Col[] = [];
-const seen = new Set<string>();
-for (const m of milestones ?? []) {
-  const key = `${m.name}|${m.due_on ?? ''}`;
-  if (seen.has(key)) continue;
-  seen.add(key);
-  cols.push({ key, name: m.name, dueOn: m.due_on });
-}
-/* The columns the class has reached: due by today, plus the next two. */
-const reached = cols.filter((c) => c.dueOn && c.dueOn <= today);
-const ahead = cols.filter((c) => !c.dueOn || c.dueOn > today).slice(0, 2);
-const showAll = Astro.url.searchParams.get('all') === '1';
-const shown = showAll ? cols : [...reached, ...ahead];
+/* Columns: the tracked steps, in the order they come due on this class's
+   calendar (a step's date is the same on every project in a class). */
+type Col = { key: string; name: string; dueOn: string | null; students: boolean };
+const cols: Col[] = trackedSteps
+  .map((st: any) => {
+    const any = (milestones ?? []).find((m: any) => m.step_id === st.id);
+    return { key: st.id, name: any?.name ?? st.name, dueOn: any?.due_on ?? null, students: Boolean(st.tracker?.students) };
+  })
+  .sort((a: Col, b: Col) => (a.dueOn ?? '9999').localeCompare(b.dueOn ?? '9999') || a.name.localeCompare(b.name));
+/* Every column is rendered; the ones past "reached so far plus the next
+   two" are hidden until the window is widened, on the page, no reload. */
+const reachedKeys = new Set(cols.filter((c) => c.dueOn && c.dueOn <= today).map((c) => c.key));
+const nextKeys = new Set(cols.filter((c) => !c.dueOn || c.dueOn > today).slice(0, 2).map((c) => c.key));
+const inWindow = (c: Col) => reachedKeys.has(c.key) || nextKeys.has(c.key);
 
 /* Rows: each student, with their place, grouped by family. */
 type Row = { student: { id: string; name: string }; part: any; project: any; elders: { id: string; name: string }[]; mine: boolean };
@@ -175,23 +154,34 @@ const families = (() => {
     .sort((a, b) => Number(b.mine) - Number(a.mine) || a.name.localeCompare(b.name));
 })();
 
-const milestoneOf = (row: Row, col: Col) => (milestones ?? []).find((m: any) => m.participation_id === row.part.id && `${m.name}|${m.due_on ?? ''}` === col.key) ?? null;
+const milestoneOf = (row: Row, col: Col) => (milestones ?? []).find((m: any) => m.participation_id === row.part.id && m.step_id === col.key) ?? null;
 const label = program.short_name ?? program.name;
 const fmt = (d: string | null) => (d ? formatDate(String(d).slice(0, 10), 'short') : '');
-const LEVELS = ['4', '3.5', '3', '2.5', '2', '1.5', '1'];
-const anyWritable = families.some((f) => f.rows.some((r) => r.mine || (me.isAdvisor && r.elders.length === 0)));
+/* An Elder writes their own family's cells. The teacher reads (decision
+   78: the teacher's grade is a different thing, on Grade a deadline). */
+const canWriteRow = (r: Row) => r.mine;
+const anyWritable = families.some((f) => f.rows.some(canWriteRow));
+const myFamily = families.find((f) => f.mine)?.key ?? '';
+const LEVELS_UI = LEVELS as unknown as string[];
+/* The averages for the first paint, from the same function the browser
+   uses afterward. */
+const cellScore = (r: Row, c: Col) => { const m = milestoneOf(r, c); return m ? scoreFor.get(`${m.id}:${r.student.id}`)?.score ?? null : null; };
+const rowAvg = (r: Row) => meanWord(cols.map((c) => cellScore(r, c)));
+const famAvg = (f: { rows: Row[] }) => meanWord(f.rows.flatMap((r) => cols.map((c) => cellScore(r, c))));
+const colAvg = (c: Col) => meanWord(rows.map((r) => cellScore(r, c)));
+const allAvg = meanWord(rows.flatMap((r) => cols.map((c) => cellScore(r, c))));
 ---
 
-<Base title={`${label} tracker`} noindex={true}>
+<Base title={`${label} Tracker`} noindex={true}>
   <div class="wrap">
     <AppShell org={org} account={account} roles={roles} here={`/app/program/${id}/tracker/`} />
 
     <section class="cover">
       <p class="kick">{programTitle(program)} · {formatDate(today, 'long')}</p>
-      <h1>{label} tracker</h1>
+      <h1>{label} Tracker</h1>
       <p class="sub">
         The family's score on each assignment, out of 4, with the {staffWord(program)}'s comment.
-        {elderHere && !me.isAdvisor ? ' Your family is first; fill in its cells here.' : ' Every family, as the Elders filled it in.'}
+        {anyWritable ? ' Your family is first; click a cell, or key into it, to score.' : ' Every family, as the Elders scored it.'}
       </p>
     </section>
 
@@ -200,122 +190,648 @@ const anyWritable = families.some((f) => f.rows.some((r) => r.mine || (me.isAdvi
       {note && !error && <p class="note flash" role="status">{note}</p>}
     </div>
 
-    <div class="tbar">
-      <span class="t-sm">{shown.length} of {cols.length} assignments shown{showAll ? '' : ': the ones due so far and the next two'}.</span>
-      <a class="btn btn-sm ghost" href={showAll ? `/app/program/${id}/tracker/` : `/app/program/${id}/tracker/?all=1`}>{showAll ? 'Only the ones reached' : 'Every assignment'}</a>
-      {me.isAdvisor && <a class="btn btn-sm ghost" href={`/app/program/${id}/grade/`}>Grade a deadline</a>}
-      {me.isAdvisor && <a class="btn btn-sm ghost" href={`/app/program/${id}/class/`}>Class page</a>}
-      {anyWritable && <button class="btn btn-sm" type="submit" form="scoreall">Save all</button>}
-    </div>
+    <div class="tk" id="tk" data-program={id} data-me={account.id} data-me-name={account.display_name ?? ''} data-my-family={myFamily} data-writable={anyWritable ? '1' : '0'} data-elder-word={staffWord(program)}>
+      <div class="tbar">
+        <div class="seg" role="tablist" aria-label="View">
+          <button type="button" class="seg-b" role="tab" data-view="grid" aria-selected="true">Grid</button>
+          <button type="button" class="seg-b" role="tab" data-view="assignment" aria-selected="false">By assignment</button>
+          <button type="button" class="seg-b" role="tab" data-view="student" aria-selected="false">By student</button>
+        </div>
+        <button type="button" class="tfilter" data-filter="window" aria-pressed="false" title="Show every assignment, not only the ones reached so far and the next two">Reached so far + next 2</button>
+        <button type="button" class="tfilter" data-filter="unscored" aria-pressed="false">Unscored only</button>
+        {myFamily && <button type="button" class="tfilter" data-filter="mine" aria-pressed="false">My family</button>}
+        {me.isAdvisor && <a class="btn btn-sm ghost" href={`/app/program/${id}/grade/`}>Grade a deadline</a>}
+        {me.isAdvisor && <a class="btn btn-sm ghost" href={`/app/program/${id}/class/`}>Class page</a>}
+        <span class="spacer"></span>
+        <span class="legend" aria-hidden="true">
+          <i class="band-1">1</i><i class="band-2">2</i><i class="band-3">3</i><i class="band-4">4</i>
+          <span class="inbar"></span> in, not scored
+          <span class="no">—</span> not in
+        </span>
+        <button type="button" class="tfilter" data-help aria-haspopup="dialog">? Keys</button>
+      </div>
 
-    <form method="POST" action="#outcome" id="scoreall">
-    <input type="hidden" name="action" value="score_all" />
-    <div class="tracker-wrap">
-      <table class="tracker">
-        <thead>
-          <tr>
-            <th scope="col" class="stick">Student</th>
-            {shown.map((c) => (
-              <th scope="col"><span class="cname">{c.name}</span><span class="cdue">{c.dueOn ? fmt(c.dueOn) : 'no date'}</span></th>
-            ))}
-          </tr>
-        </thead>
-        {families.map((f) => (
-          <tbody class:list={[f.mine && 'mine']}>
-            <tr class="fam">
-              <th scope="rowgroup" colspan={shown.length + 1}>{staffWord(program, f.rows.some((r) => r.elders.length > 1) ? 'plural' : 'singular')}: {f.name}{f.mine ? ' (you)' : ''}<span class="fcount">{f.rows.length}</span></th>
-            </tr>
-            {f.rows.map((r) => (
-              <tr>
-                <th scope="row" class="stick">
-                  <a href={`/app/project/${r.project.id}/in/${id}/`}>{r.student.name}</a>
-                  <span class="sub">{r.project.title}</span>
-                </th>
-                {shown.map((c) => {
-                  const m = milestoneOf(r, c);
-                  const sc = m ? scoreFor.get(`${m.id}:${r.student.id}`) ?? null : null;
-                  /* Writable once the work is in (2.8): a score on nothing
-                     is refused by the function too. */
-                  const canWrite = Boolean(m?.completed_on) && (r.mine || (me.isAdvisor && r.elders.length === 0));
-                  return (
-                    <td class:list={[sc ? 'has' : m?.completed_on ? 'is-in' : 'none', sc ? scoreBand(sc.score) : '']}>
-                      {!m ? (
-                        <span class="dash">—</span>
-                      ) : canWrite ? (
-                        (() => {
-                          const key = `${m.id}:${r.student.id}`;
-                          const scoreNow = sc?.score == null ? '' : String(sc.score);
-                          const commentNow = sc?.feedback_md ?? '';
-                          return (
-                            <div class="cell edit">
-                              <input type="hidden" name={`o:${key}`} value={`${scoreNow}|${commentNow.trim()}`} />
-                              <input type="hidden" name={`n:${key}`} value={`${r.student.name}, ${c.name}`} />
-                              <label class="fwrap"><span class="sr">Score for {r.student.name} on {c.name}</span>
-                                <select class="se cscore" name={`s:${key}`}>
-                                  <option value="" selected={scoreNow === ''}>—</option>
-                                  {LEVELS.map((l) => <option value={l} selected={scoreNow === l}>{l}</option>)}
-                                </select>
-                              </label>
-                              <label class="fwrap"><span class="sr">Comment for {r.student.name} on {c.name}</span>
-                                <input class="in ccmt" name={`c:${key}`} value={commentNow} />
-                              </label>
-                            </div>
-                          );
-                        })()
-                      ) : sc ? (
-                        <span class="cell read">
-                          <b>{sc.score ?? '—'}</b>
-                          {sc.feedback_md && <span class="cmt" title={sc.feedback_md}>{sc.feedback_md}</span>}
-                        </span>
-                      ) : (
-                        <span class="cstate">{m.completed_on ? 'submitted, not scored' : 'not in'}</span>
-                      )}
-                    </td>
-                  );
-                })}
-              </tr>
-            ))}
-          </tbody>
-        ))}
-      </table>
+      <div class="split">
+        {/* ── THE GRID ─────────────────────────────────────────────── */}
+        <div class="view" id="view-grid">
+          <div class="gwrap">
+            <table class="g" role="grid" aria-label={`${label} Elder scores`} aria-rowcount={rows.length} aria-colcount={cols.length}>
+              <thead>
+                <tr>
+                  <th scope="col" class="stick">Student</th>
+                  {cols.map((c, ci) => (
+                    <th scope="col" data-col={c.key} data-ci={ci} data-ahead={inWindow(c) ? '0' : '1'}>
+                      <span class="cname">{c.name}</span>
+                      <span class="cdue">{c.dueOn ? fmt(c.dueOn) : 'no date'}{c.students ? ' · seen by students' : ''}</span>
+                    </th>
+                  ))}
+                  <th scope="col" class="avg">Avg</th>
+                </tr>
+              </thead>
+              {families.map((f) => (
+                <tbody class:list={[f.mine && 'mine']} data-fam={f.key}>
+                  <tr class:list={['fam', f.mine && 'mine']}>
+                    <th scope="rowgroup" colspan={cols.length + 2}>
+                      <span class="fname">{staffWord(program, f.rows.some((r) => r.elders.length > 1) ? 'plural' : 'singular')}: {f.name}{f.mine ? ' (you)' : ''}</span>
+                      <span class="favg"><b data-fam-avg={f.key}>{famAvg(f)}</b> · {f.rows.length} {f.rows.length === 1 ? 'student' : 'students'}</span>
+                    </th>
+                  </tr>
+                  {f.rows.map((r) => (
+                    <tr data-sid={r.student.id} data-fam={f.key} data-mine={r.mine ? '1' : '0'}>
+                      <th scope="row" class="stick">
+                        <a href={`/app/project/${r.project.id}/in/${id}/`}>{r.student.name}</a>
+                        <span class="p">{r.project.title}</span>
+                      </th>
+                      {cols.map((c, ci) => {
+                        const m = milestoneOf(r, c);
+                        const sc = m ? scoreFor.get(`${m.id}:${r.student.id}`) ?? null : null;
+                        const state = !m ? 'na' : sc ? 'scored' : m.completed_on ? 'in' : 'notin';
+                        const w = Boolean(m) && canWriteRow(r);
+                        return (
+                          <td
+                            role="gridcell"
+                            tabindex="-1"
+                            class:list={['c', state, sc ? scoreBand(sc.score) : '', w && 'w']}
+                            data-col={c.key}
+                            data-ci={ci}
+                            data-ahead={inWindow(c) ? '0' : '1'}
+                            data-mid={m?.id ?? ''}
+                            data-sid={r.student.id}
+                            data-fam={f.key}
+                            data-w={w ? '1' : '0'}
+                            data-state={state}
+                            data-aid={sc?.id ?? ''}
+                            data-score={sc?.score == null ? '' : String(sc.score)}
+                            data-cmt={sc?.feedback_md ?? ''}
+                            data-by={sc?.grader?.display_name ?? ''}
+                            data-at={sc?.created_at ?? ''}
+                            data-done={m?.completed_on ?? ''}
+                            data-doc={m ? `/app/project/${r.project.id}/in/${id}/#m-${m.id}` : ''}
+                            aria-label={`${r.student.name}, ${c.name}: ${state === 'scored' ? scoreWord(sc.score) : state === 'in' ? 'in, not scored' : state === 'notin' ? 'not in' : 'not asked'}`}
+                          >
+                            {state === 'scored' ? (
+                              <span class:list={['s', scoreBand(sc.score)]}>{scoreWord(sc.score)}{sc.feedback_md && <i class="dot" title="has a comment"></i>}</span>
+                            ) : state === 'in' ? <span class="inbar" title="in, not scored"></span> : <span class="no">—</span>}
+                          </td>
+                        );
+                      })}
+                      <td class="avg" data-row-avg={r.student.id}>{rowAvg(r)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              ))}
+              <tfoot>
+                <tr>
+                  <td class="stick">Class average</td>
+                  {cols.map((c, ci) => <td data-col={c.key} data-ci={ci} data-ahead={inWindow(c) ? '0' : '1'} data-col-avg={c.key}>{colAvg(c)}</td>)}
+                  <td data-all-avg>{allAvg}</td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        </div>
+
+        {/* ── BY ASSIGNMENT and BY STUDENT: drawn from the grid's cells ── */}
+        <div class="view" id="view-assignment" hidden>
+          <div class="pick">
+            <button type="button" class="car" data-pick-prev aria-label="Previous assignment">‹</button>
+            <select class="se picksel" data-pick-col aria-label="Assignment"></select>
+            <button type="button" class="car" data-pick-next aria-label="Next assignment">›</button>
+          </div>
+          <div class="list" data-list-assignment></div>
+        </div>
+        <div class="view" id="view-student" hidden>
+          <div class="pick">
+            <button type="button" class="car" data-pick-prev aria-label="Previous student">‹</button>
+            <select class="se picksel" data-pick-student aria-label="Student"></select>
+            <button type="button" class="car" data-pick-next aria-label="Next student">›</button>
+          </div>
+          <div class="figs" data-figs></div>
+          <div class="list" data-list-student></div>
+        </div>
+
+        {/* ── THE PANEL: one cell, open ────────────────────────────── */}
+        <aside class="panel" id="panel" hidden aria-label="Score">
+          <p class="meta" data-p-meta></p>
+          <p class="who" data-p-who></p>
+          <p class="what"><span data-p-what></span> · <a data-p-doc href="#">Open the deliverable</a></p>
+          <p class="lbl">Score</p>
+          <div class="scores" data-p-scores role="radiogroup" aria-label="Score">
+            {LEVELS_UI.map((l) => <button type="button" class:list={['sc', scoreBand(l)]} data-score={l} aria-pressed="false">{l}</button>)}
+            <button type="button" class="sc" data-score="" aria-pressed="false" title="Clear">—</button>
+          </div>
+          <p class="lbl">Comment</p>
+          <div class="pcmt">
+            <MarkdownEditor id="p-comment" name="p-comment" value="" rows={4} />
+          </div>
+          <div class="saved"><span data-p-state></span><span class="kbd"><b>1</b>–<b>4</b> score · <b>h</b> half · <b>↓</b> next student · <b>→</b> next assignment · <b>Esc</b> back</span></div>
+          <div class="nav">
+            <button type="button" class="btn btn-sm btn-2" data-p-close>Close</button>
+            <button type="button" class="btn btn-sm btn-2" data-p-prev>← Previous</button>
+            <button type="button" class="btn btn-sm" data-p-next>Next ↓</button>
+          </div>
+        </aside>
+      </div>
+
+      <dialog id="keys" class="keys">
+        <h2>Keys</h2>
+        <dl>
+          <dt>↑ ↓ ← →</dt><dd>Move between cells</dd>
+          <dt>Home / End</dt><dd>First and last assignment in the row</dd>
+          <dt>PageUp / PageDown</dt><dd>Previous and next family</dd>
+          <dt>Tab</dt><dd>Next cell that is yours to score</dd>
+          <dt>1 2 3 4</dt><dd>Score the cell where it stands</dd>
+          <dt>h</dt><dd>Add or remove the half point</dd>
+          <dt>0 / Backspace</dt><dd>Clear the score</dd>
+          <dt>Enter</dt><dd>Open the panel with the comment box focused</dd>
+          <dt>Esc</dt><dd>Back to the grid, on the same cell</dd>
+          <dt>Ctrl+Enter</dt><dd>From the comment: save and move to the next student</dd>
+          <dt>g / a / s</dt><dd>Grid, by assignment, by student</dd>
+          <dt>/</dt><dd>Focus the assignment or student picker</dd>
+          <dt>?</dt><dd>This list</dd>
+        </dl>
+        <form method="dialog"><button class="btn btn-sm" type="submit">Close</button></form>
+      </dialog>
+      <noscript><p class="note">Scoring on this page needs JavaScript; the grid above still reads.</p></noscript>
     </div>
-    {anyWritable && (
-      <p class="tsave"><button class="btn" type="submit">Save all</button><span class="t-sm">Only the cells you changed are written.</span></p>
-    )}
-    </form>
   </div>
 </Base>
 
-<style>
-  .tbar { display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: center; margin: 0 0 14px; }
-  .tracker-wrap { overflow-x: auto; background: var(--card); }
-  /* One grid, every cell ruled the same (2.8). `separate` stays for the
-     sticky column and header, so each cell draws its own right and bottom
-     rule and the table draws the top and left. */
-  .tracker { border-collapse: separate; border-spacing: 0; min-width: 100%; font-size: 0.86rem; border-top: 1px solid var(--rule); border-left: 1px solid var(--rule); }
-  .tracker th, .tracker td { border-bottom: 1px solid var(--rule); border-right: 1px solid var(--rule); padding: 6px 8px; vertical-align: top; text-align: left; min-width: 150px; }
-  .tracker tr.fam th { border-right: 1px solid var(--rule); }
-  .tracker thead th { background: var(--sunk); position: sticky; top: 0; z-index: 2; }
-  .tracker .stick { position: sticky; left: 0; background: var(--card); z-index: 1; min-width: 200px; }
-  .tracker thead th.stick { z-index: 3; background: var(--sunk); }
-  .tracker .cname { display: block; font-weight: 600; }
-  .tracker .cdue { display: block; font-family: var(--face-ui); font-size: 0.76rem; color: var(--ink-3); font-weight: 400; }
-  .tracker tr.fam th { background: var(--accent-pale); font-family: var(--face-ui); font-size: 0.82rem; letter-spacing: 0.03em; text-transform: uppercase; }
-  .tracker tbody.mine tr.fam th { background: var(--accent); color: var(--accent-ink); }
-  .fcount { margin-left: 8px; font-weight: 400; opacity: 0.8; }
-  .tracker td.has { background: var(--ok-bg); }
-  .tracker td.none { color: var(--ink-3); }
-  .cell b { font-size: 1.05rem; }
-  .cmt { display: block; font-size: 0.78rem; color: var(--ink-2); max-width: 220px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .cstate { font-family: var(--face-ui); font-size: 0.72rem; color: var(--ink-3); }
-  .dash { color: var(--ink-3); }
-  .cell.read { display: grid; gap: 2px; }
-  /* A writable cell is its two fields, nothing folded (2.8): the score
-     and the comment, saved with the rest by Save all. */
-  .cell.edit { display: grid; grid-template-columns: 5rem minmax(0, 1fr); gap: 4px 6px; align-items: center; min-width: 220px; }
-  .cell.edit .cstate { grid-column: 1 / -1; }
-  .cell.edit .se, .cell.edit .in { padding: 4px 6px; font-size: 0.86rem; width: 100%; box-sizing: border-box; }
-  .cell.edit .fwrap { display: block; min-width: 0; }
-  .tsave { display: flex; align-items: center; gap: 12px; margin: 14px 0 0; }
-  .tracker th, .tracker td { padding: 5px 8px; }
+<style is:global>
+  /* Global, under .tk (2.9): the lists are drawn by script, and a
+     scoped style does not reach markup it did not render. */
+  .tk .tbar { display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: center; margin: 0 0 12px; }
+  .tk .spacer { flex: 1; }
+  .tk .legend { display: flex; gap: 6px; align-items: center; font-family: var(--face-ui); font-size: 0.78rem; color: var(--ink-3); }
+  .tk .legend i { display: inline-block; width: 18px; height: 18px; font-style: normal; font-family: var(--face-num); font-size: 0.7rem; text-align: center; line-height: 18px; }
+  .tk .legend .band-1 { background: var(--band-1-bg); color: var(--band-1-ink); } .tk .legend .band-2 { background: var(--band-2-bg); color: var(--band-2-ink); }
+  .tk .legend .band-3 { background: var(--band-3-bg); color: var(--band-3-ink); } .tk .legend .band-4 { background: var(--band-4-bg); color: var(--band-4-ink); }
+
+  /* The grid and the panel side by side; the panel below on a narrow screen. */
+  .tk .split { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; align-items: start; }
+  .tk.has-panel .split { grid-template-columns: minmax(0, 1fr) 340px; }
+  @media (max-width: 960px) { .tk.has-panel .split { grid-template-columns: minmax(0, 1fr); } }
+
+  /* ── The grid ─────────────────────────────────────────────────── */
+  .tk .gwrap { overflow: auto; max-height: min(72vh, 760px); background: var(--card); border: 1px solid var(--rule); }
+  .tk .g { border-collapse: separate; border-spacing: 0; min-width: 100%; font-size: 0.86rem; }
+  .tk .g th, .tk .g td { border-bottom: 1px solid var(--rule-fine); border-right: 1px solid var(--rule-fine); padding: 0; text-align: left; vertical-align: middle; }
+  .tk .g thead th { position: sticky; top: 0; z-index: 3; background: var(--sunk); font-family: var(--face-num); font-weight: 500; font-size: 0.66rem; letter-spacing: 0.04em; text-transform: uppercase; color: var(--ink-2); padding: 8px 6px; width: 80px; min-width: 80px; max-width: 80px; line-height: 1.2; vertical-align: top; }
+  .tk .g thead th .cdue { display: block; color: var(--ink-3); font-weight: 400; margin-top: 3px; letter-spacing: 0; text-transform: none; }
+  .tk .g .stick { position: sticky; left: 0; z-index: 2; background: var(--card); min-width: 220px; width: 220px; max-width: 220px; padding: 8px 12px; font-family: var(--face-ed); font-size: 0.95rem; font-weight: 400; text-transform: none; letter-spacing: 0; }
+  .tk .g thead .stick { z-index: 4; background: var(--sunk); font-family: var(--face-num); font-size: 0.66rem; text-transform: uppercase; }
+  .tk .g .stick a { text-decoration: none; }
+  .tk .g .stick .p { display: block; font-size: 0.76rem; color: var(--ink-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .tk .g tr.fam th { position: sticky; left: 0; z-index: 2; background: var(--brand-deep); color: var(--brand-contrast); font-family: var(--face-ed); font-weight: 600; font-size: 0.92rem; padding: 7px 12px; }
+  .tk .g tr.fam th .favg { float: right; font-family: var(--face-num); font-size: 0.74rem; font-weight: 400; opacity: 0.9; }
+  .tk .g tr.fam.mine th { background: var(--brand); }
+  .tk .g td.c { width: 80px; min-width: 80px; text-align: center; height: 44px; }
+  .tk .g td.c.w { cursor: pointer; }
+  .tk .g td.c.w:hover { outline: 2px solid var(--accent); outline-offset: -2px; }
+  .tk .g td.c:focus { outline: 3px solid var(--accent); outline-offset: -3px; background: var(--accent-pale); }
+  .tk .g td.c.cur { outline: 3px solid var(--accent); outline-offset: -3px; background: var(--accent-pale); }
+  .tk .g td.c.fresh { animation: fresh 1.4s ease-out; }
+  @keyframes fresh { from { background: var(--accent-pale); } to { background: transparent; } }
+  .tk .s { display: inline-flex; align-items: center; justify-content: center; gap: 4px; min-width: 34px; height: 26px; padding: 0 8px; font-family: var(--face-num); font-weight: 700; font-size: 0.86rem; border-radius: 2px; }
+  .tk .s.band-1 { background: var(--band-1-bg); color: var(--band-1-ink); } .tk .s.band-2 { background: var(--band-2-bg); color: var(--band-2-ink); }
+  .tk .s.band-3 { background: var(--band-3-bg); color: var(--band-3-ink); } .tk .s.band-4 { background: var(--band-4-bg); color: var(--band-4-ink); }
+  .tk .s .dot { width: 5px; height: 5px; border-radius: 50%; background: currentColor; opacity: 0.7; }
+  .tk .inbar { display: inline-block; width: 22px; height: 6px; background: var(--accent); border-radius: 3px; vertical-align: middle; }
+  .tk .no { color: var(--rule); font-size: 1rem; }
+  .tk .g td.avg, .tk .g th.avg { font-family: var(--face-num); font-size: 0.8rem; color: var(--ink-2); text-align: center; background: var(--sunk); width: 64px; min-width: 64px; padding: 0 6px; }
+  .tk .g tfoot td { position: sticky; bottom: 0; background: var(--sunk); font-family: var(--face-num); font-size: 0.78rem; color: var(--ink-2); text-align: center; padding: 8px 6px; border-top: 2px solid var(--brand); z-index: 2; }
+  .tk .g tfoot .stick { text-align: left; font-family: var(--face-num); font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.06em; z-index: 3; }
+  /* The window: columns past "reached plus two" are off until asked. */
+  .tk:not(.all) [data-ahead='1'] { display: none; }
+  /* The filters: unscored cells only; my family only. */
+  .tk.unscored td.c.scored, .tk.unscored td.c.na, .tk.unscored td.c.notin { opacity: 0.25; }
+  .tk.mine-only tbody:not(.mine) { display: none; }
+
+  /* ── The lists ─────────────────────────────────────────────────── */
+  .tk .pick { display: flex; align-items: center; gap: 8px; margin: 0 0 12px; }
+  .tk .pick .picksel { flex: 1 1 auto; min-width: 0; font-weight: 600; font-size: 1rem; }
+  .tk .figs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 0 0 12px; }
+  .tk .figs div { background: var(--card); border: 1px solid var(--rule); padding: 8px 10px; }
+  .tk .figs b { display: block; font-family: var(--face-num); font-size: 1.2rem; }
+  .tk .figs span { font-family: var(--face-ui); font-size: 0.74rem; color: var(--ink-3); }
+  .tk .fam-h { background: var(--brand-deep); color: var(--brand-contrast); font-weight: 600; padding: 8px 12px; font-size: 0.92rem; display: flex; justify-content: space-between; gap: 10px; margin-top: 12px; }
+  .tk .fam-h.mine { background: var(--brand); }
+  .tk .fam-h:first-child { margin-top: 0; }
+  .tk .fam-h .favg { font-family: var(--face-num); font-size: 0.74rem; font-weight: 400; opacity: 0.9; }
+  .tk .srow { background: var(--card); border: 1px solid var(--rule-fine); border-top: 0; padding: 10px 12px 12px; }
+  .tk .srow.cur { outline: 3px solid var(--accent); outline-offset: -3px; }
+  .tk .srow .n { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; font-weight: 600; }
+  .tk .srow .n a { text-decoration: none; }
+  .tk .srow .st { font-family: var(--face-num); font-size: 0.72rem; color: var(--ink-3); font-weight: 400; white-space: nowrap; }
+  .tk .srow.scored .st { color: var(--band-3-ink); }
+  .tk .srow .p { font-size: 0.8rem; color: var(--ink-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .tk .srow .c { margin-top: 8px; font-size: 0.9rem; border: 1px solid var(--rule); padding: 8px 10px; color: var(--ink-2); min-height: 40px; cursor: text; }
+  .tk .srow .c.empty { color: var(--ink-3); font-style: italic; }
+  .tk .srow .c p { margin: 0; }
+  .tk .srow.na, .tk .srow.notin { color: var(--ink-3); }
+  .tk .srow .read { display: flex; gap: 10px; align-items: center; margin-top: 6px; }
+  .tk .arow { display: grid; grid-template-columns: 48px minmax(0, 1fr); gap: 10px; background: var(--card); border: 1px solid var(--rule-fine); border-top: 0; padding: 10px 12px; align-items: start; }
+  .tk .arow .s { width: 46px; height: 34px; }
+  .tk .arow .a { font-weight: 600; }
+  .tk .arow .d { font-family: var(--face-num); font-size: 0.72rem; color: var(--ink-3); }
+  .tk .arow .c { font-size: 0.88rem; color: var(--ink-2); margin-top: 2px; }
+  .tk .arow .c p { margin: 0; }
+  .tk .arow.w { cursor: pointer; }
+  .tk .arow.w:hover { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+  /* The score buttons, in the panel and in the rows. */
+  .tk .scores { display: grid; grid-template-columns: repeat(8, minmax(0, 1fr)); gap: 4px; margin-top: 8px; }
+
+  /* ── The panel ─────────────────────────────────────────────────── */
+  .tk .panel[hidden] { display: none; }
+  .tk .panel { position: sticky; top: 16px; background: var(--card); border: 1px solid var(--rule); border-top: 4px solid var(--accent); padding: 16px 18px 18px; display: flex; flex-direction: column; gap: 10px; }
+  .tk .panel .meta { font-family: var(--face-num); font-size: 0.72rem; color: var(--ink-3); text-transform: uppercase; letter-spacing: 0.04em; margin: 0; }
+  .tk .panel .who { margin: 0; font-size: 1.1rem; font-weight: 700; }
+  .tk .panel .what { margin: 0; color: var(--ink-2); font-size: 0.95rem; }
+  .tk .panel .what a { color: var(--brand); }
+  .tk .panel .lbl { font-family: var(--face-num); font-size: 0.7rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-3); margin: 6px 0 -4px; }
+  .tk .panel .scores { margin-top: 0; }
+  .tk .pcmt .mdx-help { display: none; }
+  .tk .saved { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; font-family: var(--face-num); font-size: 0.72rem; color: var(--ink-3); }
+  .tk .saved [data-p-state].ok { color: var(--band-3-ink); }
+  .tk .saved [data-p-state].bad { color: var(--alert); }
+  .tk .kbd b { display: inline-block; border: 1px solid var(--rule); padding: 0 5px; border-radius: 3px; font-weight: 500; }
+  .tk .nav { display: flex; gap: 8px; }
+  .tk .nav .btn { flex: 1; text-align: center; }
+  @media (max-width: 960px) {
+    .tk .panel { position: fixed; left: 0; right: 0; bottom: 0; top: auto; z-index: 30; max-height: 80vh; overflow: auto; border-top: 4px solid var(--accent); box-shadow: var(--lift-2); margin: 0; }
+    .tk .kbd { display: none; }
+  }
+
+  .keys::backdrop { background: var(--brand-deep); opacity: 0.4; }
+  .keys { border: 1px solid var(--rule); background: var(--card); color: var(--ink); padding: 18px 22px; max-width: 32rem; }
+  .keys h2 { margin: 0 0 10px; font-size: 1.1rem; }
+  .keys dl { display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; margin: 0 0 14px; font-size: 0.92rem; }
+  .keys dt { font-family: var(--face-num); font-size: 0.8rem; color: var(--ink-2); }
+  .keys dd { margin: 0; }
 </style>
+
+<script>
+  import { renderMarkdown } from '../../../../lib/notes';
+  import { meanWord, scoreWord, LEVELS } from '../../../../lib/tracker-math';
+  import { scoreBand } from '../../../../lib/score-band';
+  import { onMessage, liveMe } from '../../../../lib/live-client';
+  /**
+   * THE TRACKER, ALIVE (2.8).
+   *
+   * The grid's cells are the model: every fact about a cell is on its
+   * `<td>` (data-mid, data-sid, data-score, data-cmt, data-aid, ...). The
+   * two lists are drawn from those cells, the panel edits one of them,
+   * and a save updates the cell first and then whatever shows it. A score
+   * arriving over the socket does the same from the other end.
+   */
+  const tkEl = document.getElementById('tk');
+  if (tkEl) {
+    const tk: HTMLElement = tkEl;
+    const me = tk.dataset.me ?? '';
+    const grid = tk.querySelector<HTMLTableElement>('table.g')!;
+    const cells = () => [...grid.querySelectorAll<HTMLTableCellElement>('td.c')];
+    const cols = [...grid.querySelectorAll<HTMLTableCellElement>('thead th[data-col]')].map((th) => ({ key: th.dataset.col!, ci: Number(th.dataset.ci), name: th.querySelector('.cname')?.textContent ?? '', due: th.querySelector('.cdue')?.textContent ?? '', ahead: th.dataset.ahead === '1' }));
+    const rowsMeta = [...grid.querySelectorAll<HTMLTableRowElement>('tbody tr[data-sid]')].map((tr) => ({ sid: tr.dataset.sid!, fam: tr.dataset.fam!, mine: tr.dataset.mine === '1', name: tr.querySelector('th a')?.textContent ?? '', href: tr.querySelector<HTMLAnchorElement>('th a')?.getAttribute('href') ?? '#', title: tr.querySelector('.p')?.textContent ?? '' }));
+    const fams = [...grid.querySelectorAll<HTMLElement>('tbody[data-fam]')].map((tb) => ({ key: tb.dataset.fam!, mine: tb.classList.contains('mine'), name: tb.querySelector('.fname')?.textContent ?? '' }));
+    const cellAt = (sid: string, col: string) => grid.querySelector<HTMLTableCellElement>(`td.c[data-sid="${CSS.escape(sid)}"][data-col="${CSS.escape(col)}"]`);
+    /* Today's scores by the hour, earlier ones by the day (2.9): "Scored
+       5:00 AM" on a score from last month said nothing. */
+    const fmtAt = (iso: string) => {
+      if (!iso) return '';
+      const d = new Date(iso);
+      const today = new Date();
+      return d.toDateString() === today.toDateString()
+        ? d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+        : d.toLocaleDateString([], { month: 'short', day: 'numeric' });
+    };
+
+    /* ── The state of the page: view, window, filters ─────────────── */
+    const remember = (k: string, v: string) => { try { localStorage.setItem(`sp:tracker:${k}`, v); } catch {} };
+    const recall = (k: string) => { try { return localStorage.getItem(`sp:tracker:${k}`); } catch { return null; } };
+    let view = recall('view') ?? (window.innerWidth < 800 ? 'assignment' : 'grid');
+    const setView = (v: string) => {
+      view = v; remember('view', v);
+      for (const b of tk.querySelectorAll<HTMLButtonElement>('[data-view]')) b.setAttribute('aria-selected', b.dataset.view === v ? 'true' : 'false');
+      for (const el of tk.querySelectorAll<HTMLElement>('.view')) el.hidden = el.id !== `view-${v}`;
+      if (v === 'assignment') drawAssignment();
+      if (v === 'student') drawStudent();
+    };
+    tk.querySelectorAll<HTMLButtonElement>('[data-view]').forEach((b) => b.addEventListener('click', () => setView(b.dataset.view!)));
+    const setFilter = (name: string, on: boolean) => {
+      const b = tk.querySelector<HTMLButtonElement>(`[data-filter="${name}"]`);
+      if (b) b.setAttribute('aria-pressed', on ? 'true' : 'false');
+      if (name === 'window') { tk.classList.toggle('all', on); if (b) b.textContent = on ? 'Every assignment' : 'Reached so far + next 2'; }
+      if (name === 'unscored') tk.classList.toggle('unscored', on);
+      if (name === 'mine') tk.classList.toggle('mine-only', on);
+      remember(`f:${name}`, on ? '1' : '0');
+      fillPickers(); if (view !== 'grid') setView(view);
+    };
+    tk.querySelectorAll<HTMLButtonElement>('[data-filter]').forEach((b) => {
+      b.addEventListener('click', () => setFilter(b.dataset.filter!, b.getAttribute('aria-pressed') !== 'true'));
+    });
+    const keys = document.getElementById('keys') as HTMLDialogElement | null;
+    tk.querySelector('[data-help]')?.addEventListener('click', () => keys?.showModal());
+
+    /* ── Reading and writing a cell ───────────────────────────────── */
+    const shown = (c: HTMLTableCellElement) => !(tk.classList.contains('mine-only') && c.dataset.fam !== tk.dataset.myFamily) && !(!tk.classList.contains('all') && c.dataset.ahead === '1');
+    const paintCell = (c: HTMLTableCellElement) => {
+      const st = c.dataset.state!;
+      c.classList.remove('scored', 'in', 'notin', 'na', 'band-1', 'band-2', 'band-3', 'band-4');
+      c.classList.add(st);
+      if (st === 'scored') {
+        const band = scoreBand(c.dataset.score);
+        if (band) c.classList.add(band);
+        c.innerHTML = `<span class="s ${band}">${scoreWord(c.dataset.score)}${c.dataset.cmt ? '<i class="dot" title="has a comment"></i>' : ''}</span>`;
+      } else if (st === 'in') c.innerHTML = '<span class="inbar" title="in, not scored"></span>';
+      else c.innerHTML = '<span class="no">—</span>';
+      c.classList.add('fresh'); window.setTimeout(() => c.classList.remove('fresh'), 1500);
+    };
+    const averages = (c: HTMLTableCellElement) => {
+      const sid = c.dataset.sid!, col = c.dataset.col!, fam = c.dataset.fam!;
+      const scores = (list: HTMLTableCellElement[]) => list.map((x) => (x.dataset.state === 'scored' ? x.dataset.score : null));
+      const all = cells();
+      const set = (sel: string, v: string) => { const el = tk.querySelector<HTMLElement>(sel); if (el) el.textContent = v; };
+      set(`[data-row-avg="${CSS.escape(sid)}"]`, meanWord(scores(all.filter((x) => x.dataset.sid === sid))));
+      set(`[data-col-avg="${CSS.escape(col)}"]`, meanWord(scores(all.filter((x) => x.dataset.col === col))));
+      set(`[data-fam-avg="${CSS.escape(fam)}"]`, meanWord(scores(all.filter((x) => x.dataset.fam === fam))));
+      set('[data-all-avg]', meanWord(scores(all)));
+    };
+    /* Put a saved (or arrived) score onto its cell and everything showing it. */
+    const applyToCell = (c: HTMLTableCellElement, v: { id: string; score: string; cmt: string; by: string; at: string }) => {
+      c.dataset.aid = v.id; c.dataset.score = scoreWord(v.score); c.dataset.cmt = v.cmt; c.dataset.by = v.by; c.dataset.at = v.at;
+      if (v.score !== '' || v.cmt !== '') c.dataset.state = 'scored';
+      else c.dataset.state = c.dataset.done ? 'in' : 'notin';
+      paintCell(c); averages(c);
+      if (view === 'assignment') drawAssignment(); else if (view === 'student') drawStudent();
+    };
+
+    /* ── Saving: one cell at a time, as it changes ────────────────── */
+    const post = async (c: HTMLTableCellElement, score: string, cmt: string) => {
+      const res = await fetch('/app/api/score/', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ milestone_id: c.dataset.mid, student_id: c.dataset.sid, score, comment: cmt, was: c.dataset.aid ?? '' }) });
+      return res.json().catch(() => ({ ok: false, error: `save failed (${res.status})` }));
+    };
+    const inFlight = new Map<string, Promise<void>>();
+    const save = (c: HTMLTableCellElement, score: string, cmt: string, tell?: (t: string, ok: boolean) => void) => {
+      const key = `${c.dataset.mid}:${c.dataset.sid}`;
+      const run = (inFlight.get(key) ?? Promise.resolve()).then(async () => {
+        tell?.('Saving…', true);
+        const out = await post(c, score, cmt);
+        if (out.ok) {
+          applyToCell(c, { id: String(out.id), score, cmt, by: tk.dataset.meName ?? '', at: out.at });
+          tell?.(`Saved ${fmtAt(out.at)} · you`, true);
+        } else if (out.conflict) {
+          applyToCell(c, { id: out.id ?? '', score: out.score == null ? '' : String(out.score), cmt: out.comment ?? '', by: out.by ?? '', at: out.at ?? '' });
+          tell?.(`${out.by ?? 'Somebody'} saved this cell at ${fmtAt(out.at)}; showing theirs. Score again to replace it.`, false);
+          if (panelCell === c) fillPanel(c);
+        } else tell?.(out.error || 'Could not save', false);
+      });
+      inFlight.set(key, run.catch(() => {}));
+      return run;
+    };
+
+    /* ── The panel ────────────────────────────────────────────────── */
+    const panel = document.getElementById('panel') as HTMLElement;
+    const pEdit = panel.querySelector<HTMLElement>('.mdx-edit');
+    const pTa = panel.querySelector<HTMLTextAreaElement>('textarea');
+    const pState = panel.querySelector<HTMLElement>('[data-p-state]')!;
+    let panelCell: HTMLTableCellElement | null = null;
+    let cmtTimer: number | undefined;
+    const tellPanel = (t: string, ok: boolean) => { pState.textContent = t; pState.className = ok ? 'ok' : 'bad'; };
+    const fillPanel = (c: HTMLTableCellElement) => {
+      const col = cols.find((x) => x.key === c.dataset.col)!;
+      const row = rowsMeta.find((x) => x.sid === c.dataset.sid)!;
+      panel.querySelector('[data-p-meta]')!.textContent = `${col.name} · due ${col.due}${c.dataset.done ? ` · in ${c.dataset.done}` : ' · not in'}`;
+      panel.querySelector('[data-p-who]')!.textContent = row.name;
+      panel.querySelector('[data-p-what]')!.textContent = row.title;
+      (panel.querySelector('[data-p-doc]') as HTMLAnchorElement).href = c.dataset.doc || row.href;
+      const writable = c.dataset.w === '1' && c.dataset.state !== 'notin' && c.dataset.state !== 'na';
+      for (const b of panel.querySelectorAll<HTMLButtonElement>('[data-p-scores] button')) { b.setAttribute('aria-pressed', b.dataset.score === (c.dataset.score ?? '') ? 'true' : 'false'); b.disabled = !writable; }
+      if (pEdit && pTa) { pTa.value = c.dataset.cmt ?? ''; pEdit.innerHTML = pTa.value.trim() ? renderMarkdown(pTa.value) : ''; pEdit.contentEditable = writable ? 'true' : 'false'; }
+      if (c.dataset.state === 'scored') tellPanel(`Scored ${fmtAt(c.dataset.at ?? '')}${c.dataset.by ? ` · ${c.dataset.by}` : ''}`, true);
+      else if (!writable) tellPanel(c.dataset.w === '1' ? 'Not handed in yet; the score waits for the work.' : 'Read only: another family.', true);
+      else tellPanel('In, not scored yet', true);
+    };
+    const openPanel = (c: HTMLTableCellElement, focusComment = false) => {
+      panelCell = c;
+      for (const x of cells()) x.classList.toggle('cur', x === c);
+      fillPanel(c);
+      panel.hidden = false; tk.classList.add('has-panel');
+      if (focusComment && pEdit && pEdit.contentEditable === 'true') pEdit.focus();
+    };
+    const closePanel = () => {
+      window.clearTimeout(cmtTimer);
+      panel.hidden = true; tk.classList.remove('has-panel');
+      const c = panelCell; panelCell = null;
+      if (c) { c.classList.remove('cur'); c.focus(); }
+    };
+    panel.querySelectorAll<HTMLButtonElement>('[data-p-scores] button').forEach((b) => b.addEventListener('click', () => { if (panelCell) setScore(panelCell, b.dataset.score ?? '', tellPanel); }));
+    pTa?.addEventListener('input', () => {
+      if (!panelCell) return;
+      window.clearTimeout(cmtTimer);
+      const c = panelCell;
+      tellPanel('Typing…', true);
+      cmtTimer = window.setTimeout(() => save(c, c.dataset.score ?? '', pTa.value, tellPanel), 1200);
+    });
+    const flushComment = () => { if (panelCell && pTa && cmtTimer) { window.clearTimeout(cmtTimer); cmtTimer = undefined; save(panelCell, panelCell.dataset.score ?? '', pTa.value, tellPanel); } };
+    panel.querySelector('[data-p-next]')?.addEventListener('click', () => step(0, 1, true));
+    panel.querySelector('[data-p-prev]')?.addEventListener('click', () => step(0, -1, true));
+    panel.querySelector('[data-p-close]')?.addEventListener('click', () => { flushComment(); closePanel(); });
+    const setScore = (c: HTMLTableCellElement, score: string, tell?: (t: string, ok: boolean) => void) => {
+      if (c.dataset.w !== '1' || c.dataset.state === 'notin' || c.dataset.state === 'na') { tell?.(c.dataset.w === '1' ? 'Not handed in yet' : 'Read only', false); return; }
+      const cmt = panelCell === c && pTa ? pTa.value : c.dataset.cmt ?? '';
+      for (const b of panel.querySelectorAll<HTMLButtonElement>('[data-p-scores] button')) if (panelCell === c) b.setAttribute('aria-pressed', b.dataset.score === score ? 'true' : 'false');
+      save(c, score, cmt, tell);
+    };
+
+    /* ── Moving: the current cell, in the grid and from the panel ──── */
+    const current = () => panelCell ?? (document.activeElement?.closest('td.c') as HTMLTableCellElement | null) ?? cells().find((c) => c.tabIndex === 0) ?? null;
+    const visibleCells = () => cells().filter(shown);
+    const focusCell = (c: HTMLTableCellElement | null) => {
+      if (!c) return;
+      for (const x of cells()) x.tabIndex = -1;
+      c.tabIndex = 0;
+      if (panelCell) openPanel(c); else c.focus();
+      c.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    };
+    /* dx across assignments, dy down students; from the panel it moves the open cell. */
+    const step = (dx: number, dy: number, viaPanel = false) => {
+      const c = current(); if (!c) return;
+      if (viaPanel) flushComment();
+      const list = visibleCells();
+      const sids = [...new Set(list.map((x) => x.dataset.sid!))];
+      const cks = [...new Set(list.map((x) => x.dataset.col!))];
+      const si = sids.indexOf(c.dataset.sid!), ci = cks.indexOf(c.dataset.col!);
+      const ns = Math.min(sids.length - 1, Math.max(0, si + dy)), nc = Math.min(cks.length - 1, Math.max(0, ci + dx));
+      focusCell(cellAt(sids[ns], cks[nc]));
+    };
+    const stepFamily = (dir: number) => {
+      const c = current(); if (!c) return;
+      const list = visibleCells();
+      const fks = [...new Set(list.map((x) => x.dataset.fam!))];
+      const fi = fks.indexOf(c.dataset.fam!);
+      const nf = fks[Math.min(fks.length - 1, Math.max(0, fi + dir))];
+      focusCell(list.find((x) => x.dataset.fam === nf && x.dataset.col === c.dataset.col) ?? null);
+    };
+    const nextMine = (dir: number) => {
+      const c = current();
+      const list = visibleCells().filter((x) => x.dataset.w === '1' && x.dataset.state !== 'na');
+      if (list.length === 0) return false;
+      const i = c ? list.indexOf(c) : -1;
+      const n = list[(i + dir + list.length) % list.length];
+      focusCell(n); return true;
+    };
+    const home = (end: boolean) => {
+      const c = current(); if (!c) return;
+      const rowCells = visibleCells().filter((x) => x.dataset.sid === c.dataset.sid);
+      focusCell(end ? rowCells[rowCells.length - 1] : rowCells[0]);
+    };
+
+    grid.addEventListener('click', (ev) => {
+      const c = (ev.target as HTMLElement).closest<HTMLTableCellElement>('td.c');
+      if (!c) return;
+      for (const x of cells()) x.tabIndex = -1; c.tabIndex = 0;
+      openPanel(c);
+    });
+    grid.addEventListener('keydown', (ev) => {
+      const c = (ev.target as HTMLElement).closest<HTMLTableCellElement>('td.c');
+      if (!c) return;
+      const k = ev.key;
+      if (k === 'ArrowRight') { step(1, 0); ev.preventDefault(); }
+      else if (k === 'ArrowLeft') { step(-1, 0); ev.preventDefault(); }
+      else if (k === 'ArrowDown') { step(0, 1); ev.preventDefault(); }
+      else if (k === 'ArrowUp') { step(0, -1); ev.preventDefault(); }
+      else if (k === 'Home') { home(false); ev.preventDefault(); }
+      else if (k === 'End') { home(true); ev.preventDefault(); }
+      else if (k === 'PageDown') { stepFamily(1); ev.preventDefault(); }
+      else if (k === 'PageUp') { stepFamily(-1); ev.preventDefault(); }
+      else if (k === 'Tab') { if (nextMine(ev.shiftKey ? -1 : 1)) ev.preventDefault(); }
+      else if (k === 'Enter') { openPanel(c, true); ev.preventDefault(); }
+      else if (/^[1-4]$/.test(k)) { setScore(c, k, (t, ok) => { if (panelCell === c) tellPanel(t, ok); }); ev.preventDefault(); }
+      else if (k === 'h') { const s = Number(c.dataset.score || 0); if (s > 0) setScore(c, String(Number.isInteger(s) ? Math.min(4, s + 0.5) : Math.floor(s))); ev.preventDefault(); }
+      else if (k === '0' || k === 'Backspace' || k === 'Delete') { setScore(c, ''); ev.preventDefault(); }
+    });
+    /* Keys that work anywhere on the page but inside a box. */
+    document.addEventListener('keydown', (ev) => {
+      const t = ev.target as HTMLElement;
+      const typing = t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName);
+      if (ev.key === 'Escape' && panelCell) { closePanel(); ev.preventDefault(); return; }
+      if (typing) {
+        if (ev.key === 'Enter' && (ev.ctrlKey || ev.metaKey) && panelCell) { step(0, 1, true); ev.preventDefault(); }
+        return;
+      }
+      if (ev.key === '?') { keys?.showModal(); ev.preventDefault(); }
+      else if (ev.key === 'g') setView('grid');
+      else if (ev.key === 'a') setView('assignment');
+      else if (ev.key === 's') setView('student');
+      else if (ev.key === '/') { const sel = tk.querySelector<HTMLSelectElement>(`#view-${view} .picksel`); if (sel) { sel.focus(); ev.preventDefault(); } }
+    });
+    /* The first scorable cell is where the keyboard starts. */
+    (cells().find((c) => c.dataset.w === '1' && c.dataset.state === 'in' && shown(c)) ?? cells().find(shown) ?? null)?.setAttribute('tabindex', '0');
+
+    /* ── The lists, drawn from the cells ──────────────────────────── */
+    const selCol = tk.querySelector<HTMLSelectElement>('[data-pick-col]')!;
+    const selStu = tk.querySelector<HTMLSelectElement>('[data-pick-student]')!;
+    const fillPickers = () => {
+      const colVis = cols.filter((c) => tk.classList.contains('all') || !c.ahead);
+      const keepC = selCol.value; selCol.innerHTML = '';
+      for (const c of colVis) { const o = document.createElement('option'); o.value = c.key; o.textContent = `${c.name} · ${c.due}`; selCol.appendChild(o); }
+      if (colVis.some((c) => c.key === keepC)) selCol.value = keepC;
+      else { const firstOpen = colVis.find((c) => cells().some((x) => x.dataset.col === c.key && x.dataset.w === '1' && x.dataset.state === 'in')); selCol.value = (firstOpen ?? colVis[colVis.length - 1] ?? colVis[0])?.key ?? ''; }
+      const rowVis = rowsMeta.filter((r) => !tk.classList.contains('mine-only') || r.fam === tk.dataset.myFamily);
+      const keepS = selStu.value; selStu.innerHTML = '';
+      for (const r of rowVis) { const o = document.createElement('option'); o.value = r.sid; o.textContent = r.name; selStu.appendChild(o); }
+      selStu.value = rowVis.some((r) => r.sid === keepS) ? keepS : rowVis[0]?.sid ?? '';
+    };
+    fillPickers();
+    selCol.addEventListener('change', drawAssignment);
+    selStu.addEventListener('change', drawStudent);
+    tk.querySelectorAll<HTMLButtonElement>('[data-pick-prev], [data-pick-next]').forEach((b) => b.addEventListener('click', () => {
+      const sel = b.parentElement!.querySelector<HTMLSelectElement>('select')!;
+      const i = sel.selectedIndex + (b.hasAttribute('data-pick-next') ? 1 : -1);
+      if (i >= 0 && i < sel.options.length) { sel.selectedIndex = i; sel.dispatchEvent(new Event('change')); }
+    }));
+    const scoreButtons = (c: HTMLTableCellElement) => `<div class="scores" role="radiogroup">${[...LEVELS, ''].map((l) => `<button type="button" class="sc ${scoreBand(l)}" data-row-score="${l}" aria-pressed="${(c.dataset.score ?? '') === l ? 'true' : 'false'}">${l || '—'}</button>`).join('')}</div>`;
+    const stateWord = (c: HTMLTableCellElement) => c.dataset.state === 'scored' ? `Scored ${fmtAt(c.dataset.at ?? '')}${c.dataset.by ? ` · ${c.dataset.by}` : ''}` : c.dataset.state === 'in' ? 'In · not scored' : c.dataset.state === 'notin' ? 'Not in yet' : 'Not asked';
+    const esc = (t: string) => t.replace(/[&<>"]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch] as string));
+
+    function drawAssignment() {
+      const box = tk.querySelector<HTMLElement>('[data-list-assignment]')!;
+      const col = selCol.value; if (!col) { box.innerHTML = '<p class="t-sm">No assignment.</p>'; return; }
+      const parts: string[] = [];
+      for (const f of fams) {
+        if (tk.classList.contains('mine-only') && f.key !== tk.dataset.myFamily) continue;
+        const rows = rowsMeta.filter((r) => r.fam === f.key);
+        const fc = rows.map((r) => cellAt(r.sid, col)).filter(Boolean) as HTMLTableCellElement[];
+        const scored = fc.filter((c) => c.dataset.state === 'scored').length, inn = fc.filter((c) => c.dataset.state !== 'na' && c.dataset.state !== 'notin').length;
+        parts.push(`<div class="fam-h ${f.mine ? 'mine' : ''}"><span>${esc(f.mine ? 'Your family' : f.name)}</span><span class="favg">${f.mine ? `${scored} of ${inn} scored` : 'read only'}</span></div>`);
+        for (const r of rows) {
+          const c = cellAt(r.sid, col); if (!c) continue;
+          if (tk.classList.contains('unscored') && c.dataset.state !== 'in') continue;
+          const w = c.dataset.w === '1' && c.dataset.state !== 'notin' && c.dataset.state !== 'na';
+          parts.push(`<div class="srow ${c.dataset.state}" data-sid="${esc(r.sid)}" data-col="${esc(col)}">
+            <div class="n"><a href="${esc(r.href)}">${esc(r.name)}</a><span class="st">${esc(stateWord(c))}</span></div>
+            <div class="p">${esc(r.title)}</div>
+            ${w ? scoreButtons(c) + `<div class="c ${c.dataset.cmt ? '' : 'empty'}" data-row-cmt>${c.dataset.cmt ? renderMarkdown(c.dataset.cmt) : 'Add a comment'}</div>` : c.dataset.state === 'scored' ? `<div class="read"><span class="s ${scoreBand(c.dataset.score)}">${scoreWord(c.dataset.score)}</span>${c.dataset.cmt ? `<div class="c">${renderMarkdown(c.dataset.cmt)}</div>` : ''}</div>` : ''}
+          </div>`);
+        }
+      }
+      box.innerHTML = parts.join('');
+    }
+    function drawStudent() {
+      const box = tk.querySelector<HTMLElement>('[data-list-student]')!;
+      const figs = tk.querySelector<HTMLElement>('[data-figs]')!;
+      const sid = selStu.value; const r = rowsMeta.find((x) => x.sid === sid); if (!r) { box.innerHTML = ''; return; }
+      const mine = cells().filter((c) => c.dataset.sid === sid && (tk.classList.contains('all') || c.dataset.ahead !== '1'));
+      const scored = mine.filter((c) => c.dataset.state === 'scored'), inn = mine.filter((c) => c.dataset.state === 'in');
+      figs.innerHTML = `<div><b>${meanWord(scored.map((c) => c.dataset.score))}</b><span>average</span></div><div><b>${scored.length} of ${mine.filter((c) => c.dataset.state !== 'na').length}</b><span>scored</span></div><div><b>${inn.length}</b><span>in, unscored</span></div>`;
+      const parts = [`<div class="fam-h ${r.mine ? 'mine' : ''}"><span>${esc(r.title)}</span><a class="favg" href="${esc(r.href)}" style="color:inherit">Open ›</a></div>`];
+      for (const c of mine) {
+        if (tk.classList.contains('unscored') && c.dataset.state !== 'in') continue;
+        const col = cols.find((x) => x.key === c.dataset.col)!;
+        const w = c.dataset.w === '1' && c.dataset.state !== 'notin' && c.dataset.state !== 'na';
+        const chip = c.dataset.state === 'scored' ? `<span class="s ${scoreBand(c.dataset.score)}">${scoreWord(c.dataset.score)}</span>` : c.dataset.state === 'in' ? '<span class="inbar" style="margin-top:14px"></span>' : '<span class="no" style="text-align:center">—</span>';
+        parts.push(`<div class="arow ${w ? 'w' : ''}" data-sid="${esc(sid)}" data-col="${esc(c.dataset.col!)}">${chip}<div><div class="a">${esc(col.name)}</div><div class="d">${esc(col.due)} · ${esc(stateWord(c))}</div>${c.dataset.cmt ? `<div class="c">${renderMarkdown(c.dataset.cmt)}</div>` : ''}</div></div>`);
+      }
+      box.innerHTML = parts.join('');
+    }
+    /* Scoring from a row, and opening the panel from a row or a card. */
+    tk.addEventListener('click', (ev) => {
+      const t = ev.target as HTMLElement;
+      const rowBtn = t.closest<HTMLButtonElement>('[data-row-score]');
+      const row = t.closest<HTMLElement>('.srow, .arow');
+      if (!row) return;
+      const c = cellAt(row.dataset.sid!, row.dataset.col!); if (!c) return;
+      if (rowBtn) { setScore(c, rowBtn.dataset.rowScore ?? '', (msg, ok) => { const st = row.querySelector('.st'); if (st) { st.textContent = msg; (st as HTMLElement).style.color = ok ? '' : 'var(--alert)'; } }); return; }
+      if (t.closest('a')) return;
+      if (t.closest('[data-row-cmt]') || row.classList.contains('w') || (row.classList.contains('srow') && c.dataset.w === '1')) openPanel(c, Boolean(t.closest('[data-row-cmt]')));
+    });
+
+    /* ── Over the socket: a score from another screen ─────────────── */
+    onMessage((m) => {
+      /* Work handed in: the cell becomes scorable without a reload. */
+      if (m.event === 'milestone' && m.payload?.milestone_id) {
+        for (const c of cells().filter((x) => x.dataset.mid === m.payload.milestone_id)) {
+          const done = m.payload.completed_on ? String(m.payload.completed_on) : '';
+          c.dataset.done = done;
+          if (c.dataset.state === 'notin' && done) { c.dataset.state = 'in'; paintCell(c); if (panelCell === c) fillPanel(c); if (view !== 'grid') setView(view); }
+          else if (c.dataset.state === 'in' && !done) { c.dataset.state = 'notin'; paintCell(c); if (panelCell === c) fillPanel(c); }
+        }
+        return;
+      }
+      if (m.event !== 'assessment' || !m.payload || m.payload.kind !== 'elder') return;
+      const p = m.payload;
+      if (p.by_id === (liveMe() || me)) return;
+      const c = cells().find((x) => x.dataset.mid === p.milestone_id && x.dataset.sid === p.student_id);
+      if (!c) return;
+      const v = { id: String(p.id ?? ''), score: p.score == null ? '' : String(p.score), cmt: String(p.comment ?? ''), by: String(p.by ?? ''), at: String(p.at ?? '') };
+      if (panelCell === c && pEdit && document.activeElement === pEdit) { tellPanel(`${v.by || 'Somebody'} saved this cell at ${fmtAt(v.at)}; your next save will replace it.`, false); c.dataset.aid = v.id; return; }
+      applyToCell(c, v);
+      if (panelCell === c) fillPanel(c);
+    });
+
+    /* What was set last time, then the view. */
+    for (const b of tk.querySelectorAll<HTMLButtonElement>('[data-filter]')) if (recall(`f:${b.dataset.filter}`) === '1') setFilter(b.dataset.filter!, true);
+    setView(view);
+  }
+</script>

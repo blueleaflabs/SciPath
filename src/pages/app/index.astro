@@ -5,6 +5,7 @@ import Base from '../../layouts/Base.astro';
 import { formatDate, todayIn } from '../../lib/dates';
 import AppShell from '../../components/AppShell.astro';
 import CareCard from '../../components/CareCard.astro';
+import { platform } from '../../config/site';
 import { activeOrg } from '../../lib/tenant';
 import { programTitle, programKind, participationVerb, staffWord } from '../../lib/program-names';
 import { serverClient } from '../../lib/supabase';
@@ -347,9 +348,11 @@ if (Astro.request.method === 'POST' && supabase) {
           ? 'Already nudged about this one this week. It will send again next week.'
           : data === 'done'
             ? 'That one has been met, so nothing was sent.'
-            : data === 'sent'
-              ? null
-              : 'Nothing to send.';
+            : data === 'early'
+              ? 'Not due yet, so nothing was sent. A nudge goes once the task is late.'
+              : data === 'sent'
+                ? null
+                : 'Nothing to send.';
     }
   } else if (!me.runsTheClub) {
     error2 = 'Only an officer or your advisor can do that.';
@@ -614,7 +617,8 @@ if (supabase && account) {
 
     /* Released grades, rolled up per project for the card. The policy
        returns only this person's own released rows. */
-    const { data: gradeRows } = myProjectIds.length
+    /* Off for the pilot (`platform.gradesToStudents`): no figure, no read. */
+    const { data: gradeRows } = myProjectIds.length && platform.gradesToStudents
       ? await supabase
           .from('assessments')
           .select('score, out_of, participations!inner(project_id)')
@@ -1411,6 +1415,7 @@ const careRows = mine.length > 0 ? mine : watched;
  */
 type Waiting = { id: string; projectId: string; projectTitle: string; who: string; deliverable: string; label: string; field: string | null; body: string; when: string };
 let waiting: Waiting[] = [];
+const answered: { who: string; asker: string; label: string; body: string; when: string; href: string }[] = [];
 if (supabase && careRows.length > 0) {
   const careIds = careRows.map((w: any) => w.id);
   const since = new Date(Date.now() - 14 * 86400000).toISOString();
@@ -1428,6 +1433,31 @@ if (supabase && careRows.length > 0) {
     const last = new Map<string, any>();
     for (const c of lines ?? []) last.set(`${c.document_id}:${c.field_id ?? ''}`, c);
     const titleOfProject = new Map<string, string>(careRows.map((w: any) => [w.id, w.title]));
+    /* Answered (2.8): a question a student asked that somebody else has
+       since answered, last seven days. The row left the plate when the
+       answer was the last line; this is how the other Elder on the same
+       project learns it was handled, and by whom, with the way back to
+       the thread. The reader's own answers are not news to them. */
+    const byThread = new Map<string, any[]>();
+    for (const c of lines ?? []) { const k = `${c.document_id}:${c.field_id ?? ''}`; if (!byThread.has(k)) byThread.set(k, []); byThread.get(k)!.push(c); }
+    const weekAgo = new Date(Date.now() - 7 * 86400000).toISOString();
+    for (const thread of byThread.values()) {
+      const lastLine = thread[thread.length - 1];
+      const d = docOf.get(lastLine.document_id);
+      const authors = authorIds.get(d?.project_id);
+      if (!d || !authors || authors.has(lastLine.author_id) || lastLine.author_id === account?.id || lastLine.created_at < weekAgo) continue;
+      const question = [...thread].reverse().find((c: any) => authors.has(c.author_id));
+      if (!question) continue;
+      answered.push({
+        who: String(lastLine.author?.display_name ?? 'Somebody').split(' ')[0],
+        asker: String(question.author?.display_name ?? 'a student').split(' ')[0],
+        label: d.deliverable.replace(/_/g, ' '),
+        body: String(question.body_md ?? '').slice(0, 90),
+        when: String(lastLine.created_at).slice(0, 10),
+        href: `/app/project/${d.project_id}/doc/${d.deliverable}/#c-${lastLine.id}`,
+      });
+    }
+    answered.sort((a, b) => b.when.localeCompare(a.when));
     waiting = [...last.values()]
       .filter((c: any) => !c.seen_at && authorIds.get(docOf.get(c.document_id)?.project_id)?.has(c.author_id))
       .map((c: any) => {
@@ -1492,8 +1522,25 @@ for (const w of mine) {
 const dayUnit = (days: number | null, late: boolean) =>
   days === null ? 'no date' : late ? 'days late' : days === 0 ? 'due today' : 'days left';
 
-/* The rows, in the order to do them. A question waiting on a document
-   in this person's care comes first: it is somebody stuck. */
+/* The other Elders on a project, by project, for a task both hold (2.9):
+   the row says "also Rohan's", so two Elders do not both read the same
+   literature review, or both leave it to the other. */
+const otherElders = new Map<string, string[]>();
+for (const w of careRows) {
+  otherElders.set(w.id, (w.officers ?? []).filter((o: any) => o.users && o.users.id !== account?.id).map((o: any) => String(o.users.display_name).split(' ')[0]));
+}
+const alsoLine = (projectId: string) => {
+  const others = otherElders.get(projectId) ?? [];
+  return others.length ? ` · also ${others.join(' and ')}'s` : '';
+};
+
+/* The rows, in the order to do them: one rule for the whole plate (2.9),
+   late first, then the nearest date, with a question counted as due
+   today because it is somebody stuck. The kicker says what kind of row
+   it is; the position says only how urgent. Before this the rows came
+   by kind, questions then tasks then the reader's own work, and an
+   Elder with a project of her own saw her task at eight days wearing
+   the gold above her own deliverable due in two. */
 const plateRows = [
   ...waiting.map((q) => ({
     id: `q-${q.id}`,
@@ -1515,7 +1562,7 @@ const plateRows = [
     kick: 'Yours to do',
     title: t.name,
     group: t.project_title,
-    sub: `${t.authors.join(', ') || 'the student'}${t.due_on ? ` · due ${formatDate(t.due_on, 'short')}` : ''}`,
+    sub: `${t.authors.join(', ') || 'the student'}${t.due_on ? ` · due ${formatDate(t.due_on, 'short')}` : ''}${alsoLine(t.project_id)}`,
     /* A task on a document written in SciPath has one verb: read it. The
        feedback is given at the foot of the document, where the rubric and
        the Elder's part are, not in a box on the plate (2.8). */
@@ -1534,7 +1581,11 @@ const plateRows = [
           late: d.late,
           kick: d.late ? 'Overdue' : 'Next up',
           group: d.projectTitle,
-          sub: d.dueOn ? `due ${formatDate(d.dueOn, 'short')}` : undefined,
+          /* "Your project" (2.9): on a plate that also carries other
+             people's projects, whose this one is has to be said. A
+             student who is nobody's Elder has only their own rows, and
+             the words would be noise there. */
+          sub: [me.runsTheClub ? 'Your project' : '', d.dueOn ? `due ${formatDate(d.dueOn, 'short')}` : ''].filter(Boolean).join(' · ') || undefined,
           ask: askFor(d.id),
         };
         /* A step written in SciPath is a row per document, each with the
@@ -1566,7 +1617,13 @@ const plateRows = [
       })
     : []),
   /* No notebook row (2.8): the notebook has its page and its button. */
-];
+].sort((a: any, b: any) => {
+  /* Late before not late, the later the earlier; then by days left, a
+     question at zero; a row with no date last. Ties keep the order the
+     rows were assembled in, which is the template's. */
+  const key = (r: any) => (r.kick === 'Question' ? 0 : r.n === null || r.n === undefined ? 1e9 : r.late ? r.n : Math.max(0, r.n));
+  return key(a) - key(b);
+});
 const showCare = me.runsTheClub && watched.length > 0;
 
 /* The sections this person has, in the order they appear. Built from the
@@ -1877,6 +1934,22 @@ const careLayout = (group: any): 'grid' | 'wide' => {
             href={next === HOME ? '/auth/signin/' : `/auth/signin/?next=${encodeURIComponent(next)}`}
           >Sign in with Google</a>
         </div>
+        {/* The way round Google's own stumble (2.9). A district's
+            session-length policy signs everybody out of Google every so
+            often, and Google's password step on the way back into a
+            third-party app has been seen to answer "Something went wrong ·
+            Restart" and nothing else, until the person signs in to Google
+            itself. Opening the school's mail does that; the link below opens
+            it in a new tab so this page is still here to come back to. */}
+        {org.signupMode === 'domain' && org.verifiedDomains.length > 0 && (
+          <details class="signin-help">
+            <summary>Google said "Something went wrong"?</summary>
+            <p class="t-sm">
+              That is Google asking you to sign in to your school account again, and its sign-in box sometimes fails on the way into another app.
+              <a href={`https://mail.google.com/a/${org.verifiedDomains[0]}`} target="_blank" rel="noopener noreferrer">Open your school Gmail in a new tab</a>, sign in there, then come back here and press <b>Sign in with Google</b> again.
+            </p>
+          </details>
+        )}
 
         {/* **Kept on every tenant, and the gate was wrong.**
         
@@ -2000,10 +2073,13 @@ const careLayout = (group: any): 'grid' | 'wide' => {
             ) : (
               <Plate rows={plateRows} />
             )}
-            {cameBack.length > 0 && (
+            {(cameBack.length > 0 || answered.length > 0) && (
               <ul class="plain came-back">
                 {cameBack.map((c) => (
                   <li><b>{c.who}</b> {c.what}{c.when ? <span class="sub"> · {c.when}</span> : null}</li>
+                ))}
+                {answered.map((a) => (
+                  <li><b>{a.who}</b> answered {a.asker} on {a.label}: <a href={a.href}>“{a.body}{a.body.length >= 90 ? '…' : ''}”</a><span class="sub"> · {formatDate(a.when, 'short')}</span></li>
                 ))}
               </ul>
             )}
@@ -3261,6 +3337,9 @@ const careLayout = (group: any): 'grid' | 'wide' => {
   .asked-ask { margin: 6px 0 0; font-family: var(--face-ui); font-size: 0.92rem; }
   .asked-do { display: flex; gap: 8px; margin-top: 8px; align-items: center; }
   .asked-do .btn { font-size: 0.86rem; padding: 5px 10px; }
+  .signin-help { margin-top: 14px; }
+  .signin-help summary { cursor: pointer; font-family: var(--face-ui); font-size: 0.9rem; color: var(--brand); }
+  .signin-help p { margin: 8px 0 0; max-width: 52ch; }
   .plate-sec { margin-top: 0; padding-top: 12px; }
   .plate-sec .alarm { margin-top: 0; }
   .came-back { margin: 14px 0 0; font-size: 0.95rem; }
@@ -3308,5 +3387,10 @@ const careLayout = (group: any): 'grid' | 'wide' => {
   }
   .care-group:first-of-type .care-h { margin-top: 8px; }
 
-
+  /* On a phone (2.8): the care head and the inline forms wrap. */
+  @media (max-width: 640px) {
+    .care-h { flex-wrap: wrap; }
+    .inline { flex-wrap: wrap; }
+    .asked-do { flex-wrap: wrap; }
+  }
 </style>

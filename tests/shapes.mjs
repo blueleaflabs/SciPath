@@ -16,7 +16,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import yaml from 'js-yaml';
-import { validateShape, sectionsOf, askedOf } from '../src/lib/template-resolve.ts';
+import { validateShape, sectionsOf, askedOf, feedbackFieldsOf } from '../src/lib/template-resolve.ts';
 
 let passed = 0;
 function test(name, fn) {
@@ -90,6 +90,20 @@ test('the Elder\'s fields are never required of the student', () => {
     for (const sec of shape.sections ?? []) for (const f of sec.fields ?? []) {
       if (f.owner === 'staff') assert.ok(!f.required, `${shape.id}/${f.id}`);
     }
+  }
+});
+
+/* The Elder's part hands over a score and a rationale (2.9): the
+   literature review names both; a shape with no Elder's part names
+   neither, so the page shows no button there. */
+test('the literature review\'s Elder part is a rating and a rationale', () => {
+  const lr = shapes.find(({ shape }) => shape.id === 'literature-review')?.shape;
+  assert.ok(lr);
+  assert.deepEqual(feedbackFieldsOf(lr), { score: 'elder_score', body: 'elder_rationale' });
+  for (const { shape } of shapes) {
+    const hasStaff = sectionsOf(shape).some((s) => s.fields.some((f) => f.owner === 'staff' && f.kind !== 'note'));
+    const parts = feedbackFieldsOf(shape);
+    if (!hasStaff) assert.deepEqual(parts, { score: null, body: null }, shape.id);
   }
 });
 

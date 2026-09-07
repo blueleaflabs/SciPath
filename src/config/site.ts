@@ -37,6 +37,15 @@ export const platform = {
    */
   familyScoresToStudents: false,
   /**
+   * Whether a student sees the teacher's grade and its feedback at all.
+   * Off until the class decides (September 2026): the release controls
+   * are off the Grade page, so nothing is released, and the policy on
+   * `assessments` then returns nothing to a student; the Grades section
+   * and the Workbench figure stay off as well. Flip to show, and to put
+   * the release controls back.
+   */
+  gradesToStudents: false,
+  /**
    * The project page's Linked documents section (a label and a URL kept
    * on the project). Off for the pilot (September 2026): every deliverable
    * now carries its own Google Drive link, so the loose list duplicated

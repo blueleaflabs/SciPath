@@ -123,18 +123,36 @@ begin;
   rollback to attempt;
   \echo '  ok   an officer cannot make somebody an advisor'
 
+  -- Hardening (2.9): the session writes no role row at all, whatever the
+  -- role; grant_club_role and revoke_club_role, the advisor's, are the way.
   savepoint officer_role;
   do $$
   begin
     insert into public.user_roles (org_id, user_id, role)
     select u.org_id, u.id, 'officer'
       from public.users u where u.display_name = 'Another student';
+    raise exception 'FAIL: an officer wrote a role row directly';
   exception
     when others then
-      raise exception 'FAIL: an officer could not grant the officer role: %', sqlerrm;
+      if sqlerrm like 'FAIL:%' then raise; end if;
   end $$;
   rollback to officer_role;
-  \echo '  ok   and can still grant the roles an officer runs'
+  \echo '  ok   and writes no role row directly, whatever the role'
+
+  -- Nor turns their own row into the advisor's.
+  savepoint self_promote;
+  do $$
+  begin
+    update public.user_roles set role = 'advisor' where user_id = auth.uid();
+    if exists (select 1 from public.user_roles where user_id = auth.uid() and role = 'advisor') then
+      raise exception 'FAIL: an officer rewrote their own role to advisor';
+    end if;
+  exception
+    when others then
+      if sqlerrm like 'FAIL:%' then raise; end if;
+  end $$;
+  rollback to self_promote;
+  \echo '  ok   and cannot rewrite their own role to advisor'
 commit;
 
 begin;
@@ -143,15 +161,33 @@ begin;
   savepoint attempt;
   do $$
   begin
+    perform public.grant_club_role((select u.id from public.users u where u.display_name = 'Another student'), 'officer');
+    if not exists (select 1 from public.user_roles r join public.users u on u.id = r.user_id
+                    where u.display_name = 'Another student' and r.role = 'officer' and r.revoked_at is null) then
+      raise exception 'FAIL: the advisor''s grant did not land';
+    end if;
+  exception
+    when others then
+      raise exception 'FAIL: the advisor could not grant the officer role: %', sqlerrm;
+  end $$;
+  rollback to attempt;
+  \echo '  ok   the advisor grants through grant_club_role'
+
+  -- And not by writing the table: the advisor role itself is claimed from a
+  -- reservation the advisor made, never inserted from a session.
+  savepoint raw;
+  do $$
+  begin
     insert into public.user_roles (org_id, user_id, role)
     select u.org_id, u.id, 'advisor'
       from public.users u where u.display_name = 'Another student';
+    raise exception 'FAIL: the advisor wrote a role row directly';
   exception
     when others then
-      raise exception 'FAIL: the advisor could not grant the advisor role: %', sqlerrm;
+      if sqlerrm like 'FAIL:%' then raise; end if;
   end $$;
-  rollback to attempt;
-  \echo '  ok   the advisor can'
+  rollback to raw;
+  \echo '  ok   and writes no role row directly either'
 commit;
 
 \echo ''

@@ -368,6 +368,24 @@ const resolvedTemplate = GRANT_THROUGH
   ? resolveProgram(cohort.template_id, loadLibrary(), cohort.process_id ?? null)
   : null;
 
+/* **A score goes only onto a tracked step (2.8).** The tracker's columns
+   are the template's `tracker.column` steps; a score in the file on any
+   other step would be written and never shown, which is a sheet column
+   and a template quietly apart. Refused by name, before anything is
+   written. */
+{
+  const tpl = resolvedTemplate ?? resolveProgram(cohort.template_id, loadLibrary(), cohort.process_id ?? null);
+  const tracked = new Set((tpl?.steps ?? []).filter((st) => st.tracker?.column).map((st) => st.id));
+  const stray = [...new Set(scores.map((sc) => String(sc.step)).filter((id) => !tracked.has(id)))];
+  if (stray.length) {
+    fail(
+      `The file scores ${stray.length === 1 ? 'a step' : 'steps'} the template does not track: ${stray.join(', ')}.\n\n` +
+        `Mark ${stray.length === 1 ? 'it' : 'them'} \`tracker: { column: true }\` in src/config/programs/${cohort.template_id}.yaml,\n` +
+        'or change the score\'s `step` to a tracked one. Tracked now: ' + ([...tracked].join(', ') || 'none') + '.'
+    );
+  }
+}
+
 console.log(`\nInto ${org.lockup_name} (${org.slug}) at ${cloud ? ref : 'the local stack'}: ${cohort.name}, ${calendar.length} deadlines per project.\n`);
 
 /* ── Accounts ─────────────────────────────────────────────────────────── */

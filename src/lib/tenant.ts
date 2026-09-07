@@ -13,6 +13,7 @@
  */
 
 import { orgs, type Org } from '../config/orgs';
+import { hostIsKnown } from './hosts';
 
 /** Slug for a hostname, or null when nothing matches. */
 export function slugForHostname(hostname: string): string | null {
@@ -56,6 +57,11 @@ export function resolveOrg(hostname?: string): { slug: string; org: Org } {
   const fallback = (import.meta.env.PUBLIC_ORG as string) ?? 'scipath';
   const slug = fromHost ?? (orgs[fallback] ? fallback : 'scipath');
   return { slug, org: orgs[slug] };
+}
+
+/** Whether a hostname is one this deployment answers for (2.9); see hosts.ts. */
+export function hostIsOurs(hostname: string, rootDomain: string): boolean {
+  return hostIsKnown(hostname, rootDomain, (h) => slugForHostname(h) !== null);
 }
 
 /**

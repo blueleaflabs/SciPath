@@ -558,7 +558,7 @@ const fmt = (d: string | null) =>
     </section>
 
     <section class="sec">
-      <div class="sec-h"><b>The notebook</b><span>{notes?.length ?? 0} entries · <a class="btn btn-sm" href={`/app/project/${project.id}/notebook/`}>Export notebook</a></span></div>
+      <div class="sec-h"><b>The notebook</b><span>{notes?.length ?? 0} entries · <a class="btn btn-sm" href={`/app/project/${project.id}/notebook/?go=1`} target="_blank" rel="noopener noreferrer">Export notebook</a></span></div>
 
       {notes && notes.length > 0 ? (
         <ol class="notes">
@@ -714,6 +714,12 @@ const fmt = (d: string | null) =>
   .notef .field label { margin-bottom: 0; }
   .notef label > span { display: block; margin-bottom: 4px; font-family: var(--face-ui); font-size: 0.92rem; font-weight: 700; }
   .notef-top { margin: 0 0 10px; }
+  /* On a phone the button is where the thumb ends up (2.9): after the
+     last box, not a screen above it. */
+  @media (max-width: 720px) {
+    .notef { display: flex; flex-direction: column; }
+    .notef-top { order: 99; margin: 12px 0 0; }
+  }
   .notef textarea,
   .notef input,
   .notef select {

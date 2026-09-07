@@ -9,6 +9,16 @@ guidance: >-
   Say what your project idea is, choose where it sits on impact and
   feasibility, and say why. Generate draws the grid with your idea in its
   quadrant.
+# On the class showcase (2.8): the grid is the picture, the idea the
+# headline, the two ratings as chips and the reasoning under them.
+showcase:
+  title: Impact and feasibility
+  headline: idea
+  hero: graphic
+  show:
+    - { fields: [feasibility, impact], as: chips }
+    - { field: because, as: prose, label: Because }
+
 sections:
   - id: idea
     name: Project Topic/Idea

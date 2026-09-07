@@ -83,7 +83,7 @@ if (Astro.request.method === 'POST' && me.isAdvisor) {
 const [{ data: people }, { data: held }, { data: waiting }] = await Promise.all([
   supabase
     .from('users')
-    .select('id, display_name, population, grad_year')
+    .select('id, display_name, grad_year')
     .order('display_name'),
   supabase
     .from('user_roles')
@@ -108,8 +108,11 @@ for (const r of held ?? []) {
 /* Staff first, then students by name. The advisor is looking for a student to
    promote far more often than anything else, but the teachers are the shorter
    list and belong at the top. */
+/* Staff is read off the roles held rather than the account's population
+   (2.9), which is the person's own business and the advisor's. */
+const isStaffRow = (id: string) => rolesFor.get(id)?.has('advisor') ?? false;
 const roster = (people ?? []).sort((a: any, b: any) => {
-  if (a.population !== b.population) return a.population === 'staff' ? -1 : 1;
+  if (isStaffRow(a.id) !== isStaffRow(b.id)) return isStaffRow(a.id) ? -1 : 1;
   return a.display_name.localeCompare(b.display_name);
 });
 

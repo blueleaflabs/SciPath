@@ -13,9 +13,9 @@
 
 import { defineMiddleware } from 'astro:middleware';
 import { serverClient, isConfigured, meterFor } from './lib/supabase';
-import { resolveOrg } from './lib/tenant';
+import { resolveOrg, hostIsOurs } from './lib/tenant';
 import { orgs } from './config/orgs';
-import { originForOrg } from './lib/deployment';
+import { originForOrg, rootDomain } from './lib/deployment';
 import { tenantSlugs } from './lib/tenant-paths';
 
 import { isNonTenantPath } from './config/routes';
@@ -160,6 +160,13 @@ function timing(context: Parameters<typeof handle>[0], response: Response, start
 
 export const onRequest = defineMiddleware(async (context, next) => {
   const started = Date.now();
+  /* A hostname this deployment does not answer for (2.9) gets nothing:
+     not the platform's front door under a stranger's name, which the
+     fallback in resolveOrg used to render for any host pointed here.
+     Before the handler, since there is no tenant to render for. */
+  if (!hostIsOurs(context.url.hostname, rootDomain)) {
+    return new Response('Not found', { status: 404, headers: { 'content-type': 'text/plain' } });
+  }
   const response = await handle(context, next);
 
   try {
@@ -464,12 +471,14 @@ const handle = async (context: any, next: any) => {
      because the record store had already been caught by it. Nothing in
      `src/` reads `organizations` anywhere else, so there is no uuid on this
      side to compare against. The slug is the name both sides know. */
-  const { data: accountRow } = await supabase
-    .from('users')
-    .select('id, org_id, display_name, grad_year, population, status, ' +
-            'affiliation_state, consent_state, author_slug, organizations(slug)')
-    .eq('id', user.id)
-    .maybeSingle();
+  /* Through my_account() (2.9): the columns that say who a person is to
+     the school (population, status, consent) left the session's reach on
+     the table, so the person's own row comes from the definer, with the
+     school's slug beside it. */
+  const { data: accountJson } = await supabase.rpc('my_account');
+  const accountRow = accountJson
+    ? { ...(accountJson as any), organizations: { slug: (accountJson as any).org_slug ?? null } }
+    : null;
 
   /* Cast once, at the boundary.
   
@@ -587,6 +596,17 @@ const handle = async (context: any, next: any) => {
   }
 
   locals.account = account ?? null;
+
+  /* Suspended is suspended here too (2.9). The database refuses a
+     suspended account's writes and reads of its projects; the pages say
+     so plainly rather than rendering an empty Workbench. The account and
+     the public archive stay reachable, and signing out still works. */
+  if (account?.status === 'suspended' && url.pathname.startsWith('/app/') && !url.pathname.startsWith('/app/account/')) {
+    return new Response(
+      '<!doctype html><meta charset="utf-8"><title>Account suspended</title><body style="font-family:system-ui;max-width:36rem;margin:4rem auto;padding:0 1rem"><h1>This account is suspended</h1><p>Your teacher or the club advisor can tell you why and what happens next. Nothing you wrote has been removed.</p><form method="POST" action="/auth/signout/"><button type="submit">Sign out</button></form></body>',
+      { status: 403, headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' } }
+    );
+  }
 
   /* So a prerendered page can greet somebody it cannot ask about.
   

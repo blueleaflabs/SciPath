@@ -92,8 +92,12 @@ if (offenders.length > 0) {
 
   const problems = [];
 
-  if (!/organizations\(slug\)/.test(code)) {
-    problems.push('the account query must join organizations(slug), or there is nothing to compare');
+  /* The slug arrives with the account: joined as organizations(slug), or
+     since the hardening (2.9) as org_slug from my_account(), which reads
+     the school's row beside the person's. Either way it is the school's
+     slug, not its uuid, that is compared. */
+  if (!/organizations\(slug\)/.test(code) && !/my_account/.test(code)) {
+    problems.push('the account query must carry the school slug (organizations(slug), or my_account()), or there is nothing to compare');
   }
 
   if (!/accountSlug\s*!==\s*slug/.test(code)) {

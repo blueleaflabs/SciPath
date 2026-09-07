@@ -13,10 +13,14 @@ import { exportName } from '../../../../lib/export-names';
 import { serverClient } from '../../../../lib/supabase';
 import { renderNote, linkDomain } from '../../../../lib/notes';
 import { signInWith } from '../../../../lib/next-path';
+import { backFrom } from '../../../../lib/back';
 
 const { session, account } = Astro.locals;
 const org = activeOrg(Astro);
 const { id } = Astro.params;
+/* Back to wherever this was opened from (the care list, the class, the
+   project), or the project when the browser does not say (2.8). */
+const back = backFrom(Astro.request, { href: `/app/project/${id}/`, label: 'Back to the project' });
 
 /* Remembering where they were headed, so a link from a notification
    survives the sign in it triggers (20.10). */
@@ -341,6 +345,9 @@ const authorIds = new Set(authors.map((a: any) => a.users?.id).filter(Boolean));
 const isObservation = (n: any) => !authorIds.has(n.author_id);
 
 const withObservations = Astro.url.searchParams.get('observations') === '1';
+/* `?go=1` opens the print dialog on arrival (2.9), as the deliverables
+   export does: an Export link is one click, not two. */
+const go = Astro.url.searchParams.get('go') === '1';
 
 const all = notes ?? [];
 const shown = withObservations ? all : all.filter((n: any) => !isObservation(n));
@@ -389,7 +396,7 @@ const stamp = (iso: string | null) =>
         hand it over, and a checkbox shows that where a pair of links shows
         only where you could go. */}
     <div class="toolbar">
-      <a href={`/app/project/${id}/`}>Back to the project</a>
+      <a href={back.href}>{back.label}</a>
 
       {observationCount > 0 && (
         <label class="opt">
@@ -679,6 +686,7 @@ const stamp = (iso: string | null) =>
         </section>
       )}
     </article>
+    {go && <script is:inline>window.addEventListener('load', () => setTimeout(() => window.print(), 300));</script>}
   </body>
 </html>
 

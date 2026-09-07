@@ -48,18 +48,25 @@ const warn = w.worst?.severity === 'planned';
 ---
 
 <article class:list={['care-card', late && 'is-late', bad && 'is-bad', warn && 'is-warn']} id={`care-${w.id}`}>
+  {/* The head is four lines in a fixed order, so the cards in a row read
+      as a table: the title (up to three lines), the flag, the authors,
+      the Elder. In the grid each line is a row shared across the cards
+      (subgrid below), so a two-line title in one card does not push its
+      neighbour's numbers out of line. */}
   <div class="cc-head">
-    <p class="cc-title">
+    <p class="cc-title" title={w.title}>
       <a href={w.entry ? `/app/entry/${w.entry.id}/` : `/app/project/${w.id}/`}>{w.title}</a>
+    </p>
+    <p class="cc-flag">
       {late && <span class="pill late">{lateCount} {lateCount === 1 ? 'day' : 'days'} late</span>}
       {!late && w.daysToNext !== null && w.daysToNext <= 7 && <span class="pill soon">{w.daysToNext === 0 ? 'due today' : `${w.daysToNext} ${w.daysToNext === 1 ? 'day' : 'days'} left`}</span>}
       {w.daysToNext === null && !w.next && <span class="pill ok">in order</span>}
+      {w.verdict?.level === 'disqualifying' && w.verdict.reasons.map((r: string) => <span class="cc-sev">{r}</span>)}
     </p>
-    <p class="cc-who">
-      {authors}
-      {officers ? <>{' · '}<span class="role">{elderWord}:</span> {officers}</> : w.selfManaged?.length > 0 ? ' · self-managed' : ''}
+    <p class="cc-who" title={authors}>{authors}</p>
+    <p class="cc-who cc-elder" title={officers || undefined}>
+      {officers ? <><span class="role">{elderWord}:</span> {officers}</> : w.selfManaged?.length > 0 ? 'self-managed' : ''}
     </p>
-    {w.verdict?.level === 'disqualifying' && w.verdict.reasons.map((r: string) => <span class="cc-sev">{r}</span>)}
   </div>
 
   {/* The three metrics, one type. The notebook count links to the project
@@ -92,10 +99,14 @@ const warn = w.worst?.severity === 'planned';
         {nextTask ? (
           <>
             <span class:list={['cc-name', nextTask.late && 'late']}>{nextTask.name}</span>
+            {/* The verb sits on the task it does (2.9): "Do it" beside the
+                days, on the Elder's line, not alone on the rail below. */}
             <span class:list={['cc-sub', nextTask.late && 'late']}>
-              {nextTask.ready ? daysWord(nextTask.days) : <>waiting on the student · <a href={nextTask.href}>open</a></>}
+              {nextTask.ready
+                ? <>{daysWord(nextTask.days)} · <a class:list={['cc-do', nextTask.late && 'late']} href={nextTask.docHref ? `${nextTask.docHref}#give` : nextTask.href}>Do it</a></>
+                : <>waiting on the student · <a href={nextTask.href}>open</a></>}
             </span>
-            {!nextTask.ready && readyTask && <span class="cc-sub">ready now: {readyTask.name}</span>}
+            {!nextTask.ready && readyTask && <span class="cc-sub">ready now: {readyTask.name} · <a class:list={['cc-do', readyTask.late && 'late']} href={readyTask.docHref ? `${readyTask.docHref}#give` : readyTask.href}>Do it</a></span>}
           </>
         ) : <span class="cc-none">Nothing open</span>}
       </div>
@@ -104,8 +115,8 @@ const warn = w.worst?.severity === 'planned';
 
   <div class="cc-foot">
     <span class="cc-exports">
-      <a href={`/app/project/${w.id}/notebook/`}>Export Notebook</a> ·{' '}
-      <a href={`/app/project/${w.id}/documents/print/`}>Export Deliverables</a>
+      <a href={`/app/project/${w.id}/notebook/?go=1`} target="_blank" rel="noopener noreferrer">Export Notebook</a> ·{' '}
+      <a href={`/app/project/${w.id}/documents/print/?go=1`} target="_blank" rel="noopener noreferrer">Export Deliverables</a>
     </span>
     {selects && w.entry && (
       <form method="POST" action="#outcome" class="cc-select">
@@ -121,12 +132,11 @@ const warn = w.worst?.severity === 'planned';
       </form>
     )}
     <span class="cc-acts">
-      {/* The Elder's ready task, as the verb: it opens the document or the
-          task to be done. */}
-      {readyTask && <a class:list={['btn', 'btn-sm', readyTask.late ? 'accent' : '']} href={readyTask.href}>Do it</a>}
       {/* The nudge, to whoever the row is addressed to (the Elder where one
-          is attached, else the student), with its track and their reply. */}
-      {w.next && w.nudgeTos.length > 0 ? w.nudgeTos.map((to: any) => {
+          is attached, else the student), with its track and their reply.
+          Only once the task is late (2.8): a nudge about work that is not
+          yet due is the message people learn to ignore. */}
+      {w.next && late && w.nudgeTos.length > 0 ? w.nudgeTos.map((to: any) => {
         const nudge = w.nudges?.get(to.id) ?? null;
         return (
           <form method="POST" action="#outcome" class="cc-nudge">
@@ -159,13 +169,16 @@ const warn = w.worst?.severity === 'planned';
   .care-card.is-late { border-top-color: var(--alert); }
   .care-card.is-bad { border-top-color: var(--alert); background: var(--alert-bg); }
   .care-card.is-warn { border-top-color: var(--accent); }
-  .cc-title { margin: 0; font-size: 1.1rem; font-weight: 700; line-height: 1.25; }
+  .cc-head { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+  .cc-title { margin: 0; font-size: 1.1rem; font-weight: 700; line-height: 1.25; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; }
   .cc-title a { color: inherit; text-decoration: none; }
   .cc-title a:hover { text-decoration: underline; }
-  .cc-title .pill { margin-left: 8px; vertical-align: middle; }
-  .cc-who { margin: 2px 0 0; color: var(--ink-2); font-size: 0.95rem; }
+  .cc-flag { margin: 0; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; min-height: 0; }
+  .cc-flag:empty { display: none; }
+  .cc-who { margin: 0; color: var(--ink-2); font-size: 0.95rem; line-height: 1.4; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .cc-who .role { color: var(--ink-3); }
-  .cc-sev { display: block; margin-top: 4px; font-family: var(--face-ui); font-size: 0.86rem; color: var(--alert); font-weight: 600; }
+  .cc-elder:empty { display: none; }
+  .cc-sev { font-family: var(--face-ui); font-size: 0.86rem; color: var(--alert); font-weight: 600; }
   .cc-metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; padding: 10px 0; border-top: 1px solid var(--rule-fine); border-bottom: 1px solid var(--rule-fine); }
   .cc-metric { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
   .cc-metric b { font-size: 1.25rem; font-weight: 700; line-height: 1.1; }
@@ -181,6 +194,8 @@ const warn = w.worst?.severity === 'planned';
   .cc-sub { display: block; font-size: 0.88rem; color: var(--ink-3); }
   .cc-sub.late { color: var(--alert); }
   .cc-sub a { color: var(--brand); }
+  .cc-do { font-weight: 700; }
+  .cc-do.late { color: var(--alert); }
   .cc-none { color: var(--ink-3); font-style: italic; }
   .cc-foot { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-top: auto; padding-top: 8px; border-top: 1px solid var(--rule-fine); flex-wrap: wrap; }
   .cc-exports { font-size: 0.88rem; }
@@ -189,6 +204,28 @@ const warn = w.worst?.severity === 'planned';
   .cc-nudge .btn { min-width: 9.5em; text-align: center; }
   .cc-reply { max-width: 22em; text-align: right; }
   .cc-select { display: flex; gap: 6px; align-items: center; margin: 0; }
+
+  /* Three across: every card in a row shares the same eight row tracks
+     (title, flag, authors, Elder, metrics, student task, Elder task,
+     rail), so the numbers and the tasks sit on the same line across the
+     row however long one title or one task name runs. Each piece is
+     placed on its row by number, so a card with no flag leaves that
+     track empty rather than sliding its authors up into it. Where
+     subgrid is not supported, the card stays a column. */
+  @supports (grid-template-rows: subgrid) {
+    .care-cards.grid .care-card { display: grid; grid-template-rows: subgrid; grid-row: span 8; row-gap: 0; align-content: start; }
+    .care-cards.grid .cc-head, .care-cards.grid .cc-tasks { display: contents; }
+    .care-cards.grid .cc-title { grid-row: 1; }
+    .care-cards.grid .cc-flag { grid-row: 2; margin-top: 4px; }
+    .care-cards.grid .cc-flag:empty { display: block; margin: 0; }
+    .care-cards.grid .cc-who { grid-row: 3; margin-top: 4px; }
+    .care-cards.grid .cc-elder { grid-row: 4; margin-top: 2px; }
+    .care-cards.grid .cc-elder:empty { display: block; margin: 0; }
+    .care-cards.grid .cc-metrics { grid-row: 5; margin-top: 10px; }
+    .care-cards.grid .cc-task { grid-row: 6; margin-top: 10px; }
+    .care-cards.grid .cc-task + .cc-task { grid-row: 7; margin-top: 8px; }
+    .care-cards.grid .cc-foot { grid-row: 8; margin-top: 10px; }
+  }
 
   /* One column: the head, the metrics and the tasks side by side, the
      rail along the bottom. */

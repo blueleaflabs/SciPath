@@ -61,10 +61,11 @@ export const POST: APIRoute = async (ctx) => {
         `Why: ${detail || '(no detail)'}`,
         `Browser: ${agent || '(unknown)'}`,
         '',
+        'Reported only once the backup path has held for ninety seconds; a lid closing or a token refresh does not get this far.',
         'Most often this is a network that will not carry a WebSocket. The page keeps working on the pulse;',
         'the incident log at /app/live/ lists every person it happened to.',
       ].join('\n')
-    : `The socket came back for ${who} at ${org.name} (${page || 'a page'}).`;
+    : `The socket came back for ${who} at ${org.name} (${page || 'a page'})${detail ? `, ${detail}` : ''}.`;
   const failures: string[] = [];
   if (to.length > 0) {
     const transport = transportFor(env);

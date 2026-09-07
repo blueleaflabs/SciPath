@@ -27,6 +27,7 @@ import { exportName } from '../../../../../../lib/export-names';
 import { placesWanting, docStanding } from '../../../../../../lib/documents';
 import PaperHeader from '../../../../../../components/PaperHeader.astro';
 import DocumentPaper from '../../../../../../components/DocumentPaper.astro';
+import { backFrom } from '../../../../../../lib/back';
 
 const { session, account } = Astro.locals;
 const org = activeOrg(Astro);
@@ -97,7 +98,7 @@ const { data: comments } = doc && withComments
 const go = Astro.url.searchParams.get('go') === '1';
 const docLink = typeof values['_doc_link'] === 'string' ? values['_doc_link'] : '';
 const printedOn = when(new Date().toISOString());
-const backHref = `/app/project/${project.id}/doc/${deliverableId}/`;
+const back = backFrom(Astro.request, { href: `/app/project/${project.id}/doc/${deliverableId}/`, label: 'Back to the document' });
 const withQuery = `?${wantVersion ? `version=${wantVersion}&` : ''}comments=1`;
 const withoutQuery = wantVersion ? `?version=${wantVersion}` : '';
 ---
@@ -111,7 +112,7 @@ const withoutQuery = wantVersion ? `?version=${wantVersion}` : '';
   </head>
   <body>
     <div class="toolbar">
-      <a href={backHref}>Back to the document</a>
+      <a href={back.href}>{back.label}</a>
       <label class="opt">
         <input type="checkbox" checked={withComments} data-on={withQuery} data-off={withoutQuery} onchange="location.search = this.checked ? this.dataset.on : this.dataset.off" />
         Include the comments

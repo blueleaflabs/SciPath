@@ -101,7 +101,18 @@ export function fail(detail: string) {
   if (st) setHealth(st, 'fallback', detail);
 }
 
+/* A tab in the background or a browser that says it is offline is not a
+   network that refuses WebSockets (2.9): a laptop closing its lid drops
+   the socket and the library's reconnects trip errors on the way back,
+   which read as a transport failure and mailed the operator. Errors in
+   that state do not count, and when the tab is seen again the channels
+   get a fresh deadline before they are judged. */
+function quiet(): boolean {
+  return typeof document !== 'undefined' && (document.hidden || (typeof navigator !== 'undefined' && navigator.onLine === false));
+}
+
 function noteError(st: LiveState, what: string) {
+  if (quiet()) return;
   const now = Date.now();
   st.errors = st.errors.filter((t) => now - t < ERROR_WINDOW);
   st.errors.push(now);
@@ -124,7 +135,20 @@ export function join(topic: string, opts: { presence?: boolean } = {}): any {
   });
   let subscribed = false;
   let lost = false;
-  const deadline = window.setTimeout(() => { if (!subscribed && st.health !== 'live') setHealth(st, 'fallback', 'no subscription within 12 seconds'); }, DEADLINE);
+  let deadline = 0;
+  const arm = () => {
+    window.clearTimeout(deadline);
+    deadline = window.setTimeout(() => {
+      if (subscribed || st.health === 'live') return;
+      /* Not yet, and not looking: judge it when somebody is. */
+      if (quiet()) { arm(); return; }
+      setHealth(st, 'fallback', 'no subscription within 12 seconds');
+    }, DEADLINE);
+  };
+  arm();
+  const again = () => { if (!subscribed && !quiet()) arm(); };
+  document.addEventListener('visibilitychange', again);
+  window.addEventListener('online', again);
   ch.subscribe((status: string, err?: any) => {
     if (status === 'SUBSCRIBED') {
       subscribed = true;
@@ -158,11 +182,27 @@ export function leave(topic: string) {
   try { st.client.removeChannel(ch); } catch {}
 }
 
-/** The topics this person listens on, asked of the database directly. */
-export async function myTopics(): Promise<string[]> {
+/**
+ * The topics this person listens on, asked of the database directly and
+ * kept for the session: the list changes when a project or a role is
+ * added, which is rare, so one call an hour per browser, not one per
+ * page. Keyed by the person, so a shared browser never inherits another
+ * account's rooms (the policy would refuse them anyway).
+ */
+const TOPICS_TTL = 60 * 60 * 1000;
+export async function myTopics(fresh = false): Promise<string[]> {
   const st = live();
   if (!st) return [];
+  const key = `sp:topics:${st.me}`;
+  if (!fresh) {
+    try {
+      const had = JSON.parse(sessionStorage.getItem(key) ?? 'null');
+      if (had && Array.isArray(had.topics) && Date.now() - had.at < TOPICS_TTL) return had.topics;
+    } catch {}
+  }
   const { data, error } = await st.client.rpc('my_live_topics');
   if (error) { noteError(st, `topics: ${error.message}`); return []; }
-  return Array.isArray(data) ? data : [];
+  const topics = Array.isArray(data) ? data : [];
+  try { sessionStorage.setItem(key, JSON.stringify({ topics, at: Date.now() })); } catch {}
+  return topics;
 }

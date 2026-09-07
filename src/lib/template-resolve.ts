@@ -127,12 +127,28 @@ export interface ShapeSection {
   fields: ShapeField[];
 }
 
+export interface ShowcaseSpec {
+  title: string;
+  headline?: string;
+  hero?: string;
+  show?: { field?: string; fields?: string[]; as: 'prose' | 'line' | 'list' | 'picture' | 'chips'; label?: string }[];
+}
+
 export interface Shape {
   id: string;
   name: string;
   version?: number;
   layout?: string;
   guidance?: string;
+  /**
+   * How a submitted document of this shape appears on the class showcase
+   * (2.8): the section's title, the field whose text is the headline, the
+   * field whose picture is the hero, and the fields shown under it, each
+   * as prose, a line, a list (a table's first column, or every filled
+   * text in a run of fields) or a picture. A shape without this block
+   * does not appear on the showcase.
+   */
+  showcase?: ShowcaseSpec;
   /** The older form: parts in order, each a paragraph box. */
   parts?: ShapePart[];
   /** For a shape that is questions rather than sections. */
@@ -197,6 +213,22 @@ export function askedOf(shape: Shape): ShapeField[] {
 /** The Elder's fields, for the document row to remember who may write them. */
 export function staffFieldsOf(shape: Shape): string[] {
   return fieldsOf(shape).filter((f) => f.kind !== 'note' && f.owner === 'staff').map((f) => f.id);
+}
+
+/**
+ * Which of the Elder's fields are the feedback (2.9): the score is the
+ * Elder's choice or number whose options are numbers (a rating out of
+ * 4), the body is the Elder's first long text (the rationale). Read by
+ * the document page's "Give the feedback", so the button and the call
+ * agree on what is handed over; a shape with no Elder's part has neither.
+ */
+export function feedbackFieldsOf(shape: Shape): { score: string | null; body: string | null } {
+  const staff = fieldsOf(shape).filter((f) => f.kind !== 'note' && f.owner === 'staff');
+  const numeric = (f: ShapeField) => f.kind === 'number' || (f.kind === 'choice' && (f.options ?? []).length > 0 && (f.options ?? []).every((o) => /^\d+(\.\d+)?$/.test(String(o))));
+  return {
+    score: staff.find(numeric)?.id ?? null,
+    body: staff.find((f) => f.kind === 'long')?.id ?? null,
+  };
 }
 
 const FIELD_KINDS: FieldKind[] = ['note', 'text', 'long', 'choice', 'choices', 'number', 'date', 'link', 'file', 'table', 'rubric', 'graphic'];
@@ -323,6 +355,16 @@ export interface Step {
    * feedback. Beside the step because an assessment is of the step (6.13).
    */
   rubric?: Rubric;
+
+  /**
+   * Whether this step is a column on the class tracker, and whether its
+   * family score and comment are shown to the student (2.8). A step
+   * without `tracker` is not on the tracker at all, so the tracker is by
+   * construction a collection of scores on assignments the template
+   * names. `students` on one step opens that step's score to the student
+   * while the platform switch (`familyScoresToStudents`) is still off.
+   */
+  tracker?: { column?: boolean; students?: boolean };
 
   /**
    * For a staff-owned step: the deliverable (by id) the Elder's feedback is

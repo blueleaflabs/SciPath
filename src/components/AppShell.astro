@@ -126,7 +126,7 @@ const nav = [
 </nav>
 
 <script>
-  import { live, join, myTopics, onMessage, onHealth, fail, type Health } from '../lib/live-client';
+  import { live, join, myTopics, onMessage, onHealth, fail, health, type Health } from '../lib/live-client';
   import { inClass, fallbackDelay } from '../lib/live-plan';
   /**
    * LIVE REGIONS (2.8).
@@ -186,6 +186,18 @@ const nav = [
   const refreshSoon = () => { window.clearTimeout(coalesce); coalesce = window.setTimeout(() => refresh().catch(() => {}), 350); };
   /* A page that just wrote something asks for its regions now. */
   document.addEventListener('live:refresh', () => { refresh().catch(() => {}); });
+
+  /* Back to a page the browser kept (2.9). The back button can restore a
+     page from its own cache without asking the server, no-store or not
+     (Safari always; Chrome increasingly), so the deliverables list still
+     said Start after the document it linked to had been opened. A page
+     restored that way is a page that missed everything: its regions
+     re-read at once, and a page with no regions is reloaded. */
+  window.addEventListener('pageshow', (ev) => {
+    if (!ev.persisted) return;
+    if (regions().length > 0) refresh().catch(() => location.reload());
+    else location.reload();
+  });
 
   /* ── The socket ─────────────────────────────────────────────────────── */
   const st = live();
@@ -249,18 +261,30 @@ const nav = [
       fetch('/app/api/live-incident/', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ state, page: location.pathname, detail }) }).catch(() => {});
     } catch {}
   };
-  let wasFallback = false;
+  /* Reported only when it lasts (2.9): a fallback that the socket
+     recovers from inside ninety seconds is a lid closing or a token
+     refreshing, and the strip has already said what to expect. One that
+     is still in fallback after that is a network worth a mail, and the
+     recovery mail says how long it was. */
+  const REPORT_AFTER = 90_000;
+  let reportTimer: number | undefined;
+  let reported = false;
+  let fellAt = 0;
   onHealth((h: Health, detail: string) => {
     if (h === 'fallback' || h === 'off') {
       startPolling();
       const every = classNow() ? `every ${plan?.fallback?.inClass ?? 8} seconds while you work` : 'once an hour outside class';
       strip.textContent = `Live updates are on the backup path (checking ${every}). Your work still saves as you type.`;
       strip.hidden = false;
-      if (h === 'fallback' && !wasFallback) { wasFallback = true; report('fallback', detail); }
+      if (h === 'fallback' && reportTimer === undefined && !reported) {
+        fellAt = Date.now();
+        reportTimer = window.setTimeout(() => { reportTimer = undefined; if (health() !== 'live') { reported = true; report('fallback', `${detail} · still on the backup path after ${Math.round(REPORT_AFTER / 1000)} seconds`); } }, REPORT_AFTER);
+      }
     } else if (h === 'live') {
       stopPolling();
       strip.hidden = true;
-      if (wasFallback) { wasFallback = false; report('recovered', ''); }
+      window.clearTimeout(reportTimer); reportTimer = undefined;
+      if (reported) { reported = false; report('recovered', `after ${Math.round((Date.now() - fellAt) / 1000)} seconds`); }
     }
     /* `starting`: nothing yet; the deadline decides. */
   });
@@ -270,30 +294,95 @@ const nav = [
 <style>
   .appnav {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
     gap: 18px;
     border-bottom: 1px solid var(--rule-fine);
-    padding-bottom: 10px;
-    margin-bottom: 26px;
+    padding-bottom: 12px;
+    /* Off the gold rule above by a step, and the page's first thing close
+       under it (2.9): the tabs had touched the masthead and stood a wide
+       gap above the plate. */
+    margin: 16px 0 14px;
   }
   .appnav ul {
     display: flex;
-    gap: 18px;
+    /* Wraps when a narrow laptop window holds more tabs than fit; on a
+       phone the strip below scrolls instead. */
+    flex-wrap: wrap;
+    gap: 8px 18px;
     list-style: none;
     margin: 0;
     padding: 0;
     margin-right: auto;
   }
+  /* Tabs that look like tabs (2.9): the brand's colour in a bold face,
+     each a button-shaped block, the current one filled. Before this the
+     labels were the quiet grey of a caption and read as a heading, not a
+     menu. */
   .appnav a {
     font-family: var(--face-ui);
     font-size: 0.88rem;
-    letter-spacing: 0.04em;
+    font-weight: 700;
+    letter-spacing: 0.05em;
     text-transform: uppercase;
     text-decoration: none;
-    color: var(--ink-3);
+    color: var(--brand);
+    padding: 7px 12px;
+    border: 1.5px solid var(--brand);
+    border-radius: 3px;
+    line-height: 1;
+    transition: background-color 120ms ease, color 120ms ease;
+  }
+  .appnav a:hover,
+  .appnav a:focus-visible {
+    background: var(--accent-pale);
+    color: var(--brand-deep);
+    border-color: var(--brand-deep);
   }
   .appnav a[aria-current='page'] {
-    color: var(--ink);
-    box-shadow: inset 0 -2px 0 var(--brand-mark);
+    background: var(--brand);
+    color: var(--card);
+    border-color: var(--brand);
+  }
+
+  /* ── ON A PHONE (2.8) ──────────────────────────────────────────
+     A tab bar does not wrap: an uppercase, letter-spaced label broken
+     across two lines reads as two tabs, and the last one was cut off.
+     Below the one-line width the bar is a strip that scrolls sideways
+     under the thumb, each label whole, the current one scrolled into view
+     on load (the script below), with a fade at the right edge that says
+     there is more. The scrollbar is hidden; the strip is the affordance. */
+  @media (max-width: 720px) {
+    .appnav {
+      overflow-x: auto;
+      overflow-y: hidden;
+      flex-wrap: nowrap;
+      -webkit-overflow-scrolling: touch;
+      scrollbar-width: none;
+      scroll-snap-type: x proximity;
+      /* The current tab, scrolled into view on load, lands after the
+         page's padding rather than under the fade at the edge (2.9). */
+      scroll-padding-inline: var(--shell-pad);
+      margin-bottom: 18px;
+      /* Full-bleed to the screen's edges, so the strip scrolls from edge
+         to edge rather than inside the page's padding. */
+      margin-inline: calc(-1 * var(--shell-pad));
+      padding-inline: var(--shell-pad);
+      -webkit-mask-image: linear-gradient(to right, transparent 0, var(--ink) var(--shell-pad), var(--ink) calc(100% - 28px), transparent 100%);
+      mask-image: linear-gradient(to right, transparent 0, var(--ink) var(--shell-pad), var(--ink) calc(100% - 28px), transparent 100%);
+    }
+    .appnav::-webkit-scrollbar { display: none; }
+    .appnav ul { flex-wrap: nowrap; gap: 20px; }
+    .appnav li { scroll-snap-align: start; }
+    .appnav a { white-space: nowrap; display: inline-block; padding: 7px 12px; }
   }
 </style>
+
+<script>
+  /* The current tab into view on a phone, where the bar scrolls. */
+  const cur = document.querySelector<HTMLElement>('.appnav a[aria-current="page"]');
+  const bar = cur?.closest<HTMLElement>('.appnav');
+  if (cur && bar && bar.scrollWidth > bar.clientWidth) {
+    bar.scrollLeft = Math.max(0, cur.offsetLeft - 16);
+  }
+</script>

@@ -152,25 +152,6 @@ const first = rows[0];
               )}
             </details>
           )}
-          {/* A nudge is "do this one" (2.8): who asked and when, on the
-              row it is about, and one word back. Anything with content
-              goes through the document's questions. */}
-          {row.ask && (
-            <div class="plate-ask">
-              <p class="plate-ask-l">
-                <b>{String(row.ask.askedBy ?? 'Somebody').split(' ')[0]} asked for this{row.ask.askedOn ? ` on ${row.ask.askedOn}` : ''}{row.ask.times > 1 ? ` (${row.ask.times} times)` : ''}.</b>
-                {row.ask.acknowledged ? (
-                  <span>You said you have it.</span>
-                ) : (
-                  <form method="POST" action="#outcome" class="inline">
-                    <input type="hidden" name="action" value="ack" />
-                    <input type="hidden" name="milestone_id" value={row.ask.milestoneId} />
-                    <button class="btn btn-sm ghost" type="submit">Got it</button>
-                  </form>
-                )}
-              </p>
-            </div>
-          )}
         </div>
         {(row.actions ?? []).length > 0 && (
           <div class="act">
@@ -179,6 +160,25 @@ const first = rows[0];
             ) : (
               <a class:list={['btn', a.accent ? 'accent' : 'ghost']} href={a.href}>{a.label}</a>
             ))}
+          </div>
+        )}
+        {/* A nudge is "do this one" (2.8): who asked and when, and one
+            word back. A strip across the whole row's foot rather than a
+            note inside its middle cell, so it lines up with the row's
+            edges: the words at the left, Got it at the right. */}
+        {row.ask && (
+          <div class="plate-ask">
+            <span class="plate-ask-l">
+              <b>{String(row.ask.askedBy ?? 'Somebody').split(' ')[0]} asked for this{row.ask.askedOn ? ` on ${row.ask.askedOn}` : ''}{row.ask.times > 1 ? ` (${row.ask.times} times)` : ''}.</b>
+              {row.ask.acknowledged && <span>You said you have it.</span>}
+            </span>
+            {!row.ask.acknowledged && (
+              <form method="POST" action="#outcome" class="plate-ack">
+                <input type="hidden" name="action" value="ack" />
+                <input type="hidden" name="milestone_id" value={row.ask.milestoneId} />
+                <button class="btn btn-sm ghost" type="submit">Got it</button>
+              </form>
+            )}
           </div>
         )}
       </div>
@@ -196,9 +196,11 @@ const first = rows[0];
   .plate-form .plate-rev { display: flex; gap: 8px; align-items: center; }
   .plate-form .ta, .plate-form .in { background: var(--card); color: var(--ink); }
   .plate-form + .plate-form { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--cover-rule); }
-  .plate-ask { margin-top: 10px; padding-top: 8px; border-top: 1px dashed var(--cover-rule); display: grid; gap: 6px; max-width: var(--measure-form); }
-  .plate-ask-l { margin: 0; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; font-family: var(--face-ui); font-size: 0.88rem; color: var(--brand-contrast); }
-  .plate-ask .inline { display: inline; }
+  .plate-ask { grid-column: 1 / -1; display: flex; align-items: center; justify-content: space-between; gap: 10px 16px; flex-wrap: wrap; padding: 8px 24px 10px; border-top: 1px dashed var(--cover-rule); background: var(--brand-deep); }
+  .plate-ask-l { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; font-family: var(--face-ui); font-size: 0.88rem; color: var(--brand-contrast); }
+  .plate-ask-l span { color: var(--cover-ink-2); }
+  .plate-ack { margin: 0; margin-left: auto; }
+  @media (max-width: 720px) { .plate-ask { padding: 8px 16px 10px; } }
   .plate-n { margin: 0; font-family: var(--face-ui); font-size: 0.88rem; font-weight: 600; color: var(--brand-contrast); }
   .plate-tpl { display: grid; gap: 6px; margin: 0; justify-items: start; }
   .plate-tpl span { font-family: var(--face-ui); font-size: 0.82rem; color: var(--brand-contrast); }

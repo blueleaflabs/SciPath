@@ -12,6 +12,16 @@ guidance: >-
   Synthesize and summarize what is known about your question and what it
   is worth to your research. Cite your sources in the text. Define any
   terms your reader may not know.
+# On the class showcase (2.8): the introduction, the sources as a reading
+# list, and the references.
+showcase:
+  title: What the literature says
+  show:
+    - { field: introduction, as: prose, label: Introduction }
+    - { field: sources, as: list, label: Sources }
+    - { field: beginning, as: prose }
+    - { field: references, as: prose, label: References }
+
 sections:
   - id: resources
     name: Resources

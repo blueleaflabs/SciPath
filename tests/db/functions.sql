@@ -822,6 +822,8 @@ begin
     v_ms uuid;
   begin
     select em.id into v_ms from public.entry_milestones em where em.participation_id = v_place limit 1;
+  /* Late, since a nudge is refused before the due date (2.8). */
+  update public.entry_milestones set due_on = current_date - 1 where id = v_ms;
     insert into public.deliverables (org_id, participation_id, milestone_id, type, label, external_url, created_by)
     select pa.org_id, v_place, v_ms, 'test_doc', 'A recorded document', 'https://example.org/doc', auth.uid()
       from public.participations pa where pa.id = v_place;
@@ -1255,14 +1257,13 @@ begin
   insert into public.role_reservations (org_id, email, display_name, role)
   values (v_org, 'reserved@demo.invalid', 'Reserved Person', 'advisor');
 
-  /* As the person themselves. The guard compares against `auth.uid()`, so
-     running this as the owner would prove nothing. */
+  /* As the person themselves: the guard compares against `auth.uid()`,
+     which is the claim, not the role. The function is internal (called by
+     the identities trigger, as definer) and not executable by a session
+     since the hardening (2.9), so the call stays the owner's. */
   perform set_config('request.jwt.claim.sub', v_user::text, true);
-  perform set_config('role', 'authenticated', true);
 
   v_n := app.claim_reservations(v_user, 'reserved@demo.invalid');
-
-  perform set_config('role', 'postgres', true);
 
   if v_n <> 1 then
     raise exception 'FAIL the reservation was not claimed (%)', v_n;
@@ -1884,6 +1885,22 @@ begin
   if v_ans->>'value' <> 'Parents and nurses' then raise exception 'FAIL the conflict did not carry the newer text: %', v_ans; end if;
   raise notice '  ok   a stale save is refused and answered with the newer text';
 
+  -- Every draft is kept (2.8): two saves are two rows; the same text saved
+  -- again is no row and answers 'same'; the newest row is the field now.
+  if (select count(*) from public.document_field_history h where h.document_id = v_doc and h.field_id = 'who') <> 2 then
+    raise exception 'FAIL two saves did not leave two drafts';
+  end if;
+  v_ans := public.save_field(v_doc, 'who', to_jsonb('Parents and nurses'::text), 2);
+  perform set_config('role', 'postgres', true);
+  if not (v_ans->>'ok')::boolean or (v_ans->>'same')::boolean is not true then raise exception 'FAIL the same text again was not answered as the same: %', v_ans; end if;
+  if (select count(*) from public.document_field_history h where h.document_id = v_doc and h.field_id = 'who') <> 2 then
+    raise exception 'FAIL the same text again left a draft';
+  end if;
+  if (select h.value from public.document_field_history h where h.document_id = v_doc and h.field_id = 'who' order by h.saved_at desc, h.version desc limit 1) <> to_jsonb('Parents and nurses'::text) then
+    raise exception 'FAIL the newest draft is not the field';
+  end if;
+  raise notice '  ok   every changed draft is kept, and the same text again is not';
+
   -- The Elder's part: the author may not write it, the Elder may, and it
   -- does not flip a submitted document back to revising.
   perform set_config('role', 'authenticated', true);
@@ -2086,14 +2103,38 @@ begin
   end if;
   raise notice '  ok   submitting records, completes the step, fixes the version and resolves the ask';
 
-  -- Now the Elder's task is ready, and the next comment completes it and writes the notebook line.
+  -- Now the Elder's task is ready. A reply in a field's thread is not the feedback (2.9)...
   perform set_config('role', 'authenticated', true);
   perform set_config('request.jwt.claim.sub', v_elder::text, true);
-  perform public.comment_on_document(v_doc, null, 'Good set. One more on cost.', false, null);
+  perform public.comment_on_document(v_doc, 'what', 'One paragraph is fine.', false, null);
+  perform set_config('role', 'postgres', true);
+  if exists (select 1 from public.entry_milestones where id = v_task and completed_on is not null) then
+    raise exception 'FAIL an Elder''s reply on a field completed the task';
+  end if;
+  raise notice '  ok   an Elder''s reply on a field leaves the task open';
+
+  -- ...the feedback given from the Elder's part is: it completes the task, writes the
+  -- notebook line, and scores the student step for the author.
+  perform set_config('role', 'authenticated', true);
+  perform set_config('request.jwt.claim.sub', v_elder::text, true);
+  perform public.give_document_feedback(v_doc, 3.5, 'Good set. One more on cost.');
   perform set_config('role', 'postgres', true);
   if not exists (select 1 from public.entry_milestones where id = v_task and completed_on is not null and completed_by = v_elder) then
-    raise exception 'FAIL the Elder''s comment after submission did not complete the task';
+    raise exception 'FAIL the feedback given did not complete the task';
   end if;
+  if not exists (select 1 from public.assessments a where a.milestone_id = v_step and a.student_id = v_author and a.score = 3.5 and a.superseded_by is null) then
+    raise exception 'FAIL the feedback given did not score the student step';
+  end if;
+  perform set_config('role', 'authenticated', true);
+  perform set_config('request.jwt.claim.sub', v_elder::text, true);
+  v_ok := false;
+  begin
+    perform public.give_document_feedback(v_doc, 3, 'Again.');
+  perform set_config('role', 'postgres', true);
+  exception when others then v_ok := true; perform set_config('role', 'postgres', true);
+  end;
+  if not v_ok then raise exception 'FAIL the feedback was given twice'; end if;
+  raise notice '  ok   the feedback given once completes the task and scores the step; twice is refused';
   if not exists (select 1 from public.field_notes where project_id = v_project and body_md like 'Feedback on **User interview questions**%') then
     raise exception 'FAIL the notebook did not get the review''s line';
   end if;
@@ -2119,6 +2160,20 @@ begin
 
   perform set_config('role', 'postgres', true);
   delete from public.notifications where subject_id = v_doc or subject_kind = 'assessments';
+  -- Pruning keeps the last draft before each submitted version and drops
+  -- the rest once they are old; nothing recent is touched (2.8).
+  update public.document_field_history set saved_at = saved_at - interval '40 days' where document_id = v_doc;
+  update public.document_versions set submitted_at = submitted_at - interval '40 days' where document_id = v_doc;
+  perform public.prune_field_history(30);
+  if not exists (select 1 from public.document_field_history h where h.document_id = v_doc and h.field_id = 'who') then
+    raise exception 'FAIL pruning dropped the last draft before a submitted version';
+  end if;
+  if (select count(*) from public.document_field_history h where h.document_id = v_doc and h.field_id = 'who')
+     > (select count(*) from public.document_versions v where v.document_id = v_doc) then
+    raise exception 'FAIL pruning left more than one draft per version';
+  end if;
+  raise notice '  ok   pruning keeps the last draft before each version and no more';
+
   delete from public.deliverable_feedback where document_id = v_doc;
   update public.deliverables set document_version_id = null where document_version_id in (select id from public.document_versions where document_id = v_doc);
   delete from public.document_versions where document_id = v_doc;
@@ -2126,6 +2181,7 @@ begin
   delete from public.field_notes where project_id = v_project and body_md like '%User interview questions%';
   delete from public.document_fields where document_id = v_doc;
   delete from public.documents where id = v_doc;
+  delete from public.assessments where milestone_id = v_step;
   delete from public.entry_milestones where id in (v_task, v_step);
 exception when others then
   perform set_config('role', 'postgres', true);
@@ -2463,6 +2519,8 @@ begin
   select em.id into v_ms from public.entry_milestones em
    where em.participation_id = v_part and em.completed_on is null
    order by em.due_on nulls last limit 1;
+  /* Late, since a nudge is refused before the due date (2.8). */
+  update public.entry_milestones set due_on = current_date - 1 where id = v_ms;
 
   if v_ms is not null then
     perform set_config('request.jwt.claim.sub', v_adv::text, true);
@@ -2977,6 +3035,7 @@ begin
     from public.entry_milestones em
    where em.completed_on is null
    limit 1;
+  update public.entry_milestones set due_on = current_date - 1 where id = v_ms;
 
   if v_ms is null then
     raise notice '  --   no open obligation seeded, nudge checks skipped';
@@ -3103,6 +3162,8 @@ begin
          and em.completed_on is null
          and em.id <> v_ms
        limit 1;
+  /* Late, since a nudge is refused before the due date (2.8). */
+  update public.entry_milestones set due_on = current_date - 1 where id = v_ms2;
 
       if v_ms2 is not null then
         if public.nudge(v_ms2, v_elder) not in ('sent', 'self') then
@@ -3157,6 +3218,8 @@ begin
      where em.participation_id = v_part and em.completed_on is null
      order by em.due_on nulls last
      limit 1;
+  /* Late, since a nudge is refused before the due date (2.8). */
+  update public.entry_milestones set due_on = current_date - 1 where id = v_ms3;
 
     if v_elder2 is not null and v_kid is not null and v_ms3 is not null
        and v_elder2 <> v_kid then
@@ -3364,6 +3427,7 @@ begin
    order by (select g.program_role = 'cohort' and g.status = 'open' from public.programs g where g.id = pt.program_id) desc,
             em.due_on nulls last
    limit 1;
+  update public.entry_milestones set due_on = current_date - 1 where id = v_ms;
 
   if v_ms is null then
     raise notice '  --   no place with an Elder, an author and an open obligation; the reply checks skipped';
@@ -3502,6 +3566,8 @@ declare
   v_before   int;
   v_after    int;
   v_ans      jsonb;
+  v_part     uuid;
+  v_step     uuid;
 begin
   perform set_config('role', 'authenticated', true);
   perform set_config('request.jwt.claim.sub', v_author::text, true);
@@ -3566,6 +3632,32 @@ begin
     raise exception 'FAIL a notice was broadcast somewhere other than a person''s channel';
   end if;
   raise notice '  ok   a notice is broadcast on its recipient''s channel';
+
+  -- A score broadcast carries the cell (student, score, comment, who), and
+  -- the row it supersedes is not broadcast again on its way out: two
+  -- scores on one cell are two messages, not three.
+  select e.id into v_part from public.participations e where e.project_id = v_project and e.program_id = 'b0000000-0000-0000-0000-000000000003';
+  insert into public.entry_milestones (org_id, participation_id, name, kind, due_on, owner, step_id, completed_on)
+  values ('11111111-1111-1111-1111-111111111111', v_part, 'Live scoring check', 'local', current_date - 1, 'student', 'live_check', current_date - 1)
+  returning id into v_step;
+  select count(*) into v_before from realtime.messages where event = 'assessment' and topic = 'project:' || v_project::text;
+  perform set_config('role', 'authenticated', true);
+  perform set_config('request.jwt.claim.sub', v_elder::text, true);
+  perform public.grade_milestone(v_step, v_author, 3, 4, 'first', null, false);
+  perform public.grade_milestone(v_step, v_author, 3.5, 4, 'second', null, false);
+  perform set_config('role', 'postgres', true);
+  select count(*) into v_after from realtime.messages where event = 'assessment' and topic = 'project:' || v_project::text;
+  if v_after - v_before <> 2 then raise exception 'FAIL two scores on one cell sent % broadcasts to the project, not two', v_after - v_before; end if;
+  if not exists (
+    select 1 from realtime.messages m
+     where m.event = 'assessment' and m.payload->>'student_id' = v_author::text and (m.payload->>'score')::numeric = 3.5
+       and m.payload->>'comment' = 'second' and m.payload->>'kind' = 'elder' and m.payload ? 'by'
+  ) then
+    raise exception 'FAIL the assessment broadcast does not carry the cell';
+  end if;
+  raise notice '  ok   a score is broadcast as the cell it fills, once per score';
+  delete from public.assessments where milestone_id = v_step;
+  delete from public.entry_milestones where id = v_step;
 
   -- The backup path: one incident an hour per person, and the advisor reads it.
   perform set_config('request.jwt.claim.sub', v_author::text, true);

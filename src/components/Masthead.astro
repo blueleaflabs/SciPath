@@ -89,6 +89,8 @@ const consentNote =
       : null;
 
 const here = Astro.url.pathname;
+/* Two letters for the chip: the first of the first and last names. */
+const initialsOf = (name: string) => { const w = String(name ?? '').trim().split(/\s+/).filter(Boolean); return ((w[0]?.[0] ?? '') + (w.length > 1 ? w[w.length - 1][0] : '')).toUpperCase() || '·'; };
 const isCurrent = (href: string) => here === href || (href !== '/' && here.startsWith(href));
 ---
 
@@ -164,8 +166,9 @@ const isCurrent = (href: string) => here === href || (href !== '/' && here.start
                 <a href="/app/" aria-current={here.startsWith('/app/') && here !== '/app/profile/' ? 'page' : undefined}>Workbench</a>
               </li>
               <li class="mnav-who">
-                <a href="/app/profile/" aria-current={here === '/app/profile/' ? 'page' : undefined} title="My profile">
-                  {account.display_name}
+                <a href="/app/profile/" class="mnav-me" aria-current={here === '/app/profile/' ? 'page' : undefined} title="My profile">
+                  <span class="mnav-ini" aria-hidden="true">{initialsOf(account.display_name)}</span>
+                  <span>{account.display_name}</span>
                 </a>
                 {consentNote && <span class="mnav-flag">{consentNote}</span>}
               </li>
@@ -198,7 +201,7 @@ const isCurrent = (href: string) => here === href || (href !== '/' && here.start
                 <a href="/app/">Workbench</a>
               </li>
               <li class="mnav-who" data-known hidden>
-                <a href="/app/profile/" data-name title="My profile"></a>
+                <a href="/app/profile/" class="mnav-me" title="My profile"><span class="mnav-ini" aria-hidden="true" data-initials></span><span data-name></span></a>
                 <span class="mnav-flag" data-consent hidden></span>
               </li>
               <li data-known hidden>
@@ -249,6 +252,8 @@ const isCurrent = (href: string) => here === href || (href !== '/' && here.start
 
       const who = document.querySelector('[data-name]');
       if (who) who.textContent = name;
+      const ini = document.querySelector('[data-initials]');
+      if (ini) { const w = name.trim().split(/\s+/).filter(Boolean); ini.textContent = ((w[0]?.[0] ?? '') + (w.length > 1 ? w[w.length - 1][0] : '')).toUpperCase() || '·'; }
 
       /* The consent flag, on a page the server could not render it on.
       
@@ -272,20 +277,52 @@ const isCurrent = (href: string) => here === href || (href !== '/' && here.start
 )}
 
 <style>
+  /* ONE SHAPE FOR THE CLUSTER (2.9). Feedback, Workbench (or Login), the
+     name and Sign out were four kinds of control: a gold block, an
+     underlined link, a pill, a bare button. They are one kind now, the
+     bordered button the working-surface tabs below use, in the masthead's
+     colours: Feedback filled gold, the page you are on filled pale, the
+     rest outlined. The name keeps its initials inside the same shape. */
+  .mnav-acct a,
+  .mnav-acct .mnav-out {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 12px;
+    border: 1.5px solid var(--masthead-ink-2);
+    border-radius: 3px;
+    background: none;
+    color: var(--masthead-ink);
+    font-family: var(--face-ui);
+    font-weight: 600;
+    font-size: 0.86rem;
+    line-height: 1.2;
+    letter-spacing: 0.02em;
+    text-decoration: none;
+    cursor: pointer;
+    transition: background-color 120ms ease, border-color 120ms ease;
+  }
+  .mnav-acct a:hover,
+  .mnav-acct a:focus-visible,
+  .mnav-acct .mnav-out:hover,
+  .mnav-acct .mnav-out:focus-visible,
+  .mnav-acct a[aria-current='page'] {
+    background: color-mix(in srgb, var(--masthead-ink) 16%, transparent);
+    border-color: var(--masthead-ink);
+    text-decoration: none;
+  }
   .mnav-fb a {
-    display: inline-block;
-    padding: 5px 12px;
     background: var(--accent);
+    border-color: var(--accent);
     color: var(--accent-ink);
     font-family: var(--face-num);
     font-weight: 700;
     font-size: 0.78rem;
     letter-spacing: 0.1em;
     text-transform: uppercase;
-    text-decoration: none;
   }
   .mnav-fb a:hover,
-  .mnav-fb a:focus-visible { background: var(--accent-pale); color: var(--accent-ink); text-decoration: none; }
+  .mnav-fb a:focus-visible { background: var(--accent-pale); border-color: var(--accent-pale); color: var(--accent-ink); }
 
   /* ONE ROW, AND WHAT GIVES WAY BEFORE IT BECOMES TWO.
   
@@ -307,7 +344,7 @@ const isCurrent = (href: string) => here === href || (href !== '/' && here.start
     flex-wrap: wrap;
   }
 
-  @media (min-width: 721px) {
+  @media (min-width: 861px) {
     .mnav-bar { flex-wrap: nowrap; min-width: 0; }
     .mnav { flex-wrap: nowrap; }
     .mnav-acct { flex-wrap: nowrap; }
@@ -392,6 +429,22 @@ const isCurrent = (href: string) => here === href || (href !== '/' && here.start
     gap: 2px;
     line-height: 1.2;
   }
+  /* The name is a chip with initials (2.9), so it reads as the profile
+     it opens rather than a caption saying who is signed in. */
+  .mnav .mnav-me { padding: 4px 12px 4px 5px; }
+  .mnav-ini {
+    display: inline-grid;
+    place-items: center;
+    width: 1.7em;
+    height: 1.7em;
+    border-radius: 50%;
+    background: var(--brand-mark);
+    color: var(--brand-deep);
+    font-family: var(--face-num);
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+  }
 
   .mnav-flag {
     font-family: var(--face-num);
@@ -407,32 +460,34 @@ const isCurrent = (href: string) => here === href || (href !== '/' && here.start
 
   /* `font: inherit` took the body serif at full size, so this button was
      half again as large as the links beside it. It has to match .mnav a. */
-  .mnav-out {
-    background: none;
-    border: 0;
-    padding: 0;
-    cursor: pointer;
-    font-family: var(--face-ui);
-    font-weight: 500;
-    font-size: 0.9rem;
-    line-height: inherit;
-    letter-spacing: inherit;
-    color: var(--masthead-ink);
-  }
+  .mnav-out { line-height: 1.2; }
+  /* A hidden cluster item stays hidden (2.9): the row's flex display
+     had been winning over the attribute, and the empty chip showed on a
+     page rendered before anybody signed in. */
+  .mnav-acct li[hidden] { display: none; }
 
-  .mnav-out:hover {
-    text-decoration: underline;
-    text-decoration-thickness: 2px;
-    text-underline-offset: 0.3em;
+  /* ── ON A PHONE (2.8) ──────────────────────────────────────────
+     Below the one-line width, everything above that was told never to
+     wrap or shrink is allowed to: the account cluster (Feedback, Workbench,
+     the name, Sign out) had `nowrap` and `flex: 0 0 auto` for the laptop's
+     sake and, with no exception here, ran off the right edge and pushed
+     the whole page sideways. Now the bar is a stack: the search on its own
+     line, full width; the sections on one; the account cluster on the
+     next, wrapping as it must, with the rule between the groups gone
+     because they are no longer side by side. Everything is left-aligned,
+     in the order a thumb reads it. */
+  @media (max-width: 860px) {
+    .mnav-bar { flex: 1 1 auto; min-width: 0; gap: 10px 18px; }
+    .mnav, .mnav-acct { flex-wrap: wrap; gap: 8px 18px; }
+    .mnav-acct { padding-left: 0; border-left: 0; flex: 1 1 100%; white-space: normal; min-width: 0; }
+    /* The search beside the lockup on a tablet, the sections and the
+       account cluster on the row below. */
+    .mnav-find { flex: 1 1 10rem; max-width: none; order: -1; }
+    .mnav-who { flex-direction: row; align-items: center; gap: 8px; }
   }
-
-  .mnav-cta a {
-    box-shadow: inset 0 0 0 1px currentColor;
-    padding: 5px 12px;
-    border-radius: var(--radius);
-  }
-
-  @media (max-width: 720px) {
-    .mnav-acct { padding-left: 0; border-left: 0; }
+  /* A phone: everything stacks, the search full width on its own row. */
+  @media (max-width: 600px) {
+    .mnav-bar { width: 100%; }
+    .mnav-find { flex: 1 1 100%; }
   }
 </style>

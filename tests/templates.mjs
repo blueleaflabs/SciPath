@@ -540,4 +540,29 @@ test('a step asks for at most one document written in SciPath', () => {
   assert.deepEqual(problems, [], 'a step with two documents');
 });
 
+test('a tracker column is a student assignment with a deliverable, and IRPD names its columns', () => {
+  /* The tracker draws its columns from `tracker.column` (2.8), so a
+     column has to be something a student hands in: a student step with a
+     deliverable, never an Elder task or an event. IRPD's columns are the
+     class sheet's, and one of them (Lit Review v2) is the teacher's one
+     exception to scores being hidden from students. */
+  const problems = [];
+  for (const id of programs) {
+    let program;
+    try { program = resolve(id); } catch { continue; }
+    for (const st of program.steps) {
+      if (!st.tracker) continue;
+      if (typeof st.tracker !== 'object') problems.push(`${id}/${st.id}: tracker is not an object`);
+      if (st.tracker.column && (st.owner ?? 'student') !== 'student') problems.push(`${id}/${st.id}: a tracker column on a ${st.owner} step`);
+      if (st.tracker.column && !(st.deliverables ?? []).length) problems.push(`${id}/${st.id}: a tracker column with nothing handed in`);
+      if (st.tracker.students && !st.tracker.column) problems.push(`${id}/${st.id}: students see a score on a step that is not a column`);
+    }
+  }
+  assert.deepEqual(problems, []);
+  const irpd = resolve('irpd-mvhs-2027');
+  const columns = irpd.steps.filter((st) => st.tracker?.column).map((st) => st.id).sort();
+  assert.deepEqual(columns, ['literature_review', 'literature_review_draft', 'project_idea', 'strengths', 'topic_narrowing']);
+  assert.deepEqual(irpd.steps.filter((st) => st.tracker?.students).map((st) => st.id), ['literature_review'], 'only Lit Review v2 is seen by students');
+});
+
 console.log(`${passed} template assertions passed.`);

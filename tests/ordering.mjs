@@ -556,6 +556,10 @@ const DELIBERATE = new Set([
   'play',     // the video facade's play control
   'linkish',  // a secondary action inside a table row
   'mdx-btn',  // a formatting control on the notebook toolbar, styled as a key rather than a button
+  'seg-b',    // one segment of the tracker's view switch, styled as a tab
+  'tfilter',  // a filter on the tracker's bar, styled as a chip that presses
+  'sc',       // a score on the tracker, one of eight in a band-tinted row
+  'car',      // the tracker's picker arrows, styled as the field's own edges
 ]);
 
 test('every button carries a class', () => {
@@ -1510,7 +1514,7 @@ test('the notebook page can reach its own export', () => {
      elsewhere. It was reachable from the overview and from the participation
      page, and not from the record it prints. */
   const notebook = fs.readFileSync('src/pages/app/project/[id].astro', 'utf8');
-  assert.match(notebook, /href=\{`\/app\/project\/\$\{project\.id\}\/notebook\/`\}/);
+  assert.match(notebook, /href=\{`\/app\/project\/\$\{project\.id\}\/notebook\/(\?go=1)?`\}/);
 });
 
 test('somebody who is not an author is offered the way to write', () => {

@@ -8,6 +8,16 @@ version: 1
 guidance: >-
   A research question pinpoints exactly what you want to find out in your
   work. A good research question is essential for outstanding research.
+# On the class showcase (2.8): the question is the headline; the area and
+# the reason it matters follow.
+showcase:
+  title: The research question
+  headline: question
+  show:
+    - { field: area, as: prose, label: The area }
+    - { field: interest, as: prose, label: Why it interested me }
+    - { field: impact, as: prose, label: The impact I want }
+
 sections:
   - id: handout
     name: The handout

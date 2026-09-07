@@ -52,7 +52,7 @@ export const GET: APIRoute = async ({ params, request, cookies, locals }) => {
         titleOf.get(r.participation_id),
         r.milestone?.name,
         r.milestone?.due_on,
-        r.kind === 'elder' ? 'family score' : 'grade',
+        r.kind === 'elder' ? 'elder score' : 'grade',
         r.score,
         r.out_of,
         r.released_at ? 'yes' : 'no',

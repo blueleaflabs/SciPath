@@ -32,6 +32,7 @@ import { resolveProgram, shape as shapeOf, scoreRubric } from '../../../../lib/t
 import { sectionsOf, textOf, isFilled, documentPath } from '../../../../lib/documents';
 import { renderMarkdown } from '../../../../lib/notes';
 import { drivePreviewUrl, driveKind } from '../../../../lib/gdrive';
+import { platform } from '../../../../config/site';
 
 const { session, account, roles } = Astro.locals;
 const org = activeOrg(Astro);
@@ -92,11 +93,11 @@ if (Astro.request.method === 'POST') {
       p_out_of: outOf,
       p_feedback_md: String(form.get('feedback') ?? ''),
       p_rubric: chosen,
-      p_release: String(form.get('release') ?? '') === '1',
+      p_release: platform.gradesToStudents && String(form.get('release') ?? '') === '1',
     });
     if (e) error = e.message;
     else note = `${String(form.get('student_name') ?? 'Graded')}: ${String(form.get('release') ?? '') === '1' ? 'graded and released.' : 'graded, not released yet.'}`;
-  } else if (action === 'release') {
+  } else if (action === 'release' && platform.gradesToStudents) {
     const { data, error: e } = await supabase.rpc('release_grades', { p_program_id: id });
     if (e) error = e.message;
     else note = `${data ?? 0} ${data === 1 ? 'grade' : 'grades'} released. The students have been told.`;
@@ -186,7 +187,7 @@ const { data: allGrades } = milestoneIds.length
   : { data: [] as any[] };
 const grades = (allGrades ?? []).filter((g: any) => g.kind !== 'elder');
 const gradeFor = new Map<string, any>(grades.map((g: any) => [`${g.milestone_id}:${g.student_id}`, g]));
-/* The family's score, beside the teacher's form: what the Elder gave and said. */
+/* The Elder's score, beside the teacher's form: what the Elder gave and said. */
 const scoreFor = new Map<string, any>((allGrades ?? []).filter((g: any) => g.kind === 'elder').map((g: any) => [`${g.milestone_id}:${g.student_id}`, g]));
 
 const rows = (called ? called.rows : []).flatMap((m: any) => {
@@ -265,10 +266,16 @@ const counts = {
         {rubric ? `Rubric: ${rubric.criteria.length} criteria, out of ${outOfRubric}` : 'No rubric on this step: a score and an out-of'}
         {docDeliverable ? ` · ${docDeliverable.name}, written in SciPath` : ''}
       </span>
-      <form method="POST" action="#outcome" class="inline">
-        <input type="hidden" name="action" value="release" />
-        <button class="btn btn-sm accent" type="submit" disabled={unreleased === 0}>{unreleased ? `Release all (${unreleased})` : 'Nothing to release'}</button>
-      </form>
+      {/* Release is off for the pilot (`platform.gradesToStudents`): a
+          grade stays the teacher's until the class decides otherwise. */}
+      {platform.gradesToStudents ? (
+        <form method="POST" action="#outcome" class="inline">
+          <input type="hidden" name="action" value="release" />
+          <button class="btn btn-sm accent" type="submit" disabled={unreleased === 0}>{unreleased ? `Release all (${unreleased})` : 'Nothing to release'}</button>
+        </form>
+      ) : (
+        <span class="gfacts">Grades are not shown to students during the pilot.</span>
+      )}
       <a class="btn btn-sm ghost" href={`/app/program/${id}/class/`}>Class page</a>
     </div>
 
@@ -387,7 +394,7 @@ const counts = {
                 <form method="POST" action={`#g-${r.milestone.id}-${r.student.id}`} class="gform">
                   {r.score && (
                     <p class="g-family">
-                      <b class:list={['pill', scoreBand(r.score.score) || 'ok']}>Family score {r.score.score ?? '—'}{r.score.out_of ? ` / ${r.score.out_of}` : ''}</b>
+                      <b class:list={['pill', scoreBand(r.score.score) || 'ok']}>Elder score {r.score.score ?? '—'}{r.score.out_of ? ` / ${r.score.out_of}` : ''}</b>
                       {r.score.grader?.display_name ? ` · ${r.score.grader.display_name}` : ''}
                       {r.score.feedback_md && <span class="g-family-c">{r.score.feedback_md}</span>}
                     </p>
@@ -416,13 +423,15 @@ const counts = {
                     </div>
                   ) : (
                     <div class="g-score">
-                      <label><span>Score</span><input class="in" type="number" step="0.5" min="0" name="score" value={grade?.score ?? ''} /></label>
-                      <label><span>Out of</span><input class="in" type="number" step="0.5" min="0" name="out_of" value={grade?.out_of ?? 10} /></label>
+                      <label><span>Score, out of 4</span><input class="in" type="number" step="0.1" min="0" max="4" name="score" value={grade?.score ?? ''} /></label>
+                      <input type="hidden" name="out_of" value="4" />
                     </div>
                   )}
                   <label class="g-fb"><span>Feedback</span><textarea class="ta" name="feedback" rows="3">{grade?.feedback_md ?? ''}</textarea></label>
                   <div class="g-do">
-                    <label class="g-rel"><input type="checkbox" name="release" value="1" checked={Boolean(grade?.released_at)} /> <span>Visible to {String(r.student.display_name).split(' ')[0]}</span></label>
+                    {platform.gradesToStudents && (
+                      <label class="g-rel"><input type="checkbox" name="release" value="1" checked={Boolean(grade?.released_at)} /> <span>Visible to {String(r.student.display_name).split(' ')[0]}</span></label>
+                    )}
                     <button class="btn btn-sm" type="submit">{grade ? 'Save grade' : 'Grade'}</button>
                   </div>
                 </form>

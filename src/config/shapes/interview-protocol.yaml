@@ -14,6 +14,13 @@ version: 3
 guidance: >-
   Everything you will do from the moment you sit down to the moment you
   say thank you, so that every interview is done the same way.
+# On the class showcase (2.8): what we will ask, and how we open.
+showcase:
+  title: What we are asking
+  show:
+    - { field: intro, as: prose, label: How we introduce the project }
+    - { fields: [q1, q2, q3, q4, q5, q6, q7, q8, q9, q10, q11, q12, q13, q14, q15], as: list, label: The questions }
+
 sections:
   - id: guidelines
     name: "Interdisciplinary Research Class: Empathy User Interviews Guidelines"

@@ -11,6 +11,13 @@ version: 1
 guidance: >-
   Upload a picture of your journey map. Update it and submit again when
   the final is due.
+# On the class showcase (2.8): the map itself, and what changed.
+showcase:
+  title: The journey map
+  hero: map
+  show:
+    - { field: changes, as: prose, label: What changed since the first draft }
+
 sections:
   - id: about
     name: The journey map

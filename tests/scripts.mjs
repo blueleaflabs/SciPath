@@ -48,7 +48,7 @@ const AMBIENT = new Set([
   'Array', 'String', 'Number', 'Boolean', 'Math', 'Date', 'Promise', 'Set',
   'Map', 'Error', 'RegExp', 'Symbol', 'parseInt', 'parseFloat', 'isNaN',
   'encodeURIComponent', 'decodeURIComponent', 'setTimeout', 'clearTimeout',
-  'fetch', 'Response', 'Request', 'Headers', 'Blob', 'URL', 'URLSearchParams',
+  'fetch', 'Response', 'Request', 'Headers', 'Blob', 'URL', 'URLSearchParams', 'WebSocket',
   'TextEncoder', 'TextDecoder', 'Uint8Array', 'ArrayBuffer', 'Buffer',
   'process', 'structuredClone', 'crypto', 'btoa', 'atob', 'queueMicrotask',
 ]);

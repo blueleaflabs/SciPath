@@ -20,6 +20,7 @@ import { shape as shapeOf, resolveProgram, deliverablesFor } from '../../../../.
 import { programTitle, staffWord } from '../../../../../lib/program-names';
 import { exportName } from '../../../../../lib/export-names';
 import { docStanding } from '../../../../../lib/documents';
+import { backFrom } from '../../../../../lib/back';
 import PaperHeader from '../../../../../components/PaperHeader.astro';
 import DocumentPaper from '../../../../../components/DocumentPaper.astro';
 
@@ -102,7 +103,7 @@ const rubricOf = (deliverableId: string) => program?.steps.find((st: any) => (st
 const printedOn = when(new Date().toISOString());
 const elderWord = staffWord(program as any, elders.length === 1 ? 'singular' : 'plural');
 const go = Astro.url.searchParams.get('go') === '1';
-const backHref = place ? `/app/project/${project.id}/in/${place.program_id}/` : `/app/project/${project.id}/`;
+const back = backFrom(Astro.request, { href: place ? `/app/project/${project.id}/in/${place.program_id}/` : `/app/project/${project.id}/`, label: 'Back to the project' });
 ---
 
 <html lang="en" data-surface="print">
@@ -114,7 +115,7 @@ const backHref = place ? `/app/project/${project.id}/in/${place.program_id}/` : 
   </head>
   <body>
     <div class="toolbar">
-      <a href={backHref}>Back to the project</a>
+      <a href={back.href}>{back.label}</a>
       <label class="opt">
         <input type="checkbox" checked={withComments} data-on="?comments=1" data-off="" onchange="location.search = this.checked ? this.dataset.on : this.dataset.off" />
         Include the comments

@@ -1,13 +1,25 @@
-# The project summary, due September 8: the class's research graphic.
+# The research graphic, due September 10 (the project summary until
+# September 7): the class's four boxes and the picture drawn from them.
 # Four boxes in the handout's words and the picture drawn from them, made
 # on the page with Generate and kept on the document as a PNG.
 
 id: project-summary
-name: Project summary
+name: Research graphic
 version: 2
 guidance: >-
   Fill in the four boxes, then Generate the graphic. Generate again after
   you change anything.
+# On the class showcase (2.8): the drawn graphic is the picture, the
+# question the headline, and the three boxes follow.
+showcase:
+  title: Research graphic
+  headline: question
+  hero: graphic
+  show:
+    - { field: impact, as: prose, label: Impact }
+    - { field: data, as: prose, label: The data we need }
+    - { field: users, as: prose, label: Who it is for }
+
 sections:
   - id: boxes
     name: The four boxes

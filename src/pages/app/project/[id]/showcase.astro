@@ -26,6 +26,10 @@ import { programTitle, staffWord } from '../../../../lib/program-names';
 import { parseVideo } from '../../../../lib/video';
 import { identify } from '../../../../lib/filetype';
 import { blobStore, projectImagePath, MAX_UPLOAD_BYTES } from '../../../../lib/blob';
+import { resolveProgram } from '../../../../lib/templates';
+import { formatDate } from '../../../../lib/dates';
+import { loadShowcases } from '../../../../lib/showcase-load';
+import ShowcaseSections from '../../../../components/ShowcaseSections.astro';
 
 const { session, account, roles } = Astro.locals;
 const org = activeOrg(Astro);
@@ -92,9 +96,33 @@ if (Astro.request.method === 'POST') {
 
   const hidden = action === 'hide' ? true : action === 'show' ? false : String(form.get('hidden') ?? '') === '1';
 
+  /* "Use my Research Graphic" (2.8; the Project Summary until 2.9): the
+     four boxes of the submitted document, as plain text, become the
+     summary in one click; the
+     author edits from there. */
+  let summaryText = String(form.get('summary') ?? '');
+  if (action === 'from_summary') {
+    const { data: doc } = await supabase
+      .from('documents')
+      .select('id, document_fields(field_id, value)')
+      .eq('project_id', id)
+      .eq('deliverable', 'project_summary')
+      .maybeSingle();
+    const v = Object.fromEntries(((doc as any)?.document_fields ?? []).map((f: any) => [f.field_id, f.value]));
+    const plain = (t: any) => String(t ?? '').replace(/[*_#>`]/g, '').replace(/\s+\n/g, '\n').trim();
+    const parts = [
+      plain(v.question),
+      v.impact ? `Impact: ${plain(v.impact)}` : '',
+      v.users ? `Who it is for: ${plain(v.users)}` : '',
+      v.data ? `The data we need: ${plain(v.data)}` : '',
+    ].filter(Boolean);
+    if (parts.length === 0) return afterPost(Astro.url, { error: 'The Research Graphic has nothing in it yet.', note: null });
+    summaryText = parts.join('\n\n').slice(0, 1200);
+  }
+
   const { error: e } = await supabase.rpc('set_project_showcase', {
     p_project_id: id,
-    p_summary: String(form.get('summary') ?? ''),
+    p_summary: summaryText,
     p_hidden: hidden,
   });
 
@@ -153,6 +181,27 @@ const { data: coverSponsors } = await supabase
   .is('superseded_at', null);
 const coverSponsorNames = [...new Set((coverSponsors ?? []).map((x: any) => x.teacher_name).filter(Boolean))];
 const coverProgram = ((firstPlace ?? (places ?? [])[0])?.programs ?? null) as any;
+
+/* The part that writes itself (2.8), shown here too: the sections the
+   class page assembles from this project's submitted deliverables, so
+   the author sees on this page what the class sees, not just the two
+   boxes they fill in by hand. Read by the same loader as the class page. */
+const { data: showProgram } = firstPlace
+  ? await supabase.from('programs').select('id, template_id').eq('id', firstPlace.program_id).maybeSingle()
+  : { data: null };
+const showTemplate = showProgram?.template_id ? (() => { try { return resolveProgram(showProgram.template_id, null); } catch { return null; } })() : null;
+const assembled = showTemplate && firstPlace
+  ? (await loadShowcases(supabase, showTemplate, firstPlace.program_id, [id!])).get(id!) ?? null
+  : null;
+const fmtDay = (d: string | null) => (d ? formatDate(String(d).slice(0, 10), 'short') : '');
+/* Whether the Research Graphic has a question to start from. */
+const { data: summaryRows } = await supabase
+  .from('documents')
+  .select('id, document_fields(field_id, value)')
+  .eq('project_id', id)
+  .eq('deliverable', 'project_summary')
+  .limit(1);
+const summaryDoc = (summaryRows ?? []).some((d: any) => (d.document_fields ?? []).some((f: any) => f.field_id === 'question' && String(f.value ?? '').trim()));
 ---
 
 <Base title="My showcase" noindex={true}>
@@ -210,6 +259,7 @@ const coverProgram = ((firstPlace ?? (places ?? [])[0])?.programs ?? null) as an
       <section class="sec">
         <div class="sec-h"><b><span class="sec-n">01</span>In your words</b><span>up to 1200 characters</span></div>
         {iAuthor ? (
+          <>
           <form method="POST" action="#outcome" class="sform">
             <input type="hidden" name="action" value="save" />
             <input type="hidden" name="hidden" value={project.showcase_hidden ? '1' : '0'} />
@@ -221,6 +271,17 @@ const coverProgram = ((firstPlace ?? (places ?? [])[0])?.programs ?? null) as an
             </p>
             <p><button class="btn" type="submit">Save</button></p>
           </form>
+          {/* Offered only once there is something to start from (2.9): the
+              button used to be there from day one and answered "nothing in
+              it yet", which is a click that does nothing. */}
+          {iAuthor && summaryDoc && (
+            <form method="POST" action="#outcome" class="sform" style="margin-top:8px">
+              <input type="hidden" name="action" value="from_summary" />
+              <input type="hidden" name="hidden" value={project.showcase_hidden ? '1' : '0'} />
+              <p class="help">Or start from what you already wrote: <button class="btn btn-sm btn-2" type="submit">Use my Research Graphic</button></p>
+            </form>
+          )}
+          </>
         ) : (
           <p>{project.summary ?? <i>No summary yet.</i>}</p>
         )}
@@ -297,10 +358,20 @@ const coverProgram = ((firstPlace ?? (places ?? [])[0])?.programs ?? null) as an
         )}
       </section>
     </div>
+
+    {assembled && (
+      <div class="assembled">
+        <p class="lede-under">
+          The rest of the page writes itself. Each deliverable you submit becomes a section below, the moment you submit it, and the class sees the same sections{assembled.total > 0 ? ` (${assembled.have} of ${assembled.total} so far)` : ''}.
+        </p>
+        <ShowcaseSections sections={assembled.sections} coming={assembled.coming} mediaUrl={mediaUrl} fmt={fmtDay} from={3} mine={iAuthor} />
+      </div>
+    )}
   </div>
 </Base>
 
 <style>
+  .assembled { margin-top: 36px; }
   .state {
     display: flex;
     flex-wrap: wrap;

@@ -727,7 +727,7 @@ const scoreFor = new Map<string, any>((assessmentRows ?? []).filter((a: any) => 
 /* The reader's own released grades, for the roll-up. The policy returns
    only these to a student; an advisor sees everything and has the Class
    page for the roll-up, so theirs is empty here on purpose. */
-const myGrades = me.isAdvisor
+const myGrades = me.isAdvisor || !platform.gradesToStudents
   ? []
   : (assessmentRows ?? []).filter((a: any) => a.student_id === account.id && a.released_at && a.kind !== 'elder');
 const gradeTotal = myGrades.reduce((n: number, a: any) => n + Number(a.score ?? 0), 0);
@@ -953,6 +953,9 @@ const wantedBy = (m: any): any[] => {
 /* The template step a milestone row came from, matched on the name it was
    seeded with. */
 const stepFor = (name: string) => template?.steps.find((st) => st.name === name);
+/* Whether a student sees the family's score on this step: the platform
+   switch, or the step's own say-so in the template (2.8). */
+const scoreShown = (m: any) => platform.familyScoresToStudents || Boolean((m.step_id ? template?.steps.find((st) => st.id === m.step_id) : stepFor(m.name))?.tracker?.students);
 
 const milestoneIdFor = (stepId: string) => {
   const step = template?.steps.find((s) => s.id === stepId);
@@ -1794,8 +1797,11 @@ const sectionNo = new Map(sections.map((section, i) => [section.id, String(i + 1
                own released grade and their own score. */
             const gradeRows = me.isAdvisor || oversees
               ? authors.map((a: any) => ({ student: one(a.users), grade: gradeFor.get(`${m.id}:${one(a.users)?.id}`) ?? null, score: scoreFor.get(`${m.id}:${one(a.users)?.id}`) ?? null }))
-              : iAuthor && (gradeFor.get(`${m.id}:${account.id}`) || scoreFor.get(`${m.id}:${account.id}`))
-                ? [{ student: { id: account.id, display_name: account.display_name }, grade: gradeFor.get(`${m.id}:${account.id}`) ?? null, score: scoreFor.get(`${m.id}:${account.id}`) ?? null }]
+              : iAuthor && ((platform.gradesToStudents && gradeFor.get(`${m.id}:${account.id}`)) || (scoreShown(m) && scoreFor.get(`${m.id}:${account.id}`)))
+                /* The author's own row, only for what the pilot shows them
+                   (`platform.gradesToStudents`; `platform.familyScoresToStudents`
+                   or the step's own `tracker.students`). */
+                ? [{ student: { id: account.id, display_name: account.display_name }, grade: platform.gradesToStudents ? gradeFor.get(`${m.id}:${account.id}`) ?? null : null, score: scoreShown(m) ? scoreFor.get(`${m.id}:${account.id}`) ?? null : null }]
                 : [];
             return (
               <>
@@ -2150,7 +2156,7 @@ const sectionNo = new Map(sections.map((section, i) => [section.id, String(i + 1
                         /* Nothing handed in: nothing to score yet (2.8). */
                         <div class="grade shown family quiet">
                           {gradeRows.length > 1 && <span class="g-who">{student?.display_name}</span>}
-                          <span class="pill quiet">{score ? `Family score ${score.score ?? '—'} / ${score.out_of ?? 4}` : 'not scored'}</span>
+                          <span class="pill quiet">{score ? `Elder score ${score.score ?? '—'} / ${score.out_of ?? 4}` : 'Elder score: not scored'}</span>
                           <span class="g-by">Waiting for deliverable to be submitted</span>
                         </div>
                       ) : oversees && !me.isAdvisor ? (
@@ -2160,9 +2166,9 @@ const sectionNo = new Map(sections.map((section, i) => [section.id, String(i + 1
                                 on one student's page it said the obvious four times. */}
                             {gradeRows.length > 1 && <span class="g-who">{student?.display_name}</span>}
                             {score ? (
-                              <span class:list={['pill', scoreBand(score.score) || 'ok']}>Family score {score.score ?? '—'}{score.out_of ? ` / ${score.out_of}` : ''}</span>
+                              <span class:list={['pill', scoreBand(score.score) || 'ok']}>Elder score {score.score ?? '—'}{score.out_of ? ` / ${score.out_of}` : ''}</span>
                             ) : (
-                              <span class="pill quiet">not scored</span>
+                              <span class="pill quiet">Elder score: not scored</span>
                             )}
                           </summary>
                           <form method="POST" action="#outcome" class="gform">
@@ -2170,33 +2176,36 @@ const sectionNo = new Map(sections.map((section, i) => [section.id, String(i + 1
                             <input type="hidden" name="milestone_id" value={m.id} />
                             <input type="hidden" name="student_id" value={student?.id} />
                             <input type="hidden" name="step_name" value="" />
-                            <label><span>Score out of 4</span><input class="in" type="number" step="0.5" min="0" max="4" name="score" value={score?.score ?? ''} /></label>
+                            <label class="g-score"><span>Score, out of 4</span><input class="in" type="number" step="0.1" min="0" max="4" name="score" value={score?.score ?? ''} /></label>
                             <input type="hidden" name="out_of" value="4" />
-                            <label class="g-fb"><span>Comment</span><textarea class="ta" name="feedback" rows="1">{score?.feedback_md ?? ''}</textarea></label>
+                            <label class="g-fb"><span>Comment</span><textarea class="ta" name="feedback" rows="3">{score?.feedback_md ?? ''}</textarea></label>
                             <button class="btn btn-sm" type="submit">{score ? 'Save score' : 'Score'}</button>
                           </form>
                         </details>
-                      ) : score && (me.isAdvisor || (iAuthor && platform.familyScoresToStudents)) ? (
+                      ) : score && (me.isAdvisor || (iAuthor && scoreShown(m))) ? (
                         /* The student's view of it waits on the class's say
-                           (`platform.familyScoresToStudents`, 2.8). */
+                           (`platform.familyScoresToStudents`, or the step's
+                           own `tracker.students`, 2.8). */
                         <div class="grade shown family">
-                          <span class="g-who">Family score</span>
+                          <span class="g-who">Elder score</span>
                           <span class:list={['pill', scoreBand(score.score) || 'ok']}>{score.score ?? '—'}{score.out_of ? ` / ${score.out_of}` : ''}</span>
                           {score.feedback_md && <p class="g-text">{score.feedback_md}</p>}
                           <span class="g-by">{score.grader?.display_name ? `${score.grader.display_name}, ` : ''}{fmt(String(score.created_at).slice(0, 10))}</span>
                         </div>
                       ) : null}
                       {me.isAdvisor ? (
-                        <details class="grade" open={false}>
+                        /* Open where nothing has been given yet (2.9): the
+                           teacher came to this row to score it. */
+                        <details class="grade" open={!grade}>
                           <summary>
                             <span class="g-who">{student?.display_name}</span>
                             {grade ? (
                               <span class:list={['pill', grade.released_at ? 'ok' : 'soon']}>
-                                {grade.score !== null && grade.score !== undefined ? `${grade.score}${grade.out_of ? ` / ${grade.out_of}` : ''}` : 'feedback'}
+                                Teacher score {grade.score !== null && grade.score !== undefined ? `${grade.score}${grade.out_of ? ` / ${grade.out_of}` : ''}` : '(feedback only)'}
                                 {grade.released_at ? ' · released' : ' · not released'}
                               </span>
                             ) : (
-                              <span class="pill quiet">not graded</span>
+                              <span class="pill quiet">Teacher score: not graded</span>
                             )}
                           </summary>
                           <form method="POST" action="#outcome" class="gform">
@@ -2204,6 +2213,8 @@ const sectionNo = new Map(sections.map((section, i) => [section.id, String(i + 1
                             <input type="hidden" name="milestone_id" value={m.id} />
                             <input type="hidden" name="student_id" value={student?.id} />
                             <input type="hidden" name="step_name" value={m.name} />
+                            {/* Out of 4, the Elders' scale (2.9), decimals allowed: the
+                                teacher's score sits beside the Elder's and reads the same. */}
                             {stepFor(m.name)?.rubric ? (
                               <div class="g-rubric">
                                 {stepFor(m.name)!.rubric!.criteria.map((c: any) => {
@@ -2226,8 +2237,8 @@ const sectionNo = new Map(sections.map((section, i) => [section.id, String(i + 1
                               </div>
                             ) : (
                               <>
-                                <label><span>Score</span><input class="in" type="number" step="0.5" min="0" name="score" value={grade?.score ?? ''} /></label>
-                                <label><span>Out of</span><input class="in" type="number" step="0.5" min="0" name="out_of" value={grade?.out_of ?? 10} /></label>
+                                <label class="g-score"><span>Score, out of 4</span><input class="in" type="number" step="0.1" min="0" max="4" name="score" value={grade?.score ?? ''} /></label>
+                                <input type="hidden" name="out_of" value="4" />
                               </>
                             )}
                             <label class="g-fb"><span>Feedback</span><textarea class="ta" name="feedback" rows="3">{grade?.feedback_md ?? ''}</textarea></label>
@@ -2237,7 +2248,7 @@ const sectionNo = new Map(sections.map((section, i) => [section.id, String(i + 1
                         </details>
                       ) : grade && grade.released_at && iAuthor ? (
                         <div class="grade shown">
-                          <span class="g-who">Grade</span>
+                          <span class="g-who">Teacher score</span>
                           <span class="pill ok">{grade.score !== null && grade.score !== undefined ? `${grade.score}${grade.out_of ? ` / ${grade.out_of}` : ''}` : 'feedback'}</span>
                           {grade.rubric?.criteria?.length > 0 && stepFor(m.name)?.rubric && (
                             <ul class="g-levels">
@@ -2761,6 +2772,8 @@ const sectionNo = new Map(sections.map((section, i) => [section.id, String(i + 1
 
     /* The date belongs with it, above it, small. */
     .phased tbody td[data-label='Due'] { padding-bottom: 0; }
+    /* The control cell wraps like any other block (2.8). */
+    .phased tbody td.act { white-space: normal; }
 
     .phased .phase-row,
     .phased .phase-row th {
@@ -2805,12 +2818,16 @@ const sectionNo = new Map(sections.map((section, i) => [section.id, String(i + 1
   .grade[open] summary::before { content: '\25BE'; }
   .g-who { font-weight: 600; }
   /* One row where it fits (2.8): the score, the comment wide, the button. */
-  .gform { display: grid; grid-template-columns: 6rem minmax(16rem, 1fr) auto; gap: 6px 12px; align-items: end; margin: 6px 0 2px; max-width: none; }
+  /* One box for the score, the feedback taking the rest of the row, the
+     release and the button on the line below (2.9). */
+  .gform { display: grid; grid-template-columns: 8rem minmax(16rem, 1fr); gap: 6px 14px; align-items: start; margin: 8px 0 2px; max-width: none; }
+  .gform .g-score .in { width: 100%; max-width: 8rem; }
+  .gform > .btn { grid-column: 1 / -1; justify-self: start; }
   .gform label > span { display: block; font-family: var(--face-ui); font-size: 0.8rem; color: var(--ink-3); margin-bottom: 2px; }
   .gform .g-fb { grid-column: auto; }
   .gform .g-fb .ta { width: 100%; resize: vertical; min-height: 2.4em; }
   .gform .in, .gform .ta { padding: 6px 8px; }
-  @media (max-width: 720px) { .gform { grid-template-columns: 6rem 1fr; } .gform .g-fb { grid-column: 1 / -1; } }
+  @media (max-width: 720px) { .gform { grid-template-columns: 1fr; } .gform .g-fb { grid-column: 1 / -1; } }
   .gform .g-rel { grid-column: 1 / -1; display: flex; align-items: center; gap: 8px; }
   .gform .g-rel span { display: inline; margin: 0; font-size: 0.9rem; color: var(--ink); }
   .grade.shown { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 12px; font-family: var(--face-ui); font-size: 0.9rem; }
@@ -2890,6 +2907,10 @@ const sectionNo = new Map(sections.map((section, i) => [section.id, String(i + 1
   /* The cell holding a row's control, which is a link for a derived
      obligation and a form for everything else. */
   .act { white-space: nowrap; }
+  /* The button stays on one line; the standing beside it ("Waits on
+     Elder Feedback: Journey Map - First Draft") wraps within the fixed
+     status track (2.8) rather than running past the table's edge. */
+  .act .rec-docstate { white-space: normal; }
 
   .place {
     padding: 16px 20px;

@@ -33,7 +33,7 @@ import { formatDate, todayIn } from '../../../../../lib/dates';
 import { daysUntil } from '../../../../../lib/attention';
 import { afterPost, outcomeFrom } from '../../../../../lib/post-redirect';
 import { signInWith } from '../../../../../lib/next-path';
-import { shape as shapeOf, staffFieldsOf } from '../../../../../lib/templates';
+import { shape as shapeOf, staffFieldsOf, feedbackFieldsOf } from '../../../../../lib/templates';
 import { renderMarkdown } from '../../../../../lib/notes';
 import { staffWord } from '../../../../../lib/program-names';
 import { placesWanting, sectionsOf, progressOf, wordCount, textOf, isFilled, stateLabel, type DocState } from '../../../../../lib/documents';
@@ -169,6 +169,23 @@ if (Astro.request.method === 'POST') {
     });
     if (e) error = e.message;
     else note = docRow.version_no > 0 ? 'Submitted again. The new version stands; whoever commented has been told.' : 'Submitted. It is on the calendar as done, and your Elder can read it.';
+  } else if (action === 'give_feedback' && docRow && shape) {
+    /* The Elder's part, given (2.9): the score and the rationale as they
+       stand in the document (autosaved as typed), handed to the one call
+       that completes the task, scores the step and tells the authors. */
+    const { data: current } = await supabase.from('document_fields').select('field_id, value').eq('document_id', docRow.id);
+    const cur = Object.fromEntries((current ?? []).map((r: any) => [r.field_id, r.value]));
+    const parts = feedbackFieldsOf(shape);
+    const scoreRaw = parts.score ? cur[parts.score] : null;
+    const score = scoreRaw == null || String(scoreRaw).trim() === '' ? null : Number(scoreRaw);
+    const body = parts.body ? textOf(sectionsOf(shape).flatMap((s) => s.fields).find((f) => f.id === parts.body)!, cur[parts.body]) : '';
+    if (parts.score && score === null) error = 'Choose the rating first.';
+    else if (!body.trim()) error = 'Write the rationale first; it is what the researcher reads.';
+    else {
+      const { error: e } = await supabase.rpc('give_document_feedback', { p_document_id: docRow.id, p_score: score, p_body_md: body });
+      if (e) error = e.message;
+      else note = 'Feedback given. The task is done, the score is on the tracker, and the researcher has been told.';
+    }
   } else if (action === 'comment' && docRow) {
     const { error: e } = await supabase.rpc('comment_on_document', {
       p_document_id: docRow.id,
@@ -221,6 +238,20 @@ const history = (versionRows ?? []).map((v: any, i: number) => ({
 const latest = (versionRows ?? [])[(versionRows ?? []).length - 1] ?? null;
 const changedSinceLatest = latest ? changedBetween(latest.content ?? {}, values).map(promptOf) : [];
 
+/* The drafts between submissions (2.8): every changed save of a field,
+   newest first, the last forty per field, so a paragraph can be put back
+   to any earlier draft from the box itself. */
+const { data: draftRows } = docRow
+  ? await supabase
+      .from('document_field_history')
+      .select('field_id, value, version, saved_at, by:saved_by(display_name)')
+      .eq('document_id', docRow.id)
+      .order('saved_at', { ascending: false })
+      .limit(600)
+  : { data: [] as any[] };
+const draftsOf = (fieldId: string) => (draftRows ?? []).filter((d: any) => d.field_id === fieldId).slice(0, 40);
+const draftPreview = (v: any) => { const t = typeof v === 'string' ? v : v == null ? '' : JSON.stringify(v); return t.replace(/\s+/g, ' ').trim().slice(0, 90); };
+
 const { data: comments } = docRow
   ? await supabase
       .from('deliverable_feedback')
@@ -257,6 +288,29 @@ const dueWord =
    stood in for them left in the pilot's friction pass (2.8): the class
    writes here. */
 const canSubmit = iAuthor && docRow && wanted && !gated && progress.missing.length === 0;
+
+/* The Elder's task on this document (2.9): the staff step whose
+   `feedback_on` names this deliverable, on any of the project's places.
+   Read once, for the button at the foot of the Elder's part: given (with
+   the date and by whom), waiting on the work, or ready to give. */
+const staffParts = shape ? feedbackFieldsOf(shape) : { score: null, body: null };
+const iGiveFeedback = Boolean(shape && (staffParts.score || staffParts.body) && (isElderHere || me.isAdvisor) && !iAuthor);
+let staffTask: { completedOn: string | null; by: string | null; ready: boolean; dueOn: string | null } | null = null;
+if (iGiveFeedback && places.length > 0) {
+  const { data: taskRows } = await supabase
+    .from('entry_milestones')
+    .select('id, completed_on, due_on, by:completed_by(display_name)')
+    .in('participation_id', places.map((p) => p.participationId))
+    .eq('owner', 'staff')
+    .eq('feedback_on', deliverableId)
+    .order('due_on', { ascending: true, nullsFirst: false });
+  const open = (taskRows ?? []).find((t: any) => !t.completed_on) ?? null;
+  const done = (taskRows ?? []).find((t: any) => t.completed_on) ?? null;
+  const row: any = open ?? done;
+  if (row) staffTask = { completedOn: row.completed_on ?? null, by: row.by?.display_name ?? null, ready: Boolean(open) && Boolean(docRow && docRow.version_no > 0), dueOn: row.due_on ?? null };
+}
+const fieldById = (fid: string | null) => (fid && shape ? sectionsOf(shape).flatMap((s) => s.fields).find((f) => f.id === fid) ?? null : null);
+const staffFilled = [staffParts.score, staffParts.body].every((fid) => { const f = fieldById(fid); return !f || isFilled(f, values[f.id]); });
 const rubric = wanted?.step?.rubric ?? null;
 const submitLabel = docRow?.version_no > 0 ? 'Submit again' : 'Submit';
 const elderWord = wanted ? staffWord(wanted.program as any) : 'Elder';
@@ -472,6 +526,22 @@ const changedSince = (c: any) => c.field_id && c.field_version != null && (versi
                               {words !== null && (f.min_words != null || f.max_words != null) && <span class:list={['fwords', f.max_words != null && words > f.max_words && 'over']} data-max={f.max_words ?? ''} data-min={f.min_words ?? ''}>{words} {words === 1 ? 'word' : 'words'}</span>}
                               <span class="fstate" aria-live="polite"></span>
                               {editedBy[f.id]?.name && authors.length > 1 && <span class="fby">last by {editedBy[f.id].name}</span>}
+                              {/* Earlier drafts of this box (2.8): pick one and it is
+                                  back in the box, saved as a new draft on top. */}
+                              {draftsOf(f.id).length > 1 && f.kind !== 'file' && f.kind !== 'graphic' && (
+                                <details class="fdrafts">
+                                  <summary>{draftsOf(f.id).length} earlier drafts</summary>
+                                  <ul class="fdraft-list" data-live={`drafts-${f.id}`}>
+                                    {draftsOf(f.id).slice(1).map((d: any) => (
+                                      <li>
+                                        <span class="fdraft-when">{when(d.saved_at)}{d.by?.display_name && authors.length > 1 ? ` · ${d.by.display_name}` : ''}</span>
+                                        <span class="fdraft-text">{draftPreview(d.value) || <i>empty</i>}</span>
+                                        {canWrite(f) && <button type="button" class="btn btn-sm btn-2 fdraft-use" data-value={JSON.stringify(d.value ?? null)}>Use this</button>}
+                                      </li>
+                                    ))}
+                                  </ul>
+                                </details>
+                              )}
                             </div>
                           </div>
                         ) : (
@@ -560,6 +630,25 @@ const changedSince = (c: any) => c.field_id && c.field_version != null && (versi
               {iAuthor && section.fields.some((f) => f.extra) && (
                 <p class="fextra-act noprint"><button class="btn btn-sm btn-2 fextra-add" type="button">Add more</button></p>
               )}
+              {/* The verb on the Elder's part (2.9). The boxes above save
+                  as they are written; this hands them over: the task is
+                  done, the score goes on the tracker, the researcher is
+                  told. The button belongs to a form outside the document's
+                  own, since a form does not nest. */}
+              {iGiveFeedback && section.fields.some((f) => f.owner === 'staff') && (
+                <div class="fgive noprint" id="give">
+                  {staffTask?.completedOn ? (
+                    <p class="fgive-done"><b>Feedback given</b> {staffTask.by ? `by ${staffTask.by} ` : ''}on {fmt(staffTask.completedOn)}. The researcher has it; add to the thread below if there is more to say.</p>
+                  ) : !docRow || docRow.version_no === 0 ? (
+                    <p class="t-sm">Not handed in yet. Once the researcher submits, the rating and rationale above go to them from here.</p>
+                  ) : (
+                    <>
+                      <button class="btn" type="submit" form="give-feedback" id="give-btn" disabled={!staffFilled}>Give the feedback</button>
+                      <span class="t-sm">{staffFilled ? `Sends the rating and rationale to ${authors.map((a: any) => String(a.users.display_name).split(' ')[0]).join(' and ') || 'the researcher'}, marks your task done and puts the score on the tracker.` : `Choose the rating and write the rationale above, then send them from here.${staffTask?.dueOn ? ` Due ${fmt(staffTask.dueOn)}.` : ''}`}</span>
+                    </>
+                  )}
+                </div>
+              )}
             </section>
           ))}
 
@@ -570,6 +659,11 @@ const changedSince = (c: any) => c.field_id && c.field_version != null && (versi
             </div>
           )}
         </form>
+        {iGiveFeedback && (
+          <form method="POST" action="#outcome" id="give-feedback" class="noprint" hidden>
+            <input type="hidden" name="action" value="give_feedback" />
+          </form>
+        )}
 
         {/* The thread on the whole document. */}
         <section class="sec noprint" id="whole">
@@ -618,6 +712,9 @@ const changedSince = (c: any) => c.field_id && c.field_version != null && (versi
             {changedSinceLatest.length > 0 && (
               <p class="t-sm">Changed since version {latest.version_no}, not yet submitted: {changedSinceLatest.join('; ')}.</p>
             )}
+            {(draftRows ?? []).length > 0 && (
+              <p class="t-sm">{(draftRows ?? []).length} drafts kept since the last thirty days began; each box offers its own under "earlier drafts". After thirty days only the last draft before each version stays.</p>
+            )}
           </section>
         )}
       </>
@@ -639,7 +736,16 @@ const changedSince = (c: any) => c.field_id && c.field_version != null && (versi
   .ds-facts .late { color: var(--alert); }
   .ds-saved { color: var(--ink-3); }
   .ds-room { color: var(--accent); font-weight: 600; }
-  @media (max-width: 720px) { .docstrip { flex-wrap: wrap; } }
+  /* On a phone (2.8): the strip stacks, the state wraps, and the verb
+     takes the full width where a thumb finds it. */
+  @media (max-width: 720px) {
+    .docstrip { flex-wrap: wrap; padding: 12px 14px; }
+    .ds-state { flex-wrap: wrap; }
+    .ds-submit { flex: 1 1 100%; }
+    .ds-submit .btn { flex: 1 1 auto; text-align: center; }
+    .docsave { flex-wrap: wrap; }
+    .fgraphic-act .btn { flex: 1 1 auto; text-align: center; }
+  }
   .ds-submit { display: flex; align-items: center; gap: 10px; flex: 0 0 auto; }
   .doc-sec { max-width: var(--measure-text); }
   .field { padding: 14px 0 18px; border-bottom: 1px solid var(--rule-fine); }
@@ -698,6 +804,16 @@ const changedSince = (c: any) => c.field_id && c.field_version != null && (versi
   .fmeta { display: flex; gap: 14px; margin: 6px 0 0; font-family: var(--face-ui); font-size: 0.8rem; color: var(--ink-3); }
   .fwords.over { color: var(--alert); font-weight: 600; }
   .fby { color: var(--ink-3); }
+  .fdrafts { flex-basis: 100%; }
+  .fdrafts > summary { cursor: pointer; color: var(--ink-3); font-family: var(--face-ui); font-size: 0.8rem; list-style: none; }
+  .fdrafts > summary::-webkit-details-marker { display: none; }
+  .fdrafts > summary::before { content: '▸ '; }
+  .fdrafts[open] > summary::before { content: '▾ '; }
+  .fdraft-list { list-style: none; margin: 6px 0 0; padding: 0; display: grid; gap: 4px; max-width: var(--measure-form); }
+  .fdraft-list li { display: grid; grid-template-columns: max-content minmax(0, 1fr) max-content; gap: 10px; align-items: center; padding: 4px 8px; background: var(--sunk); font-size: 0.84rem; }
+  .fdraft-when { font-family: var(--face-num); font-size: 0.72rem; color: var(--ink-3); white-space: nowrap; }
+  .fdraft-text { color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+  @media (max-width: 640px) { .fdraft-list li { grid-template-columns: minmax(0, 1fr); } .fdraft-text { white-space: normal; } }
   /* The room (2.8): who is in a box, the box held for them, and a box
      that just changed under the reader. */
   .fwho { margin-left: 10px; font-family: var(--face-ui); font-size: 0.78rem; font-weight: 600; color: var(--accent); }
@@ -718,6 +834,9 @@ const changedSince = (c: any) => c.field_id && c.field_version != null && (versi
   .tc-who { font-weight: 600; margin-right: 8px; }
   .tc-when { font-family: var(--face-ui); font-size: 0.78rem; color: var(--ink-3); margin-right: 8px; }
   .tc-body :global(p) { margin: 4px 0 0; }
+  .fgive { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin: 14px 0 4px; padding: 14px 16px; background: var(--card); border: 1px solid var(--rule); border-left: 6px solid var(--accent); }
+  .fgive-done { margin: 0; }
+  .fgive .t-sm { flex: 1 1 24ch; margin: 0; }
   .tadd { margin-top: 6px; }
   .tadd summary { cursor: pointer; font-family: var(--face-ui); font-size: 0.86rem; }
   .tform { display: grid; gap: 8px; margin-top: 8px; justify-items: start; }
@@ -735,6 +854,7 @@ const changedSince = (c: any) => c.field_id && c.field_version != null && (versi
 <script>
   import { draw } from '../../../../../lib/research-graphics';
   import { stampFor } from '../../../../../lib/export-names';
+  import { renderMarkdown } from '../../../../../lib/notes';
   /**
    * SAVES AS YOU TYPE.
    *
@@ -958,7 +1078,11 @@ const changedSince = (c: any) => c.field_id && c.field_version != null && (versi
       stash(fieldId, readValue(wrap));
       setState(wrap, 'Typing…', 'saving');
       window.clearTimeout(timers.get(fieldId));
-      timers.set(fieldId, window.setTimeout(() => save(wrap), delay));
+      /* The timer leaves the map when it fires (2.9): it never did, so a
+         box once typed in read as "still typing" for the rest of the
+         page's life, and Give the feedback never woke after the Elder's
+         first keystroke. */
+      timers.set(fieldId, window.setTimeout(() => { timers.delete(fieldId); save(wrap); }, delay));
     };
 
     const fields = [...form.querySelectorAll<HTMLElement>('.field[data-field]')].filter((w) => w.dataset.kind !== 'note' && w.dataset.writable === '1');
@@ -991,6 +1115,45 @@ const changedSince = (c: any) => c.field_id && c.field_version != null && (versi
         } catch {}
       }
     });
+
+    /* Use this (2.8): an earlier draft back into its box, as a new draft
+       on top; the editor's surface redrawn from it, then saved. */
+    form.addEventListener('click', (ev) => {
+      const btn = (ev.target as HTMLElement).closest<HTMLButtonElement>('.fdraft-use');
+      if (!btn) return;
+      const wrap = btn.closest<HTMLElement>('.field');
+      if (!wrap) return;
+      let value: any = null;
+      try { value = JSON.parse(btn.dataset.value ?? 'null'); } catch { return; }
+      writeValue(wrap, value);
+      for (const edit of wrap.querySelectorAll<HTMLElement>('.mdx-edit')) {
+        const ta = edit.parentElement?.querySelector('textarea');
+        if (ta) edit.innerHTML = ta.value.trim() ? renderMarkdown(ta.value) : '';
+      }
+      setState(wrap, 'Earlier draft back in the box; saving…', 'saving');
+      save(wrap);
+      btn.closest<HTMLDetailsElement>('details')?.removeAttribute('open');
+    });
+
+    /* "Give the feedback" wakes as the Elder's part fills (2.9): the
+       button follows the boxes it hands over, and waits for the save to
+       land before it can be pressed, so what is sent is what was saved. */
+    const giveBtn = document.getElementById('give-btn') as HTMLButtonElement | null;
+    const giveWraps = giveBtn ? fields.filter((w) => w.classList.contains('is-staff')) : [];
+    const refreshGive = () => {
+      if (!giveBtn) return;
+      const filled = giveWraps.every((w) => {
+        const v = readValue(w);
+        if (v === undefined) return true;
+        return Array.isArray(v) ? v.length > 0 : v !== null && String(v).trim() !== '';
+      });
+      const saving = giveWraps.some((w) => timers.has(w.dataset.field!) || pending.has(w.dataset.field!));
+      giveBtn.disabled = !filled || saving;
+    };
+    if (giveBtn) {
+      for (const w of giveWraps) { w.addEventListener('input', refreshGive); w.addEventListener('change', refreshGive); }
+      setInterval(refreshGive, 1500);
+    }
 
     /* What the live script (below) needs from this closure: a way to put
        another author's saved text into a box and to say so. */
@@ -1212,6 +1375,24 @@ const changedSince = (c: any) => c.field_id && c.field_version != null && (versi
       if (res.ok) document.dispatchEvent(new CustomEvent('live:refresh'));
     }
   });
+
+  /* Arriving at a field or a comment by its link (2.8): the question from
+     the Workbench or the tracker brings the reader to the box, so the
+     reply is opened and the cursor is already in it rather than behind a
+     collapsed "Add to this". `preventScroll` keeps the browser's own
+     jump to the hash as the scroll; the focus does not move it again. */
+  const openReplyAtHash = () => {
+    if (!/^#(?:f|c)-./.test(location.hash)) return;
+    const target = document.getElementById(location.hash.slice(1));
+    const field = target?.closest<HTMLElement>('.field') ?? (target?.classList.contains('field') ? target : null);
+    const details = field?.querySelector<HTMLDetailsElement>('details.tadd');
+    if (!details) return;
+    details.open = true;
+    const ta = details.querySelector<HTMLTextAreaElement>('textarea');
+    requestAnimationFrame(() => ta?.focus({ preventScroll: true }));
+  };
+  openReplyAtHash();
+  window.addEventListener('hashchange', openReplyAtHash);
 </script>
 
 <script>

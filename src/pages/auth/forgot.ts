@@ -1,6 +1,7 @@
 export const prerender = false;
 
 import type { APIRoute } from 'astro';
+import { adminClient } from '../../lib/supabase-admin';
 import { serverClient } from '../../lib/supabase';
 import { activeOrg } from '../../lib/tenant';
 import { originFor, apexOrigin } from '../../lib/deployment';
@@ -49,9 +50,17 @@ export const POST: APIRoute = async ({ request, cookies, url, locals, redirect }
   
      An empty result and a negative answer are not the same thing, and any
      lookup that cannot tell them apart will eventually pick the wrong one. */
-  const { data: mayReset } = await supabase.rpc('may_reset_password', {
-    p_email: email,
-  });
+  /* Asked with the secret key (2.9): the function answers "does this address
+     have a password account", which is a list of who has an account if the
+     anonymous key may ask it. Nobody but this handler may, and this handler
+     tells the person the same thing either way. */
+  let mayReset: boolean | null = null;
+  try {
+    const { data } = await adminClient(runtime).rpc('may_reset_password', { p_email: email });
+    mayReset = data === true;
+  } catch {
+    mayReset = null;
+  }
 
   if (mayReset === true && email) {
     /* The result is deliberately not read. A failure here — an address with

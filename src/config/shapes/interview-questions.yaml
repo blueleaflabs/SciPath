@@ -7,6 +7,14 @@ version: 1
 guidance: >-
   Questions you could ask a stranger in fifteen minutes and learn something
   you did not already believe. Open questions, in their words, no leading.
+# On the class showcase (2.8).
+showcase:
+  title: Who we are talking to
+  show:
+    - { field: who, as: prose, label: Who, and why them }
+    - { field: questions, as: prose, label: The questions }
+    - { field: learn, as: prose, label: What we hope to learn }
+
 sections:
   - id: who
     name: Who you will ask

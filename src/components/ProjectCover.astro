@@ -114,4 +114,13 @@ const { kick, title, people, nav, rename } = Astro.props;
   .cover-do :global(a.btn.ghost:hover), .cover-do :global(a.btn.ghost:focus) {
     background: var(--accent-ink); color: var(--accent); border-color: var(--accent-ink);
   }
+
+  /* On a phone (2.8): the title and Rename stack, the rename form fills
+     the width, and the three buttons share the row equally. */
+  @media (max-width: 640px) {
+    .cover-title { flex-wrap: wrap; }
+    .renamef { width: calc(100vw - 2 * var(--shell-pad)); left: 0; right: auto; flex-wrap: wrap; }
+    .cover-do { width: 100%; }
+    .cover-do :global(a.btn) { flex: 1 1 30%; text-align: center; }
+  }
 </style>

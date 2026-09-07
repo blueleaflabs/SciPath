@@ -1,0 +1,77 @@
+---
+/**
+ * THE SHOWCASE'S SECTIONS, ONE PER SUBMITTED DELIVERABLE (2.8).
+ *
+ * Drawn from `showcaseSection()` in the order the class's calendar wants
+ * them, each with its title, its headline as a pull quote, its picture,
+ * and its blocks. After the last one, what comes next: the deliverables
+ * not yet submitted that would become sections, with their dates, so the
+ * page says where it is going as well as where it has been.
+ */
+import type { ShowcaseSection } from '../lib/showcase-sections';
+
+interface Props {
+  sections: ShowcaseSection[];
+  /** Deliverables still to come that have a showcase shape: name and due date. */
+  coming: { name: string; dueOn: string | null }[];
+  mediaUrl: (path: string) => string;
+  fmt: (d: string | null) => string;
+  /** The first section number on the page; the page above may have used some. */
+  from?: number;
+  /** Whether the reader is an author, for the empty state's line. */
+  mine?: boolean;
+}
+const { sections, coming, mediaUrl, fmt, from = 1, mine = false } = Astro.props;
+const no = (i: number) => String(from + i).padStart(2, '0');
+---
+
+{sections.map((s, i) => (
+  <section class="sec sh-sec" id={`sh-${s.key}`} data-live={`sh-${s.key}`}>
+    <div class="sec-h"><b><span class="sec-n">{no(i)}</span>{s.title}</b><span>{s.deliverable}{s.at ? ` · ${fmt(s.at.slice(0, 10))}` : ''}</span></div>
+    {s.headline && <p class="sh-head">{s.headline}</p>}
+    <div class:list={['sh-body', s.hero && 'has-hero']}>
+      {s.hero && <figure class="sh-hero"><img src={mediaUrl(s.hero.path)} alt={s.hero.alt} loading="lazy" /></figure>}
+      <div class="sh-blocks">
+        {s.blocks.map((b) => (
+          <div class:list={['sh-block', `is-${b.kind}`]}>
+            {b.label && <p class="sh-lbl">{b.label}</p>}
+            {b.kind === 'prose' && <div class="prose" set:html={b.html} />}
+            {b.kind === 'line' && <p class="sh-line">{b.text}</p>}
+            {b.kind === 'list' && <ol class="sh-list">{(b.items ?? []).map((t) => <li>{t}</li>)}</ol>}
+            {b.kind === 'chips' && <p class="sh-chips">{(b.items ?? []).map((t) => <span class="pill quiet">{t}</span>)}</p>}
+            {b.kind === 'picture' && b.picture && <figure class="sh-pic"><img src={mediaUrl(b.picture.path)} alt={b.picture.alt} loading="lazy" /></figure>}
+          </div>
+        ))}
+      </div>
+    </div>
+  </section>
+))}
+
+{coming.length > 0 && (
+  <section class="sec sh-coming">
+    <div class="sec-h"><b><span class="sec-n">{no(sections.length)}</span>Coming next</b><span>{coming.length} more {coming.length === 1 ? 'section' : 'sections'} to come</span></div>
+    <ol class="sh-next">
+      {coming.map((c) => <li><b>{c.name}</b>{c.dueOn ? <span> · due {fmt(c.dueOn)}</span> : null}</li>)}
+    </ol>
+    {sections.length === 0 && <p class="t-sm">{mine ? 'Submit a deliverable and it appears here as a section, the moment you submit it.' : 'Nothing submitted yet; the first section appears with the first deliverable.'}</p>}
+  </section>
+)}
+
+<style is:global>
+  .sh-head { font-family: var(--face-ed); font-size: clamp(1.25rem, 2.4vw, 1.7rem); font-weight: 600; line-height: 1.25; margin: 0 0 16px; max-width: 40ch; color: var(--brand-deep); }
+  .sh-body { display: grid; gap: 18px 28px; }
+  .sh-body.has-hero { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: start; }
+  @media (max-width: 760px) { .sh-body.has-hero { grid-template-columns: minmax(0, 1fr); } }
+  .sh-hero { margin: 0; }
+  .sh-hero img, .sh-pic img { display: block; width: 100%; height: auto; border: 1px solid var(--rule); background: var(--card); box-shadow: var(--lift); }
+  .sh-pic { margin: 0; max-width: 40rem; }
+  .sh-blocks { display: grid; gap: 14px; min-width: 0; }
+  .sh-lbl { margin: 0 0 4px; font-family: var(--face-num); font-size: 0.7rem; letter-spacing: 0.1em; text-transform: uppercase; color: var(--accent-deep); }
+  .sh-line { margin: 0; font-size: 1.05rem; }
+  .sh-list { margin: 0; padding-left: 1.4em; display: grid; gap: 4px; }
+  .sh-chips { margin: 0; display: flex; flex-wrap: wrap; gap: 6px; }
+  .sh-next { margin: 0; padding-left: 1.4em; display: grid; gap: 6px; color: var(--ink-2); }
+  .sh-next span { color: var(--ink-3); font-family: var(--face-ui); font-size: 0.88rem; }
+  .sh-block .prose p:first-child { margin-top: 0; }
+  .sh-block .prose p:last-child { margin-bottom: 0; }
+</style>

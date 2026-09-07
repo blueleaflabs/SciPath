@@ -23,6 +23,8 @@ import { programTitle, staffWord } from '../../../../../lib/program-names';
 import { parseVideo } from '../../../../../lib/video';
 import { formatDate } from '../../../../../lib/dates';
 import { signInWith } from '../../../../../lib/next-path';
+import { loadShowcases } from '../../../../../lib/showcase-load';
+import ShowcaseSections from '../../../../../components/ShowcaseSections.astro';
 
 const { session, account, roles } = Astro.locals;
 const org = activeOrg(Astro);
@@ -67,6 +69,23 @@ const images = (card.images ?? []) as any[];
 const links = (card.links ?? []) as any[];
 const mediaUrl = (path: string) => `/app/media/${path}`;
 const label = program.short_name ?? program.name;
+
+/* The page that writes itself (2.8): one section per submitted
+   deliverable, from the shapes' showcase blocks, in the order they were
+   submitted; what is still to come after them. `?asof=YYYY-MM-DD` reads
+   the versions submitted by that day instead, so the page can be turned
+   back to any earlier submission day. */
+const asOfRaw = Astro.url.searchParams.get('asof');
+const asOf = asOfRaw && /^\d{4}-\d{2}-\d{2}$/.test(asOfRaw) ? asOfRaw : null;
+const shows = template ? await loadShowcases(supabase, template, id!, [projectId!], { asOf }) : new Map();
+const show = shows.get(projectId!) ?? { sections: [], coming: [], picture: null, line: null, days: [], total: 0, have: 0 };
+/* The days the picker offers come from the present, not the past. */
+const days = asOf ? (template ? (await loadShowcases(supabase, template, id!, [projectId!])).get(projectId!)?.days ?? [] : []) : show.days;
+/* The picture: the card's own if the author put one up, else the newest
+   from the deliverables. The author's voice sits above the assembled
+   sections, never instead of them. */
+const heroFromWork = images.length === 0 ? show.picture : null;
+const fmtDay = (d: string | null) => (d ? formatDate(String(d).slice(0, 10), 'short') : '');
 ---
 
 <Base title={card.title} noindex={true}>
@@ -107,9 +126,25 @@ const label = program.short_name ?? program.name;
       </div>
     )}
 
+    {heroFromWork && images.length === 0 && (
+      <ul class="shots one">
+        <li><img src={mediaUrl(heroFromWork.path)} alt={heroFromWork.alt} loading="lazy" /><p>From the deliverables, as they stand.</p></li>
+      </ul>
+    )}
+
+    {(days.length > 0 || asOf) && (
+      <div class="asof" data-live="asof">
+        <span class="t-sm">{asOf ? <>Showing the page as it stood on <b>{fmtDay(asOf)}</b>.</> : <>As it stands today, from {show.have} of {show.total} deliverables.</>}</span>
+        <span class="asof-days">
+          {asOf && <a class="tfilter" href={`/app/program/${id}/showcase/${projectId}/`}>Today</a>}
+          {days.map((d: string) => <a class:list={['tfilter']} aria-pressed={asOf === d ? 'true' : 'false'} href={`/app/program/${id}/showcase/${projectId}/?asof=${d}`}>as of {fmtDay(d)}</a>)}
+        </span>
+      </div>
+    )}
+
     <div class="two">
       <section class="sec">
-        <div class="sec-h"><b><span class="sec-n">01</span>About the project</b><span>in the {(card.authors ?? []).length === 1 ? "author's" : "authors'"} words</span></div>
+        <div class="sec-h"><b><span class="sec-n">01</span>{card.summary ? 'In our own words' : 'About the project'}</b><span>in the {(card.authors ?? []).length === 1 ? "author's" : "authors'"} words</span></div>
         {card.summary ? (
           <div class="prose"><p style="white-space: pre-line">{card.summary}</p></div>
         ) : (
@@ -148,11 +183,19 @@ const label = program.short_name ?? program.name;
         )}
       </section>
     </div>
+
+    {/* The assembled sections, from the deliverables (2.8). */}
+    <div data-live="sections">
+      <ShowcaseSections sections={show.sections} coming={asOf ? [] : show.coming} mediaUrl={mediaUrl} fmt={fmtDay} from={3} mine={Boolean(card.mine)} />
+    </div>
   </div>
 </Base>
 
 <style>
   .back { margin: 0 0 18px; font-family: var(--face-ui); font-size: 0.9rem; }
+  .asof { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; justify-content: space-between; margin: 22px 0 0; padding: 10px 14px; background: var(--card); border: 1px solid var(--rule); }
+  .asof-days { display: flex; flex-wrap: wrap; gap: 6px; }
+  .asof a { text-decoration: none; }
   .shots { list-style: none; margin: 28px 0 0; padding: 0; display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; }
   .shots.one { grid-template-columns: 1fr; }
   .shots img { display: block; width: 100%; aspect-ratio: 16 / 10; object-fit: cover; border: 1px solid var(--rule); box-shadow: var(--lift); }

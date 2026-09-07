@@ -453,6 +453,95 @@ refuse "storing an address with a space in it" \
 accept "an ordinary https address" \
 "select app.safe_url('https://example.org/a/b?c=d#e', 'link');"
 
+
+# ── HARDENING (2.9): WHAT A SESSION MAY DO DIRECTLY ──────────────────────
+#
+# Each of these is a statement a browser could send with the person's own
+# key, past every page. A second person, an officer, a guardian record and
+# a sign-in address to try them against.
+apply /dev/stdin <<'SEED'
+insert into auth.users (id) values ('00000000-0000-0000-0000-0000000000e4'),
+                                    ('00000000-0000-0000-0000-0000000000e5');
+insert into public.users (id, org_id, display_name, population, consent_state)
+values ('00000000-0000-0000-0000-0000000000e4', '00000000-0000-0000-0000-0000000000aa', 'Probe Officer', 'student', 'not_required'),
+       ('00000000-0000-0000-0000-0000000000e5', '00000000-0000-0000-0000-0000000000aa', 'Probe Classmate', 'student', 'pending');
+insert into public.user_roles (org_id, user_id, role)
+values ('00000000-0000-0000-0000-0000000000aa', '00000000-0000-0000-0000-0000000000e4', 'officer');
+insert into public.identities (org_id, user_id, auth_identity_id, provider, subject, email)
+values ('00000000-0000-0000-0000-0000000000aa', '00000000-0000-0000-0000-0000000000e5', gen_random_uuid(), 'email', 'probe-e5', 'classmate@probe.invalid');
+insert into public.guardian_consents (org_id, user_id, guardian_name, guardian_email)
+values ('00000000-0000-0000-0000-0000000000aa', '00000000-0000-0000-0000-0000000000e5', 'A Parent', 'parent@probe.invalid');
+SEED
+
+as_user() { printf "begin;\n set local role authenticated;\n set local request.jwt.claim.sub = '%s';\n %s\n rollback;" "$1" "$2"; }
+E1=00000000-0000-0000-0000-0000000000e1   # an author
+E2=00000000-0000-0000-0000-0000000000e4   # an officer
+E3=00000000-0000-0000-0000-0000000000e5   # a classmate, a minor waiting on consent
+
+# The two the review called critical.
+refuse "an officer rewriting their own role to advisor" \
+"$(as_user $E2 "update public.user_roles set role = 'advisor' where user_id = '$E2';")"
+refuse "an officer marking a classmate's consent as given" \
+"$(as_user $E2 "update public.users set consent_state = 'confirmed' where id = '$E3';")"
+refuse "an officer suspending a classmate" \
+"$(as_user $E2 "update public.users set status = 'suspended' where id = '$E3';")"
+
+# What a classmate's record shows to another student: a name, not a life.
+refuse "a student reading a classmate's consent state" \
+"$(as_user $E1 "select consent_state from public.users where id = '$E3';")"
+refuse "a student reading a classmate's age band" \
+"$(as_user $E1 "select age_band from public.users where id = '$E3';")"
+accept "an officer sees no classmate's sign-in address" \
+"$(as_user $E2 "do \$\$ begin if exists (select 1 from public.identities where user_id = '$E3') then raise exception 'read'; end if; end \$\$;")"
+accept "an officer sees no classmate's guardian" \
+"$(as_user $E2 "do \$\$ begin if exists (select 1 from public.guardian_consents where user_id = '$E3') then raise exception 'read'; end if; end \$\$;")"
+accept "a student reading a classmate's name" \
+"$(as_user $E1 "do \$\$ begin if not exists (select 1 from public.users where id = '$E3' and display_name = 'Probe Classmate') then raise exception 'unread'; end if; end \$\$;")"
+accept "a person reading their own whole record through my_account" \
+"$(as_user $E3 "do \$\$ begin if (public.my_account()->>'consent_state') is distinct from 'pending' then raise exception 'unread'; end if; end \$\$;")"
+
+# Consent is the functions' to confirm.
+refuse "a minor confirming their own guardian consent" \
+"$(as_user $E3 "update public.guardian_consents set confirmed_at = now() where user_id = '$E3';")"
+refuse "a minor inserting a confirmed consent" \
+"$(as_user $E3 "insert into public.guardian_consents (org_id, user_id, guardian_name, guardian_email, confirmed_at) values ('00000000-0000-0000-0000-0000000000aa', '$E3', 'Me', 'me@probe.invalid', now());")"
+
+# Authorship and a place's decisions are the functions' too.
+refuse "an author adding an accepted co-author directly" \
+"$(as_user $E1 "insert into public.project_authors (org_id, project_id, user_id, role, accepted_at) values ('00000000-0000-0000-0000-0000000000aa', '00000000-0000-0000-0000-0000000000c1', '$E3', 'author', now());")"
+refuse "an author deciding their own place" \
+"$(as_user $E1 "update public.participations set status = 'entered', decided_by = '$E1' where id = '00000000-0000-0000-0000-0000000000d1';")"
+refuse "an author placing themselves" \
+"$(as_user $E1 "update public.participations set placement = 'first', selection_state = 'selected' where id = '00000000-0000-0000-0000-0000000000d1';")"
+refuse "an author recording what they were awarded" \
+"$(as_user $E1 "update public.participations set awarded_amount = 500 where id = '00000000-0000-0000-0000-0000000000d1';")"
+accept "an author recording what they asked for" \
+"$(as_user $E1 "update public.participations set requested_amount = 500 where id = '00000000-0000-0000-0000-0000000000d1';")"
+
+# A view reads with the reader's eyes. (These are `accept`: the block
+# raises only if something leaked, so succeeding is the proof.)
+accept "the fair's view shows a classmate nothing that the table would not" \
+"$(as_user $E3 "do \$\$ begin if exists (select 1 from public.opportunity_participations) then raise exception 'read'; end if; end \$\$;")"
+
+# Suspended is suspended.
+accept "a suspended author no longer edits their project" \
+"begin;
+ update public.users set status = 'suspended' where id = '$E1';
+ set local role authenticated;
+ set local request.jwt.claim.sub = '$E1';
+ do \$\$ begin if app.can_edit_project('00000000-0000-0000-0000-0000000000c1') then raise exception 'edits'; end if; end \$\$;
+ rollback;"
+
+# The anonymous key calls five functions and no other.
+refuse "the anonymous key asking whose work is due" \
+"begin; set local role anon; select * from public.my_nudges(); rollback;"
+refuse "the anonymous key asking whether an address may reset" \
+"begin; set local role anon; select public.may_reset_password('x@probe.invalid'); rollback;"
+refuse "a session asking whether an address may reset" \
+"$(as_user $E1 "select public.may_reset_password('x@probe.invalid');")"
+accept "the anonymous key answering a consent link" \
+"begin; set local role anon; select public.guardian_consent_request('not-a-token'); rollback;"
+
 echo
 if [ "$failed" -gt 0 ]; then
   echo "$failed probe(s) were accepted. A rule that cannot refuse is not a rule."

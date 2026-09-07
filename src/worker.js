@@ -82,6 +82,12 @@ async function runScheduled(event, env) {
       `scheduled ${event.cron}: ${result.sent} sent, ` +
         `${result.skipped} skipped, ${result.failed} failed`
     );
+
+    /* The drafts older than thirty days, thinned to the last before each
+       submitted version (2.8). Cheap, so it rides on every tick. */
+    const { data: pruned, error: pruneError } = await db.rpc('prune_field_history', { p_days: 30 });
+    if (pruneError) console.error(`scheduled ${event.cron}: prune_field_history: ${pruneError.message}`);
+    else if (pruned) console.log(`scheduled ${event.cron}: ${pruned} old drafts pruned`);
   } catch (e) {
     console.error(`scheduled ${event.cron}: ${String(e?.message ?? e)}`);
   }

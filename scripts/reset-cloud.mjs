@@ -301,6 +301,7 @@ const TABLES = [
   'deliverable_feedback',
   'document_media',
   'document_versions',
+  'document_field_history',
   'document_fields',
   'documents',
   'identities',
