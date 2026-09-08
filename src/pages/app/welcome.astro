@@ -7,6 +7,7 @@ import { adminClient } from '../../lib/supabase-admin';
 import { activeOrg } from '../../lib/tenant';
 import { afterPost, outcomeFrom, leaveTo } from '../../lib/post-redirect';
 import { signInWith } from '../../lib/next-path';
+import { signupsClosed } from '../../lib/door';
 
 const { session, account, orgSlug } = Astro.locals;
 const org = activeOrg(Astro) as any;
@@ -15,6 +16,8 @@ const org = activeOrg(Astro) as any;
    survives the sign in it triggers (20.10). */
 if (!session) return Astro.redirect(signInWith(Astro.url));
 if (account) return Astro.redirect('/app/');
+/* Closed (2.9): the middleware has already sent this session away; belt and braces. */
+if (signupsClosed(org, (Astro.locals as any).runtime?.env)) return Astro.redirect('/app/?signin=closed');
 
 const openProgram = org?.signupMode === 'open';
 

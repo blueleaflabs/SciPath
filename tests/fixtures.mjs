@@ -737,16 +737,16 @@ test('a project can hold a sponsor per place, and the pages say so', () => {
   );
 
   /* The participation page reads its own, and names the others. */
-  assert.match(page, /\.eq\('participation_id', id\)/, 'its own sponsor');
-  /* Matched on the query rather than on a variable name: renaming
-     `elsewhere` to `elsewhereX` left a substring that still matched, so the
-     check passed with the feature removed. `neq` on the participation is the
-     part that actually means "the other places". */
+  assert.match(page, /sponsorsAll\.filter\(\(x\) => x\.participation_id === id\)/, 'its own sponsor');
+  /* The other places, read from the project's side and — this is the part
+     the earlier check missed, which passed for months while the read went
+     unrendered — actually on the page, beside "No sponsor named". */
   assert.match(
     page,
-    /\.neq\('participation_id', id\)/,
+    /sponsorsAll\.filter\(\(x\) => x\.participation_id !== id\)/,
     'and whoever sponsors this project in its other places'
   );
+  assert.match(page, /No sponsor named\$\{elsewhereSays\}/, 'and says so where the gap is reported');
 });
 
 test('the assign queue counts a class as a place', () => {

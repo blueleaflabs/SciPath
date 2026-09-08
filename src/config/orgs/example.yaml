@@ -11,7 +11,7 @@ theme: proceedings
 record_prefix: EXP
 timezone: America/Los_Angeles
 
-signup_mode: domain
+signup_mode: closed
 verified_domains: [students.example.org, example.org]
 programs: []
 

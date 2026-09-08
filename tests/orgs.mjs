@@ -302,6 +302,15 @@ test('a tab hidden for a pilot has a date, and the date has not passed', () => {
   }
 });
 
+test('the front door calls the class what the school file says (2.9)', () => {
+  const mv = yaml.load(fs.readFileSync('src/config/orgs/montavista.yaml', 'utf8'));
+  assert.equal(mv.class_name, 'IRPD Class', 'the pilot is the IRPD class, not the fair club that happens to be listed first');
+  const home = fs.readFileSync('src/pages/index.astro', 'utf8');
+  assert.match(home, /const cohortName = org\.className \?\? cohorts\[0\]\?\.name/, 'and the page reads it before falling back to the first cohort');
+  const shape = fs.readFileSync('src/config/org-shape.ts', 'utf8');
+  assert.match(shape, /className: typeof doc\.class_name === 'string'/, 'travels through shapeOrg');
+});
+
 console.log(
   `\n${passed} organization assertions passed. ` +
     `${files.length} files read, mark ${markLimits.min}-${markLimits.max} from the migration.`

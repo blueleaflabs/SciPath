@@ -84,32 +84,36 @@ const cookieHeader = (jar) => [...jar].map(([k, v]) => `${k}=${v}`).join('; ');
 /* ── Measured requests ────────────────────────────────────────────────── */
 
 const samples = new Map();
-let inFlight = 0, peak = 0, total = 0, failed = 0;
+let inFlight = 0, peak = 0, total = 0, failed = 0, refusedSignIns = 0, retriedSignIns = 0;
 const errors = [];
 
 /** The route with its ids folded, so forty projects are one line. */
 const shape = (route) => route.replace(/[0-9a-f]{8}-[0-9a-f-]{27}/g, ':id');
 
 function timings(header) {
-  const out = { db: null, calls: null, total: null };
+  const out = { db: null, calls: null, total: null, slow: null };
   for (const part of (header ?? '').split(',')) {
     const name = part.trim().split(';')[0];
     const dur = Number(part.match(/dur=([\d.]+)/)?.[1] ?? NaN);
     const desc = part.match(/desc="([^"]*)"/)?.[1] ?? '';
     if (name === 'db') { out.db = dur; out.calls = Number(desc.match(/(\d+) calls/)?.[1] ?? NaN); }
     if (name === 'total') out.total = dur;
+    /* The slowest call of the request, named: the middleware adds it when
+       asked (x-timing-trace). Its path is the PostgREST route, so a run can
+       say which rpc or table a page waits on, not only that it waits. */
+    if (name === 'slow' && desc) out.slow = { path: desc, ms: dur };
   }
   return out;
 }
 
-async function measured(kind, jar, route, init = {}) {
+async function measured(kind, jar, route, init = {}, { landing = false } = {}) {
   const key = `${kind} ${shape(route)}`;
-  if (!samples.has(key)) samples.set(key, { ms: [], db: [], calls: [], errors: 0, n: 0 });
+  if (!samples.has(key)) samples.set(key, { ms: [], db: [], calls: [], errors: 0, n: 0, slow: new Map() });
   const s = samples.get(key);
   inFlight += 1; peak = Math.max(peak, inFlight); total += 1;
   const started = Date.now();
   try {
-    const response = await fetch(`${BASE}${route}`, { ...init, headers: { ...(init.headers ?? {}), cookie: cookieHeader(jar) }, redirect: 'manual' });
+    const response = await fetch(`${BASE}${route}`, { ...init, headers: { ...(init.headers ?? {}), cookie: cookieHeader(jar), 'x-timing-trace': '1' }, redirect: 'manual' });
     const text = await response.text();
     const ms = Date.now() - started;
     takeCookies(jar, response);
@@ -117,8 +121,19 @@ async function measured(kind, jar, route, init = {}) {
     const t = timings(response.headers.get('server-timing'));
     if (t.db !== null && !Number.isNaN(t.db)) s.db.push(t.db);
     if (t.calls !== null && !Number.isNaN(t.calls)) s.calls.push(t.calls);
-    if (response.status >= 400 || response.status === 302) { s.errors += 1; failed += 1; if (errors.length < 12) errors.push(`${response.status} ${kind} ${route}`); }
-    return { status: response.status, text };
+    if (t.slow) { const w = s.slow.get(t.slow.path) ?? { n: 0, ms: [] }; w.n += 1; w.ms.push(t.slow.ms); s.slow.set(t.slow.path, w); }
+    /* A redirect is a failure here — every route asked for is one a
+       signed-in person is entitled to — and where it went is the whole
+       diagnosis: `?signin=stale` is a session the server no longer
+       recognises, `/app/welcome/` is an account it could not read, another
+       host is the tenant guard. */
+    const sentHome = response.status === 302 && landing && /^\/app\//.test(response.headers.get('location') ?? '');
+    if ((response.status >= 400 || response.status === 302) && !sentHome) {
+      s.errors += 1; failed += 1;
+      const to = response.status === 302 ? ` -> ${response.headers.get('location') ?? '?'}` : '';
+      if (errors.length < 12) errors.push(`${response.status} ${kind} ${route}${to}`);
+    }
+    return { status: response.status, text, location: response.headers.get('location') ?? '' };
   } catch (e) {
     s.n += 1; s.errors += 1; failed += 1; if (errors.length < 12) errors.push(`${e.message} ${kind} ${route}`);
     return { status: 0, text: '' };
@@ -128,23 +143,48 @@ async function measured(kind, jar, route, init = {}) {
 /* ── Sign in, and find out what this person has ───────────────────────── */
 
 async function signIn(email) {
-  const jar = new Map();
-  const body = new URLSearchParams({ email, password: PASSWORD, next: '/app/' });
-  const response = await fetch(`${BASE}/auth/password/`, { method: 'POST', body, redirect: 'manual', headers: { 'content-type': 'application/x-www-form-urlencoded' } });
-  takeCookies(jar, response);
-  const to = response.headers.get('location') ?? '';
-  if (to.includes('signin=')) throw new Error(`${email}: refused (${to})`);
-  if (jar.size === 0) throw new Error(`${email}: no session cookie came back`);
-  return jar;
+  /* Three tries, spaced. Supabase Auth admits sign-ins per address at a
+     rate — thirty in a burst, then a trickle, on the hosted service; thirty
+     per five minutes on a local stack unless `supabase/config.toml` says
+     otherwise — and forty people from one school's address inside a minute
+     is exactly the burst. A refusal here is what the class would meet, so
+     it is counted and retried the way a person would: wait, try again. */
+  let last = '';
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    if (attempt > 0) await new Promise((r) => setTimeout(r, 4000 * attempt));
+    const jar = new Map();
+    const body = new URLSearchParams({ email, password: PASSWORD, next: '/app/' });
+    const response = await fetch(`${BASE}/auth/password/`, { method: 'POST', body, redirect: 'manual', headers: { 'content-type': 'application/x-www-form-urlencoded' } });
+    takeCookies(jar, response);
+    const to = response.headers.get('location') ?? '';
+    if (to.includes('signin=')) { last = `refused (${response.status} -> ${to})`; refusedSignIns += 1; continue; }
+    if (jar.size === 0) { last = `no session cookie came back (${response.status} -> ${to || '-'})`; continue; }
+    if (attempt > 0) retriedSignIns += 1;
+    return jar;
+  }
+  throw new Error(`${email}: ${last}, after 3 tries`);
 }
 
 /** The pages off the Workbench, and the first document's first long box to save into. */
 async function discover(jar) {
-  const home = await measured('GET', jar, '/app/');
-  if (home.status !== 200) throw new Error(`/app/ answered ${home.status} after sign-in`);
+  /* A bare /app/ sends a student with one project to that project's
+     page, and a teacher with one class to the class page; only an Elder
+     lands on the Workbench itself. The first two runs counted those
+     redirects as failures (32 of 40, every student). The landing is
+     followed and walked as the person's first page, and the Workbench is
+     read with `?view=workbench`, which is the address the tab carries and
+     which the redirect leaves alone. */
+  const first = await measured('GET', jar, '/app/', {}, { landing: true });
+  let landing = null;
+  if (first.status === 302 && /^\/app\//.test(first.location)) landing = first.location.replace(/^https?:\/\/[^/]+/, '');
+  else if (first.status !== 200) throw new Error(`/app/ answered ${first.status}${first.location ? ` -> ${first.location}` : ''} after sign-in`);
+  const home = landing ? await measured('GET', jar, '/app/?view=workbench') : first;
+  if (home.status !== 200) throw new Error(`/app/?view=workbench answered ${home.status} after sign-in`);
   const hrefs = [...home.text.matchAll(/href="(\/app\/[^"#?]+)"/g)].map((m) => m[1]);
-  const first = (re) => hrefs.find((h) => re.test(h));
-  const pages = ['/app/', first(/^\/app\/project\/[^/]+\/in\/[^/]+\/$/), first(/^\/app\/project\/[^/]+\/$/), first(/^\/app\/project\/[^/]+\/doc\/[^/]+\/$/), first(/^\/app\/program\/[^/]+\/tracker\/$/)].filter(Boolean);
+  if (landing) hrefs.unshift(landing.replace(/[?#].*$/, ''));
+  const pick = (re) => hrefs.find((h) => re.test(h));
+  const pages = [landing ?? '/app/', landing ? '/app/?view=workbench' : null, pick(/^\/app\/project\/[^/]+\/in\/[^/]+\/$/), pick(/^\/app\/project\/[^/]+\/$/), pick(/^\/app\/project\/[^/]+\/doc\/[^/]+\/$/), pick(/^\/app\/program\/[^/]+\/tracker\/$/)].filter(Boolean).filter((p, i, a) => a.indexOf(p) === i);
+
   let box = null;
   const doc = pages.find((p) => /\/doc\//.test(p));
   if (doc) {
@@ -210,7 +250,19 @@ for (const [key, s] of rows) {
   console.log(`${key.padEnd(40)} ${String(s.n).padStart(5)} ${String(s.errors).padStart(4)}   ${fmt(pct(s.ms, 50))} ${fmt(pct(s.ms, 95))} ${fmt(pct(s.ms, 99))}   ${fmt(pct(s.db, 50))} ${fmt(pct(s.db, 95))} ${fmt(pct(s.calls, 50)).padStart(5)}`);
 }
 console.log('-'.repeat(96));
-console.log(`${total} requests in ${elapsed.toFixed(0)}s, ${(total / elapsed).toFixed(1)}/s, ${peak} in flight at peak, ${failed} failed. Milliseconds; db and calls from Server-Timing.\n`);
+console.log(`${total} requests in ${elapsed.toFixed(0)}s, ${(total / elapsed).toFixed(1)}/s, ${peak} in flight at peak, ${failed} failed. Milliseconds; db and calls from Server-Timing.`);
+console.log(`Sign-ins refused ${refusedSignIns} time${refusedSignIns === 1 ? '' : 's'}${retriedSignIns ? `, ${retriedSignIns} succeeded on a retry` : ''}.\n`);
+report.signIns = { refused: refusedSignIns, retried: retriedSignIns };
+
+/* Where the time went: for each route, the calls most often its slowest,
+   with their median. This is the line that names the query. */
+const slowRows = rows.flatMap(([key, s]) => [...s.slow.entries()].map(([p, w]) => ({ key, path: p, n: w.n, p50: pct(w.ms, 50) }))).sort((a, b) => b.p50 * b.n - a.p50 * a.n).slice(0, 8);
+if (slowRows.length) {
+  console.log('Slowest calls, by route (how often it was the slowest call of the request, and its median):');
+  for (const r of slowRows) console.log(`  ${r.key.padEnd(40)} ${r.path.padEnd(48)} ${String(r.n).padStart(4)}x ${fmt(r.p50)}ms`);
+  console.log();
+  report.slow = slowRows;
+}
 if (errors.length) { console.log('First failures:'); for (const e of errors) console.log(`  ${e}`); console.log(); }
 console.log(
   'Reading it: a route whose p95 is far above its db95 is slow in the Worker or the network,\n' +

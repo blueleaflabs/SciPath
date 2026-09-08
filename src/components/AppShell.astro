@@ -272,9 +272,12 @@ const nav = [
   let fellAt = 0;
   onHealth((h: Health, detail: string) => {
     if (h === 'fallback' || h === 'off') {
-      startPolling();
-      const every = classNow() ? `every ${plan?.fallback?.inClass ?? 8} seconds while you work` : 'once an hour outside class';
-      strip.textContent = `Live updates are on the backup path (checking ${every}). Your work still saves as you type.`;
+      const enabled = plan?.fallback?.enabled !== false;
+      if (enabled) startPolling();
+      const every = classNow() ? `every ${plan?.fallback?.inClass ?? 60} seconds while you work` : 'once an hour outside class';
+      strip.textContent = enabled
+        ? `Live updates are on the backup path (checking ${every}). Your work still saves as you type.`
+        : 'Live updates are off on this network; reload the page to see new replies. Your work still saves as you type.';
       strip.hidden = false;
       if (h === 'fallback' && reportTimer === undefined && !reported) {
         fellAt = Date.now();

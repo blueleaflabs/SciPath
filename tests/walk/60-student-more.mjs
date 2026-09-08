@@ -39,20 +39,24 @@ export async function run(t) {
   await t.expect('the entry is in the notebook', { selector: '.entry', text: 'first three samples' });
   await t.expect('with its picture', { selector: '.entry img' });
 
-  /* Drafts: two saves of one box, then the earlier one back. */
-  await t.readHref('doc', '/doc/literature_review/$');
+  /* Drafts: two saves of one box, then the earlier one back. On the
+     Research Question, not the literature review: the first scenario
+     submitted that one, and a submitted document takes no more typing.
+     The link is on the deadlines page, not the cover. */
+  await t.go('${deliverables}');
+  await t.readHref('doc', '/doc/question/$');
   await t.go('${doc}');
-  await t.set('#f-proud textarea', 'First wording of what I am proud of.');
+  await t.set('#f-area textarea', 'First wording of the research area.');
   await t.wait(2500);
-  await t.set('#f-proud textarea', 'Second wording, which I like less.');
+  await t.set('#f-area textarea', 'Second wording, which I like less.');
   await t.wait(2500);
   await t.go('${doc}');
   await t.shot('drafts-kept');
-  await t.expect('the box offers an earlier draft', { selector: '#f-proud details.fdrafts' });
-  await t.click('#f-proud details.fdrafts summary', { nav: false });
-  await t.click('#f-proud .fdraft-use', { nav: false });
+  await t.expect('the box offers an earlier draft', { selector: '#f-area details.fdrafts' });
+  await t.click('#f-area details.fdrafts summary', { nav: false });
+  await t.click('#f-area .fdraft-use', { nav: false });
   await t.wait(2500);
-  await t.expect('Use this put the first wording back', { selector: '#f-proud textarea', text: 'First wording' });
+  await t.expect('Use this put the first wording back', { selector: '#f-area textarea', text: 'First wording' });
 
   /* Back after opening a document: the row says Continue. */
   await t.go('${deliverables}');

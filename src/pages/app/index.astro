@@ -22,6 +22,7 @@ import { byDueThenOrder } from '../../lib/milestone-order';
 import { resolveProgram, deliverablesFor, shape } from '../../lib/templates';
 import { docStanding } from '../../lib/documents';
 import { stepProgress } from '../../lib/step-progress';
+import { sponsorsOf } from '../../lib/sponsors';
 
 const { configured, session, account, roles } = Astro.locals;
 const org = activeOrg(Astro);
@@ -422,13 +423,9 @@ if (supabase && account) {
     /* Scoped by authorship. The policy lets an officer read every entry at
        the school, which is right for the club table below and wrong for a
        section headed "this season". */
-    const { data: authored } = await supabase
-      .from('project_authors')
-      .select('project_id')
-      .eq('user_id', account.id)
-      .eq('role', 'author');
-
-    const myProjectIds = (authored ?? []).map((a: any) => a.project_id);
+    /* From the middleware's one read (2.9): the unarchived projects this
+       person authors, which is what the read below filtered to anyway. */
+    const myProjectIds = (((Astro.locals as any).projects ?? []) as { project_id: string }[]).map((p) => p.project_id);
 
     /**
      * The projects, and where each of them went.
@@ -495,11 +492,20 @@ if (supabase && account) {
        asking for anything, so the only way to find out was to open all of
        them — on the page whose job is to say which one to open. One query
        across every project of this person's, rather than one per card. */
-    const { data: mineDue } = myProjectIds.length
+    /* **By participation id, not through the embed (2.9).** This filtered
+       on `participations.project_id` inside the `!inner` embed, which
+       PostgREST answers by scanning `entry_milestones` itself — every row
+       of every tenant's, each one offered to the policy and each policy
+       call asking `can_see_project` — and only then joining the places
+       that match. The load test named it: 896 ms of the Workbench's 1.2
+       seconds, on every student's landing and every Elder's. The places
+       are already in hand from the two reads above, so the filter is on
+       the indexed column and the policy judges a dozen rows. */
+    const ownPartIds = [...new Set([...(theirEntries ?? []), ...(theirCohorts ?? [])].map((e: any) => e.id).filter(Boolean))];
+    const { data: mineDueRows } = ownPartIds.length
       ? await supabase
-          .from('entry_milestones')
+          .rpc('milestones_of', { p_participation_ids: ownPartIds })
           .select('id, name, due_on, completed_on, kind, sort_order, step_id, requires_step, requires_steps, participations!inner(id, project_id, program_id, programs(name, season_year, kind, roles, template_id))')
-          .in('participations.project_id', myProjectIds)
           .is('completed_on', null)
           .not('due_on', 'is', null)
           .neq('kind', 'event')
@@ -511,13 +517,16 @@ if (supabase && account) {
           .order('sort_order', { ascending: true })
           .order('id')
       : { data: [] as any[] };
+    /* An rpc's rows are typed as row-or-rows; these are rows. */
+    const mineDue = (mineDueRows ?? []) as any[];
 
     /* The gate (2.8): the names of the steps an open row waits on that
        are not met, from one read of the same places' rows. */
     const partIds = [...new Set((mineDue ?? []).map((r: any) => (r.participations as any)?.id).filter(Boolean))];
-    const { data: gateRows } = partIds.length
-      ? await supabase.from('entry_milestones').select('participation_id, step_id, name, kind, completed_on, due_on, sort_order').in('participation_id', partIds).order('due_on', { ascending: true, nullsFirst: false }).order('sort_order')
+    const { data: gateRowsRaw } = partIds.length
+      ? await supabase.rpc('milestones_of', { p_participation_ids: partIds }).select('participation_id, step_id, name, kind, completed_on, due_on, sort_order').order('due_on', { ascending: true, nullsFirst: false }).order('sort_order')
       : { data: [] as any[] };
+    const gateRows = (gateRowsRaw ?? []) as any[];
     const gateOf = (row: any): string[] => {
       const ids = new Set<string>([...(row.requires_steps ?? []), ...(row.requires_step ? [row.requires_step] : [])]);
       if (ids.size === 0) return [];
@@ -618,11 +627,11 @@ if (supabase && account) {
     /* Released grades, rolled up per project for the card. The policy
        returns only this person's own released rows. */
     /* Off for the pilot (`platform.gradesToStudents`): no figure, no read. */
-    const { data: gradeRows } = myProjectIds.length && platform.gradesToStudents
+    const { data: gradeRows } = ownPartIds.length && platform.gradesToStudents
       ? await supabase
           .from('assessments')
           .select('score, out_of, participations!inner(project_id)')
-          .in('participations.project_id', myProjectIds)
+          .in('participation_id', ownPartIds)
           .is('superseded_by', null)
           .not('released_at', 'is', null)
       : { data: [] as any[] };
@@ -763,9 +772,12 @@ if (supabase && account) {
   joinable = (open ?? []).filter((p: any) => !hidesProgram(org, p.template_id));
 
 
+  /* One read of this person's memberships (2.9): the states for the cards
+     here, and the classes joined — which was a second read of the same
+     rows, ordered — derived from it below. */
   const { data: mine } = await supabase
     .from('memberships')
-    .select('cohort_id, state, note, joined_at, decided_at, decided:decided_by(display_name)')
+    .select('cohort_id, state, note, joined_at, decided_at, decided:decided_by(display_name), programs:cohort_id(name, season_year, kind, program_role)')
     .eq('user_id', account.id);
 
   for (const m of mine ?? []) {
@@ -797,23 +809,19 @@ if (supabase && account) {
   
      `decided_at` is null for a cohort that admits without approval, so
      `joined_at` is the fallback and the sort is stable either way. */
-  const { data: joined } = await supabase
-    .from('memberships')
-    .select('cohort_id, decided_at, joined_at, programs:cohort_id(name, season_year, kind, program_role)')
-    .eq('user_id', account.id)
-    .eq('state', 'member')
-    .order('decided_at', { ascending: false, nullsFirst: false })
-    .order('joined_at', { ascending: false });
+  const later = (v: any) => (v ? String(v) : '');
+  const joined = (mine ?? [])
+    .filter((m: any) => m.state === 'member')
+    .map((m: any) => ({ cohort_id: m.cohort_id, decided_at: m.decided_at, joined_at: m.joined_at, programs: m.programs }))
+    /* Most recently admitted first; `decided_at` is null for a cohort that
+       admits without approval, so `joined_at` is the fallback. */
+    .sort((a: any, b: any) => later(b.decided_at).localeCompare(later(a.decided_at)) || later(b.joined_at).localeCompare(later(a.joined_at)));
 
-  myMemberships = joined ?? [];
+  myMemberships = joined;
 
-  const { data: authored } = await supabase
-    .from('project_authors')
-    .select('project_id, projects(id, title)')
-    .eq('user_id', account.id)
-    .eq('role', 'author');
-
-  myProjects = (authored ?? []).map((a: any) => a.projects).filter(Boolean);
+  /* The person's own projects, from the middleware's one read (2.9): the
+     unarchived ones, which are the only ones a fair would take. */
+  myProjects = (((Astro.locals as any).projects ?? []) as { project_id: string; title: string }[]).map((p) => ({ id: p.project_id, title: p.title }));
 
   if (myProjects.length > 0) {
     const { data: attached } = await supabase
@@ -1005,13 +1013,7 @@ if (supabase && account) {
           .in('status', ['entered', 'competed'])
       : { data: [] as any[] };
 
-    const { data: sponsorRows } = ids.length
-      ? await supabase
-          .from('project_sponsors')
-          .select('teacher_name, participations!inner(project_id)')
-          .in('participations.project_id', ids)
-          .is('superseded_at', null)
-      : { data: [] as any[] };
+    const sponsorRows = await sponsorsOf(supabase, ids);
 
     /**
      * HOW BIG THE NOTEBOOK IS AND WHEN IT WAS LAST WRITTEN IN.
@@ -1064,9 +1066,8 @@ if (supabase && account) {
     const { data: milestones } = entryIds.length
       ? await allRows(() =>
           supabase
-            .from('entry_milestones')
+            .rpc('milestones_of', { p_participation_ids: entryIds })
             .select('id, participation_id, name, kind, due_on, required, blocks_experimentation, completed_on, owner, sort_order')
-            .in('participation_id', entryIds)
             /* The students' obligations. The Elder's tasks are read separately,
                below, as the Elder's own list. */
             .eq('owner', 'student')
@@ -1125,7 +1126,7 @@ if (supabase && account) {
       const selfManaged = (p.project_authors ?? []).filter(
         (a: any) => a.role === 'officer' && a.self_managed_at
       );
-      const sponsor = (sponsorRows ?? []).find((s: any) => s.participations?.project_id === p.id) ?? null;
+      const sponsor = sponsorRows.find((s) => s.project_id === p.id) ?? null;
       const worst = worstFinding(findings);
 
       return {
@@ -1273,23 +1274,20 @@ if (supabase && account) {
        disqualification counter over a decoration. */
     const nudgeByMilestone = new Map<string, any>();
 
-    await Promise.all(
-      [...new Set(watched.map((w: any) => w.entry?.id).filter(Boolean))].map(
-        async (participationId) => {
-          const { data, error: stateError } = await supabase.rpc('nudge_state', {
-            p_participation_id: participationId,
-          });
-          if (stateError) console.error(`nudge_state: ${stateError.message}`);
-          /* Keyed on both, because a track is per obligation *and* per
-             recipient. Keyed on the milestone alone, an Elder's own row
-             showed the count of a nudge her teacher had sent to her, labelled
-             as one she had sent to the student. */
-          for (const row of data ?? []) {
-            nudgeByMilestone.set(`${row.milestone_id}:${row.recipient_id}`, row);
-          }
-        }
-      )
-    );
+    /* One call for every place at once (2.9): this was one `nudge_state`
+       per place, forty round trips for the advisor. */
+    const watchedIds = [...new Set(watched.map((w: any) => w.entry?.id).filter(Boolean))];
+    if (watchedIds.length > 0) {
+      const { data, error: stateError } = await supabase.rpc('nudge_states', { p_participation_ids: watchedIds });
+      if (stateError) console.error(`nudge_states: ${stateError.message}`);
+      /* Keyed on both, because a track is per obligation *and* per
+         recipient. Keyed on the milestone alone, an Elder's own row
+         showed the count of a nudge her teacher had sent to her, labelled
+         as one she had sent to the student. */
+      for (const row of ((data ?? []) as any[])) {
+        nudgeByMilestone.set(`${row.milestone_id}:${row.recipient_id}`, row);
+      }
+    }
 
     for (const w of watched) {
       w.nudges = new Map<string, any>();
@@ -1892,6 +1890,11 @@ const careLayout = (group: any): 'grid' | 'wide' => {
     )}
     {signin === 'stale' && (
       <p class="note" role="alert">Your earlier session is no longer valid here. Sign in again.</p>
+    )}
+    {signin === 'closed' && (
+      <p class="note" role="alert">
+        SciPath is by invitation at {org.name} for now: there is no account for that address, and none is made by signing in. Nothing was saved. If you are in the class, ask your teacher to check the roster.
+      </p>
     )}
 
     {/* **Why the address changed.**

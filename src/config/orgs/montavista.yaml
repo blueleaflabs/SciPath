@@ -24,7 +24,13 @@ theme: proceedings
 record_prefix: MVRJ
 timezone: America/Los_Angeles
 
-signup_mode: domain
+# Closed for the pilot (2.9): the class's accounts were loaded before the
+# students arrived, and nobody else — a classmate the link was forwarded
+# to, a student at another school with a district address — gets an
+# account by signing in. `domain` is the setting to return to when the
+# school opens it. SIGNUPS=closed in the deployment closes every tenant at
+# once, whatever the file says.
+signup_mode: closed
 verified_domains: [student.fuhsd.org, fuhsd.org]
 
 # Both domains grant affiliation on their own, which is what `population`
@@ -63,13 +69,25 @@ hidden_until:
 # `in_class_idle_seconds` once they pause; outside a period, once an hour.
 # Times are this school's clock (`timezone` above). Fill the periods in
 # from the bell schedule: every meeting of the class, for the year.
+#
+# The pacing is a dial, and it was turned down before the pilot (2.9):
+# every pulse is a database call for the whole class, so sixty seconds
+# in class keeps forty browsers on the backup path under one call a
+# second between them, and a reply still lands inside a minute.
+# `enabled: false` is the off switch — no polling at all, and the strip
+# asks the person to reload — for a day the numbers say so.
 live:
   class_periods:
     - { days: [Mon, Tue, Wed, Thu, Fri], from: "08:00", to: "15:30" }
   fallback:
-    in_class_seconds: 8
-    in_class_idle_seconds: 30
+    enabled: true
+    in_class_seconds: 60
+    in_class_idle_seconds: 300
     off_hours_seconds: 3600
+
+# What the front door calls the class (2.9). Without this the first class
+# or club in `programs` lent its name, and that was the fair club's.
+class_name: IRPD Class
 
 showcase_note: >-
   Work by students at this school, published as a permanent, citable record.

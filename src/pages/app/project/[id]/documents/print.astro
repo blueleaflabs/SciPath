@@ -23,6 +23,7 @@ import { docStanding } from '../../../../../lib/documents';
 import { backFrom } from '../../../../../lib/back';
 import PaperHeader from '../../../../../components/PaperHeader.astro';
 import DocumentPaper from '../../../../../components/DocumentPaper.astro';
+import { sponsorsOf, sponsorNamesOf } from '../../../../../lib/sponsors';
 
 const { session, account } = Astro.locals;
 const org = activeOrg(Astro);
@@ -76,12 +77,7 @@ if (program) {
    own margin boxes, since a browser cannot read it off the page. */
 const cssText = (t: string) => JSON.stringify(t);
 
-const { data: sponsors } = await supabase
-  .from('project_sponsors')
-  .select('teacher_name, participations!inner(project_id)')
-  .eq('participations.project_id', projectId)
-  .is('superseded_at', null);
-const teacherNames = [...new Set((sponsors ?? []).map((s: any) => s.teacher_name).filter(Boolean))];
+const teacherNames = sponsorNamesOf(await sponsorsOf(supabase, [projectId]));
 
 const { data: docs } = await supabase
   .from('documents')

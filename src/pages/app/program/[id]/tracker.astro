@@ -91,9 +91,8 @@ const trackedIds = new Set(trackedSteps.map((st: any) => st.id));
 const { data: milestones } = partIds.length && trackedIds.size
   ? await allRows(() =>
       supabase
-        .from('entry_milestones')
+        .rpc('milestones_of', { p_participation_ids: partIds })
         .select('id, participation_id, name, due_on, completed_on, kind, owner, step_id')
-        .in('participation_id', partIds)
         .in('step_id', [...trackedIds])
         .order('due_on', { ascending: true, nullsFirst: false })
         .order('id')

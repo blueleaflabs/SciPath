@@ -85,7 +85,7 @@ cachePublicPage(Astro);
    platform's page keeps its own copy below. */
 const session = (Astro.locals as any).session ?? null;
 const account = (Astro.locals as any).account ?? null;
-const cohortName = cohorts[0]?.name ?? 'research';
+const cohortName = org.className ?? cohorts[0]?.name ?? 'research';
 let summary: HomeSummary | null = null;
 if (!org.isPlatform && session && account) {
   try {

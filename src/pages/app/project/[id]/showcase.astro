@@ -30,6 +30,7 @@ import { resolveProgram } from '../../../../lib/templates';
 import { formatDate } from '../../../../lib/dates';
 import { loadShowcases } from '../../../../lib/showcase-load';
 import ShowcaseSections from '../../../../components/ShowcaseSections.astro';
+import { sponsorsOf, sponsorNamesOf } from '../../../../lib/sponsors';
 
 const { session, account, roles } = Astro.locals;
 const org = activeOrg(Astro);
@@ -174,12 +175,7 @@ const firstPlace = (places ?? []).find((p: any) => p.programs?.showcase === 'pri
 /* The cover's people, as the deliverables page names them. */
 const coverAuthors = (project.project_authors ?? []).filter((a: any) => a.role === 'author' && a.users).map((a: any) => a.users.display_name);
 const coverElders = (project.project_authors ?? []).filter((a: any) => a.role === 'officer' && !a.self_managed_at && a.users).map((a: any) => a.users.display_name);
-const { data: coverSponsors } = await supabase
-  .from('project_sponsors')
-  .select('teacher_name, participations!inner(project_id)')
-  .eq('participations.project_id', id)
-  .is('superseded_at', null);
-const coverSponsorNames = [...new Set((coverSponsors ?? []).map((x: any) => x.teacher_name).filter(Boolean))];
+const coverSponsorNames = sponsorNamesOf(await sponsorsOf(supabase, [id]));
 const coverProgram = ((firstPlace ?? (places ?? [])[0])?.programs ?? null) as any;
 
 /* The part that writes itself (2.8), shown here too: the sections the

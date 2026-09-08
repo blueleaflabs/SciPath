@@ -16,6 +16,7 @@ import { renderNote } from '../../../lib/notes';
 import { blobStore, notePath, MAX_UPLOAD_BYTES } from '../../../lib/blob';
 import { afterPost, outcomeFrom } from '../../../lib/post-redirect';
 import { signInWith } from '../../../lib/next-path';
+import { sponsorsOf, sponsorNamesOf } from '../../../lib/sponsors';
 
 const { session, account, roles } = Astro.locals;
 const org = activeOrg(Astro);
@@ -213,12 +214,16 @@ const openOpportunities = (openRows ?? []).filter((p: any) => !hidesProgram(org,
 /* One project per person per cohort at a time. The cohorts this person's
    other projects already sit in are not offered; the server refuses them
    and a picker whose choice is refused is worse than none. */
-const { data: myOtherPlaces } = await supabase
-  .from('participations')
-  .select('program_id, project_id, projects!inner(project_authors!inner(user_id, role))')
-  .neq('project_id', id)
-  .eq('projects.project_authors.user_id', account.id)
-  .eq('projects.project_authors.role', 'author');
+/* From the person's own projects, which the middleware already read for
+   the tab bar (2.9): this asked `participations` with the author inside a
+   two-deep `!inner` embed, which PostgREST answers by scanning every
+   participation through the policy before joining. The projects are the
+   authored, unarchived ones — an archived project holds no place a live
+   one would be refused for. */
+const otherOwnIds = (((Astro.locals as any).projects ?? []) as { project_id: string }[]).map((p) => p.project_id).filter((pid) => pid !== id);
+const { data: myOtherPlaces } = otherOwnIds.length
+  ? await supabase.from('participations').select('program_id, project_id').in('project_id', otherOwnIds)
+  : { data: [] as any[] };
 const heldElsewhere = new Set((myOtherPlaces ?? []).map((p: any) => p.program_id));
 const couldJoin = (myCohorts ?? []).filter(
   (m: any) => !alreadyIn.has(m.cohort_id) && (me.runsTheClub || !heldElsewhere.has(m.cohort_id))
@@ -273,12 +278,7 @@ const officers = attachments.filter((a: any) => a.role === 'officer');
 /* Every teacher standing behind this project, not the first one found: a
    class taught by two has two, and naming one of them makes the other look
    unasked. */
-const { data: sponsors } = await supabase
-  .from('project_sponsors')
-  .select('teacher_name, confirmed_at, participations!inner(project_id)')
-  .eq('participations.project_id', id)
-  .is('superseded_at', null);
-const sponsorNames = [...new Set((sponsors ?? []).map((x: any) => x.teacher_name))];
+const sponsorNames = sponsorNamesOf(await sponsorsOf(supabase, [id]));
 
 /* Does the work, or watches it. Everything on this page follows from that. */
 /* Parsed here so the page can show what was saved rather than the raw

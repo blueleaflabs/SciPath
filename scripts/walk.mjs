@@ -74,8 +74,17 @@ const t = {
        walk missed the first half and ran the teacher's scenario as the
        student who had not been signed out. */
     if (ok !== 'submitted') throw new Error(`sign-in as ${who}: ${ok}`);
+    /* `/app/?signin=password` starts with `/app` too, and the third walk
+       passed that as signed in: every scenario then ran as nobody, and
+       nine failures were one refused sign-in. Refused is named as refused,
+       with the usual reason beside it — Supabase Auth admits thirty
+       sign-ins per five minutes per address on a local stack (raised in
+       supabase/config.toml, after a restart), and a load run just before
+       spends the window. */
+    if (/[?&]signin=/.test(where)) throw new Error(`sign-in as ${who} was refused (${where}); a wrong password, or the auth rate limit after many sign-ins from this address — wait five minutes`);
     if (!where.startsWith('/app')) throw new Error(`sign-in as ${who} landed on ${where}`);
     const me = await tab.evaluate(`(document.querySelector('.mnav-me')?.textContent || '').trim()`);
+    if (!me) throw new Error(`sign-in as ${who} landed on ${where} with nobody in the masthead`);
     current.log.push(`as ${who} (${email}) → ${me}`);
   },
   async go(p) { await tab.go(`${base}${fill(p)}`); current.log.push(`go ${fill(p)}`); },
@@ -176,7 +185,7 @@ const t = {
    * the text is not on the page. Recorded, never thrown: the walk goes on
    * and the report says.
    */
-  async expect(what, { text = null, selector = null, absent = null, not = false } = {}) {
+  async expect(what, { text = null, selector = null, absent = null, not = false, or = [] } = {}) {
     let ok;
     /* Case does not count: a pill says IN PROGRESS by its style, and the
        page's text is what a person reads, not what the source said. */
@@ -185,12 +194,19 @@ const t = {
     const lc = (v) => JSON.stringify(fill(v).toLowerCase().replace(/\s+/g, ' '));
     const norm = '(s) => (s || "").toLowerCase().replace(/\\s+/g, " ")';
     if (selector) {
-      ok = await tab.evaluate(`(() => { const norm = ${norm}; const els = [...document.querySelectorAll(${JSON.stringify(fill(selector))})]; return ${text === null ? 'els.length > 0' : `els.some((e) => norm(e.innerText || e.textContent).includes(${lc(text)}))`}; })()`);
+      /* A box's text is its value, not what the server put between the
+         tags: after Use this the textarea holds the earlier draft while its
+         textContent is still the page as served. Read what a person sees. */
+      const shown = `((typeof e.value === 'string' && e.value) || e.innerText || e.textContent)`;
+      ok = await tab.evaluate(`(() => { const norm = ${norm}; const els = [...document.querySelectorAll(${JSON.stringify(fill(selector))})]; return ${text === null ? 'els.length > 0' : `els.some((e) => norm(${shown}).includes(${lc(text)}))`}; })()`);
     } else if (absent !== null) {
       ok = !(await tab.evaluate(`(${norm})(document.body.innerText).includes(${lc(absent)})`));
     } else {
       ok = await tab.evaluate(`(${norm})(document.body.innerText).includes(${lc(text ?? what)})`);
     }
+    /* `or`: any of these texts on the page will do, when a setting decides
+       which of two right answers the page gives. */
+    for (const alt of or) if (!ok) ok = await tab.evaluate(`(${norm})(document.body.innerText).includes(${lc(alt)})`);
     if (not) ok = !ok;
     current.checks.push({ step: stepNo, what: fill(what), ok });
     current.log.push(`${ok ? 'ok  ' : 'FAIL'} ${fill(what)}`);

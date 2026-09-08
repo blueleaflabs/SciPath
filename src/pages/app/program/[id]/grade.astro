@@ -119,9 +119,8 @@ const projectIds = (parts ?? []).map((p: any) => p.project_id);
 const { data: allMilestones } = partIds.length
   ? await allRows(() =>
       supabase
-        .from('entry_milestones')
+        .rpc('milestones_of', { p_participation_ids: partIds })
         .select('id, participation_id, name, due_on, completed_on, kind, owner')
-        .in('participation_id', partIds)
         .eq('owner', 'student')
         .neq('kind', 'event')
         .order('due_on', { ascending: true, nullsFirst: false })

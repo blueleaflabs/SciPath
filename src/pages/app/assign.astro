@@ -13,6 +13,7 @@ import { afterPost, outcomeFrom } from '../../lib/post-redirect';
 import { signInWith } from '../../lib/next-path';
 import { allRows } from '../../lib/all-rows';
 import { stepProgress } from '../../lib/step-progress';
+import { sponsorsOf } from '../../lib/sponsors';
 
 const { session, account, roles } = Astro.locals;
 const org = activeOrg(Astro);
@@ -174,21 +175,14 @@ const entryIds = [
 const { data: milestones } = entryIds.length
   ? await allRows(() =>
       supabase
-        .from('entry_milestones')
+        .rpc('milestones_of', { p_participation_ids: entryIds })
         .select('id, participation_id, name, kind, owner, due_on, required, blocks_experimentation, completed_on')
-        .in('participation_id', entryIds)
         .order('due_on', { ascending: true, nullsFirst: false })
             .order('id')
     )
   : { data: [] as any[] };
 
-const { data: sponsors } = ids.length
-  ? await supabase
-      .from('project_sponsors')
-      .select('teacher_name, confirmed_at, participations!inner(project_id)')
-      .in('participations.project_id', ids)
-      .is('superseded_at', null)
-  : { data: [] as any[] };
+const sponsors = await sponsorsOf(supabase, ids);
 
 /* Everyone who can hold projects, and how many each already holds. That
    count is the whole point of this screen: "assign randomly" in practice
@@ -436,7 +430,7 @@ const rows = (projects ?? [])
     /* A sponsor hangs off a participation now, so the project it belongs to
        comes through the embedded row. Any current sponsor on any of the
        project's participations answers "is this project sponsored". */
-    sponsor: (sponsors ?? []).find((s: any) => s.participations?.project_id === p.id) ?? null,
+    sponsor: sponsors.find((s) => s.project_id === p.id) ?? null,
     done: stepProgress(mine).done,
     total: stepProgress(mine).total,
     worst: worstFinding(findings),

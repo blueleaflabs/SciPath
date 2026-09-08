@@ -98,8 +98,9 @@ create table public.organizations (
   -- domain  : only an address on a listed domain may sign up
   -- open    : anyone may sign up. No domain, no mentor, no district
   -- invite  : signup requires a pending grant
+  -- closed  : nobody signs up; accounts already made sign in (2.9)
   signup_mode      text not null default 'domain'
-                     check (signup_mode in ('domain', 'open', 'invite')),
+                     check (signup_mode in ('domain', 'open', 'invite', 'closed')),
   requires_mentor boolean not null default true,
 
   -- Served at the apex rather than under a label.
@@ -1353,6 +1354,12 @@ begin
     raise exception 'organization is not accepting signups';
   end if;
 
+  -- Closed (2.9): no account is made by signing in, whoever asks. The
+  -- pages refuse earlier and say why; this is the rule for whatever posts.
+  if v_org.signup_mode = 'closed' then
+    raise exception 'signups are closed at this school for now';
+  end if;
+
   select au.email into v_email from auth.users au where au.id = v_uid;
 
   /* AN INVITE TENANT ACTUALLY REQUIRES AN INVITATION.
@@ -1582,7 +1589,10 @@ begin
      p_requires_mentor, p_address, p_phone, 'active', p_is_platform)
   on conflict (slug) do update set
     subdomain = excluded.subdomain,
-    is_platform = excluded.is_platform
+    is_platform = excluded.is_platform,
+    -- The file is the truth for the door (2.9): closing a school's signups
+    -- in its file has to reach a database that was seeded before.
+    signup_mode = excluded.signup_mode
   returning id into v_org;
 
   for d in select * from jsonb_array_elements(p_domains)
@@ -13436,23 +13446,110 @@ $$;
 revoke all on function public.my_notice_pulse() from public, anon;
 grant execute on function public.my_notice_pulse() to authenticated;
 
+-- **Scoped before it is scanned (2.9).** This asked five tables for their
+-- newest moment with no other condition, as the caller. Under row level
+-- security that is not five index lookups: every row of every table is
+-- offered to the policy, and the policy calls `can_see_project` for each
+-- one. The first load test measured it at 1.2 seconds in the database for
+-- one call, on the class's own data, polled by every browser on the backup
+-- path. A window on the timestamps halved it and no more, because a class
+-- loaded the night before has every row inside any window.
+--
+-- So the projects come first, from the person's side — a handful for a
+-- student, the family for an Elder, the school for the advisor — and the
+-- tables are read by those ids on their indexes. `app.my_project_ids`
+-- prunes with cheap membership and then asks `can_see_project` of each
+-- candidate, so the answer is exactly the policy's; only the number of
+-- times the policy is asked has changed, from every row to every project.
+
+-- The projects this person may see, as a set: the visibility rule's
+-- candidates (authored, created, the school's when advisor, the family's
+-- when an officer of a current program in it), each confirmed by the rule
+-- itself. Definer, so the pruning reads tables the session cannot; the
+-- confirmation is the same function every policy calls.
+create or replace function app.my_project_ids()
+returns setof uuid
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  with candidates as (
+    select a.project_id from public.project_authors a where a.user_id = auth.uid()
+    union
+    select p.id from public.projects p where p.created_by = auth.uid()
+    union
+    select p.id from public.projects p where p.org_id = app.org_id() and app.is_advisor()
+    union
+    select e.project_id
+      from public.participations e
+      join public.programs mine on mine.id = e.program_id
+      join public.programs theirs
+        on theirs.org_id = mine.org_id
+       and theirs.family is not distinct from mine.family
+       and theirs.current
+      join public.user_roles r
+        on r.scope_id = theirs.id
+       and r.user_id = auth.uid()
+       and r.role = 'officer'
+       and r.revoked_at is null
+  )
+  select c.project_id from candidates c where app.can_see_project(c.project_id);
+$$;
+revoke all on function app.my_project_ids() from public, anon;
+grant execute on function app.my_project_ids() to authenticated;
+
+-- The obligations of many places at once, checked once per project rather
+-- than once per row (2.9). A class page reads thirty-eight places times
+-- thirty-two obligations; through the policy that is 1,200 `can_see_project`
+-- calls, 640 ms on the load test's class page and the slowest call on six
+-- of its nine routes. This reads the same rows the policy would allow —
+-- `app.my_project_ids` is the policy, asked per project — by the index on
+-- `participation_id`. Returns the table's own row type, so a page selects,
+-- filters, orders and embeds on it exactly as it did on the table.
+create or replace function public.milestones_of(p_participation_ids uuid[])
+returns setof public.entry_milestones
+language sql
+stable
+security definer
+set search_path = ''
+rows 500
+as $$
+  select m.*
+    from public.entry_milestones m
+    join public.participations e on e.id = m.participation_id
+   where m.participation_id = any(p_participation_ids)
+     and e.project_id in (select app.my_project_ids());
+$$;
+revoke all on function public.milestones_of(uuid[]) from public, anon;
+grant execute on function public.milestones_of(uuid[]) to authenticated;
+
+
 create or replace function public.my_pulse()
 returns timestamptz
 language sql
 stable
-security invoker
+security definer
 set search_path = ''
 as $$
+  with v as (select app.my_project_ids() as project_id),
+       pe as (select e.id from public.participations e where e.project_id in (select project_id from v))
   select greatest(
-    coalesce((select max(f.created_at) from public.deliverable_feedback f), 'epoch'::timestamptz),
-    coalesce((select max(f.seen_at) from public.deliverable_feedback f), 'epoch'::timestamptz),
-    coalesce((select max(d.submitted_at) from public.documents d), 'epoch'::timestamptz),
-    coalesce((select max(a.created_at) from public.assessments a), 'epoch'::timestamptz),
-    coalesce((select max(m.updated_at) from public.entry_milestones m), 'epoch'::timestamptz),
+    coalesce((select max(f.created_at) from public.deliverable_feedback f where f.participation_id in (select id from pe)), 'epoch'::timestamptz),
+    coalesce((select max(f.seen_at) from public.deliverable_feedback f where f.participation_id in (select id from pe)), 'epoch'::timestamptz),
+    coalesce((select max(d.submitted_at) from public.documents d where d.project_id in (select project_id from v)), 'epoch'::timestamptz),
+    -- Scores follow their own policy: the advisor's, the student's own once
+    -- released, and the family's for an Elder of the program.
+    coalesce((select max(a.created_at) from public.assessments a
+               where a.participation_id in (select id from pe)
+                 and a.org_id = app.org_id()
+                 and (app.is_advisor()
+                      or (a.student_id = auth.uid() and a.released_at is not null)
+                      or (a.kind = 'elder' and app.has_role('officer', app.program_of_participation(a.participation_id))))), 'epoch'::timestamptz),
+    coalesce((select max(m.updated_at) from public.entry_milestones m where m.participation_id in (select id from pe)), 'epoch'::timestamptz),
     coalesce(public.my_notice_pulse(), 'epoch'::timestamptz)
   );
 $$;
-
 revoke all on function public.my_pulse() from public, anon;
 grant execute on function public.my_pulse() to authenticated;
 
@@ -14090,4 +14187,113 @@ create trigger participations_guard_money
 
 -- 8. A SUSPENDED ACCOUNT IS SUSPENDED EVERYWHERE: app.is_active(), defined
 --    beside can_see_project and can_edit_project, which now begin with it.
+notify pgrst, 'reload schema';
+
+-- ===========================================================================
+-- ONE CALL BEFORE EVERY PAGE (2.9).
+--
+-- The middleware asked seven questions of the database before any page
+-- could start — the account, the identity sync, the roles, the showcases,
+-- the classes, the Elder's families, the person's own projects and their
+-- places — one round trip each, on every request including the pulse and
+-- every autosave. From a Worker each is a network hop, and they add
+-- serially. This answers all seven in one, as the definer, reading only
+-- the caller's own rows: the same facts the session was reading, with the
+-- same filters, shaped as the middleware already expects them.
+-- ===========================================================================
+create or replace function public.my_context()
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_uid     uuid := auth.uid();
+  v_account jsonb;
+begin
+  if v_uid is null then
+    return jsonb_build_object('account', null);
+  end if;
+  v_account := public.my_account();
+  if v_account is null then
+    return jsonb_build_object('account', null);
+  end if;
+  -- Cheap and idempotent: the identity mirror and affiliation, as before.
+  -- Never the reason a page fails to load: the middleware ignored its error
+  -- and so does this.
+  begin
+    perform public.sync_identities();
+  exception when others then
+    null;
+  end;
+  return jsonb_build_object(
+    'account', v_account,
+    'roles', coalesce((
+      select jsonb_agg(jsonb_build_object('role', r.role, 'scope_id', r.scope_id))
+        from public.user_roles r
+       where r.user_id = v_uid and r.revoked_at is null), '[]'::jsonb),
+    'showcases', coalesce((
+      select jsonb_agg(jsonb_build_object('program_id', s.program_id, 'name', s.name, 'short_name', s.short_name))
+        from public.my_showcases() s), '[]'::jsonb),
+    'classes', coalesce((
+      select jsonb_agg(jsonb_build_object('program_id', c.program_id, 'name', c.name, 'short_name', c.short_name))
+        from public.my_classes() c), '[]'::jsonb),
+    'families', coalesce((
+      select jsonb_agg(jsonb_build_object('program_id', g.id, 'name', g.name, 'short_name', g.short_name) order by g.name)
+        from public.programs g
+       where g.program_role = 'cohort' and g.status = 'open'
+         and g.id in (select r.scope_id from public.user_roles r
+                       where r.user_id = v_uid and r.role = 'officer' and r.revoked_at is null and r.scope_id is not null)), '[]'::jsonb),
+    'own', coalesce((
+      select jsonb_agg(jsonb_build_object('id', p.id, 'title', p.title) order by p.created_at)
+        from public.projects p
+       where p.archived_at is null
+         and p.id in (select a.project_id from public.project_authors a where a.user_id = v_uid and a.role = 'author')), '[]'::jsonb),
+    'places', coalesce((
+      select jsonb_agg(jsonb_build_object(
+               'id', e.id, 'project_id', e.project_id, 'program_id', e.program_id, 'status', e.status,
+               'programs', jsonb_build_object('id', g.id, 'name', g.name, 'short_name', g.short_name, 'program_role', g.program_role, 'status', g.status)))
+        from public.participations e
+        join public.programs g on g.id = e.program_id
+       where e.status in ('entered', 'competed')
+         and e.project_id in (select p.id from public.projects p
+                               where p.archived_at is null
+                                 and p.id in (select a.project_id from public.project_authors a where a.user_id = v_uid and a.role = 'author'))), '[]'::jsonb)
+  );
+end;
+$$;
+revoke all on function public.my_context() from public, anon;
+grant execute on function public.my_context() to authenticated;
+
+-- The nudge track of many places in one call (2.9). The Workbench asked
+-- `nudge_state` once per place it watches — five calls for an Elder, forty
+-- for the advisor, and forty subrequests is most of what a Worker on the
+-- free plan may make for one page. The same function, over a set.
+create or replace function public.nudge_states(p_participation_ids uuid[])
+returns table (
+  participation_id uuid,
+  milestone_id    uuid,
+  recipient_id    uuid,
+  nudges          int,
+  last_sent_at    timestamptz,
+  last_to         text,
+  met_after       boolean,
+  acknowledged_at timestamptz,
+  relayed_at      timestamptz,
+  relayed_to      text,
+  replied_at      timestamptz,
+  reply           text
+)
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select e.id, s.*
+    from unnest(p_participation_ids) as e(id)
+    cross join lateral public.nudge_state(e.id) s;
+$$;
+revoke all on function public.nudge_states(uuid[]) from public, anon;
+grant execute on function public.nudge_states(uuid[]) to authenticated;
+
 notify pgrst, 'reload schema';

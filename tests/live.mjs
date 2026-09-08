@@ -32,8 +32,19 @@ const plan = shapeLive({ class_periods: [{ days: ['Tue', 'Thu'], from: '08:30', 
 
 test('the plan is read from the file', () => {
   assert.equal(plan.classPeriods.length, 1);
-  assert.deepEqual(plan.fallback, { inClass: 8, inClassIdle: 30, offHours: 3600 });
+  assert.deepEqual(plan.fallback, { inClass: 8, inClassIdle: 30, offHours: 3600, enabled: true });
   assert.deepEqual(shapeLive(undefined), DEFAULT_LIVE);
+});
+
+test('the backup has an off switch, and it is on unless the file says otherwise (2.9)', () => {
+  assert.equal(shapeLive({ fallback: {} }).fallback.enabled, true);
+  assert.equal(shapeLive({ fallback: { enabled: false } }).fallback.enabled, false);
+  assert.equal(shapeLive({ fallback: { enabled: 'false' } }).fallback.enabled, false);
+  assert.equal(shapeLive({ fallback: { enabled: true } }).fallback.enabled, true);
+  /* The shell reads the switch: no polling when it is off, and the strip says reload. */
+  const shellSrc = fs.readFileSync('src/components/AppShell.astro', 'utf8');
+  assert.match(shellSrc, /fallback\?\.enabled !== false/);
+  assert.match(shellSrc, /reload the page to see new replies/);
 });
 
 test('a bad period fails loudly', () => {
@@ -74,7 +85,7 @@ const org = fs.readFileSync('src/config/orgs/montavista.yaml', 'utf8');
 test('the shell joins the socket first and polls only on fallback', () => {
   assert.match(shell, /myTopics\(\)\.then/, 'the shell asks for its topics');
   assert.match(shell, /for \(const t of topics\) join\(t\)/, 'and joins each');
-  assert.match(shell, /onHealth\(\(h: Health, detail: string\) => \{\s*if \(h === 'fallback' \|\| h === 'off'\) \{\s*startPolling\(\)/, 'polling starts on fallback');
+  assert.match(shell, /onHealth\(\(h: Health, detail: string\) => \{\s*if \(h === 'fallback' \|\| h === 'off'\) \{\s*const enabled = [^;]+;\s*if \(enabled\) startPolling\(\)/, 'polling starts on fallback, when the switch is on');
   assert.match(shell, /else if \(h === 'live'\) \{\s*stopPolling\(\)/, 'and stops when the socket is back');
   assert.doesNotMatch(shell, /^\s*loop\(\);\s*$/m, 'no poll loop starts on its own');
   assert.match(shell, /live-strip/, 'the fallback is said on the page');

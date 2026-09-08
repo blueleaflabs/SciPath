@@ -27,7 +27,10 @@ is_platform: true
 # Open: no domain, no district, no adult required to vouch. Many high
 # schoolers are already adults, which is why the age gate carries three bands
 # rather than one checkbox.
-signup_mode: open
+# Closed for the pilot (2.9): the platform's own address made an account for
+# anybody who signed in, which is the one door the school's setting cannot
+# shut. `open` is the setting to return to when SciPath opens.
+signup_mode: closed
 requires_mentor: false
 verified_domains: []
 domains: []

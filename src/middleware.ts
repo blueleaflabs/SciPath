@@ -13,7 +13,8 @@
 
 import { defineMiddleware } from 'astro:middleware';
 import { serverClient, isConfigured, meterFor } from './lib/supabase';
-import { resolveOrg, hostIsOurs } from './lib/tenant';
+import { resolveOrg, hostIsOurs, slugForHostname } from './lib/tenant';
+import { signupsClosed } from './lib/door';
 import { orgs } from './config/orgs';
 import { originForOrg, rootDomain } from './lib/deployment';
 import { tenantSlugs } from './lib/tenant-paths';
@@ -143,6 +144,17 @@ function timing(context: Parameters<typeof handle>[0], response: Response, start
     `db;dur=${meter.ms};desc="${meter.calls} calls", total;dur=${total}`
   );
 
+  /* The slowest call, named, when the caller asks for it (2.9). The load
+     test sends `x-timing-trace: 1` and gathers these per route, so a run
+     says not only that the Workbench spent 1.2 seconds in the database but
+     which call it was waiting on. A browser never asks, so the path of a
+     PostgREST call — no secret, but no business of a page's either — is
+     not on every response. */
+  if (context.request.headers.get('x-timing-trace') === '1' && meter.trace.length > 0) {
+    const slowest = meter.trace.reduce((a, b) => (b.ms > a.ms ? b : a));
+    response.headers.append('Server-Timing', `slow;dur=${slowest.ms};desc="${slowest.path.replace(/"/g, '')}"`);
+  }
+
   const runtime = (context.locals as Record<string, any>).runtime?.env ?? {};
   const wanted = String(runtime.TIMING_LOG ?? import.meta.env.TIMING_LOG ?? '');
   if (wanted === '1' && meter.calls > 0) {
@@ -166,6 +178,18 @@ export const onRequest = defineMiddleware(async (context, next) => {
      Before the handler, since there is no tenant to render for. */
   if (!hostIsOurs(context.url.hostname, rootDomain)) {
     return new Response('Not found', { status: 404, headers: { 'content-type': 'text/plain' } });
+  }
+  /* And only the tenants the deployment names (2.9): TENANTS=montavista,demo
+     answers those two schools' addresses and the platform's own, and
+     nothing for any other school in the files. Unset means every school
+     in src/config/orgs, as before. */
+  const env = (context.locals as Record<string, any>).runtime?.env ?? {};
+  const tenants = String(env.TENANTS ?? import.meta.env.TENANTS ?? '').split(',').map((t: string) => t.trim().toLowerCase()).filter(Boolean);
+  if (tenants.length > 0) {
+    const label = slugForHostname(context.url.hostname);
+    if (label && !tenants.includes(label)) {
+      return new Response('Not found', { status: 404, headers: { 'content-type': 'text/plain' } });
+    }
   }
   const response = await handle(context, next);
 
@@ -475,7 +499,34 @@ const handle = async (context: any, next: any) => {
      the school (population, status, consent) left the session's reach on
      the table, so the person's own row comes from the definer, with the
      school's slug beside it. */
-  const { data: accountJson } = await supabase.rpc('my_account');
+  /* Through my_context() (2.9): the account and everything else the
+     middleware needs — roles, showcases, classes, families, own projects
+     and their places, and the identity sync — in one round trip rather
+     than seven, since from a Worker each one is a network hop and they add
+     serially before any page can start. */
+  const { data: ctxJson, error: accountError } = await supabase.rpc('my_context');
+  const ctx = (ctxJson ?? {}) as Record<string, any>;
+  const accountJson = ctx.account ?? null;
+
+  /* **A call that failed is not a person with no row.**
+
+     The error was dropped here, so a PostgREST hiccup — a pool with nothing
+     free, a timeout, a restart — read exactly like a brand-new account, and
+     the request below sent a signed-in student to the welcome screen to
+     sign up again. The first load test found it: 32 of 40 sign-ins were
+     answered by a 302 the moment the database was busy. A failed read is
+     answered as one — briefly, with a retry — and never as a decision about
+     who the person is. */
+  if (accountError) {
+    console.error(JSON.stringify({ my_account: accountError.message, path: url.pathname }));
+    if (url.pathname.startsWith(GUARDED)) {
+      return new Response(
+        '<!doctype html><meta charset="utf-8"><meta http-equiv="refresh" content="3"><title>One moment</title><body style="font-family:system-ui;max-width:36rem;margin:4rem auto;padding:0 1rem"><h1>One moment</h1><p>The database did not answer in time. This page tries again in a few seconds; nothing you wrote has been lost.</p></body>',
+        { status: 503, headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'retry-after': '3' } }
+      );
+    }
+    return next();
+  }
   const accountRow = accountJson
     ? { ...(accountJson as any), organizations: { slug: (accountJson as any).org_slug ?? null } }
     : null;
@@ -648,6 +699,17 @@ const handle = async (context: any, next: any) => {
       return next();
     }
 
+    /* Closed (2.9): a session with no account gets no welcome page. The
+       callback refuses first; this catches a session made before the door
+       closed, or a password sign-in to an identity with no account. */
+    if (signupsClosed(org, runtime)) {
+      await supabase.auth.signOut();
+      clearSessionHint(context.cookies);
+      locals.session = null;
+      if (url.pathname.startsWith(GUARDED)) return context.redirect('/app/?signin=closed');
+      return next();
+    }
+
     /* Session without an account row. Signup is the only reachable page. */
     if (url.pathname.startsWith(GUARDED) && url.pathname !== SIGNUP) {
       return context.redirect(SIGNUP);
@@ -655,83 +717,46 @@ const handle = async (context: any, next: any) => {
     return next();
   }
 
-  /* Cheap and idempotent: keeps the identity mirror current, and refreshes
-     affiliation, since a login through a domain identity is the evidence
-     that the person is still there. */
-  await supabase.rpc('sync_identities');
-
-  const { data: roles } = await supabase
-    .from('user_roles')
-    .select('role, scope_id')
-    .eq('user_id', user.id)
-    .is('revoked_at', null);
-
-  locals.roles = roles ?? [];
+  /* All of it came with my_context(): the identity sync ran inside it,
+     and the rows below are the caller's own, read as the definer with the
+     same filters the session used to apply. */
+  const roles = (ctx.roles ?? []) as { role: string; scope_id: string | null }[];
+  locals.roles = roles;
 
   /* The class showcases this person may open, for the tab beside the
-     Workbench. One definer call; empty for almost everybody, since only a
-     program flagged `private` has one. Read here rather than in the nav
-     component because the nav renders on every page and a component cannot
-     hold a query the middleware has not already paid for. */
-  const [{ data: showcases }, { data: classes }] = await Promise.all([
-    supabase.rpc('my_showcases'),
-    supabase.rpc('my_classes'),
-  ]);
-  locals.showcases = showcases ?? [];
-  locals.classes = classes ?? [];
+     Workbench; empty for almost everybody, since only a program flagged
+     `private` has one. And the classes they run. */
+  locals.showcases = ctx.showcases ?? [];
+  locals.classes = ctx.classes ?? [];
 
   /* The classes this person is an Elder in: an officer role scoped to a
      cohort program. For the tracker tab, which is theirs to fill in. */
-  locals.families = [];
-  const officerScopes = (roles ?? []).filter((r: any) => r.role === 'officer' && r.scope_id).map((r: any) => r.scope_id);
-  if (officerScopes.length > 0 && url.pathname.startsWith('/app/')) {
-    const { data: fams } = await supabase
-      .from('programs')
-      .select('id, name, short_name')
-      .in('id', officerScopes)
-      .eq('program_role', 'cohort')
-      .eq('status', 'open');
-    locals.families = (fams ?? []).map((g: any) => ({ program_id: g.id, name: g.name, short_name: g.short_name ?? null }));
-  }
+  locals.families = url.pathname.startsWith('/app/') ? (ctx.families ?? []) : [];
 
   /* The reader's own projects and where each one is, for the tab bar and
      for where a bare /app/ lands them. A student with one project in one
      class gets that project's pages as tabs rather than two abstract
      nouns, and the model is untouched: the notebook belongs to the
      project, the calendar to the place, and a second place is a third
-     tab. Only on the working surface, where the bar renders; two small
-     reads under the policies. */
+     tab. Only on the working surface, where the bar renders. */
   locals.projects = [];
   if (url.pathname.startsWith('/app/')) {
-    const { data: authored } = await supabase
-      .from('project_authors')
-      .select('project_id, projects:project_id(id, title, archived_at)')
-      .eq('user_id', user.id)
-      .eq('role', 'author');
-    const own = (authored ?? [])
-      .map((a: any) => a.projects)
-      .filter((p: any) => p && !p.archived_at);
-    if (own.length > 0) {
-      const { data: places } = await supabase
-        .from('participations')
-        .select('id, project_id, program_id, status, programs:program_id(id, name, short_name, program_role, status)')
-        .in('project_id', own.map((p: any) => p.id))
-        .in('status', ['entered', 'competed']);
-      locals.projects = own.map((p: any) => ({
-        project_id: p.id,
-        title: p.title,
-        places: (places ?? [])
-          .filter((r: any) => r.project_id === p.id && r.programs?.status === 'open')
-          .map((r: any) => ({
-            participation_id: r.id,
-            program_id: r.program_id,
-            name: r.programs.name,
-            short_name: r.programs.short_name ?? null,
-            cohort: r.programs.program_role === 'cohort',
-          }))
-          .sort((a: any, b: any) => Number(b.cohort) - Number(a.cohort) || a.name.localeCompare(b.name)),
-      }));
-    }
+    const own = (ctx.own ?? []) as { id: string; title: string }[];
+    const places = (ctx.places ?? []) as any[];
+    locals.projects = own.map((p) => ({
+      project_id: p.id,
+      title: p.title,
+      places: places
+        .filter((r: any) => r.project_id === p.id && r.programs?.status === 'open')
+        .map((r: any) => ({
+          participation_id: r.id,
+          program_id: r.program_id,
+          name: r.programs.name,
+          short_name: r.programs.short_name ?? null,
+          cohort: r.programs.program_role === 'cohort',
+        }))
+        .sort((a: any, b: any) => Number(b.cohort) - Number(a.cohort) || a.name.localeCompare(b.name)),
+    }));
   }
 
   return next();

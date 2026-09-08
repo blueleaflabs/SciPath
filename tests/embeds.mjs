@@ -125,6 +125,22 @@ for (const root of ROOTS) {
   }
 }
 
+/* A filter on the embedded side of an `!inner` embed — `.eq('participations.project_id', …)`
+   — is answered by scanning the outer table through the row policy before
+   the join (2.9): every row of every tenant's, each one a `can_see_project`
+   call. The load test found it twice (896 ms on the Workbench, 30–65 ms on
+   every project page). Filter the outer table on its own indexed column,
+   or read from the other side, as src/lib/sponsors.ts does. */
+const embedFilter = /\.(eq|in|neq|is|gte|lte|gt|lt|not|contains|overlaps)\('([a-z_]+(?:\.[a-z_]+)*)\.[a-z_]+'/g;
+for (const root of ROOTS) {
+  for (const file of walk(root)) {
+    const text = fs.readFileSync(file, 'utf8');
+    for (const m of text.matchAll(embedFilter)) {
+      problems.push(`${file}\n    filters on the embedded ${m[2]} (${m[0]}…): PostgREST scans the outer table through its policy first. Filter the outer table's own column instead.`);
+    }
+  }
+}
+
 if (problems.length > 0) {
   console.error('\nAmbiguous embeds:\n');
   for (const p of problems) console.error(`  ${p}\n`);

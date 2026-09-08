@@ -530,7 +530,7 @@ const changedSince = (c: any) => c.field_id && c.field_version != null && (versi
                                   back in the box, saved as a new draft on top. */}
                               {draftsOf(f.id).length > 1 && f.kind !== 'file' && f.kind !== 'graphic' && (
                                 <details class="fdrafts">
-                                  <summary>{draftsOf(f.id).length} earlier drafts</summary>
+                                  <summary>{draftsOf(f.id).length - 1 === 1 ? '1 earlier draft' : `${draftsOf(f.id).length - 1} earlier drafts`}</summary>
                                   <ul class="fdraft-list" data-live={`drafts-${f.id}`}>
                                     {draftsOf(f.id).slice(1).map((d: any) => (
                                       <li>

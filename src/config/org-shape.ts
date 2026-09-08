@@ -49,8 +49,10 @@ export interface Org {
    * domain : only an address on a listed domain may sign up
    * open   : anyone may sign up. No domain, no district, no club mentor
    * invite : signup requires a pending grant
+   * closed : nobody signs up; only accounts already made (loaded by the
+   *          pilot, or by an advisor) sign in. The pilot's setting (2.9).
    */
-  signupMode?: 'domain' | 'open' | 'invite';
+  signupMode?: 'domain' | 'open' | 'invite' | 'closed';
   /** False for an open program with no school behind it. */
   requiresMentor?: boolean;
   /** Full name, on every page title and record. */
@@ -107,6 +109,13 @@ export interface Org {
   /** One sentence describing what this organization publishes. */
   showcaseNote: string;
   /**
+   * What the front door calls the class (2.9): "Build, track, and showcase
+   * your Monta Vista IRPD Class project", "your IRPD Class Elder". Unset,
+   * the first class or club in `programs` lends its name, which for a
+   * school that lists its fair club first was the club's.
+   */
+  className?: string;
+  /**
    * True for an organization whose people are invented.
    *
    * There is one, and it is the tenant demonstrations are given from. Its
@@ -161,11 +170,11 @@ export interface ClassPeriod {
 export interface LivePlan {
   classPeriods: ClassPeriod[];
   /** The backup pulse's pacing, in seconds. */
-  fallback: { inClass: number; inClassIdle: number; offHours: number };
+  fallback: { inClass: number; inClassIdle: number; offHours: number; enabled: boolean };
 }
 
 /** The pacing when a school's file says nothing (2.8). */
-export const DEFAULT_LIVE: LivePlan = { classPeriods: [], fallback: { inClass: 8, inClassIdle: 30, offHours: 3600 } };
+export const DEFAULT_LIVE: LivePlan = { classPeriods: [], fallback: { inClass: 60, inClassIdle: 300, offHours: 3600, enabled: true } };
 
 /**
  * A parsed `orgs/*.yaml` document, as the record every page expects.
@@ -193,6 +202,7 @@ export function shapeOrg(doc: any): Org {
     verifiedDomains: doc.verified_domains ?? [],
     editorialReview: Boolean(doc.editorial_review),
     showcaseNote: doc.showcase_note,
+    className: typeof doc.class_name === 'string' && doc.class_name.trim() ? doc.class_name.trim() : undefined,
     demo: Boolean(doc.demo),
     /* Defaulted true, because every file but one omits it and a record that
        said `undefined` would put the burden of remembering the default on
@@ -235,6 +245,9 @@ export function shapeLive(doc: any): LivePlan {
       inClass: num(f.in_class_seconds, DEFAULT_LIVE.fallback.inClass),
       inClassIdle: num(f.in_class_idle_seconds, DEFAULT_LIVE.fallback.inClassIdle),
       offHours: num(f.off_hours_seconds, DEFAULT_LIVE.fallback.offHours),
+      /* `enabled: false` is the switch (2.9): no polling at all, and the
+         strip tells the person to reload for new replies. */
+      enabled: f.enabled === undefined || f.enabled === null ? true : Boolean(f.enabled) && String(f.enabled) !== 'false',
     },
   };
 }

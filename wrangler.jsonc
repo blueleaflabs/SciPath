@@ -25,6 +25,19 @@
     "crons": ["*/15 * * * *"]
   },
 
+  // WHERE THE WORKER RUNS (2.9).
+  //
+  // A page is fifteen to forty-five calls to Supabase, one after another,
+  // and each one is a round trip from wherever the Worker is running. By
+  // default that is the edge nearest the person, which is the wrong end of
+  // the wire: a class in Cupertino talking to a database in another region
+  // pays the distance forty-five times per page. Smart Placement moves the
+  // Worker next to what it talks to most, so the forty-five hops are short
+  // and the person pays the distance once, for the page itself. The load
+  // test's `db` column against the hosted site is the measure: it is the
+  // sum of those round trips.
+  "placement": { "mode": "smart" },
+
   "r2_buckets": [
     {
       // Notebook photographs and signed forms. Private: no public URL, no

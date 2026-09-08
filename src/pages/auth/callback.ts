@@ -4,6 +4,7 @@ import type { APIRoute } from 'astro';
 import { serverClient } from '../../lib/supabase';
 import { adminClient } from '../../lib/supabase-admin';
 import { safeNext } from '../../lib/next-path';
+import { signupsClosed } from '../../lib/door';
 
 /**
  * Exchanges the authorization code for a session and sets the cookies.
@@ -38,15 +39,19 @@ export const GET: APIRoute = async ({ request, cookies, url, locals, redirect })
    * domain was added) goes through; the domain rule is for signups.
    */
   const org = (locals as Record<string, any>).org;
-  if (org?.signupMode === 'domain') {
+  /* Closed (2.9) is the same refusal for everybody without an account,
+     on-domain or off: the identity Supabase just made is removed, the
+     session ended, and the sign-in page says the door is closed. */
+  const closed = signupsClosed(org, runtime);
+  if (closed || org?.signupMode === 'domain') {
     const {
       data: { user },
     } = await supabase.auth.getUser();
     const email = (user?.email ?? '').toLowerCase();
     const domain = email.split('@')[1] ?? '';
-    const allowed = ((org.verifiedDomains ?? []) as string[]).map((d) => d.toLowerCase());
+    const allowed = ((org?.verifiedDomains ?? []) as string[]).map((d: string) => d.toLowerCase());
 
-    if (user && !allowed.includes(domain)) {
+    if (user && (closed || !allowed.includes(domain))) {
       const { data: existing } = await supabase.from('users').select('id').eq('id', user.id).maybeSingle();
 
       if (!existing) {
@@ -61,7 +66,7 @@ export const GET: APIRoute = async ({ request, cookies, url, locals, redirect })
         }
         await supabase.auth.signOut();
         cookies.delete('scipath_next', { path: '/' });
-        return redirect('/app/?signin=domain');
+        return redirect(closed ? '/app/?signin=closed' : '/app/?signin=domain');
       }
     }
   }

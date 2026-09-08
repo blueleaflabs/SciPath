@@ -126,12 +126,20 @@ function tabOn(url) {
       f.submit(); return 'submitted';
     })()`);
     await wait(2500);
-    const where = await evaluate('location.pathname');
+    const where = await evaluate('location.pathname + location.search');
     return { ok, where };
   };
   /** Sign out, and be sure of it: the sign-in page must be back before this returns. */
   const signOut = async () => {
-    const had = await evaluate(`Boolean(document.querySelector('form[action="/auth/signout/"]'))`);
+    let had = await evaluate(`Boolean(document.querySelector('form[action="/auth/signout/"]'))`);
+    /* A print page or an export has no masthead, so no sign-out form, and
+       "no form" used to be read as "nobody signed in": the teacher's
+       scenario then ran as the student the export had left behind. The
+       Workbench always has the masthead; ask there before deciding. */
+    if (!had) {
+      const origin = await evaluate('location.origin');
+      if (/^https?:/.test(String(origin))) { await go(`${origin}/app/`); had = await evaluate(`Boolean(document.querySelector('form[action="/auth/signout/"]'))`); }
+    }
     if (!had) return;
     const loaded = nextLoad(8000);
     await evaluate(`(() => { const f = document.querySelector('form[action="/auth/signout/"]'); if (f) f.submit(); })()`);

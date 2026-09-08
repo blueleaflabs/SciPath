@@ -23,9 +23,9 @@ import { platform } from '../../../../../config/site';
 import { documentPath, docStanding } from '../../../../../lib/documents';
 import { linkDomain, renderNote } from '../../../../../lib/notes';
 import { blobStore, projectImagePath, MAX_UPLOAD_BYTES } from '../../../../../lib/blob';
-import { parseVideo } from '../../../../../lib/video';
 import { signInWith } from '../../../../../lib/next-path';
 import { participationFor } from '../../../../../lib/participation';
+import { sponsorsOf } from '../../../../../lib/sponsors';
 
 const { session, account, roles } = Astro.locals;
 const org = activeOrg(Astro);
@@ -521,10 +521,11 @@ const processFor =
   (entry.projects as any)?.process_id ??
   null;
 
-const { data: allMilestones } = await supabase
-  .from('entry_milestones')
+/* Through milestones_of (2.9): the same rows, the visibility rule asked
+   once for the project rather than once per row. */
+const { data: allMilestoneRows } = await supabase
+  .rpc('milestones_of', { p_participation_ids: [id] })
   .select('id, name, kind, due_on, required, blocks_experimentation, completed_on, completed_by, satisfied_by, sort_order, source, phase, owner, step_id, requires_step, requires_steps, feedback_on')
-  .eq('participation_id', id)
   /* By date, not by the template's sequence.
    
      A sequence says what depends on what; a student looking at a list of
@@ -538,6 +539,8 @@ const { data: allMilestones } = await supabase
      here: a step nobody has scheduled is not the next thing to worry about. */
   .order('due_on', { ascending: true, nullsFirst: false })
   .order('sort_order', { ascending: true });
+/* An rpc's rows are typed as row-or-rows; these are rows. */
+const allMilestones = (allMilestoneRows ?? []) as any[];
 
 /**
  * **The student's obligations, and the Elder's tasks, told apart.**
@@ -592,12 +595,10 @@ const { data: deliverables } = await supabase
    error and no data — so the page read *no sponsor named* on a project that
    had two, and offered *Name one* beside them. A read that cannot survive
    the second row is a read that reports the opposite of what is there. */
-const { data: sponsorRows } = await supabase
-  .from('project_sponsors')
-  .select('teacher_name, signed_on, recorded_at')
-  .eq('participation_id', id)
-  .is('superseded_at', null)
-  .order('recorded_at');
+/* From the one project-side read (2.9): this place's sponsors, and the
+   other places' below, out of the same rows. */
+const sponsorsAll = await sponsorsOf(supabase, [projectId]);
+const sponsorRows = sponsorsAll.filter((x) => x.participation_id === id);
 const sponsors = sponsorRows ?? [];
 const sponsor = sponsors[0] ?? null;
 
@@ -611,13 +612,17 @@ const sponsor = sponsors[0] ?? null;
  *
  * Shown, never assumed: agreeing to run the class is not agreeing to sponsor
  * a fair entry, and filling the name in here would claim it was.
+ *
+ * Read from the project's side through `sponsorsOf` (2.9): the embed-filtered
+ * read this replaced was the slowest call on the page, and its result had
+ * stopped being rendered when the sponsor line was redrawn. It is rendered
+ * now, beside "No sponsor named", so the hint the comment above promises is
+ * actually on the page.
  */
-const { data: elsewhere } = await supabase
-  .from('project_sponsors')
-  .select('teacher_name, participations!inner(project_id, program_id, programs:program_id(name))')
-  .eq('participations.project_id', projectId)
-  .neq('participation_id', id)
-  .is('superseded_at', null);
+const elsewhere = sponsorsAll.filter((x) => x.participation_id !== id);
+const elsewhereSays = elsewhere.length
+  ? ' · ' + elsewhere.map((x) => `${x.teacher_name} sponsors it in ${x.program_name ?? 'another place'}`).join('; ')
+  : '';
 
 /* Everything the published record shows, read once the project is known.
    These belong to the project rather than to this participation, which is
@@ -627,45 +632,23 @@ const { data: elsewhere } = await supabase
    the row here, which was the only way when the route was keyed on the
    participation. */
 
-const { data: images } = projectId
+/* Linked documents and the manuscript in one read off the project (2.9);
+   the images read that sat here was never rendered — the notebook page
+   keeps the images — and is gone. */
+const { data: projectExtras } = projectId
   ? await supabase
-      .from('project_images')
-      .select('id, position, storage_path, alt, caption')
-      .eq('project_id', projectId)
-      .is('withdrawn_at', null)
-      .order('position')
-  : { data: [] as any[] };
-
-const { data: links } = projectId
-  ? await supabase
-      .from('project_links')
-      .select('id, label, url, visibility, created_at')
-      .eq('project_id', projectId)
-      .order('created_at')
-  : { data: [] as any[] };
-
-const { data: manuscript } = projectId
-  ? await supabase
-      .from('manuscripts')
-      .select('id, title')
-      .eq('project_id', projectId)
+      .from('projects')
+      .select('project_links(id, label, url, visibility, created_at), manuscripts(id, title)')
+      .eq('id', projectId)
       .maybeSingle()
   : { data: null };
+const links = ((projectExtras as any)?.project_links ?? []).slice().sort((a: any, b: any) => String(a.created_at).localeCompare(String(b.created_at))) as any[];
+const manuscriptRows = (projectExtras as any)?.manuscripts;
+const manuscript = (Array.isArray(manuscriptRows) ? manuscriptRows[0] : manuscriptRows) ?? null;
 
-const mediaUrl = (path: string) => `/app/media/${path}`;
-
-/* A count rather than the entries themselves. The notebook is its own page;
-   what this row owes the reader is whether there is anything in it. */
-const { count: notes } = projectId
-  ? await supabase
-      .from('field_notes')
-      .select('id', { count: 'exact', head: true })
-      .eq('project_id', projectId)
-  : { count: 0 };
-
-/* When it was last written in. The count says whether a notebook exists;
-   the date says whether it is being kept, which is the obligation a class
-   actually chases and the one number a student can change today. */
+/* When it was last written in: the one fact about the notebook this page
+   renders (2.9). Two counts and the ten latest entries were read here and
+   never shown — the notebook is its own page — and are gone. */
 const { data: lastNote } = projectId
   ? await supabase
       .from('field_notes')
@@ -676,9 +659,6 @@ const { data: lastNote } = projectId
       .maybeSingle()
   : { data: null };
 
-/* The stored address, parsed once. A facade rather than an iframe: the page
-   shows a still and contacts the host only when somebody clicks. */
-const savedVideo = parseVideo((entry?.projects as any)?.video_url);
 
 
 const { data: overseers } = await supabase
@@ -1163,7 +1143,7 @@ const derived = (m: any) => {
   if (m.satisfied_by === 'sponsor') {
     return {
       met: sponsors.length > 0,
-      says: sponsors.map((x: any) => x.teacher_name).join(', ') || 'No sponsor named',
+      says: sponsors.map((x: any) => x.teacher_name).join(', ') || `No sponsor named${elsewhereSays}`,
       /* Scoped, so naming a sponsor from the class's page records the
          class's teacher rather than asking again which place was meant. */
       href: `/app/project/${project?.id}/team/?in=${programId}`,
@@ -1263,21 +1243,6 @@ const oldestLate = overdue[0] ?? null;
  * the top of the page says what to do and not what the season holds. The
  * rest of what is late is in the ledger.
  */
-/* The notebook's recent entries, for the section on this page. Newest
-   first, ten of them; the notebook page has the rest and the images. */
-const { data: recentNotes } = projectId
-  ? await supabase
-      .from('field_notes')
-      .select('id, body_md, occurred_on, created_at, users:author_id(display_name)')
-      .eq('project_id', projectId)
-      .order('occurred_on', { ascending: false })
-      .order('seq', { ascending: false })
-      .limit(10)
-  : { data: [] as any[] };
-const { count: noteCount } = projectId
-  ? await supabase.from('field_notes').select('id', { count: 'exact', head: true }).eq('project_id', projectId)
-  : { count: 0 };
-
 const notebookAge = lastNote
   ? daysUntil(String(lastNote.occurred_on ?? lastNote.created_at).slice(0, 10))
   : null;

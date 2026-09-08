@@ -2056,6 +2056,66 @@ begin
     raise notice '  ok   the pulse moves for whoever may read the new line';
   end;
 
+  -- The pulse's scope (2.9): `app.my_project_ids` prunes and then asks the
+  -- rule, so for each of these people it is exactly the set the rule
+  -- accepts across every project there is — the author, the Elder and the
+  -- classmate alike.
+  declare
+    v_who   uuid;
+    v_mine  int;
+    v_rule  int;
+  begin
+    perform set_config('role', 'authenticated', true);
+    foreach v_who in array array[v_author, v_elder, v_other] loop
+      perform set_config('request.jwt.claim.sub', v_who::text, true);
+      select count(*) into v_mine from app.my_project_ids();
+      select count(*) into v_rule from public.projects p where app.can_see_project(p.id);
+      if v_mine <> v_rule or exists (select 1 from app.my_project_ids() m(id) where not app.can_see_project(m.id)) then
+        raise exception 'FAIL my_project_ids disagrees with can_see_project for % (% vs %)', v_who, v_mine, v_rule;
+      end if;
+    end loop;
+    -- And milestones_of reads exactly the rows the policy allows, for the
+    -- same three people, over every place there is.
+    foreach v_who in array array[v_author, v_elder, v_other] loop
+      perform set_config('request.jwt.claim.sub', v_who::text, true);
+      select count(*) into v_mine from public.milestones_of((select array_agg(e.id) from public.participations e));
+      select count(*) into v_rule from public.entry_milestones m;
+      if v_mine <> v_rule then
+        raise exception 'FAIL milestones_of disagrees with the policy for % (% vs %)', v_who, v_mine, v_rule;
+      end if;
+    end loop;
+    perform set_config('role', 'postgres', true);
+    raise notice '  ok   the pulse''s scope and milestones_of are exactly what the visibility rule accepts';
+  end;
+
+  -- my_context (2.9): the one call before every page carries the account,
+  -- the roles and the person's own projects with their places; a stranger
+  -- to auth gets an empty account and nothing else.
+  declare
+    v_ctx jsonb;
+  begin
+    perform set_config('role', 'authenticated', true);
+    perform set_config('request.jwt.claim.sub', v_author::text, true);
+    v_ctx := public.my_context();
+    if v_ctx->'account'->>'id' <> v_author::text then raise exception 'FAIL my_context: not my account'; end if;
+    if jsonb_typeof(v_ctx->'roles') <> 'array' or jsonb_typeof(v_ctx->'showcases') <> 'array' or jsonb_typeof(v_ctx->'classes') <> 'array' or jsonb_typeof(v_ctx->'families') <> 'array' then
+      raise exception 'FAIL my_context: lists missing';
+    end if;
+    if not exists (select 1 from jsonb_array_elements(v_ctx->'own') o where (o->>'id')::uuid = v_project) then
+      raise exception 'FAIL my_context: the author''s own project is not listed';
+    end if;
+    if not exists (select 1 from jsonb_array_elements(v_ctx->'places') pl where (pl->>'project_id')::uuid = v_project and pl->'programs'->>'name' is not null) then
+      raise exception 'FAIL my_context: the project''s place is not listed with its program';
+    end if;
+    perform set_config('request.jwt.claim.sub', v_other::text, true);
+    v_ctx := public.my_context();
+    if exists (select 1 from jsonb_array_elements(v_ctx->'own') o where (o->>'id')::uuid = v_project) then
+      raise exception 'FAIL my_context: a classmate is handed somebody else''s project';
+    end if;
+    perform set_config('role', 'postgres', true);
+    raise notice '  ok   my_context carries the account, the lists, and only the caller''s own projects';
+  end;
+
   -- A classmate may not comment.
   perform set_config('role', 'authenticated', true);
   perform set_config('request.jwt.claim.sub', v_other::text, true);
@@ -2074,9 +2134,14 @@ begin
   perform set_config('request.jwt.claim.sub', v_author::text, true);
   v_ans := public.save_field(v_doc, '_doc_link', to_jsonb('https://docs.google.com/document/d/abc/edit'::text), 0);
   perform set_config('role', 'postgres', true);
+  -- Late is allowed (2.9): the step's date is a month gone, and the
+  -- submission goes through exactly as it would on time. The date is a
+  -- fact the page shows ("30 days late"), never a lock on the work.
+  update public.entry_milestones set due_on = current_date - 30 where id = v_step;
   perform set_config('role', 'authenticated', true);
   v_ver := public.submit_document(v_doc, v_part, v_step, 'User interview questions');
   perform set_config('role', 'postgres', true);
+  raise notice '  ok   a deliverable submits after its due date';
   if (select d.external_url from public.deliverables d where d.document_version_id = v_ver) <> 'https://docs.google.com/document/d/abc/edit' then
     raise exception 'FAIL the linked document did not reach the deliverable row';
   end if;
@@ -3681,6 +3746,41 @@ begin
   delete from public.transport_incidents;
   delete from public.document_fields where document_id = v_doc;
   delete from public.documents where id = v_doc;
+
+  -- The door (2.9): a school whose signups are closed makes no account by
+  -- signing in, whoever asks; reopening it in the file reaches a database
+  -- seeded before.
+  declare
+    v_closed uuid;
+    v_new    uuid := 'a0000000-0000-0000-0000-0000000000d1';
+    v_ok     boolean := false;
+  begin
+    perform set_config('role', 'postgres', true);
+    v_closed := app.provision_org('closedschool', 'closedschool', 'Closed', 'CL', 'entry', 'closed', '[{"domain":"closed.invalid","population":"student","grants_affiliation":true}]'::jsonb);
+    insert into auth.users (id, email) values (v_new, 'newcomer@closed.invalid');
+    perform set_config('role', 'authenticated', true);
+    perform set_config('request.jwt.claim.sub', v_new::text, true);
+    begin
+      perform public.complete_signup('closedschool', 'A newcomer', '18_plus');
+      raise exception 'FAIL a closed school made an account for a newcomer';
+    exception when others then
+      if sqlerrm like 'FAIL%' then raise; end if;
+      if sqlerrm not like '%closed%' then raise exception 'FAIL refused for the wrong reason: %', sqlerrm; end if;
+      v_ok := true;
+    end;
+    perform set_config('role', 'postgres', true);
+    if not v_ok then raise exception 'FAIL no refusal at all'; end if;
+    if exists (select 1 from public.users where id = v_new) then raise exception 'FAIL an account row was written anyway'; end if;
+    -- The file reopens it: the same provisioning call with `domain` flips the mode.
+    perform app.provision_org('closedschool', 'closedschool', 'Closed', 'CL', 'entry', 'domain', '[]'::jsonb);
+    if (select signup_mode from public.organizations where id = v_closed) <> 'domain' then
+      raise exception 'FAIL re-seeding did not carry the file''s signup_mode';
+    end if;
+    raise notice '  ok   a closed school makes no account by signing in, and the file reopens it';
+    delete from public.org_domains where org_id = v_closed;
+    delete from public.organizations where id = v_closed;
+    delete from auth.users where id = v_new;
+  end;
 end $body$;
 
 \echo ''

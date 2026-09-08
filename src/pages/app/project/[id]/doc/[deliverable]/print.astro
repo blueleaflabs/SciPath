@@ -28,6 +28,7 @@ import { placesWanting, docStanding } from '../../../../../../lib/documents';
 import PaperHeader from '../../../../../../components/PaperHeader.astro';
 import DocumentPaper from '../../../../../../components/DocumentPaper.astro';
 import { backFrom } from '../../../../../../lib/back';
+import { sponsorsOf, sponsorNamesOf } from '../../../../../../lib/sponsors';
 
 const { session, account } = Astro.locals;
 const org = activeOrg(Astro);
@@ -61,12 +62,7 @@ const elderWord = staffWord(program, elders.length === 1 ? 'singular' : 'plural'
 
 /* The teachers standing behind the work: the sponsors on any of the
    project's participations. */
-const { data: sponsors } = await supabase
-  .from('project_sponsors')
-  .select('teacher_name, participations!inner(project_id)')
-  .eq('participations.project_id', projectId)
-  .is('superseded_at', null);
-const teacherNames = [...new Set((sponsors ?? []).map((s: any) => s.teacher_name).filter(Boolean))];
+const teacherNames = sponsorNamesOf(await sponsorsOf(supabase, [projectId]));
 
 const { data: doc } = await supabase
   .from('documents')
