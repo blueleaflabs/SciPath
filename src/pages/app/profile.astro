@@ -7,6 +7,8 @@ import { activeOrg } from '../../lib/tenant';
 import { serverClient } from '../../lib/supabase';
 import { afterPost, outcomeFrom } from '../../lib/post-redirect';
 import { signInWith } from '../../lib/next-path';
+import { platform } from '../../config/site';
+import { formatDate, todayIn } from '../../lib/dates';
 
 const { session, account, roles } = Astro.locals;
 const org = activeOrg(Astro);
@@ -64,8 +66,11 @@ if (Astro.request.method === 'POST') {
       display_name: String(form.get('display_name') ?? '').trim(),
       grad_year: gradYear ? Number(gradYear) : null,
       orcid: String(form.get('orcid') ?? '').trim() || null,
-      outbound_url: String(form.get('outbound_url') ?? '').trim() || null,
-      photo_consent: form.get('photo_consent') === 'on',
+      /* Only what the form carried (2.9): with the page pared to the
+         essentials these two are not on it, and a save must not blank
+         a value the person set when they were. */
+      ...(form.has('outbound_url') ? { outbound_url: String(form.get('outbound_url') ?? '').trim() || null } : {}),
+      ...(platform.profileEssentials ? {} : { photo_consent: form.get('photo_consent') === 'on' }),
     })
     .eq('id', account.id);
 
@@ -166,13 +171,16 @@ const consentLabel: Record<string, string> = {
   <div class="wrap">
     <AppShell org={org} account={account} roles={roles} here="/app/profile/" />
 
-    <section class="hero">
-      <p class="t-lbl">Profile</p>
-      <h1 class="t-big">{person.display_name}</h1>
-      <p class="lede">
-        What appears on a byline, and who has confirmed you. Everything here is
-        yours to edit except the confirmations.
-      </p>
+    {/* The same cover block every other page has (2.9). */}
+    <section class="cover">
+      <p class="kick">Profile · {formatDate(todayIn(org.timezone), 'long')}</p>
+      <h1>{person.display_name}</h1>
+      {!platform.profileEssentials && (
+        <p class="sub">
+          What appears on a byline, and who has confirmed you. Everything here is
+          yours to edit except the confirmations.
+        </p>
+      )}
     </section>
 
     {saved && <p class="note" role="status">{saved}</p>}
@@ -207,16 +215,20 @@ const consentLabel: Record<string, string> = {
           <small>Optional. A permanent identifier that follows you to university.</small>
         </label>
 
-        <label>
-          <span>A link of your own</span>
-          <input name="outbound_url" type="url" value={person.outbound_url ?? ''} />
-          <small>Optional. Shown on your author page once you have published.</small>
-        </label>
+        {!platform.profileEssentials && (
+          <label>
+            <span>A link of your own</span>
+            <input name="outbound_url" type="url" value={person.outbound_url ?? ''} />
+            <small>Optional. Shown on your author page once you have published.</small>
+          </label>
+        )}
 
-        <label class="check">
-          <input type="checkbox" name="photo_consent" checked={person.photo_consent} />
-          <span>Show my photo on my author page</span>
-        </label>
+        {!platform.profileEssentials && (
+          <label class="check">
+            <input type="checkbox" name="photo_consent" checked={person.photo_consent} />
+            <span>Show my photo on my author page</span>
+          </label>
+        )}
 
 
 
@@ -224,6 +236,7 @@ const consentLabel: Record<string, string> = {
       </form>
     </section>
 
+    {!platform.profileEssentials && (
     <section class="sec" id="notifications">
       <div class="sec-h"><b>What reaches you</b><span>By email</span></div>
 
@@ -265,7 +278,9 @@ const consentLabel: Record<string, string> = {
         <p><button class="btn" type="submit">Save</button></p>
       </form>
     </section>
+    )}
 
+    {!platform.profileEssentials && (
     <section class="sec">
       <div class="sec-h"><b>Confirmations</b><span>Not editable here</span></div>
 
@@ -311,14 +326,18 @@ const consentLabel: Record<string, string> = {
         </div>
       </dl>
     </section>
+    )}
 
     {/* A link, not the control. Everything on the page above this can be
         changed back; what it leads to cannot, and putting an irreversible
         button under a form somebody visits to fix a spelling is how it gets
-        pressed while looking for something else. */}
-    <p class="leaving">
-      <a href="/app/account/">Leaving SciPath, and deleting your account</a>
-    </p>
+        pressed while looking for something else. Off the page for the
+        class (2.9): leaving is the teacher's decision there. */}
+    {!platform.profileEssentials && (
+      <p class="leaving">
+        <a href="/app/account/">Leaving SciPath, and deleting your account</a>
+      </p>
+    )}
   </div>
 </Base>
 

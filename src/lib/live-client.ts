@@ -42,7 +42,11 @@ interface LiveState {
 
 declare global { interface Window { __spLive?: LiveState } }
 
-const DEADLINE = 12_000;
+/* Twenty seconds, from twelve (2.9): on the hosted site the first join
+   sometimes answered after twelve, and the page had already gone to the
+   backup path, asked the pulse once and started the ninety-second clock
+   for an incident. The socket itself was fine. */
+const DEADLINE = 20_000;
 const ERRORS_TO_FALL = 3;
 const ERROR_WINDOW = 90_000;
 
@@ -142,7 +146,7 @@ export function join(topic: string, opts: { presence?: boolean } = {}): any {
       if (subscribed || st.health === 'live') return;
       /* Not yet, and not looking: judge it when somebody is. */
       if (quiet()) { arm(); return; }
-      setHealth(st, 'fallback', 'no subscription within 12 seconds');
+      setHealth(st, 'fallback', 'no subscription within 20 seconds');
     }, DEADLINE);
   };
   arm();

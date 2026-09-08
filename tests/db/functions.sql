@@ -2084,8 +2084,22 @@ begin
         raise exception 'FAIL milestones_of disagrees with the policy for % (% vs %)', v_who, v_mine, v_rule;
       end if;
     end loop;
+    -- And the whole-project and whole-program reads, the same way.
+    foreach v_who in array array[v_author, v_elder, v_other] loop
+      perform set_config('request.jwt.claim.sub', v_who::text, true);
+      select count(*) into v_mine from public.projects_i_see();
+      select count(*) into v_rule from public.projects p;
+      if v_mine <> v_rule then
+        raise exception 'FAIL projects_i_see disagrees with the policy for % (% vs %)', v_who, v_mine, v_rule;
+      end if;
+      select count(*) into v_mine from public.places_in((select e.program_id from public.participations e where e.id = v_part));
+      select count(*) into v_rule from public.participations e where e.program_id = (select x.program_id from public.participations x where x.id = v_part);
+      if v_mine <> v_rule then
+        raise exception 'FAIL places_in disagrees with the policy for % (% vs %)', v_who, v_mine, v_rule;
+      end if;
+    end loop;
     perform set_config('role', 'postgres', true);
-    raise notice '  ok   the pulse''s scope and milestones_of are exactly what the visibility rule accepts';
+    raise notice '  ok   the pulse''s scope, milestones_of, projects_i_see and places_in are exactly what the visibility rule accepts';
   end;
 
   -- my_context (2.9): the one call before every page carries the account,

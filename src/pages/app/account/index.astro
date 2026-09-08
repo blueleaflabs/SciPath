@@ -26,12 +26,16 @@ import { activeOrg } from '../../../lib/tenant';
 import { serverClient } from '../../../lib/supabase';
 import { signInWith } from '../../../lib/next-path';
 import { afterPost, outcomeFrom } from '../../../lib/post-redirect';
+import { platform } from '../../../config/site';
 
 const { session, account, roles } = Astro.locals;
 const org = activeOrg(Astro);
 
 if (!session) return Astro.redirect(signInWith(Astro.url));
 if (!account) return Astro.redirect('/app/welcome/');
+/* Leaving is the teacher's decision during the pilot (2.9): the page is
+   not reachable, by link or by address. */
+if (platform.profileEssentials) return Astro.redirect('/app/profile/');
 
 const { error, note } = outcomeFrom(Astro.url);
 

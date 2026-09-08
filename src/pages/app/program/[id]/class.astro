@@ -108,11 +108,12 @@ const { data: memberRows } = await supabase
   .eq('cohort_id', id)
   .eq('state', 'member');
 
-const { data: parts } = await supabase
-  .from('participations')
+const { data: partRows } = await supabase
+  .rpc('places_in', { p_program_id: id })
   .select('id, project_id, status, projects(id, title, project_authors(role, participation_id, self_managed_at, users(id, display_name)))')
-  .eq('program_id', id)
   .in('status', ['entered', 'competed']);
+/* An rpc's rows are typed as row-or-rows; these are rows. */
+const parts = (partRows ?? []) as any[];
 
 const partIds = (parts ?? []).map((p: any) => p.id);
 const projectIds = (parts ?? []).map((p: any) => p.project_id);

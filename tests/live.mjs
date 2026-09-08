@@ -94,7 +94,7 @@ test('the shell joins the socket first and polls only on fallback', () => {
 });
 
 test('the client judges health by deadline and repeated errors, and channels are private', () => {
-  assert.match(client, /DEADLINE = 12_000/);
+  assert.match(client, /DEADLINE = 20_000/);
   assert.match(client, /ERRORS_TO_FALL = 3/);
   assert.match(client, /config: \{ private: true/);
   assert.match(client, /live:reconnected/, 'a page re-reads after a gap');

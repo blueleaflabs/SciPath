@@ -174,7 +174,7 @@ export interface LivePlan {
 }
 
 /** The pacing when a school's file says nothing (2.8). */
-export const DEFAULT_LIVE: LivePlan = { classPeriods: [], fallback: { inClass: 60, inClassIdle: 300, offHours: 3600, enabled: true } };
+export const DEFAULT_LIVE: LivePlan = { classPeriods: [], fallback: { inClass: 300, inClassIdle: 900, offHours: 3600, enabled: true } };
 
 /**
  * A parsed `orgs/*.yaml` document, as the record every page expects.

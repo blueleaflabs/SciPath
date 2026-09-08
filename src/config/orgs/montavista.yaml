@@ -81,8 +81,8 @@ live:
     - { days: [Mon, Tue, Wed, Thu, Fri], from: "08:00", to: "15:30" }
   fallback:
     enabled: true
-    in_class_seconds: 60
-    in_class_idle_seconds: 300
+    in_class_seconds: 300
+    in_class_idle_seconds: 900
     off_hours_seconds: 3600
 
 # What the front door calls the class (2.9). Without this the first class

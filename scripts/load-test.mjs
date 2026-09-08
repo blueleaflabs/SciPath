@@ -48,6 +48,7 @@ const PASSWORD = opt('--password', '');
 const NAMED = all('--as');
 const PILOT = opt('--pilot', NAMED.length ? null : 'local-data/pilot-irpd.yaml');
 const OUT = opt('--out', 'local-data/load');
+const PULSE_S = Number(opt('--pulse', 300));
 
 function fail(message) { console.error(`\n  ${message.replace(/\n/g, '\n  ')}\n`); process.exit(1); }
 if (!/^https?:\/\//.test(BASE)) fail(`--base must be an address, not ${BASE}`);
@@ -65,6 +66,20 @@ if (PILOT) {
 }
 if (emails.length === 0) fail('Name the people: --pilot local-data/pilot.yaml, or --as <email> (repeatable).');
 const seats = Array.from({ length: USERS }, (_, i) => emails[i % emails.length]);
+
+/* The headers a browser would send with the form (2.9): the site's own
+   origin and referer, since Astro refuses a cross-site form POST, and a
+   browser's user agent, since a paid Cloudflare zone's bot protection
+   answers a bare script with 403 before the Worker sees it. If that still
+   answers 403 with `cf-mitigated`, allow this address for the run under
+   Security → WAF, or turn Super Bot Fight Mode's "definitely automated"
+   to Allow while it runs. */
+const BROWSERISH = {
+  'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0 Safari/537.36 SciPathLoadTest/2.9',
+  origin: BASE,
+  referer: `${BASE}/app/`,
+  accept: 'text/html,application/json;q=0.9,*/*;q=0.8',
+};
 
 /* ── A person's cookies ───────────────────────────────────────────────── */
 
@@ -113,7 +128,7 @@ async function measured(kind, jar, route, init = {}, { landing = false } = {}) {
   inFlight += 1; peak = Math.max(peak, inFlight); total += 1;
   const started = Date.now();
   try {
-    const response = await fetch(`${BASE}${route}`, { ...init, headers: { ...(init.headers ?? {}), cookie: cookieHeader(jar), 'x-timing-trace': '1' }, redirect: 'manual' });
+    const response = await fetch(`${BASE}${route}`, { ...init, headers: { ...BROWSERISH, ...(init.headers ?? {}), cookie: cookieHeader(jar), 'x-timing-trace': '1' }, redirect: 'manual' });
     const text = await response.text();
     const ms = Date.now() - started;
     takeCookies(jar, response);
@@ -154,11 +169,18 @@ async function signIn(email) {
     if (attempt > 0) await new Promise((r) => setTimeout(r, 4000 * attempt));
     const jar = new Map();
     const body = new URLSearchParams({ email, password: PASSWORD, next: '/app/' });
-    const response = await fetch(`${BASE}/auth/password/`, { method: 'POST', body, redirect: 'manual', headers: { 'content-type': 'application/x-www-form-urlencoded' } });
+    const response = await fetch(`${BASE}/auth/password/`, { method: 'POST', body, redirect: 'manual', headers: { ...BROWSERISH, 'content-type': 'application/x-www-form-urlencoded' } });
     takeCookies(jar, response);
     const to = response.headers.get('location') ?? '';
     if (to.includes('signin=')) { last = `refused (${response.status} -> ${to})`; refusedSignIns += 1; continue; }
-    if (jar.size === 0) { last = `no session cookie came back (${response.status} -> ${to || '-'})`; continue; }
+    if (jar.size === 0) {
+      /* Say who answered. A 403 with no cookie and no redirect is not the
+         sign-in route: Cloudflare's bot protection (`cf-mitigated`) or
+         Astro's origin check answer before it, and the body names which. */
+      const why = response.headers.get('cf-mitigated') ? `Cloudflare ${response.headers.get('cf-mitigated')}` : (await response.text()).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 120);
+      last = `no session cookie came back (${response.status} -> ${to || '-'}; ${why || 'empty body'})`;
+      continue;
+    }
     if (attempt > 0) retriedSignIns += 1;
     return jar;
   }
@@ -210,14 +232,17 @@ async function person(email, seat, startAt) {
   let plan;
   try { plan = await discover(jar); } catch (e) { errors.push(`${email}: ${e.message}`); failed += 1; return; }
   const end = Date.now() + SECONDS * 1000;
+  let lastPulse = Date.now() - Math.round(Math.random() * PULSE_S * 1000);
   let i = seat;
   while (Date.now() < end) {
     const page = plan.pages[i % plan.pages.length];
     i += 1;
     await measured('GET', jar, page);
-    /* A browser on the backup path asks the pulse; every third turn here,
-       which is heavier than the schedule would be in class. */
-    if (i % 3 === 0) await measured('GET', jar, '/app/api/pulse/');
+    /* A browser on the backup path asks the pulse, and only there: with
+       the sockets live a class asks it almost never. Once per seat per
+       `--pulse` seconds here (300, the class's own pacing), so the run
+       measures the pages and not a question the class does not ask. */
+    if (PULSE_S > 0 && Date.now() - lastPulse >= PULSE_S * 1000) { lastPulse = Date.now(); await measured('GET', jar, '/app/api/pulse/'); }
     /* And a box saved as they type: one draft every few turns. */
     if (plan.box && i % 4 === 0) {
       const r = await measured('POST', jar, '/app/api/field/', {

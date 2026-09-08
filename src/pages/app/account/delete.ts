@@ -4,6 +4,7 @@ import type { APIRoute } from 'astro';
 import { serverClient } from '../../../lib/supabase';
 import { adminClient } from '../../../lib/supabase-admin';
 import { readManifest, writeManifest, withdraw, objectsFor } from '../../../lib/records-store';
+import { platform } from '../../../config/site';
 
 /**
  * PERFORMING A DELETION.
@@ -33,6 +34,9 @@ import { readManifest, writeManifest, withdraw, objectsFor } from '../../../lib/
  * it, and a screen is not a guard.
  */
 export const POST: APIRoute = async ({ request, cookies, locals, redirect }) => {
+  /* Not during the pilot (2.9): leaving is the teacher's decision, and the
+     page that offers this is not reachable either. */
+  if (platform.profileEssentials) return new Response('Not found', { status: 404, headers: { 'content-type': 'text/plain' } });
   const runtime = (locals as Record<string, any>).runtime?.env;
   const { session, account } = locals as any;
 

@@ -364,7 +364,7 @@ const nav = [
     if (h === 'fallback' || h === 'off') {
       const enabled = plan?.fallback?.enabled !== false;
       if (enabled) startPolling();
-      const every = classNow() ? `every ${plan?.fallback?.inClass ?? 60} seconds while you work` : 'once an hour outside class';
+      const every = classNow() ? `every ${Math.round((plan?.fallback?.inClass ?? 300) / 60)} minutes while you work` : 'once an hour outside class';
       strip.textContent = enabled
         ? `Live updates are on the backup path (checking ${every}). Your work still saves as you type.`
         : 'Live updates are off on this network; reload the page to see new replies. Your work still saves as you type.';

@@ -65,4 +65,20 @@ test('the deployment can name its tenants — at runtime, never at build, and ne
   }
 });
 
+test('during the pilot nobody leaves by themselves: the account page and the delete route are shut (2.9)', () => {
+  const site = fs.readFileSync('src/config/site.ts', 'utf8');
+  const page = fs.readFileSync('src/pages/app/account/index.astro', 'utf8');
+  const route = fs.readFileSync('src/pages/app/account/delete.ts', 'utf8');
+  const profile = fs.readFileSync('src/pages/app/profile.astro', 'utf8');
+  assert.match(site, /profileEssentials: true/);
+  assert.match(page, /if \(platform\.profileEssentials\) return Astro\.redirect\('\/app\/profile\/'\);/, 'the page sends them to the profile');
+  assert.match(route, /if \(platform\.profileEssentials\) return new Response\('Not found', \{ status: 404/, 'the delete route answers nothing');
+  assert.match(profile, /\{!platform\.profileEssentials && \(\s*<p class="leaving">/, 'and the link is off the profile');
+  const markup = profile.slice(profile.indexOf('<Base'));
+  for (const gone of ['id="notifications"', 'Confirmations</b>', 'name="photo_consent"', 'name="outbound_url"']) {
+    const i = markup.indexOf(gone);
+    assert.ok(i > 0 && markup.lastIndexOf('!platform.profileEssentials', i) > 0, `${gone} sits behind the flag`);
+  }
+});
+
 console.log(`${passed} door assertions passed.`);

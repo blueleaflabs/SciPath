@@ -304,8 +304,8 @@ const unknown = [...asked].filter(([name]) => !schema.has(name));
   const filter = /\.(?:eq|neq|gt|gte|lt|lte|is|in|not)\(\s*'([a-z_]+)'/g;
   /* A chain starts at `.from('table')`, or at an rpc that returns a table's
      rows and is filtered like one (2.9): `milestones_of` is entry_milestones. */
-  const from = /\.(?:from\(\s*'([a-z_]+)'\s*\)|rpc\(\s*'(milestones_of)')/g;
-  const tableOfRpc = { milestones_of: 'entry_milestones' };
+  const from = /\.(?:from\(\s*'([a-z_]+)'\s*\)|rpc\(\s*'(milestones_of|projects_i_see|places_in)')/g;
+  const tableOfRpc = { milestones_of: 'entry_milestones', projects_i_see: 'projects', places_in: 'participations' };
 
   for (const file of ROOTS.flatMap(walk)) {
     const text = fs.readFileSync(file, 'utf8');

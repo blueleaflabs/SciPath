@@ -61,6 +61,15 @@ export const platform = {
    * the Workbench turns out to lack.
    */
   teacherWorkbench: true,
+  /**
+   * The profile page, pared to the class's needs (2.9). On, it is the name,
+   * the graduation year and the ORCID under the same cover block every
+   * other page has; the email digest settings, the confirmations box, the
+   * photo consent, the outbound link and the account-deletion link are off
+   * the page (their routes and columns stay). Off, the page is the full
+   * account page it was.
+   */
+  profileEssentials: true,
 } as const;
 
 /*

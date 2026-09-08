@@ -13554,6 +13554,41 @@ $$;
 revoke all on function public.milestones_of(uuid[]) from public, anon;
 grant execute on function public.milestones_of(uuid[]) to authenticated;
 
+-- The projects and the places a person may see, whole, the same way (2.9):
+-- the Workbench read every unarchived project at the school and the tracker
+-- every place in a program, each through the policy row by row — every
+-- project in the database offered to `can_see_project`, most of them other
+-- tenants' seed. On the hosted instance that read was the Elder's slowest
+-- (48 ms idle, 270 ms mean under load). Here the rule is asked once per
+-- project the person could see, and the rows come by their ids.
+create or replace function public.projects_i_see()
+returns setof public.projects
+language sql
+stable
+security definer
+set search_path = ''
+rows 100
+as $$
+  select p.* from public.projects p where p.id in (select app.my_project_ids());
+$$;
+revoke all on function public.projects_i_see() from public, anon;
+grant execute on function public.projects_i_see() to authenticated;
+
+create or replace function public.places_in(p_program_id uuid)
+returns setof public.participations
+language sql
+stable
+security definer
+set search_path = ''
+rows 100
+as $$
+  select e.* from public.participations e
+   where e.program_id = p_program_id
+     and e.project_id in (select app.my_project_ids());
+$$;
+revoke all on function public.places_in(uuid) from public, anon;
+grant execute on function public.places_in(uuid) to authenticated;
+
 
 create or replace function public.my_pulse()
 returns timestamptz
