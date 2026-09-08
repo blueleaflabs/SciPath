@@ -57,13 +57,19 @@ const SIGNIN = '/app/';
  * everything else now, and saying so is better than a policy that quietly
  * permits more than it looks like it does.
  */
+/* Two reports from the hosted site's console on the pilot's eve (2.9),
+   both report-only and so harmless, both fixed here so the log stays
+   quiet enough to read: the Realtime socket is `wss:`, which `https:`
+   does not cover in connect-src; and Cloudflare's Web Analytics beacon
+   (switched on in the Pages dashboard, no GA) is a script from
+   static.cloudflareinsights.com that reports to cloudflareinsights.com. */
 const POLICY = [
   "default-src 'self'",
-  "script-src 'self' 'unsafe-inline'",
+  "script-src 'self' 'unsafe-inline' https://static.cloudflareinsights.com",
   "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
   "font-src 'self' https://fonts.gstatic.com",
   "img-src 'self' data: blob:",
-  "connect-src 'self' https://*.supabase.co",
+  "connect-src 'self' https://*.supabase.co wss://*.supabase.co https://cloudflareinsights.com",
   /* Video embeds are click to load and only ever these two; a Google
      Doc, Sheet, Slides deck or Drive file linked to a document renders
      as Google's own read-only preview (src/lib/gdrive.ts). */
