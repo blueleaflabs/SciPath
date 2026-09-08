@@ -141,6 +141,50 @@ for (const root of ROOTS) {
   }
 }
 
+/* An order on a function's rows by a column the select does not name
+   (2.9). On a table PostgREST orders by any column of the table; on the
+   rows of an rpc (`milestones_of`, `projects_i_see`, `places_in`) it orders
+   only by a column the select carries, and refuses the whole read
+   otherwise — "column projects.created_at does not exist" — which a page
+   that drops the error renders as nothing. The hosted site showed every
+   Elder an empty care list this way while the database test, which asks
+   the function in SQL, passed. Reproduced against PostgREST 13 with the
+   same chain; the select names what the order uses, or the order goes. */
+let rpcOrders = 0;
+const rpcChain = /\.rpc\(\s*'([a-z_]+)'[\s\S]{0,300}?\.select\(\s*(?:\/\*[\s\S]*?\*\/\s*)?'([^']*)'([\s\S]*?)(?:;|\)\s*:|\bawait\b)/g;
+for (const root of ROOTS) {
+  for (const file of walk(root)) {
+    const text = fs.readFileSync(file, 'utf8');
+    for (const m of text.matchAll(rpcChain)) {
+      const [, fn, selection, rest] = m;
+      /* The top-level columns of the select: what is outside every
+         parenthesis, `alias:column` read as the column. */
+      const top = new Set();
+      let depth = 0;
+      let word = '';
+      for (const char of `${selection},`) {
+        if (char === '(') { depth += 1; word = ''; continue; }
+        if (char === ')') { depth -= 1; word = ''; continue; }
+        if (char === ',' && depth === 0) {
+          const name = word.trim().split(':').pop().split('!')[0].trim();
+          if (name) top.add(name);
+          word = '';
+          continue;
+        }
+        if (depth === 0) word += char;
+      }
+      for (const o of rest.matchAll(/\.order\(\s*'([a-z_.]+)'/g)) {
+        rpcOrders += 1;
+        const column = o[1];
+        if (column.includes('.')) continue; /* an embedded side's column: PostgREST's own rules */
+        if (!top.has(column) && !top.has('*')) {
+          problems.push(`${file}\n    orders the rows of rpc('${fn}') by ${column}, which its select does not name. PostgREST refuses the whole read on a function's rows; add ${column} to the select.`);
+        }
+      }
+    }
+  }
+}
+
 if (problems.length > 0) {
   console.error('\nAmbiguous embeds:\n');
   for (const p of problems) console.error(`  ${p}\n`);
@@ -148,4 +192,4 @@ if (problems.length > 0) {
   process.exit(1);
 }
 
-console.log(`${checked} embeds checked against ${links.size} tables. Every one resolves.`);
+console.log(`${checked} embeds checked against ${links.size} tables. Every one resolves; ${rpcOrders} orders on rpc rows are on selected columns.`);

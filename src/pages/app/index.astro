@@ -980,12 +980,21 @@ if (supabase && account) {
        this at all; the heading says so, unlike the section above. */
     /* Through projects_i_see (2.9): the same rows, the visibility rule
        asked once per project rather than once per row of every project
-       in the database. */
-    const { data: projectRows } = await supabase
+       in the database.
+
+       `created_at` is selected because it is ordered on. On a table
+       PostgREST orders by any column; on a function's rows it orders only
+       by a column the select names, and refuses the whole read otherwise
+       ("column projects.created_at does not exist"). The hosted site
+       answered every Elder's care list as empty for exactly that reason,
+       and this read had dropped the error, so nothing said why. The
+       error is logged now and tests/embeds.mjs refuses the pattern. */
+    const { data: projectRows, error: projectsError } = await supabase
       .rpc('projects_i_see')
-      .select('id, title, started_on, project_authors(role, participation_id, self_managed_at, users(id, display_name, grad_year))')
+      .select('id, title, started_on, created_at, project_authors(role, participation_id, self_managed_at, users(id, display_name, grad_year))')
       .is('archived_at', null)
       .order('created_at', { ascending: false });
+    if (projectsError) console.error(JSON.stringify({ projects_i_see: projectsError.message, path: Astro.url.pathname }));
     const projects = (projectRows ?? []) as any[];
 
     const ids = (projects ?? []).map((p: any) => p.id);
