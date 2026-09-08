@@ -12,7 +12,8 @@
  */
 
 import { defineMiddleware } from 'astro:middleware';
-import { serverClient, isConfigured, meterFor } from './lib/supabase';
+import { CONTEXT_COOKIE, clearContextCookie, mayChangeContext, openContext, sealContext, writeContextCookie } from './lib/context-cache';
+import { serverClient, isConfigured, meterFor, env } from './lib/supabase';
 import { resolveOrg, hostIsOurs, slugForHostname } from './lib/tenant';
 import { signupsClosed } from './lib/door';
 import { BUILD, BUILD_HEADER } from './lib/build';
@@ -531,7 +532,24 @@ const handle = async (context: any, next: any) => {
      and their places, and the identity sync — in one round trip rather
      than seven, since from a Worker each one is a network hop and they add
      serially before any page can start. */
-  const { data: ctxJson, error: accountError } = await supabase.rpc('my_context');
+  /* Remembered for a minute in a signed cookie (src/lib/context-cache.ts,
+     2.9): the same answer on every autosave and pulse, re-asked after any
+     write that could change it and after a minute regardless. */
+  const cacheSecret = env('SUPABASE_SECRET_KEY', runtime);
+  const changing = mayChangeContext(request.method, url.pathname);
+  if (changing) clearContextCookie(cookies);
+  const remembered = cacheSecret && !changing ? await openContext(cacheSecret, user.id, cookies.get(CONTEXT_COOKIE)?.value) : null;
+  let ctxJson: unknown = remembered;
+  let accountError: { message: string } | null = null;
+  if (!remembered) {
+    const answer = await supabase.rpc('my_context');
+    ctxJson = answer.data;
+    accountError = answer.error;
+    if (!answer.error && cacheSecret && !changing && (answer.data as any)?.account) {
+      const sealed = await sealContext(cacheSecret, user.id, answer.data);
+      if (sealed) writeContextCookie(cookies, sealed, url.protocol === 'https:');
+    }
+  }
   const ctx = (ctxJson ?? {}) as Record<string, any>;
   const accountJson = ctx.account ?? null;
 

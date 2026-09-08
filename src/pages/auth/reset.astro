@@ -67,27 +67,42 @@ const RECOVERY = 'scipath_recovery';
    so a link asked for on a Chromebook and opened in the mail app on a
    phone fails with "expired or already used", which the pilot's first
    morning found. The email template can instead carry the token itself:
-   `{{ .RedirectTo }}?token_hash={{ .TokenHash }}&type=recovery`, which
-   verifies from any browser and needs nothing set beforehand. Both are
-   accepted here; the template decides which is sent. */
+   `{{ .RedirectTo }}?token_hash={{ .TokenHash }}&type=recovery`.
+
+   That token is not spent on arrival. A GET that verifies it would be
+   spent by whatever fetches links before a person does — a mail filter's
+   preview, a phone's link check — and the person would then find it used.
+   So the page shows the password form with the token in it, and the POST
+   verifies the token and sets the password in one step, from any browser,
+   with nothing set beforehand. Both shapes are accepted; the template
+   decides which is sent. */
 const tokenHash = Astro.url.searchParams.get('token_hash');
 const linkType = Astro.url.searchParams.get('type');
+const pending = tokenHash && linkType === 'recovery' ? tokenHash : null;
 
-if (tokenHash && linkType === 'recovery') {
-  const { error: verifyError } = await supabase.auth.verifyOtp({ type: 'recovery', token_hash: tokenHash });
-  if (verifyError) {
-    error = 'That link has expired or has already been used.';
-  } else {
-    Astro.cookies.set(RECOVERY, '1', {
-      path: '/auth/reset/',
-      httpOnly: true,
-      sameSite: 'lax',
-      secure: Astro.url.protocol === 'https:',
-      maxAge: 600,
-    });
-    return Astro.redirect('/auth/reset/#outcome');
+/* Read once: the body cannot be read twice, and the cookie-gated POST
+   below reads the same form. */
+const posted = Astro.request.method === 'POST' ? await Astro.request.formData() : null;
+
+if (posted) {
+  const form = posted;
+  const token = String(form.get('token_hash') ?? '');
+  if (token) {
+    const password = String(form.get('password') ?? '');
+    const again = String(form.get('again') ?? '');
+    const back = `${Astro.url.pathname}?token_hash=${encodeURIComponent(token)}&type=recovery`;
+    const backWith = (e: string) => new Response(null, { status: 303, headers: { Location: `${back}&e=${encodeURIComponent(e)}#outcome` } });
+    if (password.length < 8) return backWith('A password needs at least 8 characters.');
+    if (password !== again) return backWith('Those two do not match.');
+    const { error: verifyError } = await supabase.auth.verifyOtp({ type: 'recovery', token_hash: token });
+    if (verifyError) return afterPost(Astro.url, { error: 'That link has expired or has already been used.', note: null });
+    const { error: updateError } = await supabase.auth.updateUser({ password });
+    if (updateError) return afterPost(Astro.url, { error: updateError.message, note: null });
+    return afterPost(Astro.url, { error: null, note: 'Your password is set. You are signed in.' });
   }
-} else if (code) {
+}
+
+if (code) {
   const { error: exchangeError } = await supabase.auth.exchangeCodeForSession(code);
 
   if (exchangeError) {
@@ -112,8 +127,8 @@ const { data: { session } } = await supabase.auth.getSession();
    somebody who simply happens to be signed in. */
 const recovering = Boolean(session) && Astro.cookies.get(RECOVERY)?.value === '1';
 
-if (Astro.request.method === 'POST') {
-  const form = await Astro.request.formData();
+if (posted) {
+  const form = posted;
   const password = String(form.get('password') ?? '');
   const again = String(form.get('again') ?? '');
 
@@ -153,6 +168,19 @@ if (Astro.request.method === 'POST') {
 
       {note ? (
         <p><a class="btn" href="/app/">Go to your work</a></p>
+      ) : pending ? (
+        <form method="POST" action="/auth/reset/" class="stack">
+          <input type="hidden" name="token_hash" value={pending} />
+          <label>
+            <span>New password</span>
+            <input name="password" type="password" required minlength="8" autocomplete="new-password" />
+          </label>
+          <label>
+            <span>Again</span>
+            <input name="again" type="password" required minlength="8" autocomplete="new-password" />
+          </label>
+          <p><button class="btn" type="submit">Set it</button></p>
+        </form>
       ) : recovering ? (
         <form method="POST" action="#outcome" class="stack">
           <label>

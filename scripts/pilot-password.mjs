@@ -202,14 +202,23 @@ if (rosterFile) {
   const fs = await import('node:fs');
   const yaml = (await import('js-yaml')).default;
   const doc = yaml.load(fs.readFileSync(rosterFile, 'utf8'));
+  /* Who each row is, from the roster itself: the person's role in the
+     class (student, Elder, teacher), their group and their project's title
+     — so a file of identifiers (pilot:anonymize) still says who is who. */
+  const elders = new Set((doc.groups ?? []).flatMap((g) => (g.elders ?? []).map(String)));
+  const projectOf = new Map();
+  for (const pr of doc.projects ?? []) for (const a of pr.authors ?? []) projectOf.set(String(a), pr.title);
   const people = [
-    ...(doc.groups ?? []).flatMap((g) => (g.students ?? []).map((p) => ({ name: p.name, email: String(p.email).toLowerCase() }))),
-    ...(doc.teachers ?? []).map((t) => ({ name: t.name, email: String(t.email).toLowerCase() })),
+    ...(doc.groups ?? []).flatMap((g) => (g.students ?? []).map((p) => ({
+      name: p.name, email: String(p.email).toLowerCase(),
+      role: elders.has(String(p.key)) ? 'Elder' : 'Student', group: g.name ?? '', project: projectOf.get(String(p.key)) ?? '',
+    }))),
+    ...(doc.teachers ?? []).map((t) => ({ name: t.name, email: String(t.email).toLowerCase(), role: 'Teacher', group: '', project: '' })),
   ].filter((p) => p.email);
-  const rows = [['name', 'email', 'password']];
+  const rows = [['name', 'role', 'group', 'project', 'email', 'password']];
   for (const person of people) {
     const { account, password } = await setFor(person.email, users);
-    rows.push([account.display_name ?? person.name ?? '', person.email, password]);
+    rows.push([account.display_name ?? person.name ?? '', person.role, person.group, person.project, person.email, password]);
     console.log(`  ${person.email}`);
   }
   const csv = rows.map((r) => r.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(',')).join('\n') + '\n';

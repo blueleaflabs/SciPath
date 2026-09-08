@@ -13,7 +13,6 @@ import { standing, roleLabel } from '../../lib/roles';
 import { checkDateOrder, worstFinding } from '../../lib/dateOrder';
 import { assess, queueRank, daysUntil } from '../../lib/attention';
 import { afterPost, outcomeFrom, leaveTo } from '../../lib/post-redirect';
-import { allRows } from '../../lib/all-rows';
 import { hidesProgram } from '../../lib/hidden-programs';
 import Plate from '../../components/Plate.astro';
 import { safeNext, HOME } from '../../lib/next-path';
@@ -22,7 +21,7 @@ import { byDueThenOrder } from '../../lib/milestone-order';
 import { resolveProgram, deliverablesFor, shape } from '../../lib/templates';
 import { docStanding } from '../../lib/documents';
 import { stepProgress } from '../../lib/step-progress';
-import { sponsorsOf } from '../../lib/sponsors';
+import { sponsorsFromPlaces } from '../../lib/sponsors';
 
 const { configured, session, account, roles } = Astro.locals;
 const org = activeOrg(Astro);
@@ -974,28 +973,24 @@ const readyTasks = [...openTasks.filter((t) => t.ready)].sort(
 const lateTasks = readyTasks.filter((t) => t.late);
 
 /* --- What everyone else sees: the projects they are responsible for --- */
+let careData: Record<string, any> | null = null;
 if (supabase && account) {
   if (me.runsTheClub) {
     /* Every project at the school. Row level security decides who may run
        this at all; the heading says so, unlike the section above. */
-    /* Through projects_i_see (2.9): the same rows, the visibility rule
-       asked once per project rather than once per row of every project
-       in the database.
-
-       `created_at` is selected because it is ordered on. On a table
-       PostgREST orders by any column; on a function's rows it orders only
-       by a column the select names, and refuses the whole read otherwise
-       ("column projects.created_at does not exist"). The hosted site
-       answered every Elder's care list as empty for exactly that reason,
-       and this read had dropped the error, so nothing said why. The
-       error is logged now and tests/embeds.mjs refuses the pattern. */
-    const { data: projectRows, error: projectsError } = await supabase
-      .rpc('projects_i_see')
-      .select('id, title, started_on, created_at, project_authors(role, participation_id, self_managed_at, users(id, display_name, grad_year))')
-      .is('archived_at', null)
-      .order('created_at', { ascending: false });
-    if (projectsError) console.error(JSON.stringify({ projects_i_see: projectsError.message, path: Astro.url.pathname }));
-    const projects = (projectRows ?? []) as any[];
+    /* Through care_list (2.9): the six reads behind the cards — the
+       projects with their authors, their places with their programs, the
+       sponsors, the notebook dates, the documents under way and the
+       students' obligations — as one definer read scoped by the rule once
+       per project. The Elder's /app/ was 28 calls and 750 ms on the
+       school's network when this was six of them. The error is logged,
+       never dropped: an empty list with no reason was how the hosted
+       site's first fault hid (the projects_i_see order). */
+    const { data: careAnswer, error: careError } = await supabase.rpc('care_list');
+    if (careError) console.error(JSON.stringify({ care_list: careError.message, path: Astro.url.pathname }));
+    careData = (careAnswer ?? null) as Record<string, any> | null;
+    const care = (careData ?? {}) as Record<string, any>;
+    const projects = (care.projects ?? []) as any[];
 
     const ids = (projects ?? []).map((p: any) => p.id);
 
@@ -1018,15 +1013,9 @@ if (supabase && account) {
      * naming the key because this is a table; on a view it would have to be
      * spelled `programs:program_id` (19.9).
      */
-    const { data: entries } = ids.length
-      ? await supabase
-          .from('participations')
-          .select('id, project_id, status, selection_state, selection_decided_at, programs(id, name, season_year, fair_date, kind, roles, selection_cap, program_role)')
-          .in('project_id', ids)
-          .in('status', ['entered', 'competed'])
-      : { data: [] as any[] };
+    const entries = (care.entries ?? []) as any[];
 
-    const sponsorRows = await sponsorsOf(supabase, ids);
+    const sponsorRows = sponsorsFromPlaces(care.sponsor_places ?? []);
 
     /**
      * HOW BIG THE NOTEBOOK IS AND WHEN IT WAS LAST WRITTEN IN.
@@ -1046,49 +1035,23 @@ if (supabase && account) {
      * day the work happened everywhere else, and two orderings of one record
      * is how a row disagrees with the page it links to.
      */
-    const { data: noteRows } = ids.length
-      ? await allRows(() =>
-          supabase.from('field_notes').select('project_id, occurred_on').in('project_id', ids).order('id')
-        )
-      : { data: [] as any[] };
-
-    const notebookOf = new Map<string, { count: number; last: string | null }>();
-
-    for (const n of noteRows ?? []) {
-      const held = notebookOf.get(n.project_id) ?? { count: 0, last: null };
-      held.count += 1;
-      if (!held.last || n.occurred_on > held.last) held.last = n.occurred_on;
-      notebookOf.set(n.project_id, held);
-    }
+    const notebookOf = new Map<string, { count: number; last: string | null }>(
+      ((care.notes ?? []) as any[]).map((n: any) => [n.project_id, { count: Number(n.count), last: n.last ?? null }])
+    );
 
     /* Documents under way, per project: one read for the whole list
        (2.8), so the row can say "2 of 25 in progress" beside "5 of 30 met"
        without a query per project. Submitted ones are met already. */
-    const { data: docStateRows } = ids.length
-      ? await supabase.from('documents').select('project_id, status').in('project_id', ids).neq('status', 'submitted')
-      : { data: [] as any[] };
-    const inProgressOf = new Map<string, number>();
-    for (const d of docStateRows ?? []) inProgressOf.set(d.project_id, (inProgressOf.get(d.project_id) ?? 0) + 1);
+    const inProgressOf = new Map<string, number>(((care.documents_open ?? []) as any[]).map((d: any) => [d.project_id, Number(d.count)]));
 
-    const entryIds = (entries ?? []).map((e: any) => e.id);
 
     /* Paged, because this is thirty-eight projects times thirty-two
        obligations and the API answers a thousand rows at a time. Read
        plainly, the projects past the cut had no obligations as far as the
        page could see and were reported in order (see src/lib/all-rows.ts). */
-    const { data: milestones } = entryIds.length
-      ? await allRows(() =>
-          supabase
-            .rpc('milestones_of', { p_participation_ids: entryIds })
-            .select('id, participation_id, name, kind, due_on, required, blocks_experimentation, completed_on, owner, sort_order')
-            /* The students' obligations. The Elder's tasks are read separately,
-               below, as the Elder's own list. */
-            .eq('owner', 'student')
-            .order('due_on', { ascending: true, nullsFirst: false })
-            .order('sort_order', { ascending: true })
-            .order('id')
-        )
-      : { data: [] as any[] };
+    /* The students' obligations, by date. The Elder's tasks are read
+       separately, below, as the Elder's own list. */
+    const milestones = (care.milestones ?? []) as any[];
 
     /**
      * The places this person is responsible for, and no others.
@@ -1428,17 +1391,13 @@ type Waiting = { id: string; projectId: string; projectTitle: string; who: strin
 let waiting: Waiting[] = [];
 const answered: { who: string; asker: string; label: string; body: string; when: string; href: string }[] = [];
 if (supabase && careRows.length > 0) {
-  const careIds = careRows.map((w: any) => w.id);
-  const since = new Date(Date.now() - 14 * 86400000).toISOString();
-  const { data: docs } = await supabase.from('documents').select('id, project_id, deliverable').in('project_id', careIds);
-  const docOf = new Map<string, any>((docs ?? []).map((d: any) => [d.id, d]));
+  /* From care_list (2.9): the documents of the projects in care and the
+     last fortnight's lines on them came with the cards' read. */
+  const careIds = new Set<string>(careRows.map((w: any) => w.id));
+  const docs = ((careData as any)?.documents ?? []).filter((d: any) => careIds.has(d.project_id)) as any[];
+  const docOf = new Map<string, any>(docs.map((d: any) => [d.id, d]));
   if (docOf.size > 0) {
-    const { data: lines } = await supabase
-      .from('deliverable_feedback')
-      .select('id, document_id, field_id, author_id, body_md, created_at, seen_at, author:author_id(display_name)')
-      .in('document_id', [...docOf.keys()])
-      .gte('created_at', since)
-      .order('created_at', { ascending: true });
+    const lines = (((careData as any)?.lines ?? []) as any[]).filter((c: any) => docOf.has(c.document_id));
     const authorIds = new Map<string, Set<string>>();
     for (const w of careRows) authorIds.set(w.id, new Set((w.authors ?? []).map((a: any) => a.users?.id).filter(Boolean)));
     const last = new Map<string, any>();

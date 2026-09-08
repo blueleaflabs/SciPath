@@ -2097,9 +2097,77 @@ begin
       if v_mine <> v_rule then
         raise exception 'FAIL places_in disagrees with the policy for % (% vs %)', v_who, v_mine, v_rule;
       end if;
+      -- places_of (2.9): the same places with their authors, as one jsonb;
+      -- the count of places and of author rows matches what the session
+      -- reads through the embed's policies.
+      select count(*) into v_mine from jsonb_array_elements(public.places_of((select e.program_id from public.participations e where e.id = v_part))) x;
+      select count(*) into v_rule from public.participations e
+       where e.program_id = (select x.program_id from public.participations x where x.id = v_part)
+         and e.status in ('entered', 'competed');
+      if v_mine <> v_rule then
+        raise exception 'FAIL places_of disagrees with the policy for % (% vs %)', v_who, v_mine, v_rule;
+      end if;
+      select coalesce(sum(jsonb_array_length(x -> 'projects' -> 'project_authors')), 0) into v_mine
+        from jsonb_array_elements(public.places_of((select e.program_id from public.participations e where e.id = v_part))) x;
+      select count(*) into v_rule from public.project_authors a
+       where a.project_id in (select e.project_id from public.participations e
+                               where e.program_id = (select x.program_id from public.participations x where x.id = v_part)
+                                 and e.status in ('entered', 'competed'));
+      if v_mine <> v_rule then
+        raise exception 'FAIL places_of names % author rows where the session sees % for %', v_mine, v_rule, v_who;
+      end if;
+      -- care_list (2.9): the Workbench's six reads as one; its projects are
+      -- projects_i_see's unarchived ones, its places and obligations what
+      -- the session reads of them.
+      declare
+        v_care jsonb := public.care_list();
+      begin
+        select count(*) into v_rule from public.projects_i_see() p where p.archived_at is null;
+        if jsonb_array_length(v_care -> 'projects') <> v_rule then
+          raise exception 'FAIL care_list lists % projects where the rule gives % for %', jsonb_array_length(v_care -> 'projects'), v_rule, v_who;
+        end if;
+        select count(*) into v_rule from public.participations e
+         where e.status in ('entered', 'competed') and e.project_id in (select p.id from public.projects_i_see() p where p.archived_at is null);
+        if jsonb_array_length(v_care -> 'entries') <> v_rule then
+          raise exception 'FAIL care_list lists % places where the session sees % for %', jsonb_array_length(v_care -> 'entries'), v_rule, v_who;
+        end if;
+        select count(*) into v_rule from public.entry_milestones m
+         where m.owner = 'student' and m.participation_id in (
+           select e.id from public.participations e
+            where e.status in ('entered', 'competed') and e.project_id in (select p.id from public.projects_i_see() p where p.archived_at is null));
+        if jsonb_array_length(v_care -> 'milestones') <> v_rule then
+          raise exception 'FAIL care_list lists % obligations where the session sees % for %', jsonb_array_length(v_care -> 'milestones'), v_rule, v_who;
+        end if;
+      end;
+      -- place_page (2.9): the deadlines page's nine reads as one; answered
+      -- exactly when the session could read the place, and its parts count
+      -- what the session's reads would.
+      declare
+        v_page jsonb;
+        v_seen boolean;
+      begin
+        v_page := public.place_page(
+          (select e.project_id from public.participations e where e.id = v_part),
+          (select e.program_id from public.participations e where e.id = v_part));
+        select exists(select 1 from public.participations e where e.id = v_part) into v_seen;
+        if v_seen <> (v_page is not null) then
+          raise exception 'FAIL place_page answered % for % who % see the place', (v_page is not null), v_who, case when v_seen then 'can' else 'cannot' end;
+        end if;
+        if v_page is not null then
+          if (v_page -> 'entry' ->> 'id')::uuid <> v_part then raise exception 'FAIL place_page names the wrong place'; end if;
+          select count(*) into v_rule from public.deliverable_feedback f where f.participation_id = v_part;
+          if jsonb_array_length(v_page -> 'feedback') <> v_rule then raise exception 'FAIL place_page feedback count % vs %', jsonb_array_length(v_page -> 'feedback'), v_rule; end if;
+          select count(*) into v_rule from public.project_authors a where a.project_id = (v_page -> 'entry' ->> 'project_id')::uuid;
+          if jsonb_array_length(v_page -> 'overseers') <> v_rule then raise exception 'FAIL place_page overseers % vs %', jsonb_array_length(v_page -> 'overseers'), v_rule; end if;
+          select count(*) into v_rule from public.documents d where d.project_id = (v_page -> 'entry' ->> 'project_id')::uuid;
+          if jsonb_array_length(v_page -> 'documents') <> v_rule then raise exception 'FAIL place_page documents % vs %', jsonb_array_length(v_page -> 'documents'), v_rule; end if;
+          select count(*) into v_rule from public.participations e where e.project_id = (v_page -> 'entry' ->> 'project_id')::uuid;
+          if jsonb_array_length(v_page -> 'sponsor_places') <> v_rule then raise exception 'FAIL place_page sponsor places % vs %', jsonb_array_length(v_page -> 'sponsor_places'), v_rule; end if;
+        end if;
+      end;
     end loop;
     perform set_config('role', 'postgres', true);
-    raise notice '  ok   the pulse''s scope, milestones_of, projects_i_see and places_in are exactly what the visibility rule accepts';
+    raise notice '  ok   the pulse''s scope, milestones_of, projects_i_see, places_in, places_of, place_page and care_list are exactly what the visibility rule accepts';
   end;
 
   -- my_context (2.9): the one call before every page carries the account,

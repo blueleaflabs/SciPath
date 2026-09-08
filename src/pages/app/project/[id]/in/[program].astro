@@ -24,8 +24,8 @@ import { documentPath, docStanding } from '../../../../../lib/documents';
 import { linkDomain, renderNote } from '../../../../../lib/notes';
 import { blobStore, projectImagePath, MAX_UPLOAD_BYTES } from '../../../../../lib/blob';
 import { signInWith } from '../../../../../lib/next-path';
-import { participationFor } from '../../../../../lib/participation';
-import { sponsorsOf } from '../../../../../lib/sponsors';
+import { shapeParticipation } from '../../../../../lib/participation';
+import { sponsorsFromPlaces } from '../../../../../lib/sponsors';
 
 const { session, account, roles } = Astro.locals;
 const org = activeOrg(Astro);
@@ -67,7 +67,16 @@ const supabase = serverClient(
    action below is addressed to this participation. `src/lib/participation.ts`
    is the one place page code reads the merged table directly; the reasoning
    is written out there. */
-const participation = await participationFor(supabase, projectId, programId);
+/* One read for the place and everything about it the page renders except
+   the obligations and the grades (place_page, 2.9): nine reads through the
+   same policy became one. Null when the place is not there or not the
+   reader's to see, which the redirect below handles as before. */
+const { data: pageData, error: pageError } = projectId && programId
+  ? await supabase.rpc('place_page', { p_project_id: projectId, p_program_id: programId })
+  : { data: null, error: null };
+if (pageError) console.error(JSON.stringify({ place_page: pageError.message, path: Astro.url.pathname }));
+const page = (pageData ?? null) as Record<string, any> | null;
+const participation = page?.entry ? shapeParticipation(page.entry) : null;
 
 /* Not in it. Back to the project, which is the hub and always exists.
    Rendering a class's deadlines against a project that never joined would be
@@ -507,17 +516,9 @@ const entry: any = participation.row;
  * research class is design-thinking work being judged at a fair, and the
  * fair's steps should read that way.
  */
-const { data: viaCohort } = entry.via_id
-  ? await supabase
-      .from('cohort_participations')
-      .select('programs:program_id(process_id)')
-      .eq('id', entry.via_id)
-      .maybeSingle()
-  : { data: null };
-
 const processFor =
   (entry.programs as any)?.process_id ??
-  ((viaCohort as any)?.programs?.process_id ?? null) ??
+  (page?.via_process_id ?? null) ??
   (entry.projects as any)?.process_id ??
   null;
 
@@ -567,11 +568,7 @@ const gateOf = (m: any): string[] => {
 const taskReady = (t: any) => gateOf(t).length === 0;
 
 /* Feedback on this place: on a deliverable, or on a task with none. */
-const { data: feedbackRows } = await supabase
-  .from('deliverable_feedback')
-  .select('id, deliverable_id, milestone_id, body_md, needs_revision, created_at, resolved_at, author:author_id(display_name)')
-  .eq('participation_id', id)
-  .order('created_at', { ascending: false });
+const feedbackRows = (page?.feedback ?? []) as any[];
 
 const feedbackOnDeliverable = (deliverableId: string) => (feedbackRows ?? []).filter((f: any) => f.deliverable_id === deliverableId);
 const feedbackOnTask = (milestoneId: string) => (feedbackRows ?? []).filter((f: any) => f.milestone_id === milestoneId && !f.deliverable_id);
@@ -580,11 +577,7 @@ const openRevision = (deliverableId: string) => feedbackOnDeliverable(deliverabl
 /* Current ones only. A superseded row is the version somebody replaced, and
    reading it back would answer "what has been recorded" with a document that
    is no longer the one. */
-const { data: deliverables } = await supabase
-  .from('deliverables')
-  .select('id, milestone_id, label, type, signed_on, external_url, verified_at, verified_by, document_version_id')
-  .eq('participation_id', id)
-  .is('superseded_at', null);
+const deliverables = (page?.deliverables ?? []) as any[];
 
 /* This participation's sponsors, not the project's. A teacher who signed
    for the class did not thereby sign for the fair, and the approval
@@ -597,7 +590,7 @@ const { data: deliverables } = await supabase
    the second row is a read that reports the opposite of what is there. */
 /* From the one project-side read (2.9): this place's sponsors, and the
    other places' below, out of the same rows. */
-const sponsorsAll = await sponsorsOf(supabase, [projectId]);
+const sponsorsAll = sponsorsFromPlaces(page?.sponsor_places ?? []);
 const sponsorRows = sponsorsAll.filter((x) => x.participation_id === id);
 const sponsors = sponsorRows ?? [];
 const sponsor = sponsors[0] ?? null;
@@ -635,39 +628,19 @@ const elsewhereSays = elsewhere.length
 /* Linked documents and the manuscript in one read off the project (2.9);
    the images read that sat here was never rendered — the notebook page
    keeps the images — and is gone. */
-const { data: projectExtras } = projectId
-  ? await supabase
-      .from('projects')
-      .select('project_links(id, label, url, visibility, created_at), manuscripts(id, title)')
-      .eq('id', projectId)
-      .maybeSingle()
-  : { data: null };
-const links = ((projectExtras as any)?.project_links ?? []).slice().sort((a: any, b: any) => String(a.created_at).localeCompare(String(b.created_at))) as any[];
-const manuscriptRows = (projectExtras as any)?.manuscripts;
-const manuscript = (Array.isArray(manuscriptRows) ? manuscriptRows[0] : manuscriptRows) ?? null;
+const links = ((page?.links ?? []) as any[]).slice().sort((a: any, b: any) => String(a.created_at).localeCompare(String(b.created_at)));
+const manuscript = (page?.manuscript ?? null) as any;
 
 /* When it was last written in: the one fact about the notebook this page
    renders (2.9). Two counts and the ten latest entries were read here and
    never shown — the notebook is its own page — and are gone. */
-const { data: lastNote } = projectId
-  ? await supabase
-      .from('field_notes')
-      .select('occurred_on, created_at')
-      .eq('project_id', projectId)
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .maybeSingle()
-  : { data: null };
+const lastNote = (page?.last_note ?? null) as any;
 
 
 
-const { data: overseers } = await supabase
-  .from('project_authors')
-  /* `id` on the join: two readers below compare or key on `users.id`, and
-     without it both read undefined (an Elder could not complete a task; a
-     grade row never found its grade). */
-  .select('user_id, role, participation_id, self_managed_at, accepted_at, users(id, display_name)')
-  .eq('project_id', entry.project_id);
+/* `users.id` is on every row: two readers below key on it (an Elder could
+   not complete a task and a grade row never found its grade without it). */
+const overseers = (page?.overseers ?? []) as any[];
 
 /**
  * **The officer of *this* place.**
@@ -954,12 +927,7 @@ const milestoneIdFor = (stepId: string) => {
  * Retired ones are excluded and not deleted: a warning that stopped being
  * true is a record of something that used to be.
  */
-const { data: warnings } = await supabase
-  .from('step_warnings')
-  .select('id, step_id, body, created_at, confirmed_at, users:written_by(display_name)')
-  .eq('program_id', entry?.program_id ?? '')
-  .is('retired_at', null)
-  .order('created_at', { ascending: false });
+const warnings = (page?.warnings ?? []) as any[];
 
 const warningsFor = (stepId: string) =>
   (warnings ?? []).filter((w: any) => w.step_id === stepId);
@@ -973,10 +941,7 @@ for (const d of deliverables ?? []) recorded.set(d.type, d);
    deliverable's id, with how far along each is. A deliverable with a
    shape is written on its own page; the row here says where it stands
    and opens it. */
-const { data: docRows } = await supabase
-  .from('documents')
-  .select('id, deliverable, status, version_no, opened_at, updated_at, submitted_at, document_fields(field_id, value)')
-  .eq('project_id', project?.id ?? '');
+const docRows = (page?.documents ?? []) as any[];
 const docFor = (deliverableId: string) => (docRows ?? []).find((d: any) => d.deliverable === deliverableId) ?? null;
 /* One sentence for where a document stands (documents.ts), the same on
    every page. */

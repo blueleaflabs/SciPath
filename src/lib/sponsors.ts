@@ -36,6 +36,11 @@ export async function sponsorsOf(supabase: any, projectIds: (string | undefined 
     .from('participations')
     .select('id, project_id, program_id, programs:program_id(name), project_sponsors(teacher_name, confirmed_at, signed_on, recorded_at, superseded_at)')
     .in('project_id', ids);
+  return sponsorsFromPlaces(data ?? []);
+}
+
+/** The same shaping from rows already in hand (place_page answers them). */
+export function sponsorsFromPlaces(data: any[]): Sponsor[] {
   const out: Sponsor[] = [];
   for (const p of data ?? []) {
     for (const s of p.project_sponsors ?? []) {

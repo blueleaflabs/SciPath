@@ -105,6 +105,11 @@ export async function participationById(
   return shape(data);
 }
 
+/** A place row with its program and project, as read (place_page answers one). */
+export function shapeParticipation(data: any): ResolvedParticipation {
+  return shape(data);
+}
+
 function shape(data: any): ResolvedParticipation {
   /* Read off the joined program rather than inferred from which columns are
      null. A cohort row and an entry row have the same columns, and half of

@@ -259,6 +259,16 @@ otp_expiry = 3600
 # admin_email = "admin@email.com"
 # sender_name = "Admin"
 
+# The recovery mail carries the token itself rather than a code (2.9): a
+# code can only be exchanged by the browser that asked, so a link opened in
+# a phone's mail app failed. The reset page verifies the token on the POST
+# that sets the password. This is the local copy; the hosted project's
+# template (Authentication -> Emails -> Reset password) is pasted from the
+# same file, and tests/ordering.mjs holds the template to the page's parameters.
+[auth.email.template.recovery]
+subject = "Set a new SciPath password"
+content_path = "./supabase/templates/recovery.html"
+
 # Uncomment to customize email template
 # [auth.email.template.invite]
 # subject = "You have been invited"

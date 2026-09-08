@@ -845,9 +845,14 @@ test('a staff list only counts participations that were granted', () => {
   for (const file of lists) {
     const text = fs.readFileSync(file, 'utf8');
 
+    /* Or the list comes from care_list (2.9), which keeps the same
+       condition in the database; the check follows it there. */
+    const sql = fs.readdirSync('supabase/migrations').filter((f) => f.endsWith('.sql')).sort().map((f) => fs.readFileSync(`supabase/migrations/${f}`, 'utf8')).join('\n');
+    const careListGranted = /function public\.care_list\(\)[\s\S]*?en as \(select e\.\* from public\.participations e where [\s\S]{0,120}?e\.status in \('entered', 'competed'\)\)/.test(sql);
     const aware =
       /\.in\('status', \['entered', 'competed'\]\)/.test(text) ||
-      /\['entered', 'competed'\]\.includes/.test(text);
+      /\['entered', 'competed'\]\.includes/.test(text) ||
+      (/\.rpc\('care_list'\)/.test(text) && careListGranted);
 
     if (!aware) problems.push(`${file} lists participations without checking they were granted`);
   }
@@ -1863,10 +1868,22 @@ test('a recovery link works from any browser, not only the one that asked (2.9)'
      on the same short-lived recovery cookie either way. */
   const reset = fs.readFileSync('src/pages/auth/reset.astro', 'utf8');
   assert.match(reset, /searchParams\.get\('token_hash'\)/);
-  assert.match(reset, /verifyOtp\(\{ type: 'recovery', token_hash: tokenHash \}\)/);
   assert.match(reset, /linkType === 'recovery'/, 'only a recovery token opens the password form');
-  const gates = reset.match(/Astro\.cookies\.set\(RECOVERY, '1'/g) ?? [];
-  assert.equal(gates.length, 2, 'both link shapes set the recovery cookie and nothing else does');
+  /* Spent on the POST, never on the GET: a mail filter's preview fetch
+     must not use the link up before the person does. */
+  assert.match(reset, /const token = String\(form\.get\('token_hash'\)/, 'the token comes back in the form');
+  assert.match(reset, /verifyOtp\(\{ type: 'recovery', token_hash: token \}\)/);
+  assert.match(reset, /<input type="hidden" name="token_hash" value=\{pending\} \/>/);
+  const verifies = reset.match(/verifyOtp\(/g) ?? [];
+  assert.equal(verifies.length, 1, 'verified in one place, the POST');
+  assert.match(reset, /await Astro\.request\.formData\(\) : null/, 'the body is read once');
+  /* The mail names the same parameters the page reads, and the local
+     stack sends that mail. The hosted template is pasted from this file. */
+  const mail = fs.readFileSync('supabase/templates/recovery.html', 'utf8');
+  assert.match(mail, /\{\{ \.RedirectTo \}\}\?token_hash=\{\{ \.TokenHash \}\}&type=recovery/, 'the link carries the token to the address the route asked for');
+  assert.doesNotMatch(mail, /ConfirmationURL/, 'never the code link');
+  const toml = fs.readFileSync('supabase/config.toml', 'utf8');
+  assert.match(toml, /\[auth\.email\.template\.recovery\]\s+subject = "[^"]+"\s+content_path = "\.\/supabase\/templates\/recovery\.html"/, 'the local stack sends it');
 });
 
 test('a deletion is confirmed against something only its owner knows', () => {

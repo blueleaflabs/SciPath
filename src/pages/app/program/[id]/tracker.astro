@@ -74,11 +74,10 @@ const { data: program } = await supabase
   .maybeSingle();
 if (!program) return Astro.redirect('/app/');
 
-const { data: partRows } = await supabase
-  .rpc('places_in', { p_program_id: id })
-  .select('id, project_id, projects(id, title, project_authors(role, participation_id, self_managed_at, users(id, display_name)))')
-  .in('status', ['entered', 'competed']);
-/* An rpc's rows are typed as row-or-rows; these are rows. */
+/* One read for the places, their projects and their authors (places_of,
+   2.9): the embed on places_in read every author row through its policy. */
+const { data: partRows, error: partsError } = await supabase.rpc('places_of', { p_program_id: id });
+if (partsError) console.error(JSON.stringify({ places_of: partsError.message, path: Astro.url.pathname }));
 const parts = (partRows ?? []) as any[];
 const partIds = (parts ?? []).map((p: any) => p.id);
 
