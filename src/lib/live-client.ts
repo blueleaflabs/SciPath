@@ -27,11 +27,14 @@ export type Health = 'starting' | 'live' | 'fallback' | 'off';
 export interface LiveMessage { topic: string; event: string; payload: any }
 type MessageHandler = (m: LiveMessage) => void;
 type HealthHandler = (h: Health, detail: string) => void;
+export type PresenceEvent = 'sync' | 'join' | 'leave';
+type PresenceHandler = (event: PresenceEvent, channel: any) => void;
 
 interface LiveState {
   client: any;
   channels: Map<string, any>;
   handlers: Set<MessageHandler>;
+  presence: Map<string, Set<PresenceHandler>>;
   health: Health;
   detail: string;
   onHealth: Set<HealthHandler>;
@@ -72,7 +75,7 @@ export function live(): LiveState | null {
   } catch {
     return null;
   }
-  const st: LiveState = { client, channels: new Map(), handlers: new Set(), health: 'starting', detail: '', onHealth: new Set(), errors: [], everLive: false, me };
+  const st: LiveState = { client, channels: new Map(), handlers: new Set(), presence: new Map(), health: 'starting', detail: '', onHealth: new Set(), errors: [], everLive: false, me };
   window.__spLive = st;
   return st;
 }
@@ -86,6 +89,26 @@ export function onMessage(fn: MessageHandler): () => void {
   if (!st) return () => {};
   st.handlers.add(fn);
   return () => st.handlers.delete(fn);
+}
+
+/**
+ * Hear who is in a room (2.9). The library refuses a `presence` listener
+ * added after `subscribe()` — it throws, and `join` subscribes before it
+ * returns — so the document page's three `ch.on('presence', …)` calls
+ * threw on every load, which left the room without its roster and
+ * stopped the page's script at that line: nothing after it ran, the live
+ * text included. Seen on the hosted site in the console with the socket
+ * itself at 101. So the listeners are the client's, registered once
+ * before the channel subscribes, and a page asks here; the handler gets
+ * the event and the channel, whose `presenceState()` is the roster.
+ */
+export function onPresence(topic: string, fn: PresenceHandler): () => void {
+  const st = live();
+  if (!st) return () => {};
+  const set = st.presence.get(topic) ?? new Set<PresenceHandler>();
+  set.add(fn);
+  st.presence.set(topic, set);
+  return () => { set.delete(fn); };
 }
 
 /** Hear the transport's health, and the current value at once. */
@@ -137,6 +160,14 @@ export function join(topic: string, opts: { presence?: boolean } = {}): any {
     const msg: LiveMessage = { topic, event: m.event, payload: m.payload };
     for (const fn of st.handlers) { try { fn(msg); } catch {} }
   });
+  if (opts.presence) {
+    /* Before subscribe(), or the library throws (see onPresence). */
+    for (const event of ['sync', 'join', 'leave'] as PresenceEvent[]) {
+      ch.on('presence', { event }, () => {
+        for (const fn of st.presence.get(topic) ?? []) { try { fn(event, ch); } catch {} }
+      });
+    }
+  }
   let subscribed = false;
   let lost = false;
   let deadline = 0;

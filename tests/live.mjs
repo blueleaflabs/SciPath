@@ -119,6 +119,23 @@ test('the document page joins its room with presence and holds a box', () => {
   assert.match(doc, /if \(p\.by_id === me\) return;/, 'my own save is not applied back to me');
 });
 
+test('presence is listened for by the client before the channel subscribes, and nowhere else (2.9)', () => {
+  /* The library throws on a presence listener added after subscribe(),
+     and join() subscribes before it returns. The document page did
+     exactly that on every load, which ended its script before the live
+     text section. */
+  const on = client.indexOf("ch.on('presence'");
+  const subscribe = client.indexOf('ch.subscribe(');
+  assert.ok(on > 0 && subscribe > on, 'the client registers presence before ch.subscribe()');
+  assert.match(client, /export function onPresence\(/);
+  assert.match(doc, /onPresence\(topic, /, 'the document page asks the client');
+  assert.doesNotMatch(doc, /\.on\('presence'/, 'no page puts a presence listener on the channel itself');
+  for (const dir of ['src/pages', 'src/components']) {
+    const files = fs.readdirSync(dir, { recursive: true }).map((f) => `${dir}/${f}`).filter((f) => /\.(astro|ts)$/.test(f));
+    for (const f of files) assert.doesNotMatch(fs.readFileSync(f, 'utf8'), /\.on\('presence'/, `${f} listens on the channel itself`);
+  }
+});
+
 test('the school file names its class periods', () => {
   assert.match(org, /^live:\n\s+class_periods:/m);
 });

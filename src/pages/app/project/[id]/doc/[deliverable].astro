@@ -1396,7 +1396,7 @@ const changedSince = (c: any) => c.field_id && c.field_version != null && (versi
 </script>
 
 <script>
-  import { join, onMessage, liveMe, onHealth } from '../../../../../lib/live-client';
+  import { join, onMessage, onPresence, liveMe, onHealth } from '../../../../../lib/live-client';
   import { renderMarkdown } from '../../../../../lib/notes';
   /**
    * THE ROOM (2.8).
@@ -1493,11 +1493,10 @@ const changedSince = (c: any) => c.field_id && c.field_version != null && (versi
       const roster = document.getElementById('ds-room');
       if (roster) roster.textContent = names.length ? `Also here: ${names.join(', ')}` : '';
     };
-    if (ch) {
-      ch.on('presence', { event: 'sync' }, applyPresence);
-      ch.on('presence', { event: 'join' }, applyPresence);
-      ch.on('presence', { event: 'leave' }, applyPresence);
-    }
+    /* Through the client (onPresence): a listener put on the channel here
+       came after its subscribe() and the library threw, which ended this
+       script before the text-arriving section below ever ran. */
+    onPresence(topic, () => applyPresence());
     /* Once the channel is up, say I am here (even in no box). */
     onHealth((h) => { if (h === 'live') track(); });
     document.addEventListener('live:reconnected', () => track());
