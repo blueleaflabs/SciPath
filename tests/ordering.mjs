@@ -1856,6 +1856,19 @@ test('the reset page builds its return address from the tenant', () => {
   assert.doesNotMatch(forgot, /redirectTo:.*url\.origin/);
 });
 
+test('a recovery link works from any browser, not only the one that asked (2.9)', () => {
+  /* The `code` shape needs the asking browser's verifier cookie, so a link
+     opened in a phone's mail app failed. The template can carry the token
+     itself; the page verifies it with no cookie, and still gates the form
+     on the same short-lived recovery cookie either way. */
+  const reset = fs.readFileSync('src/pages/auth/reset.astro', 'utf8');
+  assert.match(reset, /searchParams\.get\('token_hash'\)/);
+  assert.match(reset, /verifyOtp\(\{ type: 'recovery', token_hash: tokenHash \}\)/);
+  assert.match(reset, /linkType === 'recovery'/, 'only a recovery token opens the password form');
+  const gates = reset.match(/Astro\.cookies\.set\(RECOVERY, '1'/g) ?? [];
+  assert.equal(gates.length, 2, 'both link shapes set the recovery cookie and nothing else does');
+});
+
 test('a deletion is confirmed against something only its owner knows', () => {
   /* GitHub asks for a repository's name so that muscle memory cannot supply
      it. The equivalent here is the person's own address — and it is checked

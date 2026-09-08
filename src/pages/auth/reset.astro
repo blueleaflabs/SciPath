@@ -62,7 +62,32 @@ const code = Astro.url.searchParams.get('code');
  */
 const RECOVERY = 'scipath_recovery';
 
-if (code) {
+/* Two shapes of link (2.9). The default one carries a `code`, and
+   exchanging it needs the verifier cookie the *asking* browser was given —
+   so a link asked for on a Chromebook and opened in the mail app on a
+   phone fails with "expired or already used", which the pilot's first
+   morning found. The email template can instead carry the token itself:
+   `{{ .RedirectTo }}?token_hash={{ .TokenHash }}&type=recovery`, which
+   verifies from any browser and needs nothing set beforehand. Both are
+   accepted here; the template decides which is sent. */
+const tokenHash = Astro.url.searchParams.get('token_hash');
+const linkType = Astro.url.searchParams.get('type');
+
+if (tokenHash && linkType === 'recovery') {
+  const { error: verifyError } = await supabase.auth.verifyOtp({ type: 'recovery', token_hash: tokenHash });
+  if (verifyError) {
+    error = 'That link has expired or has already been used.';
+  } else {
+    Astro.cookies.set(RECOVERY, '1', {
+      path: '/auth/reset/',
+      httpOnly: true,
+      sameSite: 'lax',
+      secure: Astro.url.protocol === 'https:',
+      maxAge: 600,
+    });
+    return Astro.redirect('/auth/reset/#outcome');
+  }
+} else if (code) {
   const { error: exchangeError } = await supabase.auth.exchangeCodeForSession(code);
 
   if (exchangeError) {
