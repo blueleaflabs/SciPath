@@ -190,5 +190,20 @@ begin;
   \echo '  ok   and writes no role row directly either'
 commit;
 
+-- The password reset asks may_reset_password with the secret key (2.9):
+-- service_role may, and nobody else, since the answer is who has an
+-- account. Found on the hosted site's first morning as a 403.
+do $$
+begin
+  if not has_function_privilege('service_role', 'public.may_reset_password(text)', 'execute') then
+    raise exception 'FAIL: service_role may not ask may_reset_password, so the reset route is answered 403';
+  end if;
+  if has_function_privilege('anon', 'public.may_reset_password(text)', 'execute')
+     or has_function_privilege('authenticated', 'public.may_reset_password(text)', 'execute') then
+    raise exception 'FAIL: may_reset_password answers the anonymous or signed-in key, which is a list of who has an account';
+  end if;
+end $$;
+\echo '  ok   the reset route may ask may_reset_password with the secret key, and only it may'
+
 \echo ''
 \echo '  All access assertions passed.'

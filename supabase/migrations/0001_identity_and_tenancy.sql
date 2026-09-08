@@ -10817,13 +10817,18 @@ begin
       join public.users u on u.id = ai.user_id
      where lower(coalesce(ai.identity_data ->> 'email', '')) = lower(btrim(p_email))
        and ai.provider = 'email'
-       and u.population = 'staff'
+       -- Any account that is not suspended, not staff only (2.9): the clause
+       -- was written when only teachers had passwords, and the whole class
+       -- has one now (pilot:password --roster). An account that only ever
+       -- signed in with Google has no email identity and is still refused,
+       -- so a reset cannot turn one way in into two.
+       and u.status <> 'suspended'
   );
 end;
 $$;
 
--- Callable while signed out, because that is the only state it is used in.
-grant execute on function public.may_reset_password(text) to anon, authenticated;
+-- Asked by the reset route with the secret key, and by nobody else: the
+-- grants are settled with the other revocations below (service_role only).
 
 -- ---------------------------------------------------------------------------
 -- CLAIMING AND SETTLING.
@@ -14105,6 +14110,11 @@ alter default privileges in schema public revoke execute on functions from publi
 -- made it a list of who has an account. The reset page asks with the
 -- service key now; the session and the anonymous key get no answer.
 revoke execute on function public.may_reset_password(text) from public, anon, authenticated;
+-- The secret key's role lost execute with the revoke from `public` above
+-- and had never been granted it: the hosted site answered the route 403
+-- on the pilot's first morning, and the page said its sentence while
+-- nothing was sent. Granted to service_role alone.
+grant execute on function public.may_reset_password(text) to service_role;
 
 -- 2. VIEWS RUN AS THE READER, NOT AS THEIR OWNER.
 --
