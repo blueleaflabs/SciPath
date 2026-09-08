@@ -44,5 +44,37 @@ test('the gold goes to the most urgent row whatever its kind', () => {
   assert.equal(rows[0].kick, 'Next up');
 });
 
+test('the teacher works from the Workbench, the cards by Elder (2.9)', () => {
+  const page = fs.readFileSync('src/pages/app/index.astro', 'utf8');
+  const shell = fs.readFileSync('src/components/AppShell.astro', 'utf8');
+  const site = fs.readFileSync('src/config/site.ts', 'utf8');
+  assert.match(site, /teacherWorkbench: true/, 'on for the pilot');
+  assert.match(page, /if \(!platform\.teacherWorkbench && Astro\.request\.method === 'GET' && account && classesRun\.length === 1/, 'no redirect to the class page while it is on');
+  assert.match(page, /const careGroups = me\.isAdvisor && platform\.teacherWorkbench\s*\? byElder\(/, 'the advisor\'s cards are grouped by Elder');
+  assert.match(page, /if \(platform\.teacherWorkbench && me\.isAdvisor\) return 'grid';/, 'three across, as the Elder sees them');
+  assert.match(shell, /platform\.teacherWorkbench \? \[\] : classes\.map/, 'the class tab leaves the bar');
+  /* A project's family is its pair of Elders; one with none comes last. */
+  const byElder = (rows) => {
+    const out = new Map();
+    for (const w of rows) {
+      const elders = (w.officers ?? []).filter((o) => o.users?.display_name).map((o) => String(o.users.display_name)).sort((a, b) => a.localeCompare(b));
+      const name = elders.length ? elders.join(', ') : null;
+      const key = name ?? '\u0000';
+      if (!out.has(key)) out.set(key, { elder: name, rows: [] });
+      out.get(key).rows.push(w);
+    }
+    return [...out.values()].sort((a, b) => (a.elder === null ? 1 : b.elder === null ? -1 : a.elder.localeCompare(b.elder)));
+  };
+  const g = byElder([
+    { id: 1, officers: [{ users: { display_name: 'Yutong Chen' } }, { users: { display_name: 'Aanya Padhi' } }] },
+    { id: 2, officers: [] },
+    { id: 3, officers: [{ users: { display_name: 'Aanya Padhi' } }, { users: { display_name: 'Yutong Chen' } }] },
+    { id: 4, officers: [{ users: { display_name: 'Elaina Pan' } }] },
+  ]);
+  assert.deepEqual(g.map((x) => x.elder), ['Aanya Padhi, Yutong Chen', 'Elaina Pan', null]);
+  assert.deepEqual(g[0].rows.map((r) => r.id), [1, 3], 'the pair is one family whichever order the Elders were attached');
+  assert.match(page, /const name = elders\.length \? elders\.join\(', '\) : null;/, 'and the page groups the same way');
+});
+
 if (process.exitCode) console.error(`\n${passed} passed, with failures.`);
 else console.log(`${passed} plate assertions passed.`);

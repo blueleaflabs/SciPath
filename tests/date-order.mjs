@@ -9,8 +9,10 @@
  */
 
 import assert from 'node:assert/strict';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 import { checkDateOrder, worstFinding } from '../src/lib/dateOrder.ts';
-import { arrivedAt } from '../src/lib/dates.ts';
+import { arrivedAt, dayOf } from '../src/lib/dates.ts';
 
 let passed = 0;
 function test(name, fn) {
@@ -259,6 +261,23 @@ test('any other day is a date, not a duration', () => {
 test('nothing renders as nothing', () => {
   assert.equal(arrivedAt(null), '');
   assert.equal(arrivedAt(undefined), '');
+});
+
+test('the day a timestamp fell on is the school\'s day, and a bare date is left alone (2.9)', () => {
+  /* 7 September, 11 pm in Cupertino is 8 September, 06:00 UTC. */
+  assert.equal(dayOf('2026-09-08T06:00:00+00:00', 'America/Los_Angeles'), '2026-09-07');
+  assert.equal(dayOf('2026-09-08T06:00:00Z', 'America/Los_Angeles'), '2026-09-07');
+  /* The same instant as the database now writes it. */
+  assert.equal(dayOf('2026-09-07T23:00:00-07:00', 'America/Los_Angeles'), '2026-09-07');
+  /* A date column has no instant: converting it would move it a day. */
+  assert.equal(dayOf('2026-09-10', 'America/Los_Angeles'), '2026-09-10');
+  assert.equal(dayOf(null, 'America/Los_Angeles'), '');
+  assert.equal(dayOf(new Date('2026-09-08T06:00:00Z'), 'America/Los_Angeles'), '2026-09-07');
+  /* And the migration keeps the database on the school's clock, so the
+     first ten characters are right even where a page still slices. */
+  const fs = require('node:fs');
+  const sql = fs.readFileSync('supabase/migrations/0001_identity_and_tenancy.sql', 'utf8');
+  assert.match(sql, /alter database %I set timezone = %L', current_database\(\), 'America\/Los_Angeles'/);
 });
 
 console.log(`${passed} date ordering assertions passed.`);

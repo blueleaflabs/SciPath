@@ -53,9 +53,11 @@ test('the database refuses too, whatever posts', () => {
   assert.match(sql, /signup_mode = excluded\.signup_mode/, 're-seeding carries the file\'s mode');
 });
 
-test('the deployment can name its tenants', () => {
+test('the deployment can name its tenants — at runtime, never at build, and never against the platform', () => {
   const middleware = fs.readFileSync('src/middleware.ts', 'utf8');
-  assert.match(middleware, /env\.TENANTS/);
+  assert.match(middleware, /env\?\.TENANTS/);
+  assert.doesNotMatch(middleware, /import\.meta\.env\.TENANTS/, 'a build with TENANTS set prerendered every public page as Not found');
+  assert.match(middleware, /!orgs\[label\]\?\.isPlatform/, 'the bare domain is the platform\'s own slug and is never refused');
   for (const f of ['.cloud.vars.example', '.dev.vars.example']) {
     const t = fs.readFileSync(f, 'utf8');
     assert.match(t, /# SIGNUPS=closed/, `${f} documents SIGNUPS`);

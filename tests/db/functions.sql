@@ -3783,5 +3783,34 @@ begin
   end;
 end $body$;
 
+-- The clock (2.9): the database keeps the school's time, so a date derived
+-- from now is the school's date, and a timestamp written out carries the
+-- Pacific offset for the pages to read.
+do $body$
+declare
+  v_tz text;
+begin
+  select setting into v_tz from pg_settings where name = 'TimeZone';
+  if v_tz <> 'America/Los_Angeles' then
+    raise exception 'FAIL the session is on %, not the school''s time', v_tz;
+  end if;
+  if current_date <> (now() at time zone 'America/Los_Angeles')::date then
+    raise exception 'FAIL current_date is not the school''s date';
+  end if;
+  if to_char(now(), 'TZH') not in ('-07', '-08') then
+    raise exception 'FAIL a timestamp written out carries % rather than the Pacific offset', to_char(now(), 'TZH');
+  end if;
+  -- And the database itself, not only this session: the setting every new
+  -- connection inherits.
+  if not exists (
+    select 1 from pg_db_role_setting s join pg_database d on d.oid = s.setdatabase
+     where d.datname = current_database() and s.setrole = 0
+       and 'TimeZone=America/Los_Angeles' = any(s.setconfig)
+  ) then
+    raise exception 'FAIL the database default is not the school''s time';
+  end if;
+  raise notice '  ok   the database keeps the school''s time';
+end $body$;
+
 \echo ''
 \echo '  All function assertions passed.'

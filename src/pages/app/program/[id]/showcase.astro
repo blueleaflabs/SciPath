@@ -25,7 +25,7 @@ import { serverClient } from '../../../../lib/supabase';
 import { resolveProgram } from '../../../../lib/templates';
 import { programTitle } from '../../../../lib/program-names';
 import { parseVideo } from '../../../../lib/video';
-import { formatDate } from '../../../../lib/dates';
+import { formatDate, dayOf } from '../../../../lib/dates';
 import { signInWith } from '../../../../lib/next-path';
 import { loadShowcases } from '../../../../lib/showcase-load';
 
@@ -86,7 +86,7 @@ const sorted = [...rows].sort((a, b) => {
   const lb = showOf(b).sections.at(-1)?.at ?? b.updated_at ?? '';
   return Number(b.mine) - Number(a.mine) || lb.localeCompare(la);
 });
-const fmtDay = (d: string | null) => (d ? formatDate(String(d).slice(0, 10), 'short') : '');
+const fmtDay = (d: string | null) => (d ? formatDate(dayOf(d, org.timezone), 'short') : '');
 ---
 
 <Base title={`${label} Showcase`} noindex={true}>

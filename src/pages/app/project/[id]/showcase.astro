@@ -27,7 +27,7 @@ import { parseVideo } from '../../../../lib/video';
 import { identify } from '../../../../lib/filetype';
 import { blobStore, projectImagePath, MAX_UPLOAD_BYTES } from '../../../../lib/blob';
 import { resolveProgram } from '../../../../lib/templates';
-import { formatDate } from '../../../../lib/dates';
+import { formatDate, dayOf } from '../../../../lib/dates';
 import { loadShowcases } from '../../../../lib/showcase-load';
 import ShowcaseSections from '../../../../components/ShowcaseSections.astro';
 import { sponsorsOf, sponsorNamesOf } from '../../../../lib/sponsors';
@@ -189,7 +189,7 @@ const showTemplate = showProgram?.template_id ? (() => { try { return resolvePro
 const assembled = showTemplate && firstPlace
   ? (await loadShowcases(supabase, showTemplate, firstPlace.program_id, [id!])).get(id!) ?? null
   : null;
-const fmtDay = (d: string | null) => (d ? formatDate(String(d).slice(0, 10), 'short') : '');
+const fmtDay = (d: string | null) => (d ? formatDate(dayOf(d, org.timezone), 'short') : '');
 /* Whether the Research Graphic has a question to start from. */
 const { data: summaryRows } = await supabase
   .from('documents')

@@ -29,7 +29,7 @@ import { programSlug, safePart } from '../../../../../lib/export-names';
 import { activeOrg } from '../../../../../lib/tenant';
 import { serverClient } from '../../../../../lib/supabase';
 import { standing, isAuthorOf } from '../../../../../lib/roles';
-import { formatDate, todayIn } from '../../../../../lib/dates';
+import { formatDate, todayIn, dayOf } from '../../../../../lib/dates';
 import { daysUntil } from '../../../../../lib/attention';
 import { afterPost, outcomeFrom } from '../../../../../lib/post-redirect';
 import { signInWith } from '../../../../../lib/next-path';
@@ -274,11 +274,11 @@ const state: DocState = !docRow
       ? 'revising'
       : 'in_progress';
 
-const fmt = (d: string | null | undefined) => (d ? formatDate(String(d).slice(0, 10), 'short') : '');
+const fmt = (d: string | null | undefined) => (d ? formatDate(dayOf(d, org.timezone), 'short') : '');
 const when = (iso: string | null | undefined) => {
   if (!iso) return '';
   const d = new Date(iso);
-  return `${formatDate(iso.slice(0, 10), 'short')} ${d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: org.timezone })}`;
+  return `${formatDate(dayOf(iso, org.timezone), 'short')} ${d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: org.timezone })}`;
 };
 const days = wanted?.dueOn ? daysUntil(wanted.dueOn, today) : null;
 const dueWord =

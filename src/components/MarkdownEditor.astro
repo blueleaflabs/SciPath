@@ -529,35 +529,82 @@ const seeded = value.trim() ? renderNote(value) : '';
        front of the one already there. The selection is remembered as
        character offsets and put back after the command, because the text
        nodes themselves do not survive it. */
-    const offsets = (): [number, number] | null => {
+    /* Remembered per line, not across the whole surface (2.9). Measured
+       as one offset from the top, the caret on an empty line — the line
+       Enter has just made under a heading, or under a list — had the same
+       offset as the end of the text before it, and was put back there:
+       Heading 2 clicked on the new line moved the caret up a line and the
+       heading never took. So the position is the line itself — the
+       nearest block around the caret, named by its path of child indices
+       from the surface, since a list Chrome has made inside a paragraph
+       puts the line two levels down — and the offset within that line; an
+       empty line restores to its own start. The path survives the
+       command, which replaces the element in place. */
+    type Pos = [number[], number];
+    const LINE = /^(P|DIV|H[1-6]|LI|BLOCKQUOTE|PRE)$/;
+    const lineOf = (n: Node): HTMLElement | null => {
+      let node: Node | null = n;
+      while (node && node !== edit) {
+        if (node.nodeType === 1 && LINE.test((node as Element).tagName)) return node as HTMLElement;
+        node = node.parentNode;
+      }
+      return null;
+    };
+    const pathOf = (el: Node): number[] => {
+      const out: number[] = [];
+      let node: Node | null = el;
+      while (node && node !== edit) {
+        const parent: Node | null = node.parentNode;
+        if (!parent) return out;
+        out.unshift(Array.prototype.indexOf.call(parent.childNodes, node));
+        node = parent;
+      }
+      return out;
+    };
+    const posOf = (container: Node, offset: number): Pos | null => {
+      const line = lineOf(container);
+      if (!line) return null;
+      const pre = document.createRange();
+      pre.selectNodeContents(line);
+      pre.setEnd(container, offset);
+      return [pathOf(line), pre.toString().length];
+    };
+    const offsets = (): [Pos, Pos] | null => {
       const sel = window.getSelection();
       if (!sel || !sel.rangeCount) return null;
       const r = sel.getRangeAt(0);
       if (!edit.contains(r.startContainer)) return null;
-      const pre = r.cloneRange();
-      pre.selectNodeContents(edit);
-      pre.setEnd(r.startContainer, r.startOffset);
-      const a = pre.toString().length;
-      pre.setEnd(r.endContainer, r.endOffset);
-      return [a, pre.toString().length];
+      const a = posOf(r.startContainer, r.startOffset);
+      const b = posOf(r.endContainer, r.endOffset);
+      return a && b ? [a, b] : null;
     };
-    const restore = (at: [number, number] | null) => {
+    const locate = (at: Pos): [Node, number] | null => {
+      let line: Node = edit;
+      for (const i of at[0]) {
+        const next = line.childNodes[i] ?? line.childNodes[line.childNodes.length - 1];
+        if (!next) break;
+        line = next;
+      }
+      const walker = document.createTreeWalker(line, NodeFilter.SHOW_TEXT);
+      let node: Node | null;
+      let acc = 0;
+      let last: Node | null = null;
+      while ((node = walker.nextNode())) {
+        const len = (node.textContent ?? '').length;
+        if (acc + len >= at[1]) return [node, at[1] - acc];
+        acc += len;
+        last = node;
+      }
+      /* No text (an empty line), or past its end: the line's own start or end. */
+      return last ? [last, (last.textContent ?? '').length] : [line, 0];
+    };
+    const restore = (at: [Pos, Pos] | null) => {
       if (!at) return;
       const sel = window.getSelection();
       if (!sel) return;
-      const walker = document.createTreeWalker(edit, NodeFilter.SHOW_TEXT);
-      let node: Node | null;
-      let acc = 0;
-      let from: [Node, number] | null = null;
-      let to: [Node, number] | null = null;
-      while ((node = walker.nextNode())) {
-        const len = (node.textContent ?? '').length;
-        if (!from && acc + len >= at[0]) from = [node, at[0] - acc];
-        if (!to && acc + len >= at[1]) { to = [node, at[1] - acc]; break; }
-        acc += len;
-      }
-      if (!from) return;
-      if (!to) to = from;
+      const from = locate(at[0]);
+      const to = locate(at[1]) ?? from;
+      if (!from || !to) return;
       sel.setBaseAndExtent(from[0], from[1], to[0], to[1]);
     };
     const keepingCaret = (fn: () => void) => {
@@ -586,6 +633,27 @@ const seeded = value.trim() ? renderNote(value) : '';
       sel?.addRange(r);
     };
 
+    /* A list made on an empty line comes back from Chrome inside the
+       paragraph (`<p><ul>…</ul></p>`), and every line made after it is
+       then a line inside a paragraph — nowhere a caret memory or a
+       Markdown reader expects one. Lift such blocks out of the paragraph
+       that holds them, keeping the selection on the same nodes: they are
+       moved, not remade, so the caret's own node is still there. */
+    const NESTED = /^(UL|OL|P|DIV|H[1-6]|BLOCKQUOTE|PRE)$/;
+    const unnest = () => {
+      const sel = window.getSelection();
+      const saved = sel && sel.rangeCount && sel.anchorNode && sel.focusNode ? [sel.anchorNode, sel.anchorOffset, sel.focusNode, sel.focusOffset] as const : null;
+      let changed = false;
+      for (const p of Array.from(edit.querySelectorAll('p, div'))) {
+        if (p === edit || !p.parentNode) continue;
+        if (!Array.from(p.children).some((c) => NESTED.test(c.tagName))) continue;
+        while (p.firstChild) p.parentNode.insertBefore(p.firstChild, p);
+        p.remove();
+        changed = true;
+      }
+      if (changed && saved && edit.contains(saved[0]) && edit.contains(saved[2])) sel!.setBaseAndExtent(saved[0], saved[1], saved[2], saved[3]);
+    };
+
     const BLOCKISH = new Set(['h1', 'h2', 'h3', 'plain', 'quote', 'code', 'ul', 'ol']);
     const surface = edit;
     function run(cmd: string) {
@@ -607,6 +675,7 @@ const seeded = value.trim() ? renderNote(value) : '';
         case 'link': openLink(); return;
         case 'nothing': return;
       }
+      if (BLOCKISH.has(cmd)) unnest();
       sync();
       reflect();
     }

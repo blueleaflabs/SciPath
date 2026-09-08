@@ -63,4 +63,17 @@ export default defineConfig({
   build: {
     format: 'directory',
   },
+  /* THE BUILD'S NAME (2.9). One short id per build, fixed here so the
+     server and every page it renders agree on it: the commit on
+     Cloudflare, the build's moment anywhere else. The middleware sends it
+     on every response and the shell compares it with the one its page was
+     rendered under; a page left open across a deploy reloads itself the
+     next time it is looked at. See src/lib/build.ts. */
+  vite: {
+    define: {
+      'import.meta.env.PUBLIC_BUILD': JSON.stringify(
+        (process.env.CF_PAGES_COMMIT_SHA ?? process.env.WORKERS_CI_COMMIT_SHA ?? process.env.GITHUB_SHA ?? String(Date.now())).slice(0, 12)
+      ),
+    },
+  },
 });

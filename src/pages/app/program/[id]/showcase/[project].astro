@@ -21,7 +21,7 @@ import { serverClient } from '../../../../../lib/supabase';
 import { resolveProgram } from '../../../../../lib/templates';
 import { programTitle, staffWord } from '../../../../../lib/program-names';
 import { parseVideo } from '../../../../../lib/video';
-import { formatDate } from '../../../../../lib/dates';
+import { formatDate, dayOf } from '../../../../../lib/dates';
 import { signInWith } from '../../../../../lib/next-path';
 import { loadShowcases } from '../../../../../lib/showcase-load';
 import ShowcaseSections from '../../../../../components/ShowcaseSections.astro';
@@ -85,7 +85,7 @@ const days = asOf ? (template ? (await loadShowcases(supabase, template, id!, [p
    from the deliverables. The author's voice sits above the assembled
    sections, never instead of them. */
 const heroFromWork = images.length === 0 ? show.picture : null;
-const fmtDay = (d: string | null) => (d ? formatDate(String(d).slice(0, 10), 'short') : '');
+const fmtDay = (d: string | null) => (d ? formatDate(dayOf(d, org.timezone), 'short') : '');
 ---
 
 <Base title={card.title} noindex={true}>

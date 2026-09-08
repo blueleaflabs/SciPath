@@ -39,13 +39,14 @@ import { serverClient } from '../../../../lib/supabase';
 import { standing } from '../../../../lib/roles';
 import { scoreBand } from '../../../../lib/score-band';
 import { programTitle, staffWord } from '../../../../lib/program-names';
-import { formatDate, todayIn } from '../../../../lib/dates';
+import { formatDate, todayIn, dayOf } from '../../../../lib/dates';
 import { outcomeFrom } from '../../../../lib/post-redirect';
 import { signInWith } from '../../../../lib/next-path';
 import { allRows } from '../../../../lib/all-rows';
 import { resolveProgram } from '../../../../lib/templates';
 import { meanWord, scoreWord, LEVELS } from '../../../../lib/tracker-math';
 import MarkdownEditor from '../../../../components/MarkdownEditor.astro';
+import { platform } from '../../../../config/site';
 
 const { session, account, roles } = Astro.locals;
 const org = activeOrg(Astro);
@@ -155,7 +156,7 @@ const families = (() => {
 
 const milestoneOf = (row: Row, col: Col) => (milestones ?? []).find((m: any) => m.participation_id === row.part.id && m.step_id === col.key) ?? null;
 const label = program.short_name ?? program.name;
-const fmt = (d: string | null) => (d ? formatDate(String(d).slice(0, 10), 'short') : '');
+const fmt = (d: string | null) => (d ? formatDate(dayOf(d, org.timezone), 'short') : '');
 /* An Elder writes their own family's cells. The teacher reads (decision
    78: the teacher's grade is a different thing, on Grade a deadline). */
 const canWriteRow = (r: Row) => r.mine;
@@ -200,7 +201,9 @@ const allAvg = meanWord(rows.flatMap((r) => cols.map((c) => cellScore(r, c))));
         <button type="button" class="tfilter" data-filter="unscored" aria-pressed="false">Unscored only</button>
         {myFamily && <button type="button" class="tfilter" data-filter="mine" aria-pressed="false">My family</button>}
         {me.isAdvisor && <a class="btn btn-sm ghost" href={`/app/program/${id}/grade/`}>Grade a deadline</a>}
-        {me.isAdvisor && <a class="btn btn-sm ghost" href={`/app/program/${id}/class/`}>Class page</a>}
+        {/* The class page is off the bar while the teacher works from the
+            Workbench (2.9); the Workbench is one tab up. */}
+        {me.isAdvisor && !platform.teacherWorkbench && <a class="btn btn-sm ghost" href={`/app/program/${id}/class/`}>Class page</a>}
         <span class="spacer"></span>
         <span class="legend" aria-hidden="true">
           <i class="band-1">1</i><i class="band-2">2</i><i class="band-3">3</i><i class="band-4">4</i>

@@ -52,6 +52,15 @@ export const platform = {
    * them. The section and its form stay in the page; flip to show.
    */
   linkedDocuments: false,
+  /**
+   * The teacher's Workbench (2.9). On, the teacher lands on the same page
+   * an Elder does — the plate, then the cards, arranged by Elder — and the
+   * class page leaves the bar (it still answers at its address). Off, a
+   * bare /app/ sends the teacher to the class page and the bar names it.
+   * On for the pilot; the class page's reports are rebuilt against what
+   * the Workbench turns out to lack.
+   */
+  teacherWorkbench: true,
 } as const;
 
 /*

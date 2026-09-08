@@ -48,7 +48,7 @@ const today = todayIn(org.timezone);
  * alone, and a person running two classes has no single default.
  */
 const classesRun = ((Astro.locals as any).classes ?? []) as { program_id: string }[];
-if (Astro.request.method === 'GET' && account && classesRun.length === 1 && !Astro.url.search) {
+if (!platform.teacherWorkbench && Astro.request.method === 'GET' && account && classesRun.length === 1 && !Astro.url.search) {
   return Astro.redirect(`/app/program/${classesRun[0].program_id}/class/`);
 }
 
@@ -1737,7 +1737,27 @@ const groupsOf = (rows: any[]) => {
    nothing assigned sees everything they can reach, which is a teacher's
    ordinary case; an Elder sees their own. What nobody has taken is counted
    here and listed on the assign page, where taking it is one click. */
-const careGroups = groupsOf(shown.filter((w: any) => !unattached(w)));
+/* The teacher's cards, by family (2.9): the Elders work in pairs and the
+   teacher reads the class as families, the way the tracker names them
+   ("Elders: Aanya Padhi, Yutong Chen"). A project's family is the set of
+   its Elders, so a project with two is under the pair once, a project
+   with one under that name, and one with nobody last, under its own
+   heading, since that is the list to act on. An Elder keeps the grouping
+   by program. */
+const byElder = (rows: any[]): { program: any; elder: string | null; rows: any[] }[] => {
+  const out = new Map<string, { program: any; elder: string | null; rows: any[] }>();
+  for (const w of rows) {
+    const elders = (w.officers ?? []).filter((o: any) => o.users?.display_name).map((o: any) => String(o.users.display_name)).sort((a: string, b: string) => a.localeCompare(b));
+    const name = elders.length ? elders.join(', ') : null;
+    const key = name ?? '\u0000';
+    if (!out.has(key)) out.set(key, { program: w.entry?.programs ?? null, elder: name, rows: [] });
+    out.get(key)!.rows.push(w);
+  }
+  return [...out.values()].sort((a, b) => (a.elder === null ? 1 : b.elder === null ? -1 : a.elder.localeCompare(b.elder)));
+};
+const careGroups = me.isAdvisor && platform.teacherWorkbench
+  ? byElder(shown.filter((w: any) => !unattached(w)))
+  : groupsOf(shown.filter((w: any) => !unattached(w)));
 const groups = groupsOf(shown);
 
 /* What `watched` is a list of, said in the words of whoever is reading it.
@@ -1855,6 +1875,9 @@ const careChoice = (() => {
 const careLayout = (group: any): 'grid' | 'wide' => {
   if (careChoice) return careChoice;
   const runsIt = group.program?.id ? classesRun.some((c) => c.program_id === group.program.id) : false;
+  /* The same cards as the Elder's, three across, when the teacher works
+     from the Workbench (2.9); the one wide column was the class page's. */
+  if (platform.teacherWorkbench && me.isAdvisor) return 'grid';
   return runsIt || me.isAdvisor ? 'wide' : 'grid';
 };
 
@@ -2280,8 +2303,8 @@ const careLayout = (group: any): 'grid' | 'wide' => {
                 {careGroups.map((group: any) => (
                 <div class="care-group">
                   <div class="group-h care-h">
-                    <span>{group.program ? programTitle(group.program) : 'In no program'}</span>
-                    <span class="t-num">{standingOf(group)}</span>
+                    <span>{group.elder !== undefined ? (group.elder ? `${staffWord(group.program, group.elder.includes(',') ? 'plural' : 'singular')}: ${group.elder}` : `No ${staffWord(group.program, 'singular').toLowerCase()} yet`) : group.program ? programTitle(group.program) : 'In no program'}</span>
+                    <span class="t-num">{group.elder !== undefined ? `${group.rows.length} ${group.rows.length === 1 ? 'project' : 'projects'}${group.rows.filter((r: any) => r.daysToNext !== null && r.daysToNext < 0).length ? ` · ${group.rows.filter((r: any) => r.daysToNext !== null && r.daysToNext < 0).length} behind` : ''}` : standingOf(group)}</span>
                   </div>
 
                   {/* **CARDS, NOT A TABLE (2.8).** One component, two

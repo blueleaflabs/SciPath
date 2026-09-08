@@ -29,6 +29,36 @@
 -- would otherwise recurse.
 -- ---------------------------------------------------------------------------
 
+-- ---------------------------------------------------------------------------
+-- THE CLOCK (2.9).
+--
+-- The database kept UTC, and every date it derived from "now" — a
+-- deliverable's `signed_on`, a step's `completed_on`, `current_date` in
+-- the late and early checks — was tomorrow's from five in the afternoon
+-- in California. So was every date a page took off a timestamp, since the
+-- API wrote them out in UTC and the page kept the first ten characters.
+-- A student who submitted on the 7th saw "submitted September 8".
+--
+-- Every school here is on Pacific time, so the database keeps it: the
+-- setting below is per database, applies to every new connection whatever
+-- role opens it, and makes `current_date` the school's date and every
+-- timestamp the API writes carry the Pacific offset, which is what the
+-- pages read. Columns stay `timestamptz`; nothing about the instant is
+-- lost. The day a school in another zone arrives, this becomes a column
+-- on `organizations` and an `app.today()` beside `app.org_id()`.
+--
+-- Takes effect for connections opened after it runs: the hosted project
+-- is restarted after a reset, and the local stack is stopped and started.
+-- ---------------------------------------------------------------------------
+do $$
+begin
+  execute format('alter database %I set timezone = %L', current_database(), 'America/Los_Angeles');
+exception when others then
+  raise notice 'timezone not set on the database (%): set it in the dashboard', sqlerrm;
+end;
+$$;
+set timezone = 'America/Los_Angeles';
+
 create schema if not exists app;
 
 revoke all on schema app from public;

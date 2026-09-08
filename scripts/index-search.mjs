@@ -52,6 +52,24 @@ if (tenants.length === 0) {
   process.exit(1);
 }
 
+/* Before indexing, prove the pages are pages. The first hosted build after
+   2.9 failed inside Pagefind with "22 pages found without an <html>
+   element", which named the symptom and not the file. Whatever the cause,
+   the log should show the head of the offending file, not a search index
+   complaining about it. */
+for (const slug of tenants) {
+  const first = fs.readdirSync(path.join(DIST, slug), { withFileTypes: true, recursive: true })
+    .find((e) => e.isFile() && e.name === 'index.html');
+  if (first) {
+    const file = path.join(first.parentPath ?? first.path, first.name);
+    const head = fs.readFileSync(file, 'utf8').slice(0, 400);
+    if (!/<html[\s>]/i.test(head)) {
+      console.error(`\n${file} is not an HTML page. Its first 400 characters:\n\n${head}\n`);
+      process.exit(1);
+    }
+  }
+}
+
 for (const slug of tenants) {
   execFileSync('npx', ['pagefind', '--site', path.join(DIST, slug)], { stdio: 'inherit' });
 }

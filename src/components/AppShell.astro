@@ -11,6 +11,8 @@ interface Props {
 const { org, account, here, roles = [] } = Astro.props;
 
 import { standing } from '../lib/roles';
+import { platform } from '../config/site';
+import { BUILD } from '../lib/build';
 import { env } from '../lib/supabase';
 import { inClass } from '../lib/live-plan';
 
@@ -97,8 +99,11 @@ const trackers = [
 ];
 
 const nav = [
-  ...classes.map((c) => ({ href: `/app/program/${c.program_id}/class/`, label: `${c.short_name ?? c.name} Class` })),
-  ...(classes.length === 0 && !landsOnProject ? [{ href: '/app/', label: 'Projects Workbench' }] : []),
+  /* The class page leaves the bar while the teacher works from the
+     Workbench (2.9, `platform.teacherWorkbench`); it still answers at its
+     address. */
+  ...(platform.teacherWorkbench ? [] : classes.map((c) => ({ href: `/app/program/${c.program_id}/class/`, label: `${c.short_name ?? c.name} Class` }))),
+  ...((platform.teacherWorkbench || classes.length === 0) && !landsOnProject ? [{ href: '/app/', label: 'Projects Workbench' }] : []),
   ...projectTabs,
   ...trackers,
   ...showcases.map((s) => ({ href: `/app/program/${s.program_id}/showcase/`, label: `${s.short_name ?? s.name} Showcase` })),
@@ -115,7 +120,7 @@ const nav = [
 });
 ---
 
-<nav class="appnav" aria-label="Working surface" data-live-url={liveUrl} data-live-key={liveKey} data-live-me={account?.id ?? ''} data-live-plan={livePlan} data-live-class={classNow ? '1' : '0'}>
+<nav class="appnav" aria-label="Working surface" data-live-url={liveUrl} data-live-key={liveKey} data-live-me={account?.id ?? ''} data-live-plan={livePlan} data-live-class={classNow ? '1' : '0'} data-build={BUILD}>
   <ul>
     {nav.map((n) => (
       <li>
@@ -152,6 +157,91 @@ const nav = [
   const regions = () => Array.from(document.querySelectorAll<HTMLElement>('[data-live]'));
   const nav = document.querySelector<HTMLElement>('.appnav');
   const plan = (() => { try { return JSON.parse(nav?.dataset.livePlan ?? ''); } catch { return null; } })();
+
+  /* ── A page left open across a deploy (2.9) ─────────────────────────────
+     Every response from this site names the build that sent it, and the
+     page knows the build it was rendered under. The two are compared on
+     responses the page is already getting — an autosave, the pulse, a live
+     region re-read — so there is no polling for it; once, at most every
+     five minutes, when a tab is looked at again after being hidden (the
+     laptop opened the next morning); and, for a tab that stays visible
+     and silent, once every fifteen minutes, with one request the server
+     answers before any handler runs.
+
+     A newer build reloads the page, but never over somebody's work. Two
+     kinds of work are on a page: boxes that save as they type (the
+     documents), which are safe once nothing is saving and nothing has
+     been typed for half a minute — what was typed is on the server — and
+     forms that save on a button (a notebook entry, a rename, a question),
+     which are not safe until the button is pressed, since a reload would
+     lose what is in them. So while a form holds something unsaved the
+     page says so in a strip and waits; it reloads when the form is sent or
+     emptied, or when the person chooses. */
+  const BUILD = nav?.dataset.build ?? '';
+  const BUILD_HEADER = 'x-scipath-build';
+  let newer = false;
+  let lastKey = 0;
+  let lastAsk = 0;
+  let lastHeard = Date.now();
+  let retry: number | undefined;
+  const updateStrip = document.createElement('div');
+  updateStrip.className = 'live-strip update-strip';
+  updateStrip.hidden = true;
+  updateStrip.setAttribute('role', 'status');
+  document.body.appendChild(updateStrip);
+  /* Something typed into a form that saves on a button, and not yet sent. */
+  const unsaved = (): boolean => {
+    if (document.querySelector('.fstate.saving')) return true;
+    for (const el of document.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>('textarea, input[type="text"], input[type="url"], input[type="number"], input[type="search"], input:not([type])')) {
+      if (el.closest('.field[data-field]')) continue; /* saves as it goes */
+      if (el.value !== el.defaultValue && el.value.trim() !== '') return true;
+    }
+    return false;
+  };
+  const quiet = () => Date.now() - lastKey > 30_000 && !unsaved();
+  const reloadWhenQuiet = () => {
+    if (!newer) return;
+    if (quiet() && !document.hidden) { location.reload(); return; }
+    updateStrip.innerHTML = unsaved()
+      ? 'SciPath was updated. This page will refresh itself once what you are writing here is sent — or <a href="#" data-refresh>refresh now</a> (what is typed and not yet sent would be lost).'
+      : 'SciPath was updated. This page refreshes itself when you pause — or <a href="#" data-refresh>refresh now</a>.';
+    updateStrip.hidden = false;
+    window.clearTimeout(retry);
+    retry = window.setTimeout(reloadWhenQuiet, 15_000);
+  };
+  updateStrip.addEventListener('click', (ev) => { if ((ev.target as HTMLElement).closest('[data-refresh]')) { ev.preventDefault(); location.reload(); } });
+  const noticed = (build: string | null) => {
+    lastHeard = Date.now();
+    if (!build || !BUILD || build === BUILD || newer) return;
+    newer = true;
+    reloadWhenQuiet();
+  };
+  window.addEventListener('keydown', () => { lastKey = Date.now(); }, { passive: true });
+  /* A form sent is the safest moment of all: the page is about to be
+     rendered again anyway. */
+  document.addEventListener('submit', () => { if (newer) window.setTimeout(reloadWhenQuiet, 800); });
+  if (BUILD) {
+    const original = window.fetch.bind(window);
+    window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      const ours = url.startsWith('/') || url.startsWith(location.origin);
+      /* The request says which build it comes from, so the server can tell. */
+      const withBuild = ours ? { ...(init ?? {}), headers: { ...(init?.headers instanceof Headers ? Object.fromEntries(init.headers.entries()) : (init?.headers as Record<string, string> | undefined) ?? {}), [BUILD_HEADER]: BUILD } } : init;
+      const res = await original(input, withBuild);
+      try { if (ours) noticed(res.headers.get(BUILD_HEADER)); } catch { /* a response is a response; the check is a courtesy */ }
+      return res;
+    };
+    const ask = () => {
+      if (Date.now() - lastAsk < 5 * 60_000) return;
+      lastAsk = Date.now();
+      fetch('/app/api/version/', { cache: 'no-store', credentials: 'same-origin' }).catch(() => {});
+    };
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) { ask(); reloadWhenQuiet(); } });
+    window.addEventListener('pageshow', (ev) => { if ((ev as PageTransitionEvent).persisted) ask(); });
+    /* A tab that stays visible and hears nothing — the Workbench on a
+       projector — asks once every fifteen minutes, and only then. */
+    window.setInterval(() => { if (!document.hidden && Date.now() - lastHeard > 15 * 60_000) ask(); }, 15 * 60_000);
+  }
 
   let busy = false;
   let queued = false;

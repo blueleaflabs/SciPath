@@ -15,6 +15,7 @@ import { defineMiddleware } from 'astro:middleware';
 import { serverClient, isConfigured, meterFor } from './lib/supabase';
 import { resolveOrg, hostIsOurs, slugForHostname } from './lib/tenant';
 import { signupsClosed } from './lib/door';
+import { BUILD, BUILD_HEADER } from './lib/build';
 import { orgs } from './config/orgs';
 import { originForOrg, rootDomain } from './lib/deployment';
 import { tenantSlugs } from './lib/tenant-paths';
@@ -82,6 +83,8 @@ const HEADERS: Record<string, string> = {
   /* The origin, never the path. A student's project id in a Referer header
      travelling to a fair's website is a leak nobody would predict. */
   'Referrer-Policy': 'strict-origin-when-cross-origin',
+  /* Which build answered (2.9): the shell compares it with its page's. */
+  [BUILD_HEADER]: BUILD,
   /* Nothing here uses any of them. */
   'Permissions-Policy': 'camera=(), microphone=(), geolocation=(), payment=(), usb=()',
 };
@@ -176,22 +179,40 @@ export const onRequest = defineMiddleware(async (context, next) => {
      not the platform's front door under a stranger's name, which the
      fallback in resolveOrg used to render for any host pointed here.
      Before the handler, since there is no tenant to render for. */
-  if (!hostIsOurs(context.url.hostname, rootDomain)) {
+  /* A prerender has no host to refuse: the build renders every public
+     page once, under whatever address `site` names, and a refusal there is
+     a page written to disk as "Not found". Both gates below are for
+     requests, which arrive with the Worker's runtime; the build has none. */
+  const atRuntime = Boolean((context.locals as Record<string, any>).runtime?.env);
+  if (atRuntime && !hostIsOurs(context.url.hostname, rootDomain)) {
     return new Response('Not found', { status: 404, headers: { 'content-type': 'text/plain' } });
   }
   /* And only the tenants the deployment names (2.9): TENANTS=montavista,demo
      answers those two schools' addresses and the platform's own, and
      nothing for any other school in the files. Unset means every school
-     in src/config/orgs, as before. */
-  const env = (context.locals as Record<string, any>).runtime?.env ?? {};
-  const tenants = String(env.TENANTS ?? import.meta.env.TENANTS ?? '').split(',').map((t: string) => t.trim().toLowerCase()).filter(Boolean);
-  if (tenants.length > 0) {
+     in src/config/orgs, as before.
+
+     Read from the Worker's runtime variables only, never from the build:
+     the first deployment with this read `import.meta.env` too, and a
+     build that had TENANTS set prerendered every public page as "Not
+     found" — the bare domain resolves to the platform's own slug, which
+     the list did not name. So the platform is never refused, and at build
+     time there is no runtime and nothing to refuse with. */
+  const env = (context.locals as Record<string, any>).runtime?.env;
+  const tenants = String(env?.TENANTS ?? '').split(',').map((t: string) => t.trim().toLowerCase()).filter(Boolean);
+  if (atRuntime && tenants.length > 0) {
     const label = slugForHostname(context.url.hostname);
-    if (label && !tenants.includes(label)) {
+    if (label && !tenants.includes(label) && !orgs[label]?.isPlatform) {
       return new Response('Not found', { status: 404, headers: { 'content-type': 'text/plain' } });
     }
   }
-  const response = await handle(context, next);
+  /* Which build is serving, for a page that asks (2.9): answered here,
+     before the handler, so it costs no database call. The header is on
+     every response anyway; this is the one a tab asks for when it is
+     looked at again after a night away. */
+  const response = context.url.pathname === '/app/api/version/'
+    ? new Response(null, { status: 204, headers: { 'cache-control': 'no-store' } })
+    : await handle(context, next);
 
   try {
     stamp(response);

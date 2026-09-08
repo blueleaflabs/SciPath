@@ -23,7 +23,7 @@ import { serverClient } from '../../../../lib/supabase';
 import { standing } from '../../../../lib/roles';
 import { scoreBand } from '../../../../lib/score-band';
 import { programTitle, staffWord } from '../../../../lib/program-names';
-import { formatDate, todayIn } from '../../../../lib/dates';
+import { formatDate, todayIn, dayOf } from '../../../../lib/dates';
 import { daysUntil } from '../../../../lib/attention';
 import { afterPost, outcomeFrom } from '../../../../lib/post-redirect';
 import { signInWith } from '../../../../lib/next-path';
@@ -223,7 +223,7 @@ rows.sort((a, b) => ORDER.indexOf(state(a)) - ORDER.indexOf(state(b)) || String(
 const unreleased = (grades ?? []).filter((g: any) => !g.released_at).length;
 const label = program.short_name ?? program.name;
 const outOfRubric = rubric ? scoreRubric(rubric, []).outOf : null;
-const fmt = (d: string | null) => (d ? formatDate(String(d).slice(0, 10), 'short') : '');
+const fmt = (d: string | null) => (d ? formatDate(dayOf(d, org.timezone), 'short') : '');
 const counts = {
   submitted: rows.filter((r) => state(r) === 'submitted').length,
   graded: rows.filter((r) => state(r) === 'graded' || state(r) === 'released').length,

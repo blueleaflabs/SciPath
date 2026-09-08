@@ -2544,4 +2544,8 @@ a.btn.ghost:focus {
   font-size: 0.82rem;
   text-align: center;
 }
+/* The update strip (2.9) sits above the live strip when both show, and
+   its link is a link. */
+.update-strip { bottom: auto; top: 0; border-top: 0; border-bottom: 1px solid var(--rule); background: var(--sunk); }
+.update-strip a { color: inherit; text-decoration: underline; }
 @media print { .live-strip { display: none !important; } }

@@ -1,0 +1,7 @@
+# Cloudflare Pages headers (2.9). Astro names every built script and
+# stylesheet by its content hash, so a file under /_astro/ never changes:
+# a browser may keep it for a year, and a reload after a deploy fetches
+# only what is new. Pages are never cached this way; the middleware sets
+# their Cache-Control per request.
+/_astro/*
+  Cache-Control: public, max-age=31536000, immutable

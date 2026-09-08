@@ -131,6 +131,27 @@ export function todayIn(timezone: string, at: Date = new Date()): string {
   }
 }
 
+/**
+ * THE DAY A TIMESTAMP FELL ON, WHERE THE SCHOOL IS (2.9).
+ *
+ * A `timestamptz` comes off the API as an ISO string, and the pages took
+ * its first ten characters as the date. In UTC that is tomorrow from five
+ * in the afternoon in California. The database now writes the Pacific
+ * offset, which makes the first ten characters right again — and this
+ * makes them right whatever the database writes, by converting through
+ * the school's zone. A bare date (`2026-09-10`, a `date` column) has no
+ * instant to convert and is returned as it is; converting it would move
+ * it a day the other way.
+ */
+export function dayOf(value: string | Date | null | undefined, timezone: string): string {
+  if (!value) return '';
+  if (value instanceof Date) return todayIn(timezone, value);
+  const v = String(value);
+  if (!/T\d\d:\d\d/.test(v)) return v.slice(0, 10);
+  const at = new Date(v);
+  return Number.isNaN(at.getTime()) ? v.slice(0, 10) : todayIn(timezone, at);
+}
+
 /** A month named in a template window (`august`), as a word on a page (`August`). */
 export function monthWord(name: string | null | undefined): string {
   const w = String(name ?? '').trim();
