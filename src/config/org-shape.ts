@@ -53,6 +53,15 @@ export interface Org {
    *          pilot, or by an advisor) sign in. The pilot's setting (2.9).
    */
   signupMode?: 'domain' | 'open' | 'invite' | 'closed';
+  /**
+   * How people sign in (2.9). `both` (the default) offers Google and the
+   * email-and-password form; `password` offers the form alone and refuses
+   * a Google sign-in in the callback — the setting for a class on
+   * identifiers and addresses nobody holds, where a Google account could
+   * neither match nor be wanted. With `password`, the way to a new
+   * password is /auth/change/ with the current one, never a mailed link.
+   */
+  signIn?: 'both' | 'password';
   /** False for an open program with no school behind it. */
   requiresMentor?: boolean;
   /** Full name, on every page title and record. */
@@ -189,6 +198,7 @@ export function shapeOrg(doc: any): Org {
     slug: doc.slug,
     subdomain: doc.subdomain,
     signupMode: doc.signup_mode,
+    signIn: doc.sign_in === 'password' ? 'password' : 'both',
     requiresMentor: doc.requires_mentor,
     name: doc.name,
     shortName: doc.short_name,

@@ -14372,3 +14372,429 @@ revoke all on function public.nudge_states(uuid[]) from public, anon;
 grant execute on function public.nudge_states(uuid[]) to authenticated;
 
 notify pgrst, 'reload schema';
+
+-- ===========================================================================
+-- THE PAGES' READS, FOLDED (2.9). Every route's cost on the hosted instance
+-- was round trips rather than any one query (design brief 137). Each of
+-- these answers, as the definer scoped by `app.my_project_ids()` — the
+-- policy asked once per project — what a page used to ask in six to
+-- fourteen reads through per-row policies, in the shapes the page reads.
+-- ===========================================================================
+
+create or replace function public.places_of(p_program_id uuid)
+returns jsonb
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  with mine as (select app.my_project_ids() as project_id)
+  select coalesce(jsonb_agg(jsonb_build_object(
+           'id', e.id,
+           'project_id', e.project_id,
+           'status', e.status,
+           'projects', jsonb_build_object(
+             'id', p.id,
+             'title', p.title,
+             'project_authors', coalesce((
+               select jsonb_agg(jsonb_build_object(
+                        'role', a.role,
+                        'participation_id', a.participation_id,
+                        'self_managed_at', a.self_managed_at,
+                        'users', jsonb_build_object('id', u.id, 'display_name', u.display_name)))
+                 from public.project_authors a
+                 join public.users u on u.id = a.user_id
+                where a.project_id = p.id), '[]'::jsonb)))
+           order by p.title, e.id), '[]'::jsonb)
+    from public.participations e
+    join public.projects p on p.id = e.project_id
+   where e.program_id = p_program_id
+     and e.status in ('entered', 'competed')
+     and e.project_id in (select project_id from mine);
+$$;
+revoke all on function public.places_of(uuid) from public, anon;
+grant execute on function public.places_of(uuid) to authenticated;
+
+-- THE DEADLINES PAGE'S FACTS IN ONE READ (2.9). The page asked the
+-- database thirteen questions in a row, nine of them about this one place
+-- and its project, each answered through a row policy that resolves to the
+-- same `can_see_project` on the same project: the place with its program
+-- and project, the cohort it came through, the feedback, the recorded
+-- deliverables, the sponsors of every place of the project, the links and
+-- the manuscript, the last notebook entry, the people on the project, the
+-- class's warnings and the documents written in SciPath. From a Worker
+-- each is a network hop and they add serially. This asks the rule once and
+-- answers the nine as one jsonb in the shapes the page already reads,
+-- keyed by the same names PostgREST gave the embeds. Null when the place
+-- does not exist or the caller may not see the project — the page then
+-- does what it did for an empty read. The grades stay a session read: their
+-- policy is per person and per release, not per project, and the page must
+-- not have to restate it.
+create or replace function public.place_page(p_project_id uuid, p_program_id uuid)
+returns jsonb
+language plpgsql
+stable
+security definer
+set search_path = ''
+as $$
+declare
+  v_entry_id uuid;
+  v_org      uuid;
+begin
+  if auth.uid() is null then return null; end if;
+  if not app.can_see_project(p_project_id) then return null; end if;
+  select e.id, e.org_id into v_entry_id, v_org
+    from public.participations e
+   where e.project_id = p_project_id and e.program_id = p_program_id;
+  if v_entry_id is null then return null; end if;
+
+  return jsonb_build_object(
+    'entry', (
+      select to_jsonb(e) - 'org_id'
+             || jsonb_build_object(
+                  'projects', (select jsonb_build_object(
+                                 'id', p.id, 'title', p.title, 'started_on', p.started_on, 'facts', p.facts,
+                                 'video_url', p.video_url, 'process_id', p.process_id,
+                                 'project_authors', coalesce((
+                                   select jsonb_agg(jsonb_build_object('role', a.role, 'users', jsonb_build_object('id', a.user_id)))
+                                     from public.project_authors a where a.project_id = p.id), '[]'::jsonb))
+                                 from public.projects p where p.id = e.project_id),
+                  'programs', (select jsonb_build_object(
+                                 'id', g.id, 'name', g.name, 'season_year', g.season_year, 'kind', g.kind,
+                                 'program_role', g.program_role, 'process_id', g.process_id, 'phases', g.phases,
+                                 'roles', g.roles, 'template_id', g.template_id, 'fair_date', g.fair_date,
+                                 'advances_to_fairs', g.advances_to_fairs, 'showcase', g.showcase)
+                                 from public.programs g where g.id = e.program_id))
+        from public.participations e where e.id = v_entry_id),
+    'via_process_id', (
+      select g.process_id
+        from public.participations e
+        join public.participations v on v.id = e.via_id
+        join public.programs g on g.id = v.program_id
+       where e.id = v_entry_id),
+    'feedback', coalesce((
+      select jsonb_agg(jsonb_build_object(
+               'id', f.id, 'deliverable_id', f.deliverable_id, 'milestone_id', f.milestone_id, 'body_md', f.body_md,
+               'needs_revision', f.needs_revision, 'created_at', f.created_at, 'resolved_at', f.resolved_at,
+               'author', jsonb_build_object('display_name', u.display_name))
+             order by f.created_at desc)
+        from public.deliverable_feedback f
+        join public.users u on u.id = f.author_id
+       where f.participation_id = v_entry_id), '[]'::jsonb),
+    'deliverables', coalesce((
+      select jsonb_agg(jsonb_build_object(
+               'id', d.id, 'milestone_id', d.milestone_id, 'label', d.label, 'type', d.type, 'signed_on', d.signed_on,
+               'external_url', d.external_url, 'verified_at', d.verified_at, 'verified_by', d.verified_by,
+               'document_version_id', d.document_version_id))
+        from public.deliverables d
+       where d.participation_id = v_entry_id and d.superseded_at is null), '[]'::jsonb),
+    'sponsor_places', coalesce((
+      select jsonb_agg(jsonb_build_object(
+               'id', e.id, 'project_id', e.project_id, 'program_id', e.program_id,
+               'programs', jsonb_build_object('name', g.name),
+               'project_sponsors', coalesce((
+                 select jsonb_agg(jsonb_build_object(
+                          'teacher_name', sp.teacher_name, 'confirmed_at', sp.confirmed_at, 'signed_on', sp.signed_on,
+                          'recorded_at', sp.recorded_at, 'superseded_at', sp.superseded_at))
+                   from public.project_sponsors sp where sp.participation_id = e.id), '[]'::jsonb)))
+        from public.participations e
+        join public.programs g on g.id = e.program_id
+       where e.project_id = p_project_id), '[]'::jsonb),
+    'links', coalesce((
+      select jsonb_agg(jsonb_build_object('id', l.id, 'label', l.label, 'url', l.url, 'visibility', l.visibility, 'created_at', l.created_at)
+             order by l.created_at)
+        from public.project_links l where l.project_id = p_project_id), '[]'::jsonb),
+    'manuscript', (
+      select jsonb_build_object('id', m.id, 'title', m.title)
+        from public.manuscripts m where m.project_id = p_project_id limit 1),
+    'last_note', (
+      select jsonb_build_object('occurred_on', n.occurred_on, 'created_at', n.created_at)
+        from public.field_notes n where n.project_id = p_project_id
+       order by n.created_at desc limit 1),
+    'overseers', coalesce((
+      select jsonb_agg(jsonb_build_object(
+               'user_id', a.user_id, 'role', a.role, 'participation_id', a.participation_id,
+               'self_managed_at', a.self_managed_at, 'accepted_at', a.accepted_at,
+               'users', jsonb_build_object('id', u.id, 'display_name', u.display_name)))
+        from public.project_authors a
+        join public.users u on u.id = a.user_id
+       where a.project_id = p_project_id), '[]'::jsonb),
+    'warnings', coalesce((
+      select jsonb_agg(jsonb_build_object(
+               'id', w.id, 'step_id', w.step_id, 'body', w.body, 'created_at', w.created_at, 'confirmed_at', w.confirmed_at,
+               'users', jsonb_build_object('display_name', u.display_name))
+             order by w.created_at desc)
+        from public.step_warnings w
+        join public.users u on u.id = w.written_by
+       where w.program_id = p_program_id and w.retired_at is null and w.org_id = app.org_id()), '[]'::jsonb),
+    'documents', coalesce((
+      select jsonb_agg(jsonb_build_object(
+               'id', d.id, 'deliverable', d.deliverable, 'status', d.status, 'version_no', d.version_no,
+               'opened_at', d.opened_at, 'updated_at', d.updated_at, 'submitted_at', d.submitted_at,
+               'document_fields', coalesce((
+                 select jsonb_agg(jsonb_build_object('field_id', f.field_id, 'value', f.value))
+                   from public.document_fields f where f.document_id = d.id), '[]'::jsonb)))
+        from public.documents d where d.project_id = p_project_id), '[]'::jsonb)
+  );
+end;
+$$;
+revoke all on function public.place_page(uuid, uuid) from public, anon;
+grant execute on function public.place_page(uuid, uuid) to authenticated;
+
+-- THE CARE LIST IN ONE READ (2.9). The Workbench built an Elder's or a
+-- teacher's cards from six reads in a row — the projects they may see
+-- with their authors, the places of those projects with their programs,
+-- the sponsors, the notebook dates, the documents under way and the
+-- students' obligations — each through the rule, and each a hop from the
+-- Worker: the Elder's `/app/` was 28 calls and three-quarters of a second
+-- on the school's network once the list was real. This answers the six
+-- as one jsonb, scoped by `app.my_project_ids()` (the policy, asked once
+-- per project), in the shapes the page already reads. Unarchived projects,
+-- newest first; entered and competed places; current sponsors; the
+-- students' obligations by date.
+create or replace function public.care_list()
+returns jsonb
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  with mine as (select app.my_project_ids() as project_id),
+       pr as (select p.* from public.projects p where p.id in (select project_id from mine) and p.archived_at is null),
+       en as (select e.* from public.participations e where e.project_id in (select id from pr) and e.status in ('entered', 'competed'))
+  select jsonb_build_object(
+    'projects', coalesce((
+      select jsonb_agg(jsonb_build_object(
+               'id', p.id, 'title', p.title, 'started_on', p.started_on, 'created_at', p.created_at,
+               'project_authors', coalesce((
+                 select jsonb_agg(jsonb_build_object(
+                          'role', a.role, 'participation_id', a.participation_id, 'self_managed_at', a.self_managed_at,
+                          'users', jsonb_build_object('id', u.id, 'display_name', u.display_name, 'grad_year', u.grad_year)))
+                   from public.project_authors a join public.users u on u.id = a.user_id
+                  where a.project_id = p.id), '[]'::jsonb))
+             order by p.created_at desc)
+        from pr p), '[]'::jsonb),
+    'entries', coalesce((
+      select jsonb_agg(jsonb_build_object(
+               'id', e.id, 'project_id', e.project_id, 'status', e.status,
+               'selection_state', e.selection_state, 'selection_decided_at', e.selection_decided_at,
+               'programs', jsonb_build_object(
+                 'id', g.id, 'name', g.name, 'season_year', g.season_year, 'fair_date', g.fair_date, 'kind', g.kind,
+                 'roles', g.roles, 'selection_cap', g.selection_cap, 'program_role', g.program_role)))
+        from en e join public.programs g on g.id = e.program_id), '[]'::jsonb),
+    'sponsor_places', coalesce((
+      select jsonb_agg(jsonb_build_object(
+               'id', e.id, 'project_id', e.project_id, 'program_id', e.program_id,
+               'programs', jsonb_build_object('name', g.name),
+               'project_sponsors', coalesce((
+                 select jsonb_agg(jsonb_build_object(
+                          'teacher_name', sp.teacher_name, 'confirmed_at', sp.confirmed_at, 'signed_on', sp.signed_on,
+                          'recorded_at', sp.recorded_at, 'superseded_at', sp.superseded_at))
+                   from public.project_sponsors sp where sp.participation_id = e.id), '[]'::jsonb)))
+        from public.participations e join public.programs g on g.id = e.program_id
+       where e.project_id in (select id from pr)), '[]'::jsonb),
+    'notes', coalesce((
+      select jsonb_agg(jsonb_build_object('project_id', n.project_id, 'count', n.count, 'last', n.last))
+        from (select f.project_id, count(*) as count, max(f.occurred_on) as last
+                from public.field_notes f where f.project_id in (select id from pr) group by f.project_id) n), '[]'::jsonb),
+    'documents_open', coalesce((
+      select jsonb_agg(jsonb_build_object('project_id', d.project_id, 'count', d.count))
+        from (select x.project_id, count(*) as count
+                from public.documents x where x.project_id in (select id from pr) and x.status <> 'submitted' group by x.project_id) d), '[]'::jsonb),
+    'milestones', coalesce((
+      select jsonb_agg(jsonb_build_object(
+               'id', m.id, 'participation_id', m.participation_id, 'name', m.name, 'kind', m.kind, 'due_on', m.due_on,
+               'required', m.required, 'blocks_experimentation', m.blocks_experimentation, 'completed_on', m.completed_on,
+               'owner', m.owner, 'sort_order', m.sort_order)
+             order by m.due_on asc nulls last, m.sort_order asc, m.id)
+        from public.entry_milestones m
+       where m.participation_id in (select id from en) and m.owner = 'student'), '[]'::jsonb),
+    -- The documents of these projects and the last fortnight's lines on
+    -- them, for the questions on the plate and the answers under it.
+    'documents', coalesce((
+      select jsonb_agg(jsonb_build_object('id', d.id, 'project_id', d.project_id, 'deliverable', d.deliverable))
+        from public.documents d where d.project_id in (select id from pr)), '[]'::jsonb),
+    'lines', coalesce((
+      select jsonb_agg(jsonb_build_object(
+               'id', f.id, 'document_id', f.document_id, 'field_id', f.field_id, 'author_id', f.author_id,
+               'body_md', f.body_md, 'created_at', f.created_at, 'seen_at', f.seen_at,
+               'author', jsonb_build_object('display_name', u.display_name))
+             order by f.created_at asc)
+        from public.deliverable_feedback f
+        join public.users u on u.id = f.author_id
+       where f.document_id in (select d.id from public.documents d where d.project_id in (select id from pr))
+         and f.created_at >= now() - interval '14 days'), '[]'::jsonb)
+  );
+$$;
+revoke all on function public.care_list() from public, anon;
+grant execute on function public.care_list() to authenticated;
+
+-- THE PERSON'S OWN SECTION OF THE WORKBENCH IN ONE READ (2.9). Anyone with
+-- a project — every student, and the Elders with their own — had fourteen
+-- reads behind the plate and the cards for their own work: the projects,
+-- the documents with their fields, the places twice (the fair entries and
+-- the classes, then the same rows again for the picker), the open
+-- obligations and the rows they wait on, the notebook, the manuscripts,
+-- the reviews assigned, the open programs, the memberships and the entry
+-- gates. This answers them as one jsonb in the shapes the page reads,
+-- scoped as the policies scope them: the person's own projects by
+-- authorship, the school's programs, the person's own memberships and
+-- reviews (an editor's all, as the policy allows).
+create or replace function public.my_workbench()
+returns jsonb
+language plpgsql
+stable
+security definer
+set search_path = ''
+as $$
+declare
+  v_uid uuid := auth.uid();
+begin
+  if v_uid is null then return null; end if;
+  return (
+    with own as (
+      select p.* from public.projects p
+       where p.archived_at is null
+         and p.id in (select a.project_id from public.project_authors a where a.user_id = v_uid and a.role = 'author')
+    ),
+    places as (
+      select e.*, g.program_role, g.name as program_name, g.season_year, g.fair_date, g.kind as program_kind, g.roles as program_roles,
+             g.showcase as program_showcase, g.template_id as program_template_id
+        from public.participations e join public.programs g on g.id = e.program_id
+       where e.project_id in (select id from own)
+    )
+    select jsonb_build_object(
+      'projects', coalesce((
+        select jsonb_agg(jsonb_build_object('id', p.id, 'title', p.title, 'created_at', p.created_at, 'facts', p.facts) order by p.created_at desc)
+          from own p), '[]'::jsonb),
+      'documents', coalesce((
+        select jsonb_agg(jsonb_build_object(
+                 'project_id', d.project_id, 'deliverable', d.deliverable, 'status', d.status, 'version_no', d.version_no,
+                 'opened_at', d.opened_at, 'submitted_at', d.submitted_at,
+                 'document_fields', coalesce((select jsonb_agg(jsonb_build_object('field_id', f.field_id, 'value', f.value))
+                                                from public.document_fields f where f.document_id = d.id), '[]'::jsonb)))
+          from public.documents d where d.project_id in (select id from own)), '[]'::jsonb),
+      'entries', coalesce((
+        select jsonb_agg(jsonb_build_object(
+                 'id', e.id, 'status', e.status, 'placement', e.placement, 'program_id', e.program_id, 'project_id', e.project_id,
+                 'programs', jsonb_build_object('name', e.program_name, 'season_year', e.season_year, 'fair_date', e.fair_date, 'kind', e.program_kind, 'roles', e.program_roles))
+               order by e.entered_at desc)
+          from places e where e.program_role = 'opportunity'), '[]'::jsonb),
+      'cohorts', coalesce((
+        select jsonb_agg(jsonb_build_object(
+                 'id', e.id, 'program_id', e.program_id, 'project_id', e.project_id,
+                 'programs', jsonb_build_object('name', e.program_name, 'season_year', e.season_year, 'kind', e.program_kind, 'roles', e.program_roles, 'showcase', e.program_showcase)))
+          from places e where e.program_role = 'cohort'), '[]'::jsonb),
+      'due', coalesce((
+        select jsonb_agg(jsonb_build_object(
+                 'id', m.id, 'name', m.name, 'due_on', m.due_on, 'completed_on', m.completed_on, 'kind', m.kind, 'sort_order', m.sort_order,
+                 'step_id', m.step_id, 'requires_step', m.requires_step, 'requires_steps', m.requires_steps,
+                 'participations', jsonb_build_object(
+                   'id', e.id, 'project_id', e.project_id, 'program_id', e.program_id,
+                   'programs', jsonb_build_object('name', e.program_name, 'season_year', e.season_year, 'kind', e.program_kind, 'roles', e.program_roles, 'template_id', e.program_template_id)))
+               order by m.due_on asc, m.sort_order asc, m.id)
+          from public.entry_milestones m join places e on e.id = m.participation_id
+         where m.completed_on is null and m.due_on is not null and m.kind <> 'event' and m.owner = 'student'), '[]'::jsonb),
+      'gate_rows', coalesce((
+        select jsonb_agg(jsonb_build_object(
+                 'participation_id', m.participation_id, 'step_id', m.step_id, 'name', m.name, 'kind', m.kind,
+                 'completed_on', m.completed_on, 'due_on', m.due_on, 'sort_order', m.sort_order)
+               order by m.due_on asc nulls last, m.sort_order asc)
+          from public.entry_milestones m where m.participation_id in (select id from places)), '[]'::jsonb),
+      'notes', (
+        select jsonb_build_object('count', count(*), 'last', max(n.occurred_on))
+          from public.field_notes n where n.project_id in (select id from own)),
+      'manuscripts', coalesce((
+        select jsonb_agg(m.project_id) from public.manuscripts m where m.project_id in (select id from own)), '[]'::jsonb),
+      'reviews', coalesce((
+        select jsonb_agg(jsonb_build_object(
+                 'id', r.id, 'due_at', r.due_at, 'submitted_at', r.submitted_at,
+                 'submissions', jsonb_build_object('manuscripts', jsonb_build_object('title', mu.title)))
+               order by r.due_at asc)
+          from public.reviews r
+          join public.submissions s on s.id = r.submission_id
+          join public.manuscripts mu on mu.id = s.manuscript_id
+         where r.submitted_at is null and (r.reviewer_id = v_uid or app.is_editor())), '[]'::jsonb),
+      'open_programs', coalesce((
+        select jsonb_agg(to_jsonb(g) order by g.fair_date asc nulls last)
+          from public.programs g
+         where g.status = 'open' and (g.org_id is null or g.org_id = app.org_id())), '[]'::jsonb),
+      'memberships', coalesce((
+        select jsonb_agg(jsonb_build_object(
+                 'cohort_id', mb.cohort_id, 'state', mb.state, 'note', mb.note, 'joined_at', mb.joined_at, 'decided_at', mb.decided_at,
+                 'decided', case when du.id is null then null else jsonb_build_object('display_name', du.display_name) end,
+                 'programs', jsonb_build_object('name', g.name, 'season_year', g.season_year, 'kind', g.kind, 'program_role', g.program_role)))
+          from public.memberships mb
+          join public.programs g on g.id = mb.cohort_id
+          left join public.users du on du.id = mb.decided_by
+         where mb.user_id = v_uid), '[]'::jsonb),
+      'gates', coalesce((
+        select jsonb_agg(jsonb_build_object('program_id', x.program_id, 'reason', x.reason)) from public.entry_gates() x), '[]'::jsonb)
+    )
+  );
+end;
+$$;
+revoke all on function public.my_workbench() from public, anon;
+grant execute on function public.my_workbench() to authenticated;
+
+-- ===========================================================================
+-- PASSWORD ATTEMPTS, COUNTED (2.9). With the class on identifiers and
+-- addresses nobody receives mail at, the only way to change a password is
+-- to know the current one, on a page a stranger can type at. Every
+-- attempt at an account's password, from that page and from the sign-in
+-- form, is counted here, and an account guessed at too often is refused
+-- for a while, whatever is typed, with the same sentence a wrong password
+-- gets. Per account, not per network address: the class sits behind one
+-- school address. Read and written with the secret key only.
+-- ===========================================================================
+
+create table public.password_attempts (
+  id       bigserial primary key,
+  email    text not null,
+  ok       boolean not null,
+  at       timestamptz not null default now()
+);
+create index password_attempts_email_at_idx on public.password_attempts (email, at desc);
+alter table public.password_attempts enable row level security;
+-- No policies: nothing but the definer functions below reads or writes it
+-- from a session; the secret key may, for the cloud reset and for a look.
+revoke all on public.password_attempts from public, anon, authenticated;
+grant select, insert, update, delete on public.password_attempts to service_role;
+
+-- Whether an attempt at this account may be judged now: fewer than
+-- `p_limit` failures in the last `p_window`. Failures before the newest
+-- success do not count, so a person who got in and later mistypes is not
+-- carrying an old streak.
+create or replace function public.password_gate(p_email text, p_limit int default 8, p_window interval default interval '15 minutes')
+returns boolean
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select count(*) < p_limit
+    from public.password_attempts a
+   where a.email = lower(btrim(p_email))
+     and a.ok = false
+     and a.at > now() - p_window
+     and a.at > coalesce((select max(s.at) from public.password_attempts s where s.email = lower(btrim(p_email)) and s.ok), '-infinity'::timestamptz);
+$$;
+
+-- Record one. Old rows are pruned as they are written, so the table stays
+-- the size of the last day.
+create or replace function public.password_attempt(p_email text, p_ok boolean)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  insert into public.password_attempts (email, ok) values (lower(btrim(p_email)), p_ok);
+  delete from public.password_attempts a where a.at < now() - interval '1 day';
+end;
+$$;
+
+revoke all on function public.password_gate(text, int, interval) from public, anon, authenticated;
+revoke all on function public.password_attempt(text, boolean) from public, anon, authenticated;
+grant execute on function public.password_gate(text, int, interval) to service_role;
+grant execute on function public.password_attempt(text, boolean) to service_role;

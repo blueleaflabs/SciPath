@@ -2139,6 +2139,34 @@ begin
           raise exception 'FAIL care_list lists % obligations where the session sees % for %', jsonb_array_length(v_care -> 'milestones'), v_rule, v_who;
         end if;
       end;
+      -- my_workbench (2.9): the person's own section as one; its projects
+      -- are the ones they author, its places theirs, its obligations the
+      -- open dated student-owned rows of those places.
+      declare
+        v_mine jsonb := public.my_workbench();
+      begin
+        select count(*) into v_rule from public.projects p
+         where p.archived_at is null and p.id in (select a.project_id from public.project_authors a where a.user_id = v_who and a.role = 'author');
+        if jsonb_array_length(v_mine -> 'projects') <> v_rule then
+          raise exception 'FAIL my_workbench lists % projects where % authors %', jsonb_array_length(v_mine -> 'projects'), v_who, v_rule;
+        end if;
+        select count(*) into v_rule from public.participations e
+         where e.project_id in (select p.id from public.projects p where p.archived_at is null and p.id in (select a.project_id from public.project_authors a where a.user_id = v_who and a.role = 'author'));
+        if jsonb_array_length(v_mine -> 'entries') + jsonb_array_length(v_mine -> 'cohorts') <> v_rule then
+          raise exception 'FAIL my_workbench lists % places where % has %', jsonb_array_length(v_mine -> 'entries') + jsonb_array_length(v_mine -> 'cohorts'), v_who, v_rule;
+        end if;
+        select count(*) into v_rule from public.entry_milestones m
+         where m.completed_on is null and m.due_on is not null and m.kind <> 'event' and m.owner = 'student'
+           and m.participation_id in (select e.id from public.participations e
+                                       where e.project_id in (select p.id from public.projects p where p.archived_at is null and p.id in (select a.project_id from public.project_authors a where a.user_id = v_who and a.role = 'author')));
+        if jsonb_array_length(v_mine -> 'due') <> v_rule then
+          raise exception 'FAIL my_workbench lists % open obligations where the session sees % for %', jsonb_array_length(v_mine -> 'due'), v_rule, v_who;
+        end if;
+        select count(*) into v_rule from public.memberships mb where mb.user_id = v_who;
+        if jsonb_array_length(v_mine -> 'memberships') <> v_rule then
+          raise exception 'FAIL my_workbench lists % memberships where % has %', jsonb_array_length(v_mine -> 'memberships'), v_who, v_rule;
+        end if;
+      end;
       -- place_page (2.9): the deadlines page's nine reads as one; answered
       -- exactly when the session could read the place, and its parts count
       -- what the session's reads would.
@@ -2167,7 +2195,7 @@ begin
       end;
     end loop;
     perform set_config('role', 'postgres', true);
-    raise notice '  ok   the pulse''s scope, milestones_of, projects_i_see, places_in, places_of, place_page and care_list are exactly what the visibility rule accepts';
+    raise notice '  ok   the pulse''s scope, milestones_of, projects_i_see, places_in, places_of, place_page, care_list and my_workbench are exactly what the visibility rule accepts';
   end;
 
   -- my_context (2.9): the one call before every page carries the account,

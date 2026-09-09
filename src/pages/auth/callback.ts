@@ -39,6 +39,30 @@ export const GET: APIRoute = async ({ request, cookies, url, locals, redirect })
    * domain was added) goes through; the domain rule is for signups.
    */
   const org = (locals as Record<string, any>).org;
+
+  /* A school that signs in by password alone (`sign_in: password`, 2.9)
+     takes no Google session at all: the session just made is ended, and
+     an identity Google created for an address with no account here is
+     removed, as the closed door does. An account that exists is not
+     harmed — it simply is not signed in this way. */
+  if (org?.signIn === 'password') {
+    const { data: { user: gu } } = await supabase.auth.getUser();
+    if (gu) {
+      const { data: existing } = await supabase.from('users').select('id').eq('id', gu.id).maybeSingle();
+      if (!existing) {
+        try {
+          const { error: gone } = await adminClient(runtime).auth.admin.deleteUser(gu.id);
+          if (gone) console.error('google refusal: identity was not removed');
+        } catch {
+          console.error('google refusal: identity removal raised');
+        }
+      }
+    }
+    await supabase.auth.signOut();
+    cookies.delete('scipath_next', { path: '/' });
+    return redirect('/app/?signin=password_only');
+  }
+
   /* Closed (2.9) is the same refusal for everybody without an account,
      on-domain or off: the identity Supabase just made is removed, the
      session ended, and the sign-in page says the door is closed. */

@@ -205,5 +205,30 @@ begin
 end $$;
 \echo '  ok   the reset route may ask may_reset_password with the secret key, and only it may'
 
+-- Guesses counted (2.9): open until the eighth failure in the window,
+-- closed after it, open again once a success is newer than the failures;
+-- only the secret key's role may ask or record.
+do $$
+declare v_i int;
+begin
+  if not public.password_gate('Guess@Example.org') then raise exception 'FAIL: a fresh account is not open'; end if;
+  for v_i in 1..7 loop perform public.password_attempt('guess@example.org', false); end loop;
+  if not public.password_gate('guess@example.org') then raise exception 'FAIL: locked before the eighth failure'; end if;
+  perform public.password_attempt('guess@example.org', false);
+  if public.password_gate('guess@example.org') then raise exception 'FAIL: not locked after the eighth failure'; end if;
+  if not public.password_gate('other@example.org') then raise exception 'FAIL: one account''s failures locked another'; end if;
+  perform public.password_attempt('guess@example.org', true);
+  if not public.password_gate('guess@example.org') then raise exception 'FAIL: a success newer than the failures did not reopen the account'; end if;
+  if has_function_privilege('anon', 'public.password_gate(text, int, interval)', 'execute')
+     or has_function_privilege('authenticated', 'public.password_attempt(text, boolean)', 'execute') then
+    raise exception 'FAIL: a session may ask or record password attempts';
+  end if;
+  if not has_function_privilege('service_role', 'public.password_gate(text, int, interval)', 'execute') then
+    raise exception 'FAIL: the secret key may not ask the gate';
+  end if;
+  delete from public.password_attempts where email like '%@example.org';
+end $$;
+\echo '  ok   guesses at a password are counted per account, the eighth in a quarter hour closes it, a success reopens it, and only the secret key asks'
+
 \echo ''
 \echo '  All access assertions passed.'

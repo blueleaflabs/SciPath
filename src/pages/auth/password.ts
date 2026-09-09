@@ -3,6 +3,7 @@ export const prerender = false;
 import type { APIRoute } from 'astro';
 import { serverClient } from '../../lib/supabase';
 import { safeNext, HOME } from '../../lib/next-path';
+import { passwordAllowed, notePasswordAttempt, pause } from '../../lib/password-gate';
 
 /**
  * Sign in with an email address and a password.
@@ -25,10 +26,20 @@ export const POST: APIRoute = async ({ request, cookies, url, locals, redirect }
      Validated rather than trusted: see src/lib/next-path.ts. */
   const next = safeNext(String(form.get('next') ?? ''));
 
+  /* Guesses are counted (src/lib/password-gate.ts, 2.9): an account
+     guessed at too often is refused before the credential is checked,
+     with the same answer a wrong password gets. */
+  const lowered = email.toLowerCase();
+  const allowed = lowered ? await passwordAllowed(runtime, lowered) : false;
+
   const supabase = serverClient(request, cookies, runtime);
-  const { error } = await supabase.auth.signInWithPassword({ email, password });
+  const { error } = allowed
+    ? await supabase.auth.signInWithPassword({ email, password })
+    : { error: { message: 'refused before the credential was checked' } };
+  if (lowered && allowed) await notePasswordAttempt(runtime, lowered, !error);
 
   if (error) {
+    await pause();
     /* The destination survives a wrong password, or somebody who mistypes
        once has to go back to their email and click the link again. */
     const again = next === HOME ? '' : `&next=${encodeURIComponent(next)}`;

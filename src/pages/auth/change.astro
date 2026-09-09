@@ -1,0 +1,142 @@
+---
+export const prerender = false;
+
+/**
+ * CHANGE A PASSWORD, KNOWING THE CURRENT ONE (2.9).
+ *
+ * The class signs in with identifiers and addresses nobody receives mail
+ * at, so a reset link has nowhere to go. The one thing that proves an
+ * account is yours without mail is its current password, and this page
+ * asks for it: address, the password now, the new one twice. The new
+ * password is set in the same request and the person is signed in with it.
+ *
+ * **One sentence for every failure.** A wrong current password, an unknown
+ * address, a locked account, two new passwords that differ, a new one too
+ * short — all of them answer "Password change failed. Check every field
+ * and try again." A page that said which field was wrong would tell a
+ * stranger whether an address exists and whether a guess was close.
+ *
+ * **Guesses are counted** (src/lib/password-gate.ts): eight
+ * failures at one account in a quarter of an hour and the account is
+ * refused for a quarter of an hour, with the same sentence. The sign-in
+ * form shares the count, so the two doors are one door.
+ *
+ * A change is written to the audit log, so the teacher's record says when
+ * each account's password last changed and that its owner did it.
+ */
+
+import Base from '../../layouts/Base.astro';
+import { serverClient } from '../../lib/supabase';
+import { adminClient } from '../../lib/supabase-admin';
+import { activeOrg } from '../../lib/tenant';
+import { afterPost, outcomeFrom } from '../../lib/post-redirect';
+import { passwordAllowed, notePasswordAttempt, pause, CHANGE_FAILED } from '../../lib/password-gate';
+
+const org = activeOrg(Astro);
+const runtime = (Astro.locals as any).runtime?.env;
+let { error, note } = outcomeFrom(Astro.url);
+
+const MIN = 10;
+
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData();
+  const email = String(form.get('email') ?? '').trim().toLowerCase();
+  const current = String(form.get('current') ?? '');
+  const password = String(form.get('password') ?? '');
+  const again = String(form.get('again') ?? '');
+
+  const refuse = async () => { await pause(); return afterPost(Astro.url, { error: CHANGE_FAILED, note: null }); };
+
+  /* The cheap checks first, and they cost the account nothing: a form
+     that fails here never reached the credential. */
+  if (!email || !current || password.length < MIN || password !== again || password === current) return refuse();
+
+  if (!(await passwordAllowed(runtime, email))) return refuse();
+
+  const supabase = serverClient(Astro.request, Astro.cookies, runtime);
+  const { data: signedIn, error: signInError } = await supabase.auth.signInWithPassword({ email, password: current });
+  if (signInError || !signedIn?.user) {
+    await notePasswordAttempt(runtime, email, false);
+    return refuse();
+  }
+  await notePasswordAttempt(runtime, email, true);
+
+  const { error: updateError } = await supabase.auth.updateUser({ password });
+  if (updateError) {
+    /* The credential was right and the change did not take — the one
+       failure that is ours, and the one the person cannot fix by checking
+       fields. Still the same sentence on the page; the cause is logged. */
+    console.error(JSON.stringify({ change_password: updateError.message }));
+    return refuse();
+  }
+
+  try {
+    const admin = adminClient(runtime);
+    const { data: account } = await admin.from('users').select('id, org_id').eq('id', signedIn.user.id).maybeSingle();
+    if (account) {
+      await admin.from('audit_log').insert({
+        org_id: account.org_id,
+        actor_user_id: account.id,
+        action: 'password.changed_by_owner',
+        entity_type: 'user',
+        entity_id: account.id,
+        reason: 'changed on /auth/change/ with the current password',
+      });
+    }
+  } catch (e: any) {
+    console.error(JSON.stringify({ change_password_audit: e?.message ?? String(e) }));
+  }
+
+  return afterPost(Astro.url, { error: null, note: 'Your password is changed, and you are signed in with it.' });
+}
+---
+
+<Base title="Change your password" noindex={true}>
+  <div class="wrap">
+    <section class="stack">
+      <p class="eyebrow">{org?.name}</p>
+      <h1>Change your password</h1>
+
+      <div id="outcome" tabindex="-1">
+        {error && <p class="note" role="alert">{error}</p>}
+        {note && <p class="note" role="status">{note}</p>}
+      </div>
+
+      {note ? (
+        <p><a class="btn" href="/app/">Go to your work</a></p>
+      ) : (
+        <form method="POST" action="/auth/change/" class="stack" autocomplete="on">
+          <p class="lede">
+            Your current password proves the account is yours. Choose a new one of at least {MIN} characters and type it twice.
+          </p>
+          <label>
+            <span>Your email address</span>
+            <input name="email" type="email" required autocomplete="username" />
+          </label>
+          <label>
+            <span>Current password</span>
+            <input name="current" type="password" required autocomplete="current-password" />
+          </label>
+          <label>
+            <span>New password</span>
+            <input name="password" type="password" required minlength={MIN} autocomplete="new-password" />
+          </label>
+          <label>
+            <span>New password again</span>
+            <input name="again" type="password" required minlength={MIN} autocomplete="new-password" />
+          </label>
+          <p><button class="btn" type="submit">Change it</button></p>
+          <p class="t-sm">Lost your current password? Ask your teacher, who can have a new one set.</p>
+        </form>
+      )}
+    </section>
+  </div>
+</Base>
+
+<style>
+  form.stack { max-width: 42ch; }
+  form label { display: block; margin-bottom: 16px; }
+  form label > span { display: block; margin-bottom: 6px; font-family: var(--face-ui); font-size: 0.92rem; }
+  form input { width: 100%; padding: 9px 11px; border: 1px solid var(--rule); background: var(--card); color: var(--ink); font: inherit; }
+  .lede { max-width: var(--measure-text); }
+</style>

@@ -31,6 +31,9 @@ timezone: America/Los_Angeles
 # school opens it. SIGNUPS=closed in the deployment closes every tenant at
 # once, whatever the file says.
 signup_mode: closed
+# The class signs in with identifiers and passwords only (2.9): no Google,
+# and a new password is set on /auth/change/ with the current one.
+sign_in: password
 verified_domains: [student.fuhsd.org, fuhsd.org]
 
 # Both domains grant affiliation on their own, which is what `population`

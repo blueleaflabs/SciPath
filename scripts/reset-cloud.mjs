@@ -293,6 +293,7 @@ if (!verifyOnly) {
  * left alone so an interrupted reset still has something coherent in it.
  */
 const TABLES = [
+  'password_attempts',
   'org_domains',
   'audit_log',
   'feedback',

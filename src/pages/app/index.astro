@@ -412,6 +412,9 @@ const docStandingOn = (projectId: string, deliverableId: string, shapeId: string
 const gradesFor = new Map<string, { n: number; score: number; outOf: number }>();
 let myNotes = 0;
 let myLastNote: string | null = null;
+/* The person's own section, answered as one (my_workbench, 2.9); null
+   where the section did not run, and the reads below then ask as before. */
+let mineData: Record<string, any> | null = null;
 
 /* --- What everyone else sees: the projects they are responsible for --- */
 let watched: any[] = [];
@@ -424,7 +427,15 @@ if (supabase && account) {
        section headed "this season". */
     /* From the middleware's one read (2.9): the unarchived projects this
        person authors, which is what the read below filtered to anyway. */
-    const myProjectIds = (((Astro.locals as any).projects ?? []) as { project_id: string }[]).map((p) => p.project_id);
+
+    /* One read for the person's own section (my_workbench, 2.9): the
+       projects, documents, places, open obligations and the rows they
+       wait on, notebook, manuscripts, reviews, open programs, memberships
+       and entry gates — fourteen reads through their policies as one. */
+    const { data: mineAnswer, error: mineError } = await supabase.rpc('my_workbench');
+    if (mineError) console.error(JSON.stringify({ my_workbench: mineError.message, path: Astro.url.pathname }));
+    mineData = (mineAnswer ?? null) as Record<string, any> | null;
+    const mine = (mineData ?? {}) as Record<string, any>;
 
     /**
      * The projects, and where each of them went.
@@ -439,41 +450,21 @@ if (supabase && account) {
      * thing (22.1). A project with no entry is the ordinary state of every
      * project for its first month.
      */
-    const { data: mineProjects } = myProjectIds.length
-      ? await supabase
-          .from('projects')
-          .select('id, title, created_at, facts')
-          .in('id', myProjectIds)
-          .is('archived_at', null)
-          .order('created_at', { ascending: false })
-      : { data: [] as any[] };
+    const mineProjects = (mine.projects ?? []) as any[];
 
     /* Which documents exist, for the verb on the plate: Start for one not
        begun, Continue for one under way, Open for one submitted (2.8). */
-    const { data: myDocs } = myProjectIds.length
-      ? await supabase.from('documents').select('project_id, deliverable, status, version_no, opened_at, submitted_at, document_fields(field_id, value)').in('project_id', myProjectIds)
-      : { data: [] as any[] };
+    const myDocs = (mine.documents ?? []) as any[];
     for (const d of myDocs ?? []) myDocState.set(`${d.project_id}:${d.deliverable}`, d);
 
-    const { data: theirEntries } = myProjectIds.length
-      ? await supabase
-          .from('opportunity_participations')
-          .select('id, status, placement, program_id, project_id, programs:program_id(name, season_year, fair_date, kind, roles)')
-          .in('project_id', myProjectIds)
-          .order('entered_at', { ascending: false })
-      : { data: [] as any[] };
+    const theirEntries = (mine.entries ?? []) as any[];
 
     /* The classes and clubs these projects are in, which is a separate
        question from what they have been entered in. Before the merge a
        cohort had no participation row to read, so this line could not be
        written and the list below said "not entered anywhere yet" to a
        student whose project was sitting in IRPD. */
-    const { data: theirCohorts } = myProjectIds.length
-      ? await supabase
-          .from('cohort_participations')
-          .select('id, program_id, project_id, programs:program_id(name, season_year, kind, roles, showcase)')
-          .in('project_id', myProjectIds)
-      : { data: [] as any[] };
+    const theirCohorts = (mine.cohorts ?? []) as any[];
 
     const entriesFor = new Map<string, any[]>();
     for (const e of theirEntries ?? []) {
@@ -501,31 +492,14 @@ if (supabase && account) {
        are already in hand from the two reads above, so the filter is on
        the indexed column and the policy judges a dozen rows. */
     const ownPartIds = [...new Set([...(theirEntries ?? []), ...(theirCohorts ?? [])].map((e: any) => e.id).filter(Boolean))];
-    const { data: mineDueRows } = ownPartIds.length
-      ? await supabase
-          .rpc('milestones_of', { p_participation_ids: ownPartIds })
-          .select('id, name, due_on, completed_on, kind, sort_order, step_id, requires_step, requires_steps, participations!inner(id, project_id, program_id, programs(name, season_year, kind, roles, template_id))')
-          .is('completed_on', null)
-          .not('due_on', 'is', null)
-          .neq('kind', 'event')
-          /* The student's own obligations. An Elder's task on the project
-             is on the project's calendar and on the Elder's list, never
-             here as something the student owes. */
-          .eq('owner', 'student')
-          .order('due_on', { ascending: true })
-          .order('sort_order', { ascending: true })
-          .order('id')
-      : { data: [] as any[] };
-    /* An rpc's rows are typed as row-or-rows; these are rows. */
-    const mineDue = (mineDueRows ?? []) as any[];
+    /* The student's own open, dated obligations, by date. An Elder's task
+       on the project is on the project's calendar and on the Elder's
+       list, never here as something the student owes. */
+    const mineDue = (mine.due ?? []) as any[];
 
     /* The gate (2.8): the names of the steps an open row waits on that
        are not met, from one read of the same places' rows. */
-    const partIds = [...new Set((mineDue ?? []).map((r: any) => (r.participations as any)?.id).filter(Boolean))];
-    const { data: gateRowsRaw } = partIds.length
-      ? await supabase.rpc('milestones_of', { p_participation_ids: partIds }).select('participation_id, step_id, name, kind, completed_on, due_on, sort_order').order('due_on', { ascending: true, nullsFirst: false }).order('sort_order')
-      : { data: [] as any[] };
-    const gateRows = (gateRowsRaw ?? []) as any[];
+    const gateRows = (mine.gate_rows ?? []) as any[];
     const gateOf = (row: any): string[] => {
       const ids = new Set<string>([...(row.requires_steps ?? []), ...(row.requires_step ? [row.requires_step] : [])]);
       if (ids.size === 0) return [];
@@ -647,17 +621,8 @@ if (supabase && account) {
 
     /* When this person last wrote in any notebook of theirs, by the day the
        work happened. The one number they can change today. */
-    const { data: myNoteRows } = myProjectIds.length
-      ? await supabase
-          .from('field_notes')
-          .select('project_id, occurred_on')
-          .in('project_id', myProjectIds)
-      : { data: [] as any[] };
-
-    for (const n of myNoteRows ?? []) {
-      myNotes += 1;
-      if (!myLastNote || n.occurred_on > myLastNote) myLastNote = n.occurred_on;
-    }
+    myNotes = Number(mine.notes?.count ?? 0);
+    myLastNote = mine.notes?.last ?? null;
 
     /* One row per project, carrying whatever it has been entered in. A
        project entered nowhere still gets a row, which is the fix. */
@@ -676,23 +641,13 @@ if (supabase && account) {
 
     /* Which of these already have a manuscript, so the link can say "start"
        or "open" rather than making somebody click to find out. */
-    const { data: started } = myProjectIds.length
-      ? await supabase.from('manuscripts').select('project_id').in('project_id', myProjectIds)
-      : { data: [] as any[] };
-
-    myManuscripts = new Set((started ?? []).map((m: any) => m.project_id));
+    myManuscripts = new Set(((mine.manuscripts ?? []) as string[]));
 
     /* Reviewing is an attachment rather than a standing role, so it appears
        nowhere in the nav. If it did not appear here it would appear nowhere
        at all, which is exactly how an assignment sits untouched until the
        week of the fair. */
-    const { data: assigned } = await supabase
-      .from('reviews')
-      .select('id, due_at, submitted_at, submissions(manuscripts(title))')
-      .is('submitted_at', null)
-      .order('due_at', { ascending: true });
-
-    myReviews = assigned ?? [];
+    myReviews = (mine.reviews ?? []) as any[];
   }
 }
 
@@ -760,11 +715,15 @@ const myProjectsForOpportunity = (programId: string) =>
     : myProjects.filter((p: any) => !(projectEntries.get(p.id) ?? new Set()).has(programId));
 
 if (supabase && account) {
-  const { data: open } = await supabase
-    .from('programs')
-    .select('id, name, season_year, fair_date, description, website_url, advances_to_fairs, status, kind, level, joining, places, program_role, template_id')
-    .eq('status', 'open')
-    .order('fair_date', { ascending: true });
+  /* From my_workbench where it ran (anyone with a project); the two
+     reads below are the same for somebody without one. */
+  const open = mineData
+    ? ((mineData.open_programs ?? []) as any[])
+    : (await supabase
+        .from('programs')
+        .select('id, name, season_year, fair_date, description, website_url, advances_to_fairs, status, kind, level, joining, places, program_role, template_id')
+        .eq('status', 'open')
+        .order('fair_date', { ascending: true })).data;
 
   /* A shared fair is one row for every school; this school may still be
      keeping it out of sight (src/lib/hidden-programs.ts). */
@@ -774,10 +733,12 @@ if (supabase && account) {
   /* One read of this person's memberships (2.9): the states for the cards
      here, and the classes joined — which was a second read of the same
      rows, ordered — derived from it below. */
-  const { data: mine } = await supabase
-    .from('memberships')
-    .select('cohort_id, state, note, joined_at, decided_at, decided:decided_by(display_name), programs:cohort_id(name, season_year, kind, program_role)')
-    .eq('user_id', account.id);
+  const mine = mineData
+    ? ((mineData.memberships ?? []) as any[])
+    : (await supabase
+        .from('memberships')
+        .select('cohort_id, state, note, joined_at, decided_at, decided:decided_by(display_name), programs:cohort_id(name, season_year, kind, program_role)')
+        .eq('user_id', account.id)).data;
 
   for (const m of mine ?? []) {
     cohortState.set(m.cohort_id, m.state);
@@ -823,10 +784,8 @@ if (supabase && account) {
   myProjects = (((Astro.locals as any).projects ?? []) as { project_id: string; title: string }[]).map((p) => ({ id: p.project_id, title: p.title }));
 
   if (myProjects.length > 0) {
-    const { data: attached } = await supabase
-      .from('cohort_participations')
-      .select('project_id, program_id')
-      .in('project_id', myProjects.map((p: any) => p.id));
+    /* The same places my_workbench answered above. */
+    const attached = ((mineData?.cohorts ?? []) as any[]);
 
     for (const row of attached ?? []) {
       const held = projectCohorts.get(row.project_id) ?? new Set<string>();
@@ -847,11 +806,10 @@ if (supabase && account) {
     
        `withdrawn` is excluded on purpose: withdrawing is how a place is given
        back, and the trigger reads it the same way. */
-    const { data: entered } = await supabase
-      .from('opportunity_participations')
-      .select('project_id, program_id, status, projects:project_id(title)')
-      .in('project_id', myProjects.map((p: any) => p.id))
-      .neq('status', 'withdrawn');
+    const titleOf = new Map<string, string>(myProjects.map((p: any) => [p.id, p.title]));
+    const entered = ((mineData?.entries ?? []) as any[])
+      .filter((e: any) => e.status !== 'withdrawn')
+      .map((e: any) => ({ ...e, projects: { title: titleOf.get(e.project_id) } }));
 
     for (const row of entered ?? []) {
       const held = projectEntries.get(row.project_id) ?? new Set<string>();
@@ -861,7 +819,7 @@ if (supabase && account) {
     }
   }
 
-  const { data: gates } = await supabase.rpc('entry_gates');
+  const gates = mineData ? ((mineData.gates ?? []) as any[]) : (await supabase.rpc('entry_gates')).data;
   for (const g of gates ?? []) gateFor.set(g.program_id, g.reason);
 
   /* A program already entered shows the way in rather than the form.
@@ -1886,6 +1844,11 @@ const careLayout = (group: any): 'grid' | 'wide' => {
     {signin === 'stale' && (
       <p class="note" role="alert">Your earlier session is no longer valid here. Sign in again.</p>
     )}
+    {signin === 'password_only' && (
+      <p class="note" role="alert">
+        {org.name} signs in with an email address and a password, not with Google. Nothing was saved. Use the form below with the details you were given.
+      </p>
+    )}
     {signin === 'closed' && (
       <p class="note" role="alert">
         SciPath is by invitation at {org.name} for now: there is no account for that address, and none is made by signing in. Nothing was saved. If you are in the class, ask your teacher to check the roster.
@@ -1921,17 +1884,26 @@ const careLayout = (group: any): 'grid' | 'wide' => {
             real signup was a personal Gmail address. A sentence that tells
             somebody the thing they just did is not allowed is worse than no
             sentence. */}
-        <p class="lede">
-          {org.signupMode === 'open'
-            ? 'Sign in with Google. Any Google account works, including a personal one.'
-            : 'Use your school Google account.'}
-        </p>
-        <div class="row" style="margin-top:24px">
-          <a
-            class="btn"
-            href={next === HOME ? '/auth/signin/' : `/auth/signin/?next=${encodeURIComponent(next)}`}
-          >Sign in with Google</a>
-        </div>
+        {/* A class on identifiers signs in with the form alone (2.9,
+            `sign_in: password`): no Google button, and the words say what
+            to type. */}
+        {org.signIn === 'password' ? (
+          <p class="lede">Sign in with the email address and password you were given.</p>
+        ) : (
+          <>
+            <p class="lede">
+              {org.signupMode === 'open'
+                ? 'Sign in with Google. Any Google account works, including a personal one.'
+                : 'Use your school Google account.'}
+            </p>
+            <div class="row" style="margin-top:24px">
+              <a
+                class="btn"
+                href={next === HOME ? '/auth/signin/' : `/auth/signin/?next=${encodeURIComponent(next)}`}
+              >Sign in with Google</a>
+            </div>
+          </>
+        )}
         {/* The way round Google's own stumble (2.9). A district's
             session-length policy signs everybody out of Google every so
             often, and Google's password step on the way back into a
@@ -1939,7 +1911,7 @@ const careLayout = (group: any): 'grid' | 'wide' => {
             Restart" and nothing else, until the person signs in to Google
             itself. Opening the school's mail does that; the link below opens
             it in a new tab so this page is still here to come back to. */}
-        {org.signupMode === 'domain' && org.verifiedDomains.length > 0 && (
+        {org.signIn !== 'password' && org.signupMode === 'domain' && org.verifiedDomains.length > 0 && (
           <details class="signin-help">
             <summary>Google said "Something went wrong"?</summary>
             <p class="t-sm">
@@ -1965,7 +1937,7 @@ const careLayout = (group: any): 'grid' | 'wide' => {
             false in production, which `demo: true` is not — it marks one
             tenant, not one environment. */}
         <div class="fixture">
-          <p class="t-lbl">Or with your email and password</p>
+          <p class="t-lbl">{org.signIn === 'password' ? 'Your email and password' : 'Or with your email and password'}</p>
           <form method="POST" action="/auth/password/" class="fixrow">
             {/* Without this the round trip loses its destination on the last
                 step, which is the one place it would be hardest to notice. */}
@@ -1987,7 +1959,13 @@ const careLayout = (group: any): 'grid' | 'wide' => {
               while typing it; somebody who does not has already failed once
               and is looking down the page. */}
           <p class="t-sm" style="margin:10px 0 0">
-            <a href="/auth/reset/">Forgotten your password?</a>
+            {org.signIn === 'password' ? (
+              /* No mailbox to send a link to: the way to a new password is
+                 the current one, on its own page. */
+              <a href="/auth/change/">Change your password</a>
+            ) : (
+              <a href="/auth/reset/">Forgotten your password?</a>
+            )}
           </p>
         </div>
       </section>

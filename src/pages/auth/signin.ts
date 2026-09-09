@@ -85,6 +85,9 @@ export const GET: APIRoute = async ({ request, cookies, url, locals, redirect })
    * subdomain that does not exist.
    */
   const org = activeOrg({ locals: locals as { org?: unknown } });
+  /* A school that signs in by password alone does not start a Google
+     round trip at all (2.9); the callback refuses one anyway. */
+  if (org.signIn === 'password') return redirect('/app/?signin=password_only');
   const origin = org.isPlatform ? apexOrigin() : originFor(org.subdomain ?? org.slug);
 
   const { data, error } = await supabase.auth.signInWithOAuth({

@@ -1597,7 +1597,12 @@ test('the oversight table says when the notebook was last written in', () => {
      What makes it right here: the rule is that a teacher can see when the
      notebook was last written in, and that is still checked. */
   const overview = fs.readFileSync('src/pages/app/index.astro', 'utf8');
-  assert.match(overview, /from\('field_notes'\)/, 'the count has to be read');
+  /* Read through care_list since 2.9 (the notebook dates come with the
+     cards' one read); the migration's function is where the count is. */
+  const migrations = fs.readdirSync('supabase/migrations').filter((f) => f.endsWith('.sql')).sort().map((f) => fs.readFileSync(`supabase/migrations/${f}`, 'utf8')).join('\n');
+  assert.match(overview, /rpc\('care_list'\)/, 'the count has to be read');
+  assert.match(migrations, /function public\.care_list\(\)[\s\S]*?'notes', coalesce\(\([\s\S]*?from public\.field_notes f/, 'care_list carries the notebook count and date');
+  assert.match(overview, /notebookOf = new Map[\s\S]*?care\.notes/, 'the page keys the count by project');
   /* The row is a card now (CareCard.astro, 2.8), and the date is on the
      notebook metric. */
   const card = fs.readFileSync('src/components/CareCard.astro', 'utf8');
