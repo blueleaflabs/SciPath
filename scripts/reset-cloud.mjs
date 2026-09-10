@@ -450,6 +450,13 @@ if (verifyOnly) {
   process.exit(clean ? 0 : 1);
 }
 
+/* `--from "<step>"` resumes the seeds from a named step after one failed
+   (every seed is safe to run twice), instead of dropping the database again
+   to get past a dropped connection. The schema, the accounts and the files
+   are left as they are on a resume; the step names are the SEEDS below. */
+const fromArg = process.argv.find((a) => a.startsWith('--from='))?.slice(7) ?? (process.argv.includes('--from') ? process.argv[process.argv.indexOf('--from') + 1] : null);
+
+if (!fromArg) {
 console.log(`\nBefore:`);
 report(await census({ tolerant: true }));
 
@@ -597,6 +604,9 @@ console.log(`\nAfter:`);
 if (!report(await census())) {
   fail('Something is still there. Nothing below should be run until it is not.');
 }
+} else {
+  console.log(`\nResuming from "${fromArg}": the schema, the accounts and the files are left as they are.`);
+}
 
 /* --- 4. seed ------------------------------------------------------- */
 
@@ -684,7 +694,10 @@ const SEEDS = [
   ['Search index', ['scripts/index-records.mjs', '--remote'], {}],
 ];
 
-for (const [what, argv, extraEnv] of SEEDS) {
+const fromIndex = fromArg ? SEEDS.findIndex(([what]) => what.toLowerCase() === fromArg.toLowerCase()) : 0;
+if (fromArg && fromIndex < 0) fail(`--from names no step. The steps are: ${SEEDS.map(([w]) => w).join(', ')}.`);
+
+for (const [what, argv, extraEnv] of SEEDS.slice(fromIndex)) {
   console.log(`\n${what}\n`);
 
   const code = await new Promise((resolve) => {
@@ -696,7 +709,7 @@ for (const [what, argv, extraEnv] of SEEDS) {
     child.on('error', () => resolve(1));
   });
 
-  if (code !== 0) fail(`${what} failed. Nothing after it has run.`);
+  if (code !== 0) fail(`${what} failed. Nothing after it has run.\n\n  Resume from this step, without touching the schema:\n\n    node scripts/reset-cloud.mjs --yes --project=${ref} --from "${what}"`);
 }
 
 console.log(`\n${ref} is rebuilt and seeded.\n`);

@@ -109,6 +109,31 @@ async function remoteBucket() {
     region: 'auto',
   });
 
+  /* **A dropped connection is retried, and named.** A cloud reset writes
+     the back catalogue's twenty-three PDFs to R2 one after another, and
+     the twelfth once failed with Node's bare "fetch failed" — a socket
+     reset mid-upload — which stopped the whole reset with no key and no
+     cause in the message. A network fault is not a reason to stop a
+     seed: the call is made again, three times with a pause between, and
+     a failure that survives that says which key, which call and what the
+     runtime reported underneath. */
+  const tries = 3;
+  const attempt = async (what, run) => {
+    let last;
+    for (let i = 1; i <= tries; i += 1) {
+      try {
+        const response = await run();
+        if (response.ok || (response.status < 500 && response.status !== 429)) return response;
+        last = new Error(`${what}: ${response.status}`);
+      } catch (e) {
+        const cause = e?.cause?.code ?? e?.cause?.message ?? '';
+        last = new Error(`${what}: ${e?.message ?? e}${cause ? ` (${cause})` : ''}`);
+      }
+      if (i < tries) await new Promise((r) => setTimeout(r, 800 * i));
+    }
+    throw last;
+  };
+
   const bucket = {
     async list({ prefix = '', cursor } = {}) {
       const url = new URL(base);
@@ -116,7 +141,7 @@ async function remoteBucket() {
       url.searchParams.set('prefix', prefix);
       if (cursor) url.searchParams.set('continuation-token', cursor);
 
-      const response = await client.fetch(url.toString());
+      const response = await attempt(`list ${prefix}`, () => client.fetch(url.toString()));
       if (!response.ok) throw new Error(`list ${prefix}: ${response.status}`);
       const xml = await response.text();
 
@@ -129,7 +154,7 @@ async function remoteBucket() {
     },
 
     async get(key) {
-      const response = await client.fetch(`${base}/${key}`);
+      const response = await attempt(`get ${key}`, () => client.fetch(`${base}/${key}`));
       if (!response.ok) return null;
 
       /* Read once and hand back both readings. A caller may ask for either,
@@ -142,13 +167,16 @@ async function remoteBucket() {
     },
 
     async put(key, body, options = {}) {
-      const response = await client.fetch(`${base}/${key}`, {
-        method: 'PUT',
-        body: normalize(body),
-        headers: {
-          'Content-Type': options.httpMetadata?.contentType ?? 'application/octet-stream',
-        },
-      });
+      const bytes = normalize(body);
+      const response = await attempt(`put ${key}`, () =>
+        client.fetch(`${base}/${key}`, {
+          method: 'PUT',
+          body: bytes,
+          headers: {
+            'Content-Type': options.httpMetadata?.contentType ?? 'application/octet-stream',
+          },
+        })
+      );
       if (!response.ok) throw new Error(`put ${key}: ${response.status}`);
     },
   };
