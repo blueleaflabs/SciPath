@@ -346,15 +346,12 @@ steps:
   - id: literature_review
     name: Lit Review v2
     phase: irpd_empathy
-    # After the graphic and the question in the sequence (order 45), since
-    # it is due after them now; the guard in tests/templates.mjs holds the
-    # sequence and the dates to the same order.
-    order: 45
+    order: 20
     owner: student
     # Moved from the 14th on September 4, so the review is open when the
-    # pilot starts; to the 11th on September 10, the day after the class
-    # first signs in. The Elders' reading of it keeps the 14th.
-    due: { on: 2026-09-11 }
+    # pilot starts; to the 10th on September 10, the day the class first
+    # signs in. The Elders' reading of it keeps the 14th.
+    due: { on: 2026-09-10 }
     requires: [literature_review_draft]
     # The one column whose score and comment the student sees (the
     # teacher's call, September 2026); every other column waits on the
