@@ -2,7 +2,7 @@
 export const prerender = false;
 
 /**
- * EVERYTHING PUBLISHED, IN ONE LIST.
+ * EVERYTHING PUBLISHED, WITH A FRONT (2.9, dev-149).
  *
  * A paper and a fair entry are siblings rather than a thing and its lesser
  * version (8.1), and every other reading surface already treats them that
@@ -16,18 +16,33 @@ export const prerender = false;
  * did real work and did not write it up in the second menu — which is the
  * student 2.5 is about, and the reason 8.1 has two record kinds at all.
  *
+ * **The front (dev-149).** This page was the list and nothing else, which
+ * served a reader who knew what they were looking for and nobody who did
+ * not. A club printed the address on a flyer, so the page now opens the
+ * way a journal's front does: a few records with covers
+ * (`src/lib/featured.ts` chooses; the school's file may name them), then
+ * the archive by year and by subject, then the list. Nothing rotates: a
+ * carousel shows one thing at a time and hides the rest, and a research
+ * archive is not a brochure. The front appears once there is enough to
+ * front — under four records it is a list with a search box, which is what
+ * a new school has.
+ *
  * `/articles/` and `/projects/` are unchanged and still in the sitemap. They
  * are the filtered views of this page, reached from the chips below, and
- * they remain the separate crawl paths 10.2 depends on.
+ * they remain the separate crawl paths 10.2 depends on. The year filter
+ * here (`?year=`) covers both kinds at once, which neither of them does.
  */
 
 import Base from '../../layouts/Base.astro';
 import { cachePublicPage } from '../../lib/caching';
 import PageHead from '../../components/PageHead.astro';
 import RecordCard from '../../components/RecordCard.astro';
+import RecordCover from '../../components/RecordCover.astro';
 import Empty from '../../components/Empty.astro';
-import { openArchive } from '../../lib/archive';
+import { openArchive, byYear } from '../../lib/archive';
 import { companionOf } from '../../lib/records-store';
+import { featuredRecords } from '../../lib/featured';
+import { disciplines } from '../../config/site';
 
 const archive = await openArchive(Astro);
 
@@ -35,8 +50,12 @@ const archive = await openArchive(Astro);
    so a reader learns one mechanism rather than two (8.4). */
 const wanted = Astro.url.searchParams.get('kind');
 const kind = wanted === 'article' || wanted === 'project' ? wanted : null;
+const yearWanted = Number(Astro.url.searchParams.get('year'));
+const year = Number.isInteger(yearWanted) && yearWanted > 1900 ? yearWanted : null;
 
-const records = kind ? archive.all.filter((r) => r.recordKind === kind) : archive.all;
+const records = archive.all
+  .filter((r) => !kind || r.recordKind === kind)
+  .filter((r) => !year || r.year === year);
 
 const counts = {
   all: archive.all.length,
@@ -59,15 +78,27 @@ const chips = [
   { kind: 'article', label: 'Papers', count: counts.article },
   { kind: 'project', label: 'Fair entries', count: counts.project },
 ];
+const withYear = (href: string) => (year ? `${href}${href.includes('?') ? '&' : '?'}year=${year}` : href);
+
+/* The front. */
+const FRONT_AT = 4;
+const front = archive.all.length >= FRONT_AT && !kind && !year;
+const featured = front ? featuredRecords(archive.org, archive.all) : [];
+const years = byYear(archive.all);
+const topicCounts = new Map<string, number>();
+for (const r of archive.all) topicCounts.set(r.discipline, (topicCounts.get(r.discipline) ?? 0) + 1);
+const topics = disciplines.map((d) => ({ ...d, n: topicCounts.get(d.slug) ?? 0 })).filter((d) => d.n > 0);
+
+const listTitle = kind === 'article' ? 'Papers' : kind === 'project' ? 'Fair entries' : 'All records';
 
 cachePublicPage(Astro);
 ---
 
 <Base
-  title="Showcase"
+  title={archive.org.showcaseTitle ?? 'Showcase'}
   description="Every published record, newest first, each with its full abstract."
 >
-  <PageHead eyebrow="Published records" title="Showcase" lede={archive.org.showcaseNote} />
+  <PageHead eyebrow="Published records" title={archive.org.showcaseTitle ?? 'Showcase'} sub={archive.org.showcaseKicker} lede={archive.org.showcaseNote} />
 
   <div class="wrap">
     {archive.all.length === 0 ? (
@@ -77,38 +108,95 @@ cachePublicPage(Astro);
       />
     ) : (
       <>
+        {/* No search box here: the masthead carries one on every page,
+            posting to `/search/`, and a second box two lines under it was
+            the same control twice — on a phone, stacked. The front leads
+            with the featured records instead. */}
+        {front && featured.length > 0 && (
+          <section class="sec featured" aria-labelledby="featured-h">
+            <div class="sec-h"><b id="featured-h">Featured</b><span>{featured.length}</span></div>
+            <ul class="grid">
+              {featured.map((r, i) => {
+                const space = r.recordKind === 'project' ? 'projects' : 'articles';
+                const honors = r.entries.flatMap((e) => [e.placement, ...e.awards].filter(Boolean));
+                return (
+                  <li class:list={[i < 2 && 'lead']}>
+                    <a class="fcard" href={`/${space}/${r.year}/${r.slug}/`}>
+                      <RecordCover record={r} wide={i < 2} />
+                      <span class="fkind">{r.recordKind === 'project' ? 'Fair entry' : 'Paper'} · {r.year}</span>
+                      <span class="ftitle">{r.title}</span>
+                      <span class="fby">{r.authors.map((a) => a.displayName).join(', ')}</span>
+                      {honors.length > 0 && <span class="fhonor">{honors[0]}</span>}
+                    </a>
+                  </li>
+                );
+              })}
+            </ul>
+          </section>
+        )}
+
+        {front && (years.length > 1 || topics.length > 1) && (
+          <section class="sec browse" aria-label="Browse the archive">
+            {years.length > 1 && (
+              <div>
+                <div class="sec-h"><b>By year</b><span>{years.length}</span></div>
+                <ul class="index">
+                  {years.map(([y, list]) => (
+                    <li><a href={`/showcase/?year=${y}`}>{y}</a><span>{list.length}</span></li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {topics.length > 1 && (
+              <div>
+                <div class="sec-h"><b>By subject</b><span>{topics.length}</span></div>
+                <ul class="index">
+                  {topics.map((t) => (
+                    <li><a href={`/topics/${t.slug}/`}>{t.label}</a><span>{t.n}</span></li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </section>
+        )}
+
         {/* Only where there is something to filter. One chip reading
             "Everything 6" beside an empty one is a control that does
             nothing, which is worse than no control. */}
-        {counts.article > 0 && counts.project > 0 && (
-          <nav class="chips" aria-label="Filter by kind">
-            {chips.map((c) => (
+        {(counts.article > 0 && counts.project > 0) || year ? (
+          <nav class="chips" aria-label="Filter">
+            {counts.article > 0 && counts.project > 0 && chips.map((c) => (
               <a
-                href={c.kind ? `/showcase/?kind=${c.kind}` : '/showcase/'}
+                href={withYear(c.kind ? `/showcase/?kind=${c.kind}` : '/showcase/')}
                 aria-current={kind === c.kind ? 'page' : undefined}
               >
                 {c.label}
                 <span class="n">{c.count}</span>
               </a>
             ))}
+            {year && (
+              <a href={kind ? `/showcase/?kind=${kind}` : '/showcase/'} class="clear" aria-label={`Showing ${year}; show every year`}>
+                {year} <span class="n">×</span>
+              </a>
+            )}
           </nav>
-        )}
+        ) : null}
 
         {records.length === 0 ? (
           <Empty
             title="Nothing of that kind yet"
-            body="Everything published here is of the other kind. The filter above shows what there is."
+            body="Everything published here is of the other kind, or another year. The controls above show what there is."
           />
         ) : (
           <section class="sec" style="padding-top:0">
             <div class="sec-h">
-              <b>{kind === 'article' ? 'Papers' : kind === 'project' ? 'Fair entries' : 'All records'}</b>
+              <b>{year ? `${listTitle}, ${year}` : listTitle}</b>
               <span>{records.length}</span>
             </div>
             {records.map((r) => {
               const companion = companions.get(r.recordId);
               return (
-                <div class="row">
+                <div class="entry">
                   <RecordCard record={r} />
                   {companion && (
                     <p class="companion">
@@ -132,6 +220,62 @@ cachePublicPage(Astro);
 </Base>
 
 <style>
+  /* The featured grid: two wide cards, then up to four. */
+  .featured .grid {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 22px 20px;
+  }
+  .featured li.lead { grid-column: span 2; }
+  .fcard {
+    display: block;
+    text-decoration: none;
+    color: var(--ink);
+  }
+  .fcard:hover .ftitle { text-decoration: underline; }
+  .fkind {
+    display: block;
+    margin-top: 10px;
+    font-family: var(--face-num);
+    font-size: 0.78rem;
+    color: var(--ink-3);
+  }
+  .ftitle {
+    display: block;
+    margin-top: 4px;
+    font-size: 1.08rem;
+    line-height: 1.3;
+    font-weight: 600;
+  }
+  .lead .ftitle { font-size: 1.32rem; }
+  .fby { display: block; margin-top: 4px; font-size: 0.9rem; color: var(--ink-2); }
+  .fhonor {
+    display: inline-block;
+    margin-top: 8px;
+    font-family: var(--face-ui);
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: var(--stage-pub);
+  }
+
+  .browse {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0 40px;
+  }
+  .index { list-style: none; margin: 0; padding: 0; }
+  .index li {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 9px 0;
+    border-bottom: 1px solid var(--rule-fine, var(--rule));
+  }
+  .index span { font-family: var(--face-num); color: var(--ink-3); }
+
   .chips {
     display: flex;
     flex-wrap: wrap;
@@ -149,18 +293,29 @@ cachePublicPage(Astro);
     text-decoration: none;
     color: var(--ink-2);
   }
-  .chips a[aria-current='page'] {
+  .chips a[aria-current='page'], .chips a.clear {
     border-color: var(--ink);
     color: var(--ink);
   }
   .chips .n { color: var(--ink-3); }
 
-  .row { position: relative; }
+  /* Not `.row`: the global one is a flex row, and it shrink-wrapped every card to its longest line — ragged widths down the whole list. */
+  .entry { position: relative; }
   /* Aligned with the abstract rather than with the record number, because it
      belongs to the record's text and not to its identifier. */
   .companion {
     margin: -14px 0 0 5.9rem;
     padding: 0 0 18px;
     font-size: 0.88rem;
+  }
+
+  @media (max-width: 860px) {
+    .featured .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .browse { grid-template-columns: 1fr; }
+  }
+  @media (max-width: 520px) {
+    .featured .grid { grid-template-columns: 1fr; }
+    .featured li.lead { grid-column: auto; }
+    .companion { margin-left: 0; }
   }
 </style>

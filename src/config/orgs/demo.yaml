@@ -65,6 +65,22 @@ showcase_note: >-
   Published student research, alongside invented projects that demonstrate the
   platform.
 
+# The public face of this tenant is the journal (dev-149): the Research
+# Club printed demo.scipath.org on its flyers as the place to read the
+# Monta Vista Research Journal, so a visitor lands on the showcase, not on
+# the platform's pitch. Signed-in people land on their work as before.
+front_door: showcase
+
+# What the showcase calls itself on this tenant, and the word under it.
+showcase_title: Monta Vista Research Club Journal
+showcase_kicker: Demo showcase
+
+# Records to lead the showcase, by id, in order; up to six are shown and
+# the rest are filled by the archive's own rule (src/lib/featured.ts):
+# awarded first, then reviewed, newest first, never an invented record.
+# Empty until the club names its picks.
+featured: []
+
 # Monta Vista's list, unchanged. Two of them are shared and seed once for
 # everybody; the other four are school level and get a row of their own under
 # this organization.

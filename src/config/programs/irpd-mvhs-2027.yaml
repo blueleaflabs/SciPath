@@ -201,9 +201,12 @@ deliverables:
   # Written in SciPath from a shape (6.16): the row opens the document,
   # the Elder reads it there, and Submit records it.
   - { id: interview_protocol_handout, name: Interview Protocol, kind: text, owner: student, requirement: required, shape: interview-protocol }
-  # One page for the interviews (2.8): the Drive folder with the signed
-  # consent forms and the write-up of what was heard.
-  - { id: interview_synthesis, name: Empathy Interviews, kind: link, owner: student, requirement: required, shape: drive-link }
+  # The interviews themselves (2.9, dev-152): one box of notes per
+  # interview, three needed, five the goal, more on demand; the Drive
+  # folder with the signed consent forms is an optional field at the end.
+  # The deliverable's id is unchanged, so a document already opened under
+  # it keeps its rows, and the shape keeps the old fields' ids.
+  - { id: interview_synthesis, name: Empathy Interviews, kind: text, owner: student, requirement: required, shape: empathy-interviews }
 
   - id: question
     name: Research Question
@@ -469,7 +472,8 @@ steps:
     phase: irpd_question
     order: 10
     owner: student
-    due: { on: 2026-09-14 }
+    # September 21, from September 14 (dev-152).
+    due: { on: 2026-09-21 }
     deliverables:
       - { ref: interview_protocol_handout }
 
@@ -478,9 +482,15 @@ steps:
     phase: irpd_question
     order: 20
     owner: student
+    # October 8 (dev-152). The step had no date of its own before.
+    due: { on: 2026-10-08 }
     requires: [interview_protocol_handout]
     consequence: blocks_human_participants
-    applies_when: humans
+    # Every project in this class interviews people: the course is built
+    # on empathy interviews. The step used to apply only when a project's
+    # `humans` fact was set, and nothing after the seed ever sets that
+    # fact, so no project in the pilot had the step at all — the row was
+    # there with its date, and the deliverable behind it was not (dev-152).
     deliverables:
       - { ref: interview_synthesis }
     risk: ""

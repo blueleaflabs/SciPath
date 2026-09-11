@@ -23,6 +23,11 @@ export const prerender = false;
  *
  * A change is written to the audit log, so the teacher's record says when
  * each account's password last changed and that its owner did it.
+ *
+ * **From the profile page too (dev-151).** Signed in, the same form sits
+ * on /app/profile/ and posts here: the address is the session's, not the
+ * form's, and `back` names where the answer goes (only the profile page
+ * is accepted), so the person never leaves their own page to do it.
  */
 
 import Base from '../../layouts/Base.astro';
@@ -34,18 +39,26 @@ import { passwordAllowed, notePasswordAttempt, pause, CHANGE_FAILED } from '../.
 
 const org = activeOrg(Astro);
 const runtime = (Astro.locals as any).runtime?.env;
+const session = (Astro.locals as any).session ?? null;
 let { error, note } = outcomeFrom(Astro.url);
 
 const MIN = 10;
 
+/** Where the answer goes: this page, or the profile page that asked. */
+const BACK = new Set(['/app/profile/']);
+
 if (Astro.request.method === 'POST') {
   const form = await Astro.request.formData();
-  const email = String(form.get('email') ?? '').trim().toLowerCase();
+  const back = String(form.get('back') ?? '');
+  const answerAt = BACK.has(back) ? new URL(back, Astro.url) : Astro.url;
+  /* Signed in, the address is the session's: a form cannot change somebody
+     else's password from a signed-in page by naming their address. */
+  const email = (session?.email ?? String(form.get('email') ?? '')).trim().toLowerCase();
   const current = String(form.get('current') ?? '');
   const password = String(form.get('password') ?? '');
   const again = String(form.get('again') ?? '');
 
-  const refuse = async () => { await pause(); return afterPost(Astro.url, { error: CHANGE_FAILED, note: null }); };
+  const refuse = async () => { await pause(); return afterPost(answerAt, { error: CHANGE_FAILED, note: null }); };
 
   /* The cheap checks first, and they cost the account nothing: a form
      that fails here never reached the credential. */
@@ -87,7 +100,7 @@ if (Astro.request.method === 'POST') {
     console.error(JSON.stringify({ change_password_audit: e?.message ?? String(e) }));
   }
 
-  return afterPost(Astro.url, { error: null, note: 'Your password is changed, and you are signed in with it.' });
+  return afterPost(answerAt, { error: null, note: BACK.has(back) ? 'Your password is changed.' : 'Your password is changed, and you are signed in with it.' });
 }
 ---
 

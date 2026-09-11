@@ -472,6 +472,26 @@ const nav = [
 </style>
 
 <script>
+  /* AN HOUR WITHOUT A TOUCH, AND THE PAGE SIGNS ITSELF OUT (dev-151).
+
+     The server ends a session an hour after the person's last request
+     (src/lib/idle.ts); this is the same hour, counted on the device from
+     the last key, tap, click or scroll, so a page left open on a shared
+     laptop leaves on its own rather than waiting for a stranger's first
+     click to find out. The sign-out route clears the session and lands
+     on the sign-in page with the reason. Unsaved text is on the device
+     (the editor keeps every field in local storage). */
+  const IDLE_MS = 60 * 60 * 1000;
+  let idleTimer = 0;
+  const armIdle = () => {
+    window.clearTimeout(idleTimer);
+    idleTimer = window.setTimeout(() => { window.location.assign('/auth/signout/?idle=1'); }, IDLE_MS);
+  };
+  for (const ev of ['keydown', 'pointerdown', 'wheel', 'touchstart', 'scroll']) {
+    document.addEventListener(ev, armIdle, { passive: true, capture: true });
+  }
+  armIdle();
+
   /* The current tab into view on a phone, where the bar scrolls. */
   const cur = document.querySelector<HTMLElement>('.appnav a[aria-current="page"]');
   const bar = cur?.closest<HTMLElement>('.appnav');

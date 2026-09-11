@@ -73,6 +73,45 @@ await test('a list under a heading, Enter out of it, then Heading 3: the heading
   assert.equal(await md(), '# Title\n\n## Sub\n\n- one\n- two\n\n### Third');
 });
 
+/* ── Indentation (dev-151) ─────────────────────────────────────────────── */
+
+const pressTab = async (shift = false) => { const mods = shift ? 8 : 0; await tab.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9, modifiers: mods }); await tab.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9, modifiers: mods }); await wait(30); };
+
+await test('Tab on a paragraph indents it one level, written as four spaces; Shift+Tab takes it back', async () => {
+  await tab.evaluate(`(() => { const e = document.querySelector('.mdx-edit'); e.innerHTML = ''; e.focus(); })()`);
+  await type('Smith, J. (2020). A title.'); await pressTab(); await wait(100);
+  assert.equal(await html(), '<p class="ind" data-ind="1">Smith, J. (2020). A title.</p>');
+  assert.equal(await md(), '    Smith, J. (2020). A title.');
+  await pressTab(); await wait(100);
+  assert.equal(await md(), '        Smith, J. (2020). A title.');
+  await pressTab(true); await pressTab(true); await wait(100);
+  assert.equal(await html(), '<p>Smith, J. (2020). A title.</p>');
+  assert.equal(await md(), 'Smith, J. (2020). A title.');
+});
+
+await test('an indented paragraph, Enter, more text: the new line keeps the level; the bar buttons do the same as the keys', async () => {
+  await tab.evaluate(`(() => { const e = document.querySelector('.mdx-edit'); e.innerHTML = ''; e.focus(); })()`);
+  await type('First'); await click('indent'); await press('Enter', 'Enter', 13); await type('Second'); await wait(100);
+  assert.equal(await md(), '    First\n\n    Second');
+  await click('outdent'); await wait(100);
+  assert.equal(await md(), '    First\n\nSecond');
+});
+
+await test('Tab in a list nests the item, and the Markdown is a nested list, not an indented paragraph', async () => {
+  await tab.evaluate(`(() => { const e = document.querySelector('.mdx-edit'); e.innerHTML = ''; e.focus(); })()`);
+  await click('ul'); await type('one'); await press('Enter', 'Enter', 13); await type('two'); await pressTab(); await wait(150);
+  assert.equal(await md(), '- one\n  - two');
+  await pressTab(true); await wait(150);
+  assert.equal(await md(), '- one\n- two');
+});
+
+await test('a heading does not indent, and Tab does not leave the field', async () => {
+  await tab.evaluate(`(() => { const e = document.querySelector('.mdx-edit'); e.innerHTML = ''; e.focus(); })()`);
+  await click('h2'); await type('Heading'); await pressTab(); await wait(100);
+  assert.equal(await md(), '## Heading');
+  assert.equal(await tab.evaluate(`document.activeElement === document.querySelector('.mdx-edit')`), true);
+});
+
 if (process.exitCode) console.error(`\n${passed} passed, with failures.`);
 else console.log(`${passed} editor assertions passed.`);
 process.exit(process.exitCode ?? 0);

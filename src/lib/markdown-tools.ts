@@ -16,6 +16,11 @@ export const TOOLS: Tool[] = [
   { cmd: 'h3', label: 'H3', title: 'Heading 3', keys: '⌥3' },
   { cmd: 'ul', label: '• List', title: 'Bulleted list', keys: '⇧8' },
   { cmd: 'ol', label: '1. List', title: 'Numbered list', keys: '⇧7' },
+  /* Indentation (dev-151): a paragraph in from the margin, a list item
+     under its parent. Tab and Shift+Tab, as in Docs; no modifier, so
+     `keys` is null and the key is named in the title. */
+  { cmd: 'indent', label: '⇥', title: 'Indent (Tab)', keys: null, cls: 'ind' },
+  { cmd: 'outdent', label: '⇤', title: 'Outdent (Shift+Tab)', keys: null, cls: 'ind' },
   { cmd: 'quote', label: '“ Quote', title: 'Quote', keys: null },
   { cmd: 'code', label: '</>', title: 'Code', keys: null },
   { cmd: 'link', label: 'Link', title: 'Link', keys: 'K' },

@@ -1,0 +1,85 @@
+# Empathy interviews, due October 8 (dev-152). What was heard, one box per
+# interview: three are needed, five is the goal, and a student who talks to
+# more people adds a box for each. The boxes are the deliverable; the
+# interview protocol before it says how each conversation was run.
+#
+# **The Drive folder is kept, and optional.** This deliverable was a link
+# to a Drive folder (drive-link: `url` and `note`) until 2.9, and a student
+# who pasted one has it still: the two fields keep their ids here, at the
+# end, so what was written before the change is on the page after it.
+#
+# **No showcase block, on purpose.** These are notes about conversations
+# with real people, some of them minors, and the class gallery is read by
+# the whole class. What a project asked is on the showcase from the
+# interview protocol; what a particular person said is not.
+
+id: empathy-interviews
+name: Empathy interviews
+version: 1
+guidance: >-
+  One box for each person you interviewed: who they were (a role, not a
+  name), what you asked, what they said, and what surprised you. Write
+  soon after the conversation, while it is fresh. Three interviews are
+  needed; five is the goal; add a box for each one beyond that.
+
+sections:
+  - id: interviews
+    name: Interviews
+    # The count in the section head, kept live as boxes fill: "2 of 3
+    # interviews written · 5 is the goal".
+    tally: { singular: interview, plural: interviews, min: 3, goal: 5 }
+    fields:
+      - id: interview_1
+        kind: long
+        prompt: Interview 1
+        tip: Who (their role), when, what you asked, what they said, what surprised you.
+        required: true
+      - id: interview_2
+        kind: long
+        prompt: Interview 2
+        tip: Same as above.
+        required: true
+      - id: interview_3
+        kind: long
+        prompt: Interview 3
+        tip: Same as above.
+        required: true
+      - id: interview_4
+        kind: long
+        prompt: Interview 4
+        extra: true
+      - id: interview_5
+        kind: long
+        prompt: Interview 5
+        extra: true
+      - id: interview_6
+        kind: long
+        prompt: Interview 6
+        extra: true
+      - id: interview_7
+        kind: long
+        prompt: Interview 7
+        extra: true
+      - id: interview_8
+        kind: long
+        prompt: Interview 8
+        extra: true
+      - id: interview_9
+        kind: long
+        prompt: Interview 9
+        extra: true
+      - id: interview_10
+        kind: long
+        prompt: Interview 10
+        extra: true
+  - id: link
+    name: Consent forms
+    fields:
+      - id: url
+        kind: link
+        prompt: Google Drive folder with the signed consent forms
+        tip: Optional here; the folder is where the forms live. Make sure sharing is set so your Elders and teachers can open it.
+      - id: note
+        kind: long
+        prompt: Anything your Elder should know about the interviews
+        tip: Optional.

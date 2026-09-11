@@ -1,0 +1,86 @@
+---
+/**
+ * THE COVER OF A RECORD, IN A GRID (dev-149).
+ *
+ * The showcase front shows records as cards with a picture, and most of
+ * the archive has none: the back catalogue is papers, and a paper's
+ * figures are inside its PDF. So every record gets a cover, and the rule
+ * for what it is lives here and nowhere else: the first showcase picture,
+ * else the first figure, else the video's still, else a typographic panel
+ * in the discipline's tint with the record's number set large. A grid with
+ * holes in it says the archive is thin; a grid of covers says it is full,
+ * which is the truth.
+ *
+ * The tint is by discipline and fixed (`disciplineHue`), the same one the
+ * topic page and the record page wear.
+ */
+import { disciplineHue, toneStyle, disciplineLabel } from '../config/site';
+import type { RecordEntry } from '../lib/records-store';
+
+interface Props {
+  record: RecordEntry;
+  /** Wider covers on the first row of a featured grid. */
+  wide?: boolean;
+}
+
+const { record: d, wide = false } = Astro.props;
+
+const picture = d.shots[0]?.src ?? d.figures[0]?.src ?? d.videoPoster ?? null;
+const alt = d.shots[0]?.alt ?? d.figures[0]?.alt ?? '';
+const seq = d.recordId.split('-').pop();
+
+const hue = disciplineHue(d.discipline);
+const style = toneStyle(d.discipline);
+---
+
+<div class:list={['rcover', wide && 'wide', !picture && 'typo']} style={style}>
+  {picture ? (
+    <img src={picture} alt={alt} loading="lazy" decoding="async" />
+  ) : (
+    <div class="panel" aria-hidden="true">
+      <span class="no">{seq}</span>
+      <span class="disc">{disciplineLabel(d.discipline)}</span>
+    </div>
+  )}
+</div>
+
+<style>
+  .rcover {
+    aspect-ratio: 16 / 10;
+    overflow: hidden;
+    background: var(--wash, var(--paper));
+    border: 1px solid var(--rule);
+  }
+  .rcover.wide { aspect-ratio: 2 / 1; }
+  /* Cropped from the bottom, never the top: a drawn figure carries its
+     title at the top. */
+  .rcover img { width: 100%; height: 100%; object-fit: cover; object-position: 50% 0; display: block; }
+  .rcover.typo {
+    background:
+      linear-gradient(160deg, hsl(var(--hue) var(--sat) calc(var(--lum) + 8%)) 0%, hsl(var(--hue) var(--sat) calc(var(--lum) - 6%)) 100%);
+    border-color: hsl(var(--hue) var(--sat) calc(var(--lum) - 22%));
+  }
+  .rcover.typo:not([style]) {
+    background: linear-gradient(160deg, var(--wash, var(--paper)), var(--rule));
+  }
+  .panel {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    padding: 14px 16px;
+    color: hsl(var(--hue) var(--sat) 16%);
+  }
+  .no {
+    font-family: var(--face-num);
+    font-size: 2.6rem;
+    line-height: 1;
+    letter-spacing: -0.02em;
+  }
+  .disc {
+    font-family: var(--face-ui);
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+  }
+</style>

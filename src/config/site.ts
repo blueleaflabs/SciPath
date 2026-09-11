@@ -115,3 +115,39 @@ export type DisciplineSlug = (typeof disciplines)[number]['slug'];
 export function disciplineLabel(slug: string): string {
   return disciplines.find((d) => d.slug === slug)?.label ?? slug;
 }
+
+/**
+ * One colour per discipline, fixed (dev-149; richer in dev-151). The same
+ * subject is the same colour on the cover, on its topic page and on each
+ * of its records, so a reader learns it without being told. Hue,
+ * saturation and lightness of the mid-tone; the surfaces derive their
+ * lighter and darker steps from it. Greens, yellows, blues, oranges and
+ * browns, a violet and a teal — no red, which the interface keeps for
+ * what is late or wrong. In the list's order; an unknown slug has none.
+ */
+const TONES: [number, number, number][] = [
+  [228, 45, 74], // astronomy: periwinkle
+  [138, 40, 70], // biology: leaf green
+  [30, 70, 74],  // chemistry: orange
+  [205, 55, 72], // computer science: sky blue
+  [80, 45, 68],  // earth and climate: olive
+  [28, 35, 58],  // engineering: brown
+  [46, 70, 68],  // mathematics: gold
+  [282, 35, 74], // neuroscience: violet
+  [186, 45, 66], // physics: teal
+  [58, 45, 72],  // social science: straw
+];
+export function disciplineTone(slug: string): { h: number; s: number; l: number } | null {
+  const i = disciplines.findIndex((d) => d.slug === slug);
+  if (i < 0) return null;
+  const [h, s, l] = TONES[i];
+  return { h, s, l };
+}
+/** The three custom properties a surface reads (`--hue`, `--sat`, `--lum`), or nothing. */
+export function toneStyle(slug: string): string | undefined {
+  const t = disciplineTone(slug);
+  return t ? `--hue: ${t.h}; --sat: ${t.s}%; --lum: ${t.l}%` : undefined;
+}
+export function disciplineHue(slug: string): number | null {
+  return disciplineTone(slug)?.h ?? null;
+}

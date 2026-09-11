@@ -118,6 +118,14 @@ export interface Org {
   /** One sentence describing what this organization publishes. */
   showcaseNote: string;
   /**
+   * The showcase's own name and a word under it (dev-149): a school whose
+   * showcase is its journal calls the page by the journal's name, and the
+   * demonstration tenant says under it that this is a demonstration.
+   * Absent, the page is "Showcase".
+   */
+  showcaseTitle?: string;
+  showcaseKicker?: string;
+  /**
    * What the front door calls the class (2.9): "Build, track, and showcase
    * your Monta Vista IRPD Class project", "your IRPD Class Elder". Unset,
    * the first class or club in `programs` lends its name, which for a
@@ -139,6 +147,22 @@ export interface Org {
    * happens to say on the day.
    */
   demo?: boolean;
+  /**
+   * Where a visitor with no session lands on the bare hostname (dev-149).
+   *
+   * The default front page is the platform's pitch. A tenant whose public
+   * face is its journal — the one a club prints on a flyer — sends the
+   * visitor to the showcase instead; anybody signed in still lands on
+   * their work. Only `showcase` is understood; anything else is the pitch.
+   */
+  frontDoor?: 'showcase';
+  /**
+   * Record ids to put at the top of the showcase, in order (dev-149). Up to
+   * six are shown. Absent or short, the page fills from the archive: the
+   * awarded and placed first, then the reviewed papers, newest first, never
+   * an invented record.
+   */
+  featured?: string[];
   /**
    * False for a record that gets pages but no database row.
    *
@@ -212,8 +236,12 @@ export function shapeOrg(doc: any): Org {
     verifiedDomains: doc.verified_domains ?? [],
     editorialReview: Boolean(doc.editorial_review),
     showcaseNote: doc.showcase_note,
+    showcaseTitle: typeof doc.showcase_title === 'string' && doc.showcase_title.trim() ? doc.showcase_title.trim() : undefined,
+    showcaseKicker: typeof doc.showcase_kicker === 'string' && doc.showcase_kicker.trim() ? doc.showcase_kicker.trim() : undefined,
     className: typeof doc.class_name === 'string' && doc.class_name.trim() ? doc.class_name.trim() : undefined,
     demo: Boolean(doc.demo),
+    frontDoor: doc.front_door === 'showcase' ? 'showcase' : undefined,
+    featured: Array.isArray(doc.featured) ? doc.featured.map(String).filter(Boolean) : [],
     /* Defaulted true, because every file but one omits it and a record that
        said `undefined` would put the burden of remembering the default on
        every caller. */

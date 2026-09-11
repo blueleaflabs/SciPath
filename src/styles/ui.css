@@ -493,6 +493,24 @@
   }
 }
 
+/* ── INDENTATION (dev-151) ─────────────────────────────────── */
+/* An indented paragraph, from the Markdown rule in src/lib/notes.ts: one
+   level per four leading spaces, up to four. Global, so the editor's
+   surface, the printed document, the tracker and the public record all
+   set it the same. */
+p.ind[data-ind="1"] { padding-left: 2em; }
+p.ind[data-ind="2"] { padding-left: 4em; }
+p.ind[data-ind="3"] { padding-left: 6em; }
+p.ind[data-ind="4"] { padding-left: 8em; }
+/* A hanging indent, for a references page: the first line at the margin
+   and the rest of each entry set in. A field's shape asks for it
+   (`style: hanging`); the container carries the class, every paragraph
+   in it hangs. */
+.hang > p, .hang p.ind { text-indent: -2em; padding-left: 2em; }
+.hang p.ind[data-ind="2"] { padding-left: 4em; }
+.hang p.ind[data-ind="3"] { padding-left: 6em; }
+.hang p.ind[data-ind="4"] { padding-left: 8em; }
+
 /* ── MARKS ─────────────────────────────────────────────────── */
 .chip {
   display: inline-flex;
@@ -541,6 +559,13 @@
   color: var(--alert);
   border-color: var(--alert);
   background: var(--alert-bg);
+}
+/* An invented record on the demonstration tenant (dev-149): dashed, so it
+   reads as provisional beside the solid mark of a real publication. */
+.chip.demo {
+  color: var(--ink-2);
+  border-style: dashed;
+  background: transparent;
 }
 .chip.solid {
   background: var(--ink);

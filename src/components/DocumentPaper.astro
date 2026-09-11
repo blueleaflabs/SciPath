@@ -46,7 +46,7 @@ const withComments = comments.length > 0;
             <>
               <p class="prompt">{f.prompt}{f.owner === 'staff' && <span class="owner"> · {staffWord(program)}'s part</span>}</p>
               {f.kind === 'long' ? (
-                isFilled(f, v) ? <div class="prose" set:html={renderMarkdown(String(v))} /> : <p class="empty">Not written</p>
+                isFilled(f, v) ? <div class:list={['prose', f.style === 'hanging' && 'hang']} set:html={renderMarkdown(String(v))} /> : <p class="empty">Not written</p>
               ) : f.kind === 'table' && Array.isArray(v) ? (
                 <table>
                   <thead><tr><th></th>{(f.columns ?? []).map((c) => <th>{c}</th>)}</tr></thead>

@@ -64,16 +64,20 @@ async function sign(secret: string, text: string): Promise<string> {
 }
 
 /** The cookie's value for this person and context, or null when it would not fit. */
-export async function sealContext(secret: string, userId: string, ctx: unknown, now = Date.now()): Promise<string | null> {
-  const exp = Math.floor(now / 1000) + CONTEXT_TTL_SECONDS;
-  const payload = b64url(enc.encode(JSON.stringify(ctx)));
+/**
+ * Seal a small JSON value for one person for `ttl` seconds (dev-151 made
+ * this general: the context cookie and the idle stamp are the same
+ * shape — who, until when, what — under the same derived key).
+ */
+export async function seal(secret: string, userId: string, value: unknown, ttl: number, now = Date.now()): Promise<string | null> {
+  const exp = Math.floor(now / 1000) + ttl;
+  const payload = b64url(enc.encode(JSON.stringify(value)));
   const body = `${userId}.${exp}.${payload}`;
   if (body.length > MAX_BYTES) return null;
   return `${body}.${await sign(secret, body)}`;
 }
 
-/** The context inside a cookie, or null when it is not this person's, is past its minute, or was not signed here. */
-export async function openContext(secret: string, userId: string, value: string | undefined, now = Date.now()): Promise<Record<string, any> | null> {
+export async function open(secret: string, userId: string, value: string | undefined, now = Date.now()): Promise<Record<string, any> | null> {
   if (!value) return null;
   const at = value.lastIndexOf('.');
   if (at < 0) return null;
@@ -95,6 +99,14 @@ export async function openContext(secret: string, userId: string, value: string 
   } catch {
     return null;
   }
+}
+
+export function sealContext(secret: string, userId: string, ctx: unknown, now = Date.now()): Promise<string | null> {
+  return seal(secret, userId, ctx, CONTEXT_TTL_SECONDS, now);
+}
+
+export function openContext(secret: string, userId: string, value: string | undefined, now = Date.now()): Promise<Record<string, any> | null> {
+  return open(secret, userId, value, now);
 }
 
 export function writeContextCookie(cookies: AstroCookies, value: string, secure: boolean) {

@@ -177,10 +177,11 @@ test('every step in a course gets a date, from its phase where it has none', () 
 });
 
 test('a phase window resolves to the end of the month it names', () => {
-  /* The interviews have no day of their own: the calendar teaches how to run
-     one and leaves when to the student, which is exactly what a window is
-     for. */
-  const dates = datesFor(irpd);
+  /* The interviews had no day of their own until dev-152 gave them October
+     8; the window rule is asserted on the same step with its day taken
+     off, since no step of this program is left to the window now. */
+  const withoutDay = { ...irpd, steps: irpd.steps.map((st) => (st.id === 'interviews' ? { ...st, due: undefined } : st)) };
+  const dates = datesFor(withoutDay);
   const interviews = dates.find((d) => d.step.id === 'interviews');
   assert.equal(interviews.source, 'window');
   assert.equal(interviews.date, '2026-09-30', 'August to September ends in September');

@@ -24,6 +24,7 @@ import { tenantSlugs } from './lib/tenant-paths';
 import { isNonTenantPath } from './config/routes';
 import { signInWith } from './lib/next-path';
 import { setSessionHint, clearSessionHint } from './lib/session-hint';
+import { judgeIdle, clearIdle } from './lib/idle';
 
 const GUARDED = '/app/';
 
@@ -508,6 +509,28 @@ const handle = async (context: any, next: any) => {
       return context.redirect(signInWith(url));
     }
     return next();
+  }
+
+  /* An hour away and the session ends (dev-151, src/lib/idle.ts). Judged
+     before anything is read for the person: a stale stamp signs them out
+     here, the same way a signed-out request is answered, with a word on
+     the sign-in page saying why. The stamp needs the same key as the
+     context cookie; without it nothing is judged, and nothing breaks. */
+  const idleSecret = env('SUPABASE_SECRET_KEY', runtime);
+  if (idleSecret) {
+    const idle = await judgeIdle(idleSecret, user.id, cookies, url.pathname, url.protocol === 'https:');
+    if (idle === 'expired') {
+      await supabase.auth.signOut();
+      clearSessionHint(context.cookies);
+      clearContextCookie(cookies);
+      clearIdle(cookies);
+      if (url.pathname.startsWith('/app/api/')) return new Response(JSON.stringify({ ok: false, error: 'signed out after an hour away' }), { status: 401, headers: { 'Content-Type': 'application/json' } });
+      if (url.pathname.startsWith(GUARDED)) {
+        const to = signInWith(url);
+        return context.redirect(`${to}${to.includes('?') ? '&' : '?'}signin=idle`);
+      }
+      return next();
+    }
   }
 
   locals.session = { id: user.id, email: user.email ?? null };

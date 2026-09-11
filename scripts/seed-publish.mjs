@@ -28,6 +28,8 @@ import { loadOrgs } from './orgs-library.mjs';
 import { openBucket } from './notebook-bucket.mjs';
 import { assembleRecord } from '../src/lib/record-files.ts';
 import { readManifest, writeManifest, upsert } from '../src/lib/records-store.ts';
+import { blobOver, normalize } from './record-blob.mjs';
+import { FIXTURE_PUBLISHED_ON } from '../src/config/demo-records.mjs';
 
 const orgs = loadOrgs();
 
@@ -72,19 +74,7 @@ async function release() {
   store = null;
 }
 
-/** The blob interface `assembleRecord` expects. */
-const blob = {
-  available: () => Boolean(bucket),
-  async get(path) {
-    if (!bucket) return null;
-    const object = await bucket.get(path);
-    if (!object) return null;
-    return {
-      body: await object.arrayBuffer(),
-      contentType: object.httpMetadata?.contentType ?? 'application/octet-stream',
-    };
-  },
-};
+const blob = blobOver(bucket);
 
 async function main() {
   if (!bucket) {
@@ -140,7 +130,8 @@ async function main() {
           p_submission_id: accepted.id,
           p_slug: slugify(accepted.manuscripts?.title ?? 'untitled'),
           p_prefix: prefix,
-          p_published_on: new Date().toISOString().slice(0, 10),
+          /* A fixed date, not today's: see src/config/demo-records.mjs. */
+          p_published_on: FIXTURE_PUBLISHED_ON.article,
         }),
       confirm: (recordId) => editor.rpc('confirm_published', { p_submission_id: accepted.id }),
       org,
@@ -170,7 +161,7 @@ async function main() {
           p_project_id: withResult.project_id,
           p_slug: slugify(withResult.projects?.title ?? 'untitled'),
           p_prefix: prefix,
-          p_published_on: new Date().toISOString().slice(0, 10),
+          p_published_on: FIXTURE_PUBLISHED_ON.project,
         }),
       confirm: (recordId) => editor.rpc('mark_record_live', { p_record_id: recordId }),
       org,
@@ -240,20 +231,6 @@ async function publish({ what, title, allocate, confirm, org }) {
   }
 
   console.log(`  ${recordId}  ${what}  ${title}`);
-}
-
-/**
- * Miniflare's proxy asserts on a typed array whose byte offset is not zero,
- * and a Node Buffer almost never starts at zero. The remote path is
- * unaffected; this is only the local bucket.
- */
-function normalize(body) {
-  if (typeof body === 'string') return body;
-  if (body instanceof ArrayBuffer) return body;
-  if (ArrayBuffer.isView(body)) {
-    return body.buffer.slice(body.byteOffset, body.byteOffset + body.byteLength);
-  }
-  return body;
 }
 
 /** The same rule the publish screen uses. */

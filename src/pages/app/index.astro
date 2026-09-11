@@ -1841,6 +1841,9 @@ const careLayout = (group: any): 'grid' | 'wide' => {
         Nothing was saved. Sign in with your school account.
       </p>
     )}
+    {signin === 'idle' && (
+      <p class="note" role="status">You were signed out after an hour away. Sign in again to carry on; anything you were typing is kept on this device until you do.</p>
+    )}
     {signin === 'stale' && (
       <p class="note" role="alert">Your earlier session is no longer valid here. Sign in again.</p>
     )}

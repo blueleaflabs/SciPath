@@ -6,7 +6,7 @@ import { cachePublicPage } from '../../lib/caching';
 import PageHead from '../../components/PageHead.astro';
 import RecordCard from '../../components/RecordCard.astro';
 import { openArchive } from '../../lib/archive';
-import { disciplineLabel } from '../../config/site';
+import { disciplineLabel, toneStyle } from '../../config/site';
 
 const archive = await openArchive(Astro);
 const slug = String(Astro.params.slug ?? '');
@@ -22,6 +22,7 @@ cachePublicPage(Astro);
     eyebrow="Discipline"
     title={disciplineLabel(slug)}
     lede={`${records.length} ${records.length === 1 ? 'record' : 'records'}`}
+    tone={toneStyle(slug)}
   />
   <div class="wrap">
     <section class="sec" style="padding-top:0">

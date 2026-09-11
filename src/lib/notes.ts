@@ -18,6 +18,54 @@ import { marked } from 'marked';
 
 marked.setOptions({ gfm: true, breaks: true });
 
+/**
+ * INDENTED PARAGRAPHS (dev-151).
+ *
+ * A references page wants its entries set in from the margin, and an
+ * outline wants its sub-points under their points. Markdown has no
+ * indented paragraph: four leading spaces are a code block. Nothing this
+ * platform writes uses that form — the editor writes fenced code only,
+ * and its serializer collapses leading whitespace to at most one space —
+ * so the four-space form is free to mean what a writer means by it:
+ * indentation, one level per four spaces, up to four levels.
+ *
+ * One rule, here, so the editor's surface, the printed document, the
+ * class tracker, the showcase and the public record all agree. A block
+ * of consecutive lines with the same indent is one paragraph; a line
+ * inside it may carry more (a wrapped continuation) and is trimmed. A
+ * fenced block still keeps whatever is inside it, since the fence is
+ * read first and whole. A paragraph indented under a list item with a
+ * blank line between is Markdown's loose-list continuation and stays
+ * inside the item, unindented, as before.
+ */
+const INDENT = /^( {4,})(\S[^\n]*)((?:\n\1[^\n]*)*)(?:\n+|$)/;
+const MAX_INDENT = 4;
+
+marked.use({
+  extensions: [
+    {
+      name: 'indent',
+      level: 'block',
+      start(src: string) {
+        const m = /(^|\n) {4,}\S/.exec(src);
+        return m ? m.index + (m[1] ? 1 : 0) : undefined;
+      },
+      tokenizer(src: string) {
+        const m = INDENT.exec(src);
+        if (!m) return undefined;
+        const depth = Math.min(MAX_INDENT, Math.floor(m[1].length / 4));
+        const text = (m[2] + m[3]).split('\n').map((l) => l.trim()).join('\n');
+        const token: any = { type: 'indent', raw: m[0], depth, text, tokens: [] };
+        (this as any).lexer.inline(text, token.tokens);
+        return token;
+      },
+      renderer(token: any) {
+        return `<p class="ind" data-ind="${token.depth}">${(this as any).parser.parseInline(token.tokens)}</p>\n`;
+      },
+    },
+  ],
+});
+
 const ENTITIES: Record<string, string> = {
   '<': '&lt;',
   '>': '&gt;',

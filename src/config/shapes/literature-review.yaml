@@ -61,6 +61,9 @@ sections:
         required: true
       - id: references
         kind: long
+        # A references page hangs (dev-151): each entry's first line at the
+        # margin, the rest set in, on the surface and on the page.
+        style: hanging
         prompt: "III. References"
         tip: "Properly format your references page and include a minimum of 5 solid sources. See below for a model of formatting. Here is a [citation generator](https://www.scribbr.com/apa-citation-generator/?scr_source=Apa%20Generator%20cta&scr_medium=Scribbr%20services%20cta%20OLD&scr_campaign=Knowledgebase%20alternative%20header&frm=22895). Alphabetize. Notice the spacing and the indentation!"
         required: true

@@ -36,7 +36,7 @@ import { signInWith } from '../../../../../lib/next-path';
 import { shape as shapeOf, staffFieldsOf, feedbackFieldsOf } from '../../../../../lib/templates';
 import { renderMarkdown } from '../../../../../lib/notes';
 import { staffWord } from '../../../../../lib/program-names';
-import { placesWanting, sectionsOf, progressOf, wordCount, textOf, isFilled, stateLabel, type DocState } from '../../../../../lib/documents';
+import { placesWanting, sectionsOf, progressOf, wordCount, textOf, isFilled, tallyWords, stateLabel, type DocState } from '../../../../../lib/documents';
 
 const { session, account, roles } = Astro.locals;
 const org = activeOrg(Astro);
@@ -226,6 +226,14 @@ for (const r of fieldRows ?? []) {
 const { data: versionRows } = docRow && docRow.version_no > 0
   ? await supabase.from('document_versions').select('version_no, content, submitted_at, by:submitted_by(display_name)').eq('document_id', docRow.id).order('version_no', { ascending: true })
   : { data: [] as any[] };
+/* The count in a section's head (dev-152), the same words the page keeps
+   live below: how many of its fields are written, against the minimum and
+   the goal the shape names. */
+const tallyLine = (section: any): string => {
+  const t = section.tally;
+  const n = section.fields.filter((f: any) => f.kind !== 'note' && isFilled(f, values[f.id])).length;
+  return tallyWords(n, t);
+};
 const promptOf = (fieldId: string) => (shape ? sectionsOf(shape).flatMap((sec) => sec.fields).find((f) => f.id === fieldId)?.prompt : null) ?? fieldId;
 const changedBetween = (before: Record<string, any>, after: Record<string, any>) =>
   [...new Set([...Object.keys(before ?? {}), ...Object.keys(after ?? {})])].filter((k) => !k.startsWith('_') && JSON.stringify(before?.[k] ?? null) !== JSON.stringify(after?.[k] ?? null));
@@ -380,9 +388,9 @@ const changedSince = (c: any) => c.field_id && c.field_version != null && (versi
           <input type="hidden" name="action" value="save" />
 
           {sections.map((section, si) => (
-            <section class="sec doc-sec" id={`s-${section.id}`}>
+            <section class="sec doc-sec" id={`s-${section.id}`} data-tally={section.tally ? JSON.stringify(section.tally) : undefined}>
               {section.name && (
-                <div class="sec-h"><b><span class="sec-n">{String(si + 1).padStart(2, '0')}</span>{section.name}</b><span></span></div>
+                <div class="sec-h"><b><span class="sec-n">{String(si + 1).padStart(2, '0')}</span>{section.name}</b><span class="sec-tally" aria-live="polite">{section.tally && tallyLine(section)}</span></div>
               )}
               {section.fields.map((f) => {
                 const v = values[f.id];
@@ -390,7 +398,7 @@ const changedSince = (c: any) => c.field_id && c.field_version != null && (versi
                 const thread = threadOn(f.id);
                 const words = f.kind === 'long' || f.kind === 'text' ? wordCount(textOf(f, v)) : null;
                 return (
-                  <div class:list={['field', `k-${f.kind}`, openAskOn(f.id) && 'has-ask', f.owner === 'staff' && 'is-staff', f.extra && 'is-extra']} id={`f-${f.id}`} data-field={f.id} data-version={ver} data-kind={f.kind} data-writable={canWrite(f) ? '1' : '0'} data-asked={f.kind !== 'note' && (f.owner ?? 'student') === 'student' ? '1' : '0'} data-required={f.required ? '1' : '0'} hidden={f.extra && !isFilled(f, v) && threadOn(f.id).length === 0}>
+                  <div class:list={['field', `k-${f.kind}`, openAskOn(f.id) && 'has-ask', f.owner === 'staff' && 'is-staff', f.extra && 'is-extra']} id={`f-${f.id}`} data-field={f.id} data-version={ver} data-kind={f.kind} data-style={f.style ?? ''} data-writable={canWrite(f) ? '1' : '0'} data-asked={f.kind !== 'note' && (f.owner ?? 'student') === 'student' ? '1' : '0'} data-required={f.required ? '1' : '0'} hidden={f.extra && !isFilled(f, v) && threadOn(f.id).length === 0}>
                     {f.kind === 'note' ? (
                       <div class="fnote" set:html={renderMarkdown(f.text ?? '').replace(/<a href="http/g, '<a target="_blank" rel="noopener noreferrer" href="http')} />
                     ) : (
@@ -472,7 +480,7 @@ const changedSince = (c: any) => c.field_id && c.field_version != null && (versi
                               /* The notebook's editor (2.8): bold, headings, lists and links
                                  the way Docs does them, Markdown underneath. The textarea it
                                  writes is the field the autosave reads. */
-                              <MarkdownEditor id={`in-${f.id}`} name={`f:${f.id}`} value={textOf(f, v)} rows={6} />
+                              <MarkdownEditor id={`in-${f.id}`} name={`f:${f.id}`} value={textOf(f, v)} rows={6} hang={f.style === 'hanging'} />
                             )}
                             {f.kind === 'text' && <label class="fwrap"><span class="sr">{f.prompt}</span><input id={`in-${f.id}`} name={`f:${f.id}`} class="in" value={textOf(f, v)} /></label>}
                             {f.kind === 'number' && <label class="fwrap"><span class="sr">{f.prompt}</span><input id={`in-${f.id}`} name={`f:${f.id}`} class="in fnum" type="number" value={v ?? ''} min={f.min} max={f.max} step={f.step ?? 'any'} /></label>}
@@ -573,7 +581,7 @@ const changedSince = (c: any) => c.field_id && c.field_version != null && (versi
                                 </ul>
                               ) : <p class="fempty">Not evaluated yet</p>
                             ) : f.kind === 'long' ? (
-                              isFilled(f, v) ? <div class="fprose" set:html={renderMarkdown(String(v))} /> : <p class="fempty">Not written yet</p>
+                              isFilled(f, v) ? <div class:list={['fprose', f.style === 'hanging' && 'hang']} set:html={renderMarkdown(String(v))} /> : <p class="fempty">Not written yet</p>
                             ) : (f.kind === 'file' || f.kind === 'graphic') && v?.path ? (
                               <p>{String(v.path).match(/\.(png|jpe?g|gif|webp)$/i) ? <img src={`/app/media/${v.path}`} alt={v.name ?? ''} /> : null}<a href={`/app/media/${v.path}`} target="_blank" rel="noopener noreferrer">{v.name ?? 'the file'}</a></p>
                             ) : f.kind === 'graphic' ? (
@@ -1061,7 +1069,29 @@ const changedSince = (c: any) => c.field_id && c.field_version != null && (versi
       if (typeof v === 'object') return Object.keys(v).length > 0;
       return String(v).trim().length > 0;
     };
+    /* The words of a section's tally, the same as the server's first
+       render (src/lib/field-values.ts `tallyWords`, repeated here because
+       this script is bundled apart). */
+    const tallyWords = (n: number, t: { singular: string; plural: string; min?: number; goal?: number }): string => {
+      const noun = (k: number) => (k === 1 ? t.singular : t.plural);
+      const parts: string[] = [];
+      if (t.min != null) parts.push(`${n} of ${t.min} ${noun(t.min)} written`); else parts.push(`${n} ${noun(n)} written`);
+      if (t.goal != null && n < t.goal) parts.push(`${t.goal} is the goal`);
+      if (t.goal != null && n >= t.goal) parts.push('the goal is met');
+      return parts.join(' · ');
+    };
+    const refreshTallies = () => {
+      for (const sec of form.querySelectorAll<HTMLElement>('section[data-tally]')) {
+        let t: any = null;
+        try { t = JSON.parse(sec.dataset.tally ?? 'null'); } catch { continue; }
+        const out = sec.querySelector<HTMLElement>('.sec-tally');
+        if (!t || !out) continue;
+        const n = [...sec.querySelectorAll<HTMLElement>('.field[data-kind]:not([data-kind="note"])')].filter(filledHere).length;
+        out.textContent = tallyWords(n, t);
+      }
+    };
     const refreshProgress = () => {
+      refreshTallies();
       const asked = [...form.querySelectorAll<HTMLElement>('.field[data-asked="1"][data-required="1"]')];
       const filledEl = document.getElementById('ds-filled');
       if (filledEl) filledEl.textContent = String(asked.filter(filledHere).length);
@@ -1510,7 +1540,7 @@ const changedSince = (c: any) => c.field_id && c.field_version != null && (versi
       if (!read) return false;
       const kind = w.dataset.kind;
       const empty = (t: string) => `<p class="fempty">${t}</p>`;
-      if (kind === 'long') { read.innerHTML = value && String(value).trim() ? `<div class="fprose">${renderMarkdown(String(value))}</div>` : empty('Not written yet'); return true; }
+      if (kind === 'long') { read.innerHTML = value && String(value).trim() ? `<div class="fprose${w.dataset.style === 'hanging' ? ' hang' : ''}">${renderMarkdown(String(value))}</div>` : empty('Not written yet'); return true; }
       if (kind === 'text' || kind === 'number' || kind === 'choice' || kind === 'date') { read.innerHTML = value != null && String(value).trim() ? `<p></p>` : empty('Not answered yet'); if (value != null && String(value).trim()) read.querySelector('p')!.textContent = String(value); return true; }
       if (kind === 'choices') { read.innerHTML = Array.isArray(value) && value.length ? `<p></p>` : empty('Not answered yet'); if (Array.isArray(value) && value.length) read.querySelector('p')!.textContent = value.join(', '); return true; }
       return false;

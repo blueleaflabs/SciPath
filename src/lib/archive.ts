@@ -14,6 +14,7 @@ import {
   visible,
   findRecord,
   authorsOf,
+  isDemonstration,
   type Manifest,
   type RecordEntry,
 } from './records-store';
@@ -26,6 +27,11 @@ export interface Archive {
   projects: RecordEntry[];
 }
 
+function marked(org: Archive['org'], records: RecordEntry[]): RecordEntry[] {
+  if (!org?.demo) return records;
+  return records.map((r) => ({ ...r, demonstration: isDemonstration(org, r) }));
+}
+
 export async function openArchive(context: any): Promise<Archive> {
   const org = activeOrg(context);
   const manifest = await readManifest(bucketFrom(context.locals), org.slug);
@@ -33,13 +39,13 @@ export async function openArchive(context: any): Promise<Archive> {
   return {
     org,
     manifest,
-    all: visible(manifest),
-    articles: visible(manifest, 'article'),
-    projects: visible(manifest, 'project'),
+    all: marked(org, visible(manifest)),
+    articles: marked(org, visible(manifest, 'article')),
+    projects: marked(org, visible(manifest, 'project')),
   };
 }
 
-export { findRecord, authorsOf };
+export { findRecord, authorsOf, isDemonstration };
 export type { RecordEntry };
 
 /**

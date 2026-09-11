@@ -25,6 +25,7 @@ import { fixtureTarget, fixtureName } from './fixture-target.mjs';
 import { openBucket } from './notebook-bucket.mjs';
 import { actingAs, signOutAll } from './act-as.mjs';
 import { placeholderPng, PLACEHOLDER_CAPTIONS } from './placeholder-image.mjs';
+import { FIXTURE_VIDEO } from '../src/config/demo-records.mjs';
 
 loadDevVars();
 
@@ -230,7 +231,7 @@ const SCENARIOS = [
     images: 4,
     /* A real Creative Commons film, so the facade has something to load if
        somebody presses play. Nothing is fetched until they do. */
-    video: 'https://vimeo.com/76979871',
+    video: FIXTURE_VIDEO,
     /* Finished, and the check should find nothing blocking. */
     manuscript: {
       write: 7,

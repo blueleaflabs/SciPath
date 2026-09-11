@@ -20,8 +20,8 @@ export function wordCount(text: string | null | undefined): number {
 
 /* `textOf` and `isFilled` live in field-values.ts (2.8), where the pure
    readers can take them; the same two functions, re-exported. */
-import { textOf, isFilled } from './field-values';
-export { textOf, isFilled };
+import { textOf, isFilled, tallyWords } from './field-values';
+export { textOf, isFilled, tallyWords };
 
 /** How far along a document is: filled of asked, and which required ones are missing. */
 export function progressOf(shape: Shape, values: Record<string, any>) {

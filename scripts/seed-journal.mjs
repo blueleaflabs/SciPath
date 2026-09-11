@@ -46,6 +46,7 @@ import { loadOrgs } from './orgs-library.mjs';
 import { openBucket } from './notebook-bucket.mjs';
 import { assembleRecord } from '../src/lib/record-files.ts';
 import { readManifest, writeManifest, upsert, keysFor } from '../src/lib/records-store.ts';
+import { blobOver, normalize } from './record-blob.mjs';
 import { extractPdfText, worthIndexing } from '../src/lib/pdf-text.ts';
 import { pdfFor } from './mvrj-pdfs.mjs';
 
@@ -115,18 +116,7 @@ async function release() {
   store = null;
 }
 
-const blob = {
-  available: () => Boolean(bucket),
-  async get(path) {
-    if (!bucket) return null;
-    const object = await bucket.get(path);
-    if (!object) return null;
-    return {
-      body: await object.arrayBuffer(),
-      contentType: object.httpMetadata?.contentType ?? 'application/octet-stream',
-    };
-  },
-};
+const blob = blobOver(bucket);
 
 /**
  * Publication order, oldest first.
@@ -143,20 +133,6 @@ function inPublicationOrder(records) {
       ? b.seq - a.seq
       : a.published_on.localeCompare(b.published_on)
   );
-}
-
-/**
- * Miniflare's proxy asserts on a typed array whose byte offset is not zero,
- * and a Node Buffer almost never starts at zero. The remote path is
- * unaffected; this is only the local bucket.
- */
-function normalize(body) {
-  if (typeof body === 'string') return body;
-  if (body instanceof ArrayBuffer) return body;
-  if (ArrayBuffer.isView(body)) {
-    return body.buffer.slice(body.byteOffset, body.byteOffset + body.byteLength);
-  }
-  return body;
 }
 
 async function main() {

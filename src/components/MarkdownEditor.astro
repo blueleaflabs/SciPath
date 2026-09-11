@@ -69,16 +69,18 @@ interface Props {
   shared?: boolean;
   /** Extra attributes for the textarea (a page's own data-* hooks). */
   data?: Record<string, string | number>;
+  /** A references page: every paragraph hangs (dev-151). */
+  hang?: boolean;
 }
 
-const { name, value = '', rows = 7, required = false, id, shared = false, data = {} } = Astro.props;
+const { name, value = '', rows = 7, required = false, id, shared = false, data = {}, hang = false } = Astro.props;
 const dataAttrs = Object.fromEntries(Object.entries(data).map(([k, v]) => [`data-${k}`, String(v)]));
 const fieldId = id ?? `md-${name}`;
 const seeded = value.trim() ? renderNote(value) : '';
 
 ---
 
-<div class:list={['mdx', shared && 'mdx-shared']} data-md-editor data-required={required ? '1' : '0'}>
+<div class:list={['mdx', shared && 'mdx-shared', hang && 'hang']} data-md-editor data-required={required ? '1' : '0'}>
   <MarkdownBar controls={fieldId} />
   <div class="mdx-linkbar" hidden>
     <label>
@@ -100,7 +102,7 @@ const seeded = value.trim() ? renderNote(value) : '';
   />
   <textarea id={fieldId} name={name} rows={rows} required={required} {...dataAttrs}>{value}</textarea>
   <p class="mdx-empty" role="alert" hidden>Write what happened before recording it.</p>
-  <small class="mdx-help">Use formatting buttons above. Same shortcuts as Google Docs</small>
+  <small class="mdx-help">Use formatting buttons above. Same shortcuts as Google Docs; Tab indents, Esc then Tab leaves the box</small>
 </div>
 
 <script>
@@ -200,6 +202,10 @@ const seeded = value.trim() ? renderNote(value) : '';
       let n = 0;
       let out = '';
       for (const li of Array.from(el.children)) {
+        /* Chrome nests a list as a sibling of the item it belongs under
+           (`<ul><li>one</li><ul><li>two</li></ul></ul>`) rather than
+           inside it (dev-151). It belongs to the item before it. */
+        if (/^(UL|OL)$/.test(li.tagName)) { out += block(li as HTMLElement, depth + 1); continue; }
         if (li.tagName !== 'LI') continue;
         /* The item's own words first, then any list nested inside it. */
         let text = '';
@@ -230,7 +236,13 @@ const seeded = value.trim() ? renderNote(value) : '';
     /* Paragraphs, and the DIVs a browser makes when Enter is pressed. */
     if (Array.from(el.childNodes).some(isBlock)) return children(el, depth);
     const text = inlineOf(el);
-    return text.trim() ? escapeLineStart(text).replace(/\n+$/, '') + '\n' : '';
+    if (!text.trim()) return '';
+    /* Indented (dev-151): four spaces per level on every line of it,
+       which is what src/lib/notes.ts reads back as an indented paragraph. */
+    const ind = Math.min(4, Math.max(0, Number(el.dataset.ind || 0)));
+    const lead = '    '.repeat(ind);
+    const lines = escapeLineStart(text).replace(/\n+$/, '').split('\n');
+    return lines.map((l) => (ind ? lead + l.trim() : l)).join('\n') + '\n';
   }
 
   function inlineOf(el: HTMLElement): string {
@@ -259,7 +271,9 @@ const seeded = value.trim() ? renderNote(value) : '';
   }
 
   function toMarkdown(root: HTMLElement): string {
-    return children(root).replace(/\n{3,}/g, '\n\n').trim();
+    /* Blank lines off both ends, and nothing else: a leading indent on
+       the first paragraph is content (dev-151), and `trim()` took it. */
+    return children(root).replace(/\n{3,}/g, '\n\n').replace(/^\n+/, '').replace(/\s+$/, '');
   }
 
   /* ── A paste, reduced to the vocabulary ─────────────────────────────── */
@@ -654,6 +668,51 @@ const seeded = value.trim() ? renderNote(value) : '';
       if (changed && saved && edit.contains(saved[0]) && edit.contains(saved[2])) sel!.setBaseAndExtent(saved[0], saved[1], saved[2], saved[3]);
     };
 
+    /* ── Indentation (dev-151) ── */
+    /* In a list, Tab nests the item under the one above and Shift+Tab
+       lifts it, which the browser does and the serializer already reads
+       as a nested list. In a paragraph, the level is a number on the
+       paragraph (`data-ind`, one to four), set here and written out as
+       four spaces per level. Headings, quotes and code do not indent. */
+    const caretLine = (): HTMLElement | null => {
+      const sel = window.getSelection();
+      const r = sel?.rangeCount ? sel.getRangeAt(0) : null;
+      if (!r || !edit.contains(r.startContainer)) return null;
+      return lineOf(r.startContainer);
+    };
+    const shift = (by: 1 | -1) => {
+      ensureBlock();
+      if (document.queryCommandState('insertUnorderedList') || document.queryCommandState('insertOrderedList')) {
+        keepingCaret(() => exec(by > 0 ? 'indent' : 'outdent'));
+        unnest();
+        return;
+      }
+      let line = caretLine();
+      /* Words typed straight onto the surface sit in no block yet; give
+         them a paragraph so there is something to set in. */
+      if (!line) { keepingCaret(() => exec('formatBlock', 'p')); line = caretLine(); }
+      if (!line || !/^(P|DIV)$/.test(line.tagName)) return;
+      const now = Math.min(4, Math.max(0, Number(line.dataset.ind || 0)));
+      const next = Math.min(4, Math.max(0, now + by));
+      if (next === now) return;
+      if (next === 0) { delete line.dataset.ind; line.removeAttribute('class'); }
+      else { line.classList.add('ind'); line.dataset.ind = String(next); }
+    };
+    /* Enter inside an indented paragraph: Chrome gives the new half a
+       fresh element and the level survives on only one of the two. Both
+       halves keep it. */
+    const keepLevel = () => {
+      const before = caretLine();
+      const level = before && /^(P|DIV)$/.test(before.tagName) ? before.dataset.ind : undefined;
+      if (!level) return;
+      setTimeout(() => {
+        for (const el of [before, caretLine()]) {
+          if (el && edit.contains(el) && /^(P|DIV)$/.test(el.tagName) && !el.dataset.ind) { el.classList.add('ind'); el.dataset.ind = level; }
+        }
+        sync();
+      }, 0);
+    };
+
     const BLOCKISH = new Set(['h1', 'h2', 'h3', 'plain', 'quote', 'code', 'ul', 'ol']);
     const surface = edit;
     function run(cmd: string) {
@@ -672,6 +731,8 @@ const seeded = value.trim() ? renderNote(value) : '';
         case 'code': toggleBlock('pre'); break;
         case 'ul': keepingCaret(() => exec('insertUnorderedList')); break;
         case 'ol': keepingCaret(() => exec('insertOrderedList')); break;
+        case 'indent': shift(1); break;
+        case 'outdent': shift(-1); break;
         case 'link': openLink(); return;
         case 'nothing': return;
       }
@@ -692,11 +753,24 @@ const seeded = value.trim() ? renderNote(value) : '';
         run(cmd);
         return;
       }
+      /* Tab indents and Shift+Tab outdents, as in Docs (dev-151). The key
+         no longer leaves the field; Escape does, and the next Tab moves
+         on from there. */
+      if (ev.key === 'Tab') {
+        ev.preventDefault();
+        run(ev.shiftKey ? 'outdent' : 'indent');
+        return;
+      }
+      if (ev.key === 'Escape') {
+        edit.blur();
+        return;
+      }
       /* Enter at the end of a heading starts a paragraph, not another
          heading, which is what a document does. Chrome continues the
          heading; Firefox does not; this makes them agree. Inside `pre`
          Enter stays a newline. */
       if (ev.key === 'Enter' && !ev.shiftKey) {
+        keepLevel();
         const b = blockOf();
         if (/^h[1-6]$/.test(b)) {
           const sel = window.getSelection();
@@ -842,6 +916,12 @@ const seeded = value.trim() ? renderNote(value) : '';
      is recorded. Tight margins: this is a field, not a page. */
   .mdx-edit :global(p) { margin: 0 0 8px; }
   .mdx-edit :global(p:last-child) { margin-bottom: 0; }
+  /* A references field: every paragraph on the surface hangs, as it will
+     on the page (the same rule as `.hang` in ui.css). */
+  .hang .mdx-edit :global(p) { text-indent: -2em; padding-left: 2em; }
+  .hang .mdx-edit :global(p.ind[data-ind="2"]) { padding-left: 4em; }
+  .hang .mdx-edit :global(p.ind[data-ind="3"]) { padding-left: 6em; }
+  .hang .mdx-edit :global(p.ind[data-ind="4"]) { padding-left: 8em; }
   .mdx-edit :global(h1),
   .mdx-edit :global(h2),
   .mdx-edit :global(h3) { margin: 10px 0 6px; line-height: 1.2; }

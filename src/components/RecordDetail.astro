@@ -1,10 +1,11 @@
 ---
 import { renderMarkdown } from '../lib/notes';
-import { disciplineLabel } from '../config/site';
+import { disciplineLabel, disciplineHue, toneStyle } from '../config/site';
 import { originForOrg } from '../lib/deployment';
 import type { RecordEntry } from '../lib/records-store';
 import type { Org } from '../config/orgs';
 import { parseVideo } from '../lib/video';
+import { isDemonstration } from '../lib/records-store';
 
 interface Props {
   record: RecordEntry;
@@ -23,6 +24,18 @@ interface Props {
  * article with holes in it.
  */
 const { record: d, body, org, companion } = Astro.props;
+
+/* Derived here as well as in the archive, because a detail page finds its
+   record in the manifest, which carries no mark (dev-149). */
+const demonstration = isDemonstration(org, d);
+
+/* The discipline's colour, carried from the cover and the topic page
+   (dev-149, dev-151): the head of a record is the school's block — the
+   same dark block that opens every working page — and the subject's
+   colour is its accent: the rule under it, the eyebrow, the subject's
+   name. The school says whose page it is; the colour says which shelf. */
+const hue = disciplineHue(d.discipline);
+const hueStyle = toneStyle(d.discipline);
 
 const space = d.recordKind === 'project' ? 'projects' : 'articles';
 /* The citation URL is the one a reader will paste into a bibliography years
@@ -90,26 +103,38 @@ const html = body ? renderMarkdown(body) : '';
 
 <article class="wrap">
   <header class="hero" data-pagefind-body data-pagefind-filter={`discipline:${disciplineLabel(d.discipline)}, year:${d.year}`}>
-    <p class="t-lbl">
-      {d.recordKind === 'project' ? 'Project entry' : 'Article'} · {org.name}
-    </p>
-    <h1 class="t-h1" data-pagefind-meta="title">{d.title}</h1>
-    <p class="by">
-      {d.authors.map((a, i) => (
-        <>
-          {i > 0 && ', '}
-          {a.authorSlug ? <a href={`/authors/${a.authorSlug}/`}>{a.displayName}</a> : a.displayName}
-        </>
-      ))}
-    </p>
-    {/* The question, directly under the byline. Somebody scanning decides
-        from this line whether to keep reading, and the abstract is too long
-        to be that line. */}
-    {d.question && <p class="question">{d.question}</p>}
+    <div class:list={['plate', hue !== null && 'toned']} style={hueStyle}>
+      <p class="t-lbl">
+        {d.recordKind === 'project' ? 'Project entry' : 'Article'} · {org.name}
+        {demonstration && <span class="chip demo">Demonstration</span>}
+      </p>
+      <h1 class="t-h1" data-pagefind-meta="title">{d.title}</h1>
+      <p class="by">
+        {d.authors.map((a, i) => (
+          <>
+            {i > 0 && ', '}
+            {a.authorSlug ? <a href={`/authors/${a.authorSlug}/`}>{a.displayName}</a> : a.displayName}
+          </>
+        ))}
+      </p>
+      {/* The question, directly under the byline. Somebody scanning decides
+          from this line whether to keep reading, and the abstract is too long
+          to be that line. */}
+      {d.question && <p class="question">{d.question}</p>}
 
-    <p class="meta">
-      {published} · <a href={`/topics/${d.discipline}/`}>{disciplineLabel(d.discipline)}</a> · {d.recordId}
-    </p>
+      <p class="meta">
+        {published} · <a class="subject" href={`/topics/${d.discipline}/`}>{disciplineLabel(d.discipline)}</a> · {d.recordId}
+      </p>
+    </div>
+
+    {/* Said once, plainly, on the page a search result lands on. The people,
+        the project and the result are invented; the pictures are drawn. The
+        real papers on this tenant never show this line. */}
+    {demonstration && (
+      <p class="demo-note">
+        This record is a demonstration: the project, its authors and its result are invented to show what a published record looks like here. The pictures are illustrations.
+      </p>
+    )}
 
     {/* What the fair said, before the prose. A reader deciding whether this
         is worth their time weighs an award more heavily than an abstract, and
@@ -363,17 +388,49 @@ const html = body ? renderMarkdown(body) : '';
 </script>
 
 <style>
-  .hero { padding: 40px 0 0; }
-  .by { margin: 10px 0 0; font-size: 1.05rem; color: var(--ink-2); }
-  .meta { margin: 6px 0 0; font-size: 0.9rem; color: var(--ink-3); }
+  .hero { padding: 28px 0 0; }
+  /* The plate: the school's block (the same `--cover` every working page
+     opens with), with the subject's colour as its accent — the rule under
+     it, the ring, the eyebrow and the subject's name. */
+  .plate {
+    position: relative;
+    overflow: hidden;
+    padding: 30px 32px 26px;
+    background: var(--cover);
+    color: var(--cover-ink);
+    border-bottom: 5px solid var(--accent);
+  }
+  .plate.toned { --accent: hsl(var(--hue) var(--sat) var(--lum)); }
+  .plate::after {
+    content: '';
+    position: absolute;
+    right: -90px;
+    top: -110px;
+    width: 320px;
+    height: 320px;
+    border: 24px solid var(--accent);
+    border-radius: 50%;
+    opacity: 0.18;
+    pointer-events: none;
+  }
+  .plate > * { position: relative; z-index: 1; }
+  .plate .t-lbl { color: var(--accent); }
+  .plate h1 { color: var(--cover-ink); }
+  .plate a { color: inherit; text-decoration-color: var(--accent); }
+  .plate .subject { color: var(--accent); }
+  .by { margin: 10px 0 0; font-size: 1.05rem; color: var(--cover-ink-2, var(--cover-ink)); }
+  .meta { margin: 6px 0 0; font-size: 0.9rem; color: var(--cover-ink-2, var(--cover-ink)); }
+  .t-lbl .chip.demo { margin-left: 10px; vertical-align: middle; font-size: 0.72rem; padding: 2px 7px; color: var(--cover-ink); border-color: var(--cover-ink-2, var(--cover-ink)); }
+  .demo-note { margin: 14px 0 0; padding: 10px 14px; border: 1px dashed var(--rule); max-width: var(--measure-text); font-size: 0.92rem; color: var(--ink-2); }
 
   .question {
     margin: 18px 0 0;
     max-width: var(--measure-lede);
     font-size: 1.28rem;
     line-height: 1.45;
-    color: var(--ink-2);
+    color: var(--cover-ink);
   }
+  .demo-note { margin-top: 18px; }
 
   /* Evidence before prose. Set as a list of facts rather than as prose,
      because that is what it is. */

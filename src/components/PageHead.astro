@@ -1,17 +1,68 @@
 ---
+/**
+ * `hue`: the discipline's colour, where the page is about one (dev-149) —
+ * the eyebrow, the rule and a wash behind the head take it, so a topic
+ * page is the same colour as its covers. `sub`: a line under the title,
+ * above the lede, for a page whose title is a name and whose nature needs
+ * a word ("Demo showcase").
+ */
 interface Props {
   eyebrow?: string;
   title: string;
+  sub?: string;
   lede?: string;
+  /** The `--hue/--sat/--lum` triple from `toneStyle`, for a page about one discipline. */
+  tone?: string;
 }
-const { eyebrow, title, lede } = Astro.props;
+const { eyebrow, title, sub, lede, tone } = Astro.props;
+const style = tone;
+const hue = tone ? 1 : null;
 ---
 
 <div class="wrap">
-  <div class="page-head">
+  <div class:list={['page-head', hue !== null && 'tinted']} style={style}>
     {eyebrow && <p class="t-lbl">{eyebrow}</p>}
     <h1 class="t-big">{title}</h1>
+    {sub && <p class="sub">{sub}</p>}
     {lede && <p class="lede">{lede}</p>}
     <slot />
   </div>
 </div>
+
+<style>
+  .sub {
+    margin: 6px 0 0;
+    font-family: var(--face-ui);
+    font-size: 1.05rem;
+    letter-spacing: 0.02em;
+    color: var(--ink-2);
+  }
+  /* A discipline's page opens on the school's block — the same dark block
+     every working page and every record opens with — with the subject's
+     colour as the accent: the rule under it, the ring, the eyebrow. */
+  .page-head.tinted {
+    --accent: hsl(var(--hue) var(--sat) var(--lum));
+    position: relative;
+    overflow: hidden;
+    padding: 34px 32px 28px;
+    background: var(--cover);
+    color: var(--cover-ink);
+    border-bottom: 5px solid var(--accent);
+  }
+  .page-head.tinted::after {
+    content: '';
+    position: absolute;
+    right: -90px;
+    top: -110px;
+    width: 320px;
+    height: 320px;
+    border: 24px solid var(--accent);
+    border-radius: 50%;
+    opacity: 0.18;
+    pointer-events: none;
+  }
+  .page-head.tinted > * { position: relative; z-index: 1; }
+  .page-head.tinted .t-lbl { color: var(--accent); }
+  .page-head.tinted h1 { color: var(--cover-ink); }
+  .page-head.tinted .lede, .page-head.tinted .sub { color: var(--cover-ink-2, var(--cover-ink)); }
+</style>

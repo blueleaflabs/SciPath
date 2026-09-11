@@ -34,6 +34,15 @@ import { remainingWords } from '../lib/step-progress';
 const archive = await openArchive(Astro);
 const org = archive.org;
 
+/* A tenant whose public face is its journal (dev-149): a visitor with no
+   session goes to the showcase, where the flyer said they would find the
+   published work. Anybody signed in still lands here, on their own work.
+   A redirect rather than a second front page, so there is one front page
+   and one place its parts are maintained. */
+if (org.frontDoor === 'showcase' && !(Astro.locals as any).session) {
+  return Astro.redirect('/showcase/', 302);
+}
+
 /**
  * What this school takes part in, this season.
  *

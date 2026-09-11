@@ -280,6 +280,34 @@ const consentLabel: Record<string, string> = {
     </section>
     )}
 
+    {(org.signIn === 'password' || org.demo) && (
+    <section class="sec" id="password">
+      <div class="sec-h"><b>Your password</b><span>Needs the current one</span></div>
+
+      {/* The same handler as /auth/change/ (dev-151): the current password
+          proves the account, the new one is set in the same request, and
+          every failure is one sentence. The address is the session's; the
+          form does not carry it. */}
+      <form method="POST" action="/auth/change/" class="stack" autocomplete="on">
+        <input type="hidden" name="back" value="/app/profile/" />
+        <label>
+          <span>Current password</span>
+          <input name="current" type="password" required autocomplete="current-password" />
+        </label>
+        <label>
+          <span>New password</span>
+          <input name="password" type="password" required minlength={10} autocomplete="new-password" />
+        </label>
+        <label>
+          <span>New password again</span>
+          <input name="again" type="password" required minlength={10} autocomplete="new-password" />
+        </label>
+        <p class="t-sm">At least 10 characters. Lost the current one? Ask your teacher, who can have a new one set.</p>
+        <p><button class="btn" type="submit">Change it</button></p>
+      </form>
+    </section>
+    )}
+
     {!platform.profileEssentials && (
     <section class="sec">
       <div class="sec-h"><b>Confirmations</b><span>Not editable here</span></div>

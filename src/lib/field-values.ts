@@ -27,3 +27,18 @@ export function isFilled(field: ShapeField, value: any): boolean {
   if (typeof value === 'object') return Object.keys(value).length > 0;
   return String(value).trim().length > 0;
 }
+
+/**
+ * The words of a section's tally (dev-152): "2 of 3 interviews written ·
+ * 5 is the goal". Here so the server's first render and the page's live
+ * count say the same thing.
+ */
+export function tallyWords(n: number, t: { singular: string; plural: string; min?: number; goal?: number }): string {
+  const noun = (k: number) => (k === 1 ? t.singular : t.plural);
+  const parts: string[] = [];
+  if (t.min != null) parts.push(`${n} of ${t.min} ${noun(t.min)} written`);
+  else parts.push(`${n} ${noun(n)} written`);
+  if (t.goal != null && n < t.goal) parts.push(`${t.goal} is the goal`);
+  if (t.goal != null && n >= t.goal) parts.push('the goal is met');
+  return parts.join(' · ');
+}

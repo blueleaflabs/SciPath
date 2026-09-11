@@ -103,6 +103,14 @@ export interface RecordEntry {
    * hash rather than the internal identifier.
    */
   projectRef?: string | null;
+
+  /**
+   * Invented, and shown as such (dev-149). Derived when the archive is
+   * opened (`isDemonstration` in archive.ts) rather than written to the
+   * manifest, so a tenant's file decides and nothing in the store has to
+   * change when it does.
+   */
+  demonstration?: boolean;
 }
 
 export interface Manifest {
@@ -298,6 +306,24 @@ export async function objectsFor(
 }
 
 /** Everything a reader should see, newest first. */
+/**
+ * Whether a record is invented (dev-149).
+ *
+ * The demonstration tenant holds two kinds of record side by side: the
+ * back catalogue, twenty-six real papers by real students, and the
+ * fixtures the seeds make so that a demonstration has something to show.
+ * A visitor sent there by a flyer must be able to tell them apart, and a
+ * banner over the whole showcase would tell the real authors their work
+ * is made up. So the mark is per record and derived, not stored: on a
+ * tenant whose file says `demo: true`, every record that did not come in
+ * as `migrated` came out of the workbench — and nobody real can publish
+ * through an invite-only door. A real school never shows it, whatever a
+ * record's source.
+ */
+export function isDemonstration(org: { demo?: boolean } | null | undefined, record: Pick<RecordEntry, 'source'>): boolean {
+  return Boolean(org?.demo) && record.source !== 'migrated';
+}
+
 export function visible(manifest: Manifest, kind?: 'article' | 'project'): RecordEntry[] {
   return manifest.records
     .filter((r) => r.status !== 'archived')

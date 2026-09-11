@@ -1,5 +1,5 @@
 ---
-import { disciplineLabel } from '../config/site';
+import { disciplineLabel, disciplineHue, toneStyle } from '../config/site';
 import type { RecordEntry } from '../lib/records-store';
 
 interface Props {
@@ -15,6 +15,7 @@ const href = `/${space}/${d.year}/${d.slug}/`;
    page makes no claim about quality it cannot support. */
 const awards = d.entries.flatMap((e) => e.awards);
 const seq = d.recordId.split('-').pop();
+const hue = disciplineHue(d.discipline);
 ---
 
 <article class="record s-pub">
@@ -35,12 +36,13 @@ const seq = d.recordId.split('-').pop();
       <span class="dot"></span>
       {d.recordKind === 'project' ? 'Project' : 'Published'}
     </span>
+    {d.demonstration && <span class="chip demo" title="An invented record that shows what the platform does">Demonstration</span>}
   </div>
 
   {d.abstract && <p class="abs">{d.abstract}</p>}
 
   <p class="meta">
-    <a href={`/topics/${d.discipline}/`}>{disciplineLabel(d.discipline)}</a>
+    <a class="subject" href={`/topics/${d.discipline}/`} style={toneStyle(d.discipline)}>{hue !== null && <span class="swatch" aria-hidden="true"></span>}{disciplineLabel(d.discipline)}</a>
     <span>·</span>
     <span>{d.publishedOn.slice(0, 7)}</span>
     {d.entries.map((e) => (
@@ -67,6 +69,9 @@ const seq = d.recordId.split('-').pop();
     box-shadow: var(--lift);
   }
   .record-top { display: flex; gap: 18px; align-items: baseline; }
+  /* The subject's colour, as a swatch before its name (dev-149): the same
+     hue as its cover and its topic page. */
+  .swatch { display: inline-block; width: 9px; height: 9px; margin-right: 6px; vertical-align: 0; background: hsl(var(--hue) var(--sat) var(--lum)); border: 1px solid hsl(var(--hue) var(--sat) calc(var(--lum) - 22%)); }
   .record-no {
     font-family: var(--face-num);
     font-size: 1.3rem;

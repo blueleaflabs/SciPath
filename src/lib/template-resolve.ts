@@ -116,6 +116,13 @@ export interface ShapeField {
    * section's *Add more*, revealed one at a time, and never required.
    */
   extra?: boolean;
+  /**
+   * For `long`: how its paragraphs are set (dev-151). `hanging` is a
+   * references page — the first line of each entry at the margin and the
+   * rest set in — on the editor's surface, the printed document and the
+   * page alike. Absent, paragraphs are ordinary.
+   */
+  style?: 'hanging';
   /** For `graphic`: which picture, and the fields it is drawn from. */
   graphic?: 'summary' | 'impact';
   sources?: string[];
@@ -125,6 +132,13 @@ export interface ShapeSection {
   id: string;
   name?: string;
   fields: ShapeField[];
+  /**
+   * A count in the section's head, kept live as its fields fill (dev-152):
+   * "2 of 3 interviews written · 5 is the goal". For a section whose
+   * fields are the same thing repeated — one box per interview — and
+   * whose number is the point.
+   */
+  tally?: { singular: string; plural: string; min?: number; goal?: number };
 }
 
 export interface ShowcaseSpec {
@@ -280,6 +294,9 @@ export function validateShape(shape: Shape): string[] {
         if (!(f.sources && f.sources.length > 0)) problems.push(`${at}: a graphic names the fields it is drawn from`);
         for (const src of f.sources ?? []) if (!fieldsOf(shape).some((g) => g.id === src && g.kind !== 'note' && g.kind !== 'graphic')) problems.push(`${at}: drawn from "${src}", which is not a field here`);
       }
+      if (f.style && (f.style !== 'hanging' || f.kind !== 'long')) {
+        problems.push(`${at}: style is "hanging", on a long field`);
+      }
       if (f.owner && f.owner !== 'student' && f.owner !== 'staff') {
         problems.push(`${at}: owner is student or staff`);
       }
@@ -290,6 +307,13 @@ export function validateShape(shape: Shape): string[] {
         problems.push(`${at}: the Elder's field cannot be required of the student`);
       }
     }
+  }
+  for (const sec of sectionsOf(shape)) {
+    const t = sec.tally;
+    if (!t) continue;
+    if (!t.singular || !t.plural) problems.push(`${shape.id}/${sec.id}: a tally needs singular and plural`);
+    if (t.min != null && t.goal != null && t.min > t.goal) problems.push(`${shape.id}/${sec.id}: tally min above goal`);
+    if (!sec.fields.some((f) => f.kind !== 'note')) problems.push(`${shape.id}/${sec.id}: a tally on a section with nothing to count`);
   }
   if (askedOf(shape).length === 0) problems.push(`${shape.id}: every field is a note`);
   return problems;
