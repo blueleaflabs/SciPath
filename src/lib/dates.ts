@@ -65,12 +65,29 @@ export function formatDate(
     : date.toLocaleDateString('en-US', { ...STYLES[style], ...zoned });
 }
 
-/** Whole days from today. Negative is in the past. */
-export function daysFrom(value: string | Date | null | undefined): number | null {
+/**
+ * Whole days from today. Negative is in the past.
+ *
+ * **Today is the school's day, not the server's (dev-153).** This compared
+ * midnights on the Worker's own clock, which is UTC, so from five in the
+ * afternoon Pacific the plate was a day ahead of the class: a deliverable
+ * due September 10 read "1 day late" on the evening of September 10. With
+ * a timezone, a bare date is taken as that day and a timestamp as the day
+ * it falls on there, and both are measured against today there. Without
+ * one it behaves as before, which is right only where the server's clock
+ * is the school's.
+ */
+export function daysFrom(value: string | Date | null | undefined, timezone?: string, now: Date = new Date()): number | null {
   const date = toDate(value);
   if (!date) return null;
+  if (timezone) {
+    const day = typeof value === 'string' && DATE_ONLY.test(value) ? value : todayIn(timezone, date);
+    const today = todayIn(timezone, now);
+    const utc = (iso: string) => { const [y, m, d] = iso.split('-').map(Number); return Date.UTC(y, m - 1, d); };
+    return Math.round((utc(day) - utc(today)) / 86400000);
+  }
   const midnight = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
-  return Math.round((midnight(date) - midnight(new Date())) / 86400000);
+  return Math.round((midnight(date) - midnight(now)) / 86400000);
 }
 
 export function isPast(value: string | Date | null | undefined): boolean {
@@ -94,15 +111,15 @@ export function isPast(value: string | Date | null | undefined): boolean {
  * is yesterday at one this morning, which is what a person would say and
  * what a rolling window would get wrong.
  */
-export function arrivedAt(value: string | Date | null | undefined): string {
-  const days = daysFrom(value);
+export function arrivedAt(value: string | Date | null | undefined, timezone?: string): string {
+  const days = daysFrom(value, timezone);
   if (days === null) return '';
 
   if (days !== 0) return formatDate(value, 'short');
 
   const at = toDate(value);
   return at
-    ? `today, ${at.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}`
+    ? `today, ${at.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', ...(timezone ? { timeZone: timezone } : {}) })}`
     : 'today';
 }
 

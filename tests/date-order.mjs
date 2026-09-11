@@ -12,7 +12,7 @@ import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 import { checkDateOrder, worstFinding } from '../src/lib/dateOrder.ts';
-import { arrivedAt, dayOf } from '../src/lib/dates.ts';
+import { arrivedAt, dayOf, daysFrom } from '../src/lib/dates.ts';
 
 let passed = 0;
 function test(name, fn) {
@@ -278,6 +278,21 @@ test('the day a timestamp fell on is the school\'s day, and a bare date is left 
   const fs = require('node:fs');
   const sql = fs.readFileSync('supabase/migrations/0001_identity_and_tenancy.sql', 'utf8');
   assert.match(sql, /alter database %I set timezone = %L', current_database\(\), 'America\/Los_Angeles'/);
+});
+
+test('days from today are counted on the school\'s calendar, not the server\'s (dev-153)', () => {
+  /* Eleven at night on September 10 in Cupertino is already September 11
+     in UTC, where the Worker's clock runs. A deliverable due the 10th is
+     due today there, not a day late. */
+  const lateEvening = new Date('2026-09-11T06:30:00Z');
+  assert.equal(daysFrom('2026-09-10', 'America/Los_Angeles', lateEvening), 0);
+  assert.equal(daysFrom('2026-09-21', 'America/Los_Angeles', lateEvening), 11);
+  assert.equal(daysFrom('2026-09-09', 'America/Los_Angeles', lateEvening), -1);
+  /* A timestamp is placed on the day it falls on there. */
+  assert.equal(daysFrom('2026-09-11T05:00:00Z', 'America/Los_Angeles', lateEvening), 0);
+  /* The page passes the school's zone. */
+  const page = require('node:fs').readFileSync('src/pages/app/project/[id]/in/[program].astro', 'utf8');
+  assert.match(page, /daysFrom\(iso, org\.timezone, now\)/);
 });
 
 console.log(`${passed} date ordering assertions passed.`);

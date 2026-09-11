@@ -1153,8 +1153,9 @@ const openCount = progressAll.open;
 const now = new Date();
 const todayIso = todayIn(org.timezone, now);
 
+/* On the school's calendar (dev-153): the Worker's clock is UTC. */
 const daysUntil = (iso: string | null) =>
-  iso ? daysFrom(iso) : null;
+  iso ? daysFrom(iso, org.timezone, now) : null;
 
 
 /**

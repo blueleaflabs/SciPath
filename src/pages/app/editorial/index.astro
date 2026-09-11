@@ -126,7 +126,7 @@ const byState = QUEUE_ORDER.map((state) => ({
                       {tally.overdue === 0 && tally.out > 0 && (
                         <b>{tally.out} out</b>
                       )}
-                      <i>{arrivedAt(s.submitted_at)}</i>
+                      <i>{arrivedAt(s.submitted_at, org.timezone)}</i>
                     </span>
                   </li>
                 );
