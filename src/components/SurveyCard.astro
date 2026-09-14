@@ -1,0 +1,65 @@
+---
+/**
+ * ONE QUESTION, IN A SMALL CARD (dev-156).
+ *
+ * Shown under the outcome strip of whichever page the rules chose
+ * (src/lib/survey.ts). Never a modal, never over a form, never in the way:
+ * three buttons or one line, and "Not now", which records a dismissal and
+ * nothing else. Every button submits; the page that rendered this has
+ * already recorded that it was shown.
+ *
+ * The same card on every surface, so the wording, the buttons and the way
+ * past are one thing to change.
+ */
+import type { SurveyQuestion } from '../config/survey';
+import { COMMENT_MAX, NUMBER_MAX } from '../config/survey';
+
+interface Props {
+  question: SurveyQuestion;
+  /** Where to send the person back to: this page's path. */
+  back: string;
+  /** The document the question is about, when there is one. */
+  documentId?: string | null;
+}
+
+const { question, back, documentId = null } = Astro.props;
+---
+
+<form method="POST" action="/app/api/survey/" class="survey" aria-label="One question">
+  <input type="hidden" name="question" value={question.id} />
+  <input type="hidden" name="back" value={back} />
+  {documentId && <input type="hidden" name="document_id" value={documentId} />}
+  <p class="sq">{question.text}</p>
+  {question.kind === 'scale' ? (
+    <div class="sa">
+      {(question.answers ?? []).map((a, i) => (
+        <button class:list={['btn', 'btn-sm', i > 0 && 'btn-2']} type="submit" name="answer" value={String(a.value)}>{a.label}</button>
+      ))}
+    </div>
+  ) : question.kind === 'number' ? (
+    <div class="sl">
+      <label class="sline snum"><span>{question.unit ?? 'How many'}</span><input class="in" name="answer" type="number" inputmode="numeric" min="0" max={NUMBER_MAX} step="1" required /></label>
+      <button class="btn btn-sm" type="submit" name="event" value="answered">Send</button>
+    </div>
+  ) : (
+    <div class="sl">
+      <label class="sline"><span>One line is plenty.</span><input class="in" name="comment" maxlength={COMMENT_MAX} required /></label>
+      <button class="btn btn-sm" type="submit" name="event" value="answered">Send</button>
+    </div>
+  )}
+  <p class="t-sm">
+    <button class="linkish" type="submit" name="event" value="dismissed" formnovalidate>{question.cadence === 'weekly' ? 'Not this week' : 'Not now'}</button>
+    · {question.audience === 'teacher' ? 'Your answer goes to whoever runs the pilot, and to nobody else.' : 'Your answer goes to whoever runs the class, and to nobody else.'}
+  </p>
+</form>
+
+<style>
+  .survey { margin: 12px 0 0; padding: 14px 16px; border: 1px solid var(--rule); background: var(--card); max-width: 52ch; }
+  .survey .sq { margin: 0 0 10px; font-family: var(--face-ui); font-weight: 600; }
+  .survey .sa { display: flex; gap: 8px; flex-wrap: wrap; margin: 0 0 10px; }
+  .survey .sl { display: flex; gap: 8px; align-items: flex-end; flex-wrap: wrap; margin: 0 0 10px; }
+  .survey .sline { display: block; flex: 1 1 24ch; }
+  .survey .snum { flex: 0 1 12ch; }
+  .survey .sline > span { display: block; margin-bottom: 4px; font-family: var(--face-ui); font-size: 0.86rem; color: var(--ink-2); }
+  .survey .t-sm { margin: 0; color: var(--ink-3); }
+</style>

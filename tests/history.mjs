@@ -40,8 +40,9 @@ test('the page offers each box its earlier drafts, and Use this puts one back', 
   assert.match(page, /f\.kind !== 'file' && f\.kind !== 'graphic'/, 'pictures are not drafts to put back');
 });
 
-test('the clock prunes', () => {
-  assert.match(worker, /db\.rpc\('prune_field_history', \{ p_days: 30 \}\)/);
+test('the clock no longer prunes (dev-158): every draft is kept', () => {
+  assert.doesNotMatch(worker, /db\.rpc\('prune_field_history'/);
+  assert.match(worker, /The drafts are kept, all of them/);
 });
 
 console.log(`${passed} history assertions passed.`);

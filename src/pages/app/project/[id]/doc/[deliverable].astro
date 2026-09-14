@@ -29,6 +29,9 @@ import { programSlug, safePart } from '../../../../../lib/export-names';
 import { activeOrg } from '../../../../../lib/tenant';
 import { serverClient } from '../../../../../lib/supabase';
 import { standing, isAuthorOf } from '../../../../../lib/roles';
+import { chooseQuestion, historyFrom } from '../../../../../lib/survey';
+import type { SurveyQuestion } from '../../../../../config/survey';
+import SurveyCard from '../../../../../components/SurveyCard.astro';
 import { formatDate, todayIn, dayOf } from '../../../../../lib/dates';
 import { daysUntil } from '../../../../../lib/attention';
 import { afterPost, outcomeFrom } from '../../../../../lib/post-redirect';
@@ -81,6 +84,10 @@ const gated = Boolean(wanted && !wanted.completedOn && wanted.waitsOn.length > 0
 const label = wanted?.deliverable.name ?? deliverableId;
 
 let { error, note } = outcomeFrom(Astro.url);
+/* Which moment a redirect carries (dev-156): set by the submit and the
+   feedback handlers, read back from the address, and put to the survey's
+   rules, which mostly say no. */
+let ask: string = '';
 
 /* ── Actions ────────────────────────────────────────────────────────── */
 
@@ -168,7 +175,7 @@ if (Astro.request.method === 'POST') {
       p_label: label,
     });
     if (e) error = e.message;
-    else note = docRow.version_no > 0 ? 'Submitted again. The new version stands; whoever commented has been told.' : 'Submitted. It is on the calendar as done, and your Elder can read it.';
+    else { note = docRow.version_no > 0 ? 'Submitted again. The new version stands; whoever commented has been told.' : 'Submitted. It is on the calendar as done, and your Elder can read it.'; ask = 'submitted'; }
   } else if (action === 'give_feedback' && docRow && shape) {
     /* The Elder's part, given (2.9): the score and the rationale as they
        stand in the document (autosaved as typed), handed to the one call
@@ -184,7 +191,7 @@ if (Astro.request.method === 'POST') {
     else {
       const { error: e } = await supabase.rpc('give_document_feedback', { p_document_id: docRow.id, p_score: score, p_body_md: body });
       if (e) error = e.message;
-      else note = 'Feedback given. The task is done, the score is on the tracker, and the researcher has been told.';
+      else { note = 'Feedback given. The task is done, the score is on the tracker, and the researcher has been told.'; ask = 'reviewed'; }
     }
   } else if (action === 'comment' && docRow) {
     const { error: e } = await supabase.rpc('comment_on_document', {
@@ -202,7 +209,7 @@ if (Astro.request.method === 'POST') {
     else note = 'Ask withdrawn.';
   }
 
-  return afterPost(Astro.url, { error, note });
+  return afterPost(Astro.url, { error, note }, { ask });
 }
 
 /* ── What is on the page ─────────────────────────────────────────────── */
@@ -303,6 +310,21 @@ const canSubmit = iAuthor && docRow && wanted && !gated && progress.missing.leng
    the date and by whom), waiting on the work, or ready to give. */
 const staffParts = shape ? feedbackFieldsOf(shape) : { score: null, body: null };
 const iGiveFeedback = Boolean(shape && (staffParts.score || staffParts.body) && (isElderHere || me.isAdvisor) && !iAuthor);
+
+/* The survey (dev-156, 0002): right after a submission or after feedback,
+   to the person who did it, one question from the bank — if the rules in
+   src/lib/survey.ts say so, which for any one person is seldom. The
+   showing is recorded here, so the report can count what was asked. */
+const askWanted = Astro.url.searchParams.get('ask');
+let survey: SurveyQuestion | null = null;
+if (docRow && (askWanted === 'submitted' || askWanted === 'reviewed') && (askWanted === 'submitted' ? iAuthor : iGiveFeedback) && !me.isAdvisor) {
+  const moment = askWanted === 'submitted' ? 'after_submit' : 'after_feedback';
+  const { data: trail } = await supabase.rpc('survey_history');
+  survey = chooseQuestion({ moment, audience: askWanted === 'submitted' ? 'student' : 'elder', history: historyFrom(trail) });
+  if (survey) await supabase.rpc('record_survey_event', { p_question_id: survey.id, p_moment: survey.moment, p_event: 'shown', p_document_id: docRow.id });
+}
+/* This page's own address, for the survey's way back. */
+const herePath = Astro.url.pathname;
 let staffTask: { completedOn: string | null; by: string | null; ready: boolean; dueOn: string | null } | null = null;
 if (iGiveFeedback && places.length > 0) {
   const { data: taskRows } = await supabase
@@ -348,6 +370,7 @@ const changedSince = (c: any) => c.field_id && c.field_version != null && (versi
     <div id="outcome" tabindex="-1">
       {error && <p class="note flash" role="alert">{error}</p>}
       {note && !error && <p class="note flash" role="status">{note}</p>}
+      {survey && <SurveyCard question={survey} back={herePath} documentId={docRow?.id ?? null} />}
     </div>
 
     {!shape || !wanted ? (

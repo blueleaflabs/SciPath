@@ -83,11 +83,15 @@ async function runScheduled(event, env) {
         `${result.skipped} skipped, ${result.failed} failed`
     );
 
-    /* The drafts older than thirty days, thinned to the last before each
-       submitted version (2.8). Cheap, so it rides on every tick. */
-    const { data: pruned, error: pruneError } = await db.rpc('prune_field_history', { p_days: 30 });
-    if (pruneError) console.error(`scheduled ${event.cron}: prune_field_history: ${pruneError.message}`);
-    else if (pruned) console.log(`scheduled ${event.cron}: ${pruned} old drafts pruned`);
+    /* The drafts are kept, all of them (dev-158). A prune to the last
+       draft before each version rode on this tick from 2.8; it was
+       removed because every draft is the record of how a piece of work was
+       written — when, in what bursts, revised how soon after which comment
+       — and that record is the pilot's evidence. `prune_field_history`
+       stays in the database, callable by hand, and nothing calls it. The
+       runbook has the query that watches the table's size.
+       Estimate: an autosave writes the whole field 1.2 s after typing
+       pauses, so an hour of writing is a few megabytes per student. */
   } catch (e) {
     console.error(`scheduled ${event.cron}: ${String(e?.message ?? e)}`);
   }

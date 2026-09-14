@@ -59,12 +59,15 @@ export interface Outcome {
  * `#outcome` so a message rendered at the top of a long page is not three
  * screens above the control that produced it.
  */
-export function afterPost(url: URL, outcome: Outcome): Response {
+export function afterPost(url: URL, outcome: Outcome, extra: Record<string, string> = {}): Response {
   const params = new URLSearchParams();
 
   if (outcome.refused) params.set('no', '1');
   else if (outcome.error) params.set('e', outcome.error.slice(0, MAX));
   else if (outcome.note) params.set('m', outcome.note.slice(0, MAX));
+  /* A page may ride one more short thing on the redirect (dev-155: `ask`,
+     which tells the document page to put the one-question pulse up). */
+  for (const [k, v] of Object.entries(extra)) if (v) params.set(k, v.slice(0, 40));
 
   const query = params.toString();
 

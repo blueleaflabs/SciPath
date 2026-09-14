@@ -3922,5 +3922,143 @@ begin
   raise notice '  ok   the database keeps the school''s time';
 end $body$;
 
+
+\echo ''
+\echo '── The survey: shown, answered or not now; the trail read by its owner and the advisor (0002)'
+
+do $body$
+declare
+  v_project  uuid := 'c0000000-0000-0000-0000-000000000002';   -- Course project
+  v_author   uuid := 'a0000000-0000-0000-0000-000000000008';   -- Author two
+  v_other    uuid := 'a0000000-0000-0000-0000-000000000006';   -- Another student, same school
+  v_advisor  uuid := 'a0000000-0000-0000-0000-000000000004';
+  v_doc      uuid;
+  v_n        int;
+  v_trail    jsonb;
+  v_failed   boolean := false;
+begin
+  perform set_config('role', 'authenticated', true);
+  perform set_config('request.jwt.claim.sub', v_author::text, true);
+  v_doc := public.open_document(v_project, 'project_summary', 'project-summary', 1, array[]::text[]);
+
+  -- The trail before anything: the account's date, whether a line was ever saved, no events.
+  v_trail := public.survey_history();
+  if v_trail->>'since' is null then raise exception 'FAIL the trail carries no account date'; end if;
+  if jsonb_array_length(v_trail->'events') <> 0 then raise exception 'FAIL a fresh trail has events'; end if;
+  raise notice '  ok   the trail starts with the account''s date and no events';
+
+  -- Shown, then answered with a trimmed line; then shown on the Workbench and dismissed.
+  perform public.record_survey_event('submit_easier', 'after_submit', 'shown', null, null, v_doc);
+  perform public.record_survey_event('submit_easier', 'after_submit', 'answered', 3, '  worked fine  ', v_doc);
+  perform public.record_survey_event('know_next', 'workbench', 'shown');
+  perform public.record_survey_event('know_next', 'workbench', 'dismissed', 2, 'ignored on a dismissal');
+  select count(*) into v_n from public.survey_events where user_id = v_author;
+  if v_n <> 4 then raise exception 'FAIL four events expected, got %', v_n; end if;
+  if (select comment from public.survey_events where user_id = v_author and event = 'answered') <> 'worked fine' then raise exception 'FAIL the line is trimmed and kept'; end if;
+  if (select version_no from public.survey_events where user_id = v_author and event = 'answered') is null then raise exception 'FAIL the document''s version is not kept'; end if;
+  if exists (select 1 from public.survey_events where user_id = v_author and event = 'dismissed' and (answer is not null or comment is not null)) then raise exception 'FAIL a dismissal carried data'; end if;
+  v_trail := public.survey_history();
+  if jsonb_array_length(v_trail->'events') <> 4 then raise exception 'FAIL the trail does not carry the four events'; end if;
+  if v_trail->'events'->0->>'question_id' <> 'submit_easier' then raise exception 'FAIL the trail is not oldest first'; end if;
+  raise notice '  ok   shown, answered and dismissed are recorded; a dismissal says nothing; the trail reads them oldest first';
+
+  -- An answer that says nothing, a bad answer, an unknown moment, an unknown event, a bad id: refused.
+  begin perform public.record_survey_event('submit_easier', 'after_submit', 'answered', null, '   ', v_doc); exception when others then v_failed := true; end;
+  if not v_failed then raise exception 'FAIL an empty answer was accepted'; end if;
+  v_failed := false;
+  begin perform public.record_survey_event('submit_easier', 'after_submit', 'answered', -1, null, v_doc); exception when others then v_failed := true; end;
+  if not v_failed then raise exception 'FAIL a negative answer was accepted'; end if;
+  v_failed := false;
+  begin perform public.record_survey_event('submit_easier', 'whenever', 'shown'); exception when others then v_failed := true; end;
+  if not v_failed then raise exception 'FAIL an unknown moment was accepted'; end if;
+  v_failed := false;
+  begin perform public.record_survey_event('submit_easier', 'workbench', 'glanced'); exception when others then v_failed := true; end;
+  if not v_failed then raise exception 'FAIL an unknown event was accepted'; end if;
+  v_failed := false;
+  begin perform public.record_survey_event('Not A Question!', 'workbench', 'shown'); exception when others then v_failed := true; end;
+  if not v_failed then raise exception 'FAIL a malformed question id was accepted'; end if;
+  raise notice '  ok   an empty answer, a bad answer, an unknown moment or event and a malformed id are refused';
+
+  -- A classmate cannot name a document they may not see, nor read the author's rows.
+  perform set_config('request.jwt.claim.sub', v_other::text, true);
+  v_failed := false;
+  begin perform public.record_survey_event('submit_easier', 'after_submit', 'answered', 2, null, v_doc); exception when others then v_failed := true; end;
+  if not v_failed then raise exception 'FAIL a classmate answered about somebody else''s document'; end if;
+  select count(*) into v_n from public.survey_events where user_id = v_author;
+  if v_n <> 0 then raise exception 'FAIL a classmate reads the author''s rows'; end if;
+  v_trail := public.survey_history();
+  if jsonb_array_length(v_trail->'events') <> 0 then raise exception 'FAIL a classmate''s trail carries the author''s events'; end if;
+
+  -- The advisor reads them; the author reads their own.
+  perform set_config('request.jwt.claim.sub', v_advisor::text, true);
+  select count(*) into v_n from public.survey_events where user_id = v_author;
+  if v_n <> 4 then raise exception 'FAIL the advisor cannot read the survey'; end if;
+  perform set_config('request.jwt.claim.sub', v_author::text, true);
+  select count(*) into v_n from public.survey_events where user_id = v_author;
+  if v_n <> 4 then raise exception 'FAIL the author cannot read their own rows'; end if;
+  raise notice '  ok   refused for a stranger, read by the advisor and the author';
+
+  -- No session writes the table directly.
+  v_failed := false;
+  begin
+    insert into public.survey_events (org_id, user_id, question_id, moment, event) values (app.org_id(), v_author, 'know_next', 'workbench', 'shown');
+  exception when others then v_failed := true; end;
+  if not v_failed then raise exception 'FAIL a session wrote the survey table directly'; end if;
+  raise notice '  ok   the table takes no writes from a session';
+
+  -- A number answer (the teacher's minutes, dev-157) is kept as given; a
+  -- weekly question is recorded like any other.
+  perform set_config('request.jwt.claim.sub', v_advisor::text, true);
+  perform public.record_survey_event('teacher_minutes', 'workbench', 'shown');
+  perform public.record_survey_event('teacher_minutes', 'workbench', 'answered', 45);
+  if (select answer from public.survey_events where user_id = v_advisor and event = 'answered') <> 45 then raise exception 'FAIL the minutes were not kept'; end if;
+  v_failed := false;
+  begin perform public.record_survey_event('teacher_minutes', 'workbench', 'answered', 10000); exception when others then v_failed := true; end;
+  if not v_failed then raise exception 'FAIL an answer beyond the small numbers was accepted'; end if;
+  raise notice '  ok   a count is kept as given, within reason';
+  perform set_config('role', 'postgres', true);
+end $body$;
+
+\echo ''
+\echo '── The days anybody wrote: rolled up from every save, kept for good (0002, dev-157)'
+
+do $body$
+declare
+  v_project  uuid := 'c0000000-0000-0000-0000-000000000002';   -- Course project
+  v_author   uuid := 'a0000000-0000-0000-0000-000000000008';   -- Author two
+  v_other    uuid := 'a0000000-0000-0000-0000-000000000006';   -- Another student, same school
+  v_doc      uuid;
+  v_n        int;
+  v_saves    int;
+  v_failed   boolean := false;
+begin
+  perform set_config('role', 'authenticated', true);
+  perform set_config('request.jwt.claim.sub', v_author::text, true);
+  v_doc := public.open_document(v_project, 'project_summary', 'project-summary', 1, array[]::text[]);
+  select count(*) into v_n from public.activity_days where user_id = v_author and project_id = v_project and day = current_date;
+  -- Two saves today: one row, two saves.
+  perform public.save_field(v_doc, 'title', to_jsonb('First'::text), 0);
+  perform public.save_field(v_doc, 'title', to_jsonb('Second'::text), 1);
+  select count(*), coalesce(sum(saves), 0) into v_n, v_saves from public.activity_days where user_id = v_author and project_id = v_project and day = current_date;
+  if v_n <> 1 then raise exception 'FAIL one row per person per project per day, got %', v_n; end if;
+  if v_saves < 2 then raise exception 'FAIL the saves were not counted (%)', v_saves; end if;
+  if (select first_at <= last_at from public.activity_days where user_id = v_author and project_id = v_project and day = current_date) is not true then raise exception 'FAIL first and last are not ordered'; end if;
+  raise notice '  ok   two saves on a day are one row with two saves';
+
+  -- The author reads it; a classmate who may not see the project reads nothing; nobody writes it.
+  perform set_config('request.jwt.claim.sub', v_other::text, true);
+  select count(*) into v_n from public.activity_days where project_id = v_project;
+  if v_n <> 0 then raise exception 'FAIL a classmate reads another project''s days'; end if;
+  begin
+    insert into public.activity_days (org_id, user_id, project_id, day, saves, first_at, last_at) values (app.org_id(), v_other, v_project, current_date, 1, now(), now());
+  exception when others then v_failed := true; end;
+  if not v_failed then raise exception 'FAIL a session wrote activity_days directly'; end if;
+  perform set_config('request.jwt.claim.sub', v_author::text, true);
+  select count(*) into v_n from public.activity_days where project_id = v_project;
+  if v_n < 1 then raise exception 'FAIL the author cannot read their own days'; end if;
+  raise notice '  ok   read by whoever may see the project, written by nobody';
+  perform set_config('role', 'postgres', true);
+end $body$;
+
 \echo ''
 \echo '  All function assertions passed.'

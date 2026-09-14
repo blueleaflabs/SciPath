@@ -294,6 +294,8 @@ if (!verifyOnly) {
  */
 const TABLES = [
   'password_attempts',
+  'survey_events',
+  'activity_days',
   'org_domains',
   'audit_log',
   'feedback',

@@ -29,6 +29,9 @@ import { programTitle, staffWord } from '../../../../lib/program-names';
 import { formatDate, todayIn, dayOf } from '../../../../lib/dates';
 import { daysUntil } from '../../../../lib/attention';
 import { afterPost, outcomeFrom } from '../../../../lib/post-redirect';
+import SurveyCard from '../../../../components/SurveyCard.astro';
+import { chooseQuestion, historyFrom, shownThisWeek } from '../../../../lib/survey';
+import type { SurveyQuestion } from '../../../../config/survey';
 import { signInWith } from '../../../../lib/next-path';
 import { allRows } from '../../../../lib/all-rows';
 import { resolveProgram, shape as shapeOf } from '../../../../lib/templates';
@@ -49,6 +52,26 @@ const supabase = serverClient(Astro.request, Astro.cookies, (Astro.locals as any
 const today = todayIn(org.timezone);
 
 let { error, note } = outcomeFrom(Astro.url);
+
+/**
+ * THE TEACHER'S FRIDAY QUESTION (dev-157, 0002).
+ *
+ * From Friday to Sunday each week, until answered or put off: about how
+ * many minutes the week cost less than it would have without SciPath. The
+ * one number nothing in the database can measure, asked of the one person
+ * who knows it, on the page they land on. The rules are in
+ * src/lib/survey.ts; a GET only, so a POST's outcome is not decorated.
+ */
+let survey: SurveyQuestion | null = null;
+if (Astro.request.method === 'GET') {
+  const { data: trail } = await supabase.rpc('survey_history');
+  const history = historyFrom(trail);
+  survey = chooseQuestion({ moment: 'workbench', audience: 'teacher', history, today, timezone: org.timezone });
+  /* Once a week on the record, however many loads it stays up for. */
+  if (survey && history && !shownThisWeek(history.events, survey.id, today, org.timezone)) {
+    await supabase.rpc('record_survey_event', { p_question_id: survey.id, p_moment: 'workbench', p_event: 'shown' });
+  }
+}
 
 if (Astro.request.method === 'POST') {
   const form = await Astro.request.formData();
@@ -552,6 +575,7 @@ const dayWord = (d: number | null) =>
     <div id="outcome" tabindex="-1">
       {error && <p class="note flash" role="alert">{error}</p>}
       {note && !error && <p class="note flash" role="status">{note}</p>}
+      {survey && <SurveyCard question={survey} back={Astro.url.pathname} />}
     </div>
 
     {/* ── 01 Answers ──────────────────────────────────────────────── */}

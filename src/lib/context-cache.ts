@@ -117,8 +117,8 @@ export function clearContextCookie(cookies: AstroCookies) {
   if (cookies.has(CONTEXT_COOKIE)) cookies.delete(CONTEXT_COOKIE, { path: '/' });
 }
 
-/** The writes that never change the context: the autosave and the pulse. */
-const UNCHANGING = new Set(['/app/api/field/', '/app/api/pulse/']);
+/** The writes that never change the context: the autosave, the pulse, and a survey answer. */
+const UNCHANGING = new Set(['/app/api/field/', '/app/api/pulse/', '/app/api/survey/']);
 
 /** Whether a request may change the context, and so must clear the cookie. */
 export function mayChangeContext(method: string, pathname: string): boolean {

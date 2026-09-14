@@ -5,6 +5,9 @@ import Base from '../../layouts/Base.astro';
 import { formatDate, todayIn } from '../../lib/dates';
 import AppShell from '../../components/AppShell.astro';
 import CareCard from '../../components/CareCard.astro';
+import SurveyCard from '../../components/SurveyCard.astro';
+import { chooseQuestion, historyFrom, sampled } from '../../lib/survey';
+import type { SurveyQuestion, Audience } from '../../config/survey';
 import { platform } from '../../config/site';
 import { activeOrg } from '../../lib/tenant';
 import { programTitle, programKind, participationVerb, staffWord } from '../../lib/program-names';
@@ -891,6 +894,27 @@ if (supabase && account && me.runsTheClub) {
     };
   });
 }
+/**
+ * THE SURVEY, ON A SAMPLED LOAD (dev-156, 0002).
+ *
+ * One question from the bank, under the outcome strip, on one eligible
+ * load in four — and only when the rules in src/lib/survey.ts say the
+ * person is past the warm-up, under the cap and out of the cooldown. The
+ * roll comes first so three loads in four cost nothing at all. A teacher
+ * is never asked; an Elder is asked the Elder's questions, a student the
+ * student's.
+ */
+let survey: SurveyQuestion | null = null;
+if (supabase && account && Astro.request.method === 'GET' && !me.isAdvisor) {
+  const audience: Audience | null = me.runsTheClub ? 'elder' : me.isStudent ? 'student' : null;
+  const roll = Math.random();
+  if (audience && sampled('workbench', roll)) {
+    const { data: trail } = await supabase.rpc('survey_history');
+    survey = chooseQuestion({ moment: 'workbench', audience, history: historyFrom(trail), roll });
+    if (survey) await supabase.rpc('record_survey_event', { p_question_id: survey.id, p_moment: 'workbench', p_event: 'shown' });
+  }
+}
+
 /* Which of these tasks is feedback on a document written in SciPath
    (6.16): the Elder reads it on its own page, with the comment boxes
    live, rather than in a Drive tab. One template per program. */
@@ -1996,6 +2020,7 @@ const careLayout = (group: any): 'grid' | 'wide' => {
         <div id="outcome" tabindex="-1">
           {error2 && <p class="note flash" role="alert">{error2}</p>}
           {attached && <p class="note flash" role="status">{attached}</p>}
+          {survey && <SurveyCard question={survey} back="/app/" />}
         </div>
 
         {/* The advisor hears, on the page, that somebody's socket would not

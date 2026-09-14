@@ -30,6 +30,10 @@ import { loadDevVars, loadCloudVars } from './dev-vars.mjs';
 const args = process.argv.slice(2);
 const opt = (name, fallback) => (args.includes(name) ? args[args.indexOf(name) + 1] : fallback);
 const cloud = args.includes('--cloud');
+/* `--print` (dev-154): the same numbers, to the terminal, nothing written
+   — the ad hoc look during the day. Adds a "right now" line: who has
+   saved anything in the last quarter hour, and the hour's saves. */
+const PRINT = args.includes('--print');
 const ORG = opt('--org', 'montavista');
 const TZ = 'America/Los_Angeles';
 const OUT = opt('--out', 'local-data/reports');
@@ -122,6 +126,15 @@ const notes = await all(() => db.from('field_notes').select('project_id, author_
 const milestones = placeIds.length
   ? await all(() => db.from('entry_milestones').select('participation_id, step_id, name, owner, kind, due_on, completed_on').in('participation_id', placeIds), 'milestones')
   : [];
+/* The days anybody wrote (0002, dev-157): one row per person per project
+   per day, rolled up from every save — the cheap read for the week's
+   actives and the quiet projects, whatever the size of the history. */
+const activity = projectIds.length
+  ? await all(() => db.from('activity_days').select('user_id, project_id, day, saves, last_at').in('project_id', projectIds), 'activity days')
+  : [];
+/* Reminders: nudges a teacher or an Elder sent about a step (the platform's
+   `nudge` kinds), which is what "interventions" means here. */
+const reminders = await all(() => db.from('notifications').select('kind, actor_id, recipient_id, created_at').eq('org_id', org.id).in('kind', ['nudge', 'nudge_officer']), 'reminders');
 const incidents = await must(db.from('transport_incidents').select('state, created_at').gte('created_at', `${today}T00:00:00-07:00`), 'incidents');
 const attempts = await must(db.from('password_attempts').select('email, ok, at').gte('at', `${today}T00:00:00-07:00`), 'password attempts');
 /* Dates moved on this program by `program:redate` (dev-152): all of them,
@@ -205,8 +218,130 @@ for (const m of milestones) {
 const steps = [...byStep.values()].sort((a, b) => String(a.due_on ?? '9999').localeCompare(String(b.due_on ?? '9999')));
 const docsBy = (f) => documents.filter(f).length;
 
-/* ── The file ────────────────────────────────────────────────────────── */
 const count = (xs, f) => xs.filter(f).length;
+
+/* ── The deeper measures (dev-155) ───────────────────────────────────── */
+/* Each one is a claim a reviewer can check: the mechanism, then the
+   number. All from rows that exist; nothing new is written to record them. */
+const staffIds = new Set([...elders, ...teachers]);
+const dayStart = Date.parse(`${today}T00:00:00-07:00`);
+const week = (iso) => iso && dayStart + 86400000 - Date.parse(iso) < 7 * 86400000 && Date.parse(iso) < dayStart + 86400000;
+const projectOfDoc = new Map(documents.map((d) => [d.id, d.project_id]));
+const projectOfPlace = new Map(places.map((p) => [p.id, p.project_id]));
+
+/* Weekly active: anybody who wrote anything in the seven days ending today. */
+const wroteThisWeek = new Set();
+for (const h of history) if (week(h.saved_at)) wroteThisWeek.add(h.saved_by);
+for (const a of activity) if (week(a.last_at)) wroteThisWeek.add(a.user_id);
+for (const l of lines) if (week(l.created_at)) wroteThisWeek.add(l.author_id);
+for (const n of notes) if (week(n.created_at)) wroteThisWeek.add(n.author_id);
+for (const a of assessments) if (week(a.created_at)) wroteThisWeek.add(a.grader_id);
+const activeWeek = [...wroteThisWeek].filter((id) => everyone.has(id));
+const activeWeekStudents = activeWeek.filter((id) => studentIds.has(id));
+
+/* Feedback latency after a submission: hours from submitted_at to the
+   first staff line or Elder score on that document's project. */
+const latencies = [];
+for (const d of documents) {
+  if (!d.submitted_at) continue;
+  const t0 = Date.parse(d.submitted_at);
+  const firstLine = lines.filter((l) => l.document_id === d.id && staffIds.has(l.author_id) && Date.parse(l.created_at) > t0).map((l) => Date.parse(l.created_at));
+  const firstScore = assessments.filter((a) => a.kind === 'elder' && projectOfPlace.get(a.participation_id) === d.project_id && Date.parse(a.created_at) > t0).map((a) => Date.parse(a.created_at));
+  const first = Math.min(...firstLine, ...firstScore);
+  if (Number.isFinite(first)) latencies.push((first - t0) / 3600000);
+}
+const submittedAwaiting = documents.filter((d) => d.submitted_at && !lines.some((l) => l.document_id === d.id && staffIds.has(l.author_id) && Date.parse(l.created_at) > Date.parse(d.submitted_at)) && !assessments.some((a) => a.kind === 'elder' && projectOfPlace.get(a.participation_id) === d.project_id && Date.parse(a.created_at) > Date.parse(d.submitted_at))).length;
+
+/* Revision after feedback: a staff line on a field, then an author's save
+   to that same field within 48 hours. */
+let staffLinesOnFields = 0, revisedAfter = 0;
+for (const l of lines) {
+  if (!staffIds.has(l.author_id) || !l.field_id) continue;
+  staffLinesOnFields += 1;
+  const t0 = Date.parse(l.created_at);
+  if (history.some((h) => h.document_id === l.document_id && h.field_id === l.field_id && !staffIds.has(h.saved_by) && Date.parse(h.saved_at) > t0 && Date.parse(h.saved_at) - t0 < 48 * 3600000)) revisedAfter += 1;
+}
+
+/* Work outside class hours: saves on a school day before 8 or after 15:30, or on a weekend. */
+const outside = (iso) => {
+  const d = new Date(iso);
+  const hm = d.toLocaleTimeString('en-US', { timeZone: TZ, hour12: false, hour: '2-digit', minute: '2-digit' });
+  const wd = d.toLocaleDateString('en-US', { timeZone: TZ, weekday: 'short' });
+  return wd === 'Sat' || wd === 'Sun' || hm < '08:00' || hm > '15:30';
+};
+const savesToday = history.filter((h) => onDay(h.saved_at));
+const afterHoursToday = savesToday.filter((h) => outside(h.saved_at)).length;
+
+/* Elder coverage: projects touched by staff (a line or a score) this week. */
+const touched = new Set();
+for (const l of lines) if (staffIds.has(l.author_id) && week(l.created_at)) touched.add(projectOfDoc.get(l.document_id));
+for (const a of assessments) if (a.kind === 'elder' && week(a.created_at)) touched.add(projectOfPlace.get(a.participation_id));
+const coveredWeek = projectIds.filter((id) => touched.has(id)).length;
+
+/* Interviews written, per project (the empathy-interviews boxes). */
+const interviewDocs = documents.filter((d) => d.deliverable === 'interview_synthesis');
+const interviewFields = interviewDocs.length
+  ? await all(() => db.from('document_fields').select('document_id, field_id, value').in('document_id', interviewDocs.map((d) => d.id)).like('field_id', 'interview_%'), 'interview boxes')
+  : [];
+const interviewsPer = new Map();
+for (const f of interviewFields) if (typeof f.value === 'string' && f.value.trim()) interviewsPer.set(f.document_id, (interviewsPer.get(f.document_id) ?? 0) + 1);
+const interviewCounts = [...interviewsPer.values()];
+
+/* The survey (0002): shown, answered, dismissed, per question, and the
+   answers' spread; the lines stay in the database. Response rate is
+   answered over shown — the number that says whether the cadence is
+   right. */
+const surveyRows = await must(db.from('survey_events').select('user_id, question_id, moment, event, answer, comment, created_at').eq('org_id', org.id), 'survey events');
+const surveyOf = (rows) => {
+  const per = {};
+  for (const id of [...new Set(rows.map((x) => x.question_id))].sort()) {
+    const mine = rows.filter((x) => x.question_id === id);
+    const shown = count(mine, (x) => x.event === 'shown');
+    const answered = count(mine, (x) => x.event === 'answered');
+    per[id] = {
+      shown, answered, dismissed: count(mine, (x) => x.event === 'dismissed'),
+      response_rate: shown ? Math.round((answered / shown) * 100) : null,
+      high: count(mine, (x) => x.event === 'answered' && x.answer === 3), mid: count(mine, (x) => x.event === 'answered' && x.answer === 2), low: count(mine, (x) => x.event === 'answered' && x.answer === 1),
+      with_a_line: count(mine, (x) => x.event === 'answered' && x.comment),
+    };
+  }
+  const shown = count(rows, (x) => x.event === 'shown');
+  const answered = count(rows, (x) => x.event === 'answered');
+  return { shown, answered, dismissed: count(rows, (x) => x.event === 'dismissed'), response_rate: shown ? Math.round((answered / shown) * 100) : null, people_asked: new Set(rows.filter((x) => x.event === 'shown').map((x) => x.user_id)).size, questions: per };
+};
+
+/* Quiet projects: no save, feedback line, notebook entry or score on the
+   project in the seven days ending today. The share of the class's
+   projects is the number to watch. */
+const lastTouch = new Map();
+const touch = (projectId, iso) => { if (!projectId || !iso) return; const t = Date.parse(iso); if (t < dayStart + 86400000 && t > (lastTouch.get(projectId) ?? 0)) lastTouch.set(projectId, t); };
+for (const a of activity) touch(a.project_id, a.last_at);
+for (const h of history) touch(projectOfDoc.get(h.document_id), h.saved_at);
+for (const l of lines) touch(projectOfDoc.get(l.document_id), l.created_at);
+for (const n of notes) touch(n.project_id, n.created_at);
+for (const a of assessments) touch(projectOfPlace.get(a.participation_id), a.created_at);
+const staleProjects = projectIds.filter((id) => !lastTouch.has(id) || dayStart + 86400000 - lastTouch.get(id) >= 7 * 86400000);
+
+/* The student's side of the loop: hours from a staff line on a document to
+   the author's next save on that document, for lines that got one. */
+const responses = [];
+let staffLinesTotal = 0, staffLinesUnanswered = 0;
+for (const l of lines) {
+  if (!staffIds.has(l.author_id)) continue;
+  staffLinesTotal += 1;
+  const t0 = Date.parse(l.created_at);
+  const next = history.filter((h) => h.document_id === l.document_id && !staffIds.has(h.saved_by) && Date.parse(h.saved_at) > t0).map((h) => Date.parse(h.saved_at));
+  if (next.length) responses.push((Math.min(...next) - t0) / 3600000);
+  else staffLinesUnanswered += 1;
+}
+
+/* The teacher's Friday number (dev-157): minutes saved this week, one per
+   teacher per week, listed by week so the run of them reads as a series. */
+const teacherMinutes = surveyRows.filter((x) => x.question_id === 'teacher_minutes' && x.event === 'answered' && typeof x.answer === 'number')
+  .map((x) => ({ week: dayOf(x.created_at), by: label.get(x.user_id) ?? roleOf(x.user_id), minutes: x.answer }))
+  .sort((a, b) => a.week.localeCompare(b.week));
+
+/* ── The file ────────────────────────────────────────────────────────── */
 const report = {
   date: today, timezone: TZ, org: org.slug, class: cohort.slug, generated_at: new Date().toISOString(),
   roster: { students: students.size, elders: elders.size, teachers: teachers.size, projects: projectIds.length },
@@ -246,6 +381,34 @@ const report = {
   },
   standing: steps,
   schedule_changes: redates.map((x) => ({ on: x.occurred_at, was: x.before?.due_on ?? null, now: x.after?.due_on ?? null, what: x.reason })),
+  /* dev-155 */
+  week: {
+    active_people: activeWeek.length, active_students: activeWeekStudents.length,
+    active_share_of_roster: Math.round((activeWeek.length / everyone.size) * 100),
+    active_share_of_students: Math.round((activeWeekStudents.length / Math.max(1, students.size)) * 100),
+    projects_with_staff_touch: coveredWeek, projects: projectIds.length,
+  },
+  feedback_loop: {
+    submissions_answered: latencies.length, submissions_awaiting: submittedAwaiting,
+    median_hours_to_first_feedback: latencies.length ? Math.round(median(latencies) * 10) / 10 : null,
+    answered_within_24h: count(latencies, (h) => h <= 24),
+    staff_lines_on_fields: staffLinesOnFields, revised_within_48h: revisedAfter,
+    revision_rate: staffLinesOnFields ? Math.round((revisedAfter / staffLinesOnFields) * 100) : null,
+  },
+  hours: { saves_today: savesToday.length, saves_outside_class_today: afterHoursToday },
+  interviews: {
+    projects_with_notes: interviewCounts.length, at_least_3: count(interviewCounts, (n) => n >= 3), at_least_5: count(interviewCounts, (n) => n >= 5),
+    total_written: interviewCounts.reduce((a, b) => a + b, 0),
+  },
+  survey: { total: surveyOf(surveyRows), today: surveyOf(surveyRows.filter((x) => onDay(x.created_at))) },
+  teacher_minutes: teacherMinutes,
+  stale: { projects: staleProjects.length, share_of_projects: projectIds.length ? Math.round((staleProjects.length / projectIds.length) * 100) : null },
+  student_response: {
+    staff_lines: staffLinesTotal, answered_by_a_save: responses.length, unanswered: staffLinesUnanswered,
+    median_hours_to_next_save: responses.length ? Math.round(median(responses) * 10) / 10 : null,
+    within_48h: count(responses, (h) => h <= 48),
+  },
+  reminders: { today: count(reminders, (r) => onDay(r.created_at)), this_week: count(reminders, (r) => week(r.created_at)), total: reminders.length, by_staff_total: count(reminders, (r) => staffIds.has(r.actor_id)) },
   health: {
     transport_incidents_today: incidents.length,
     incidents_by_state: Object.fromEntries([...new Set(incidents.map((i) => i.state))].map((k) => [k, count(incidents, (i) => i.state === k)])),
@@ -253,11 +416,38 @@ const report = {
   people,
 };
 
+/* ── Right now (dev-154) ─────────────────────────────────────────────── */
+const nowMs = Date.now();
+const recent = (minutes) => history.filter((h) => nowMs - Date.parse(h.saved_at) < minutes * 60 * 1000);
+const quarter = recent(15);
+const hour = recent(60);
+const activeNow = [...new Set(quarter.map((h) => h.saved_by))].map((id) => label.get(id) ?? roleOf(id)).sort();
+const submittedRecently = documents.filter((d) => d.submitted_at && nowMs - Date.parse(d.submitted_at) < 60 * 60 * 1000).length;
+const openNow = report.questions.open;
+
 /* Nothing typed and no address leaves: the file is checked before it is
    written. */
 const text = JSON.stringify(report, null, 2);
 if (/@/.test(text)) fail('an address survived into the report — nothing was written');
 for (const l of lines) if (l.body_md && l.body_md.length > 12 && text.includes(l.body_md.slice(0, 40))) fail('a line of text survived into the report — nothing was written');
+
+if (PRINT) {
+  const at = new Date().toLocaleTimeString('en-US', { timeZone: TZ, hour: 'numeric', minute: '2-digit' });
+  const busiest = people.filter((p) => p.saves_today > 0).slice(0, 8).map((p) => `${p.who} ${p.saves_today}`).join(', ');
+  const stepsLive = steps.filter((st) => st.due_on && st.due_on <= today).slice(-4).map((st) => `${st.name} ${st.done}/${st.places}${st.late ? ` (${st.late} late)` : ''}`).join(' · ');
+  console.log(`
+${org.slug} · ${cohort.name} · ${today} at ${at}
+
+  Right now   ${activeNow.length ? `${activeNow.length} writing in the last 15 min: ${activeNow.join(', ')}` : 'nobody has saved anything in the last 15 min'}; ${hour.length} saves in the last hour; ${submittedRecently} submitted in the last hour; ${openNow} question${openNow === 1 ? '' : 's'} open
+  Today       ${report.sign_ins.today} signed in (${report.sign_ins.students_today} students); ${report.writing.people_who_saved_today} wrote, ${report.writing.saves_today} saves, ~${report.writing.words_written_today} words; ${report.writing.documents_submitted_today} submitted; ${report.questions.asked_today} asked, ${report.questions.answered_today} answered; ${report.feedback.elder_scores_today} Elder scores; ${report.health.transport_incidents_today} transport incidents; ${report.sign_ins.password_failures_today} wrong passwords
+  This week   ${report.week.active_people} of ${everyone.size} active (${report.week.active_share_of_students}% of students); staff touched ${report.week.projects_with_staff_touch}/${report.week.projects} projects; feedback median ${report.feedback_loop.median_hours_to_first_feedback ?? '–'} h, ${report.feedback_loop.submissions_awaiting} awaiting; revisions after comments ${report.feedback_loop.revised_within_48h}/${report.feedback_loop.staff_lines_on_fields}
+  Quiet       ${report.stale.projects} of ${projectIds.length} projects with nothing in 7 days (${report.stale.share_of_projects ?? '–'}%); students answer a staff line by a save in median ${report.student_response.median_hours_to_next_save ?? '–'} h (${report.student_response.answered_by_a_save}/${report.student_response.staff_lines}); ${report.reminders.this_week} reminders this week (${report.reminders.total} in all); teacher minutes saved: ${teacherMinutes.map((t) => `${t.week} ${t.minutes}`).join(', ') || 'none yet'}
+  Survey      ${report.survey.total.shown} shown to ${report.survey.total.people_asked}, ${report.survey.total.answered} answered (${report.survey.total.response_rate ?? '–'}%), ${report.survey.total.dismissed} not now · ${Object.entries(report.survey.total.questions).map(([id, q]) => `${id} ${q.high}/${q.mid}/${q.low}`).join(' · ') || 'nothing asked yet'}
+  Busiest     ${busiest || '—'}
+  Due so far  ${stepsLive || '—'}
+`);
+  process.exit(0);
+}
 
 fs.mkdirSync(OUT, { recursive: true });
 const jsonPath = path.join(OUT, `${today}.json`);
@@ -273,6 +463,11 @@ const md = [
   `**Questions** ${r.questions.asked_today} asked today, ${r.questions.answered_today} answered; ${r.questions.open} open; median wait ${r.questions.median_wait_minutes ?? '–'} min; ${r.questions.answered_within_an_hour} of ${r.questions.answered_total} answered within an hour.`,
   `**Feedback** ${r.feedback.elder_scores_today} Elder scores today (${r.feedback.elder_scores_total} in all); ${r.feedback.teacher_grades_today} teacher grades today.`,
   `**Health** ${r.health.transport_incidents_today} transport incidents.`,
+  `**This week** ${r.week.active_people} of ${everyone.size} active (${r.week.active_share_of_students}% of students); staff touched ${r.week.projects_with_staff_touch} of ${r.week.projects} projects.`,
+  `**Feedback loop** ${r.feedback_loop.submissions_answered} submissions answered, median ${r.feedback_loop.median_hours_to_first_feedback ?? '–'} h to first feedback, ${r.feedback_loop.answered_within_24h} within a day; ${r.feedback_loop.submissions_awaiting} awaiting. ${r.feedback_loop.revised_within_48h} of ${r.feedback_loop.staff_lines_on_fields} field comments followed by a revision within 48 h${r.feedback_loop.revision_rate != null ? ` (${r.feedback_loop.revision_rate}%)` : ''}.`,
+  `**Outside class** ${r.hours.saves_outside_class_today} of ${r.hours.saves_today} saves today. **Interviews** ${r.interviews.total_written} written on ${r.interviews.projects_with_notes} projects; ${r.interviews.at_least_3} at three or more, ${r.interviews.at_least_5} at five.`,
+  `**Quiet projects** ${r.stale.projects} of ${projectIds.length} (${r.stale.share_of_projects ?? '–'}%) with nothing in seven days. **Student response** ${r.student_response.answered_by_a_save} of ${r.student_response.staff_lines} staff lines followed by a save, median ${r.student_response.median_hours_to_next_save ?? '–'} h, ${r.student_response.within_48h} within 48 h. **Reminders** ${r.reminders.today} today, ${r.reminders.this_week} this week, ${r.reminders.total} in all. **Teacher minutes saved** ${r.teacher_minutes.length ? r.teacher_minutes.map((t) => `${t.week}: ${t.minutes} (${t.by})`).join('; ') : 'none yet'}.`,
+  `**Survey** ${r.survey.total.shown} shown to ${r.survey.total.people_asked} people, ${r.survey.total.answered} answered (${r.survey.total.response_rate ?? '–'}% response), ${r.survey.total.dismissed} not now; today ${r.survey.today.shown} shown, ${r.survey.today.answered} answered.` + (Object.keys(r.survey.total.questions).length ? ' Per question (high/mid/low): ' + Object.entries(r.survey.total.questions).map(([id, q]) => `${id} ${q.high}/${q.mid}/${q.low} of ${q.shown} shown${q.with_a_line ? `, ${q.with_a_line} with a line` : ''}`).join('; ') + '.' : ''),
   '',
   '| Step | Due | Done | On time | Late | Of |',
   '|---|---|---|---|---|---|',
