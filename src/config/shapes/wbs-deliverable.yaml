@@ -1,0 +1,32 @@
+# One of the three deliverables promised in the Work Breakdown Structure
+# (dev-160): due October 15, November 15 and December 15. What each one
+# *is* depends on what the student wrote in that box, so this shape is the
+# smallest thing that can hold any of them — what was done, and where it
+# is — and is reshaped once the class's breakdowns are in. Keep the field
+# ids when that happens, so what is written here stays on the page.
+
+id: wbs-deliverable
+name: WBS deliverable
+version: 1
+guidance: >-
+  This is one of the three deliverables you committed to in your Work
+  Breakdown Structure. Say what you finished, how it was tested or
+  checked, and where it can be seen.
+
+sections:
+  - id: done
+    name: What was delivered
+    fields:
+      - id: summary
+        kind: long
+        prompt: What you delivered
+        tip: What now exists that did not before, and how you know it works.
+        required: true
+      - id: url
+        kind: link
+        prompt: Where it is
+        tip: Optional. A Drive folder, a document, a repository, a video.
+      - id: note
+        kind: long
+        prompt: What changed from the plan
+        tip: Optional. If the deliverable differs from what you wrote in the breakdown, say how and why.

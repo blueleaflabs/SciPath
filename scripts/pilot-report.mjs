@@ -139,7 +139,7 @@ const incidents = await must(db.from('transport_incidents').select('state, creat
 const attempts = await must(db.from('password_attempts').select('email, ok, at').gte('at', `${today}T00:00:00-07:00`), 'password attempts');
 /* Dates moved on this program by `program:redate` (dev-152): all of them,
    since the start, so the teacher's report carries the whole trail. */
-const redates = await must(db.from('audit_log').select('entity_id, before, after, reason, occurred_at').eq('org_id', org.id).eq('action', 'milestone.redated').order('occurred_at'), 'schedule changes');
+const redates = await must(db.from('audit_log').select('entity_id, before, after, reason, occurred_at').eq('org_id', org.id).in('action', ['milestone.redated', 'milestone.added']).order('occurred_at'), 'schedule changes');
 
 /* ── Words, from the values kept in the history ───────────────────────── */
 const words = (v) => {
@@ -476,7 +476,7 @@ const md = [
   ...(redates.length ? [
     '| Schedule change | Was | Now | Changed on |',
     '|---|---|---|---|',
-    ...redates.map((x) => `| ${(x.reason ?? '').split(':')[0]} | ${x.before?.due_on ?? ''} | ${x.after?.due_on ?? ''} | ${x.occurred_at.slice(0, 10)} |`),
+    ...redates.map((x) => `| ${(x.reason ?? '').split(':')[0]} | ${x.before?.due_on ?? (x.before ? '' : 'new')} | ${x.after?.due_on ?? ''} | ${x.occurred_at.slice(0, 10)} |`),
     '',
   ] : []),
   '| Who | Role | In today | Saves | Docs | First | Last | Lines | Notes | Scores |',

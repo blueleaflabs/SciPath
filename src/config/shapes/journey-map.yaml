@@ -7,7 +7,7 @@
 
 id: journey-map
 name: Journey map
-version: 1
+version: 2
 guidance: >-
   Upload a picture of your journey map. Update it and submit again when
   the final is due.
@@ -36,3 +36,16 @@ sections:
         kind: long
         prompt: What changed since the first draft, if this is the final
         tip: Leave it empty on the first draft.
+  # The family's feedback on the first draft (dev-160). A staff field is
+  # what puts "Give the feedback" on the page for the Elder and completes
+  # the Elder's task (Elder Feedback: Journey Map - First Draft) when it is
+  # sent; without one, the task had nowhere to be done. Feedback only, no
+  # rating: the map is a draft on binder paper.
+  - id: family
+    name: Family feedback on the first draft
+    fields:
+      - id: elder_feedback
+        kind: long
+        owner: staff
+        prompt: Feedback on the first draft
+        tip: What works, what is missing, and what to change before the final. This is what you say to the researcher; the written line is the record of it.

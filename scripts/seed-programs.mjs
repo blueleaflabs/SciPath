@@ -24,6 +24,7 @@ import { fixtureAddress } from '../src/config/demo-accounts.mjs';
 import { loadLibrary } from './template-library.mjs';
 import { loadOrgs } from './orgs-library.mjs';
 import { resolveProgram, datesFor } from '../src/lib/template-resolve.ts';
+import { milestoneRow } from './milestone-rows.mjs';
 
 const ORG_RECORDS = loadOrgs();
 
@@ -194,39 +195,6 @@ function orderedSeasons(library) {
  * template author to classify a step into five buckets they did not choose
  * would be asking them to know about our schema.
  */
-/* The deliverable a step asks for, by the id the template uses.
- *
- * The first where a step wants several, because that is the one the deadline
- * is named for and the one a reader is looking for on the row. Null where a
- * step hands nothing over. */
-function deliverableRef(step) {
-  const first = (step.deliverables ?? [])[0];
-  return first ? (first.ref ?? first.id ?? null) : null;
-}
-
-function kindOf(step) {
-  if (step.consequence === 'blocks_experimentation') return 'approval';
-  if (step.consequence === 'blocks_registration') return 'registration';
-  if (step.consequence === 'blocks_competition') return 'submission';
-  if (/judg/i.test(step.name)) return 'judging';
-
-  /* A club's own step is never an event. The club put it in the calendar
-     because somebody has to do something, whether or not a deliverable was
-     declared for it — "ask a teacher to sponsor" has nothing to hand in and
-     is the single most important thing in October. */
-  if (step.internal) return 'local';
-
-  /* Nothing to hand in, nothing at stake, and nobody's own step: a day on
-     the calendar rather than an obligation. Applications open, results are
-     announced. A student counting down to one learns nothing they can act
-     on, so the interface skips them when it asks what is next. */
-  const nothingDue = (step.deliverables ?? []).length === 0;
-  const nothingAtStake = !step.consequence || step.consequence === 'none';
-  if (nothingDue && nothingAtStake && !step.repeats) return 'event';
-
-  if ((step.deliverables ?? []).some((d) => (d.ref ?? d.id ?? '').includes('form'))) return 'form';
-  return 'submission';
-}
 
 async function main() {
   const library = loadLibrary();
@@ -362,29 +330,10 @@ async function main() {
   const layerSchoolDates = async (programId, org, dates) => {
     const rows = dates
       .filter((d) => d.date && d.step.internal)
-      .map((d, index) => ({
-        program_id: programId,
-        org_id: org.id,
-        name: d.step.name,
-        kind: kindOf(d.step),
-        due_on: d.date,
-        required: d.step.applies_when ? false : true,
-        blocks_experimentation: d.step.consequence === 'blocks_experimentation',
-        notes: d.step.note ?? d.step.risk ?? null,
-        sort_order: Math.round((d.step.order ?? index) * 10),
-        /* Always the school's, whatever the step called itself: on a shared
-           program that is what `org_id` being set means. */
-        source: 'school',
-        phase: d.step.phase ?? null,
-        satisfied_by:
-          d.step.id === 'club_sponsor' || d.step.id === 'sponsor' ? 'sponsor' : null,
-        deliverable_ref: deliverableRef(d.step),
-        owner: d.step.owner === 'staff' ? 'staff' : 'student',
-        step_id: d.step.id ?? null,
-        requires_step: d.step.owner === 'staff' ? (d.step.requires?.[0] ?? null) : null,
-        requires_steps: d.step.requires ?? [],
-        feedback_on: d.step.owner === 'staff' ? (d.step.feedback_on ?? null) : null,
-      }));
+      /* Always the school's, whatever the step called itself: on a shared
+         program that is what `org_id` being set means; and the note is the
+         step's own, never a phase's, because the school's dates are days. */
+      .map((d, index) => ({ ...milestoneRow(d, index, { programId, orgId: org.id }), org_id: org.id, source: 'school', notes: d.step.note ?? d.step.risk ?? null }));
 
     if (!rows.length) return 0;
 
@@ -629,42 +578,7 @@ async function main() {
        null date in this table reads as overdue. */
     const rows = dates
       .filter((d) => d.date)
-      .map((d, index) => ({
-        program_id: program.id,
-        /* A club's own deadline is scoped to the school; the institution's is
-           not, because every school entering that fair shares it. */
-        org_id: d.step.internal ? org.id : null,
-        name: d.step.name,
-        kind: kindOf(d.step),
-        due_on: d.date,
-        required: d.step.applies_when ? false : true,
-        blocks_experimentation: d.step.consequence === 'blocks_experimentation',
-        /* Where the date came from, in the note, because a deadline derived
-           from a phase and one read off a fair's calendar are not the same
-           kind of promise and a student should be able to tell. */
-        notes: [
-          d.source === 'window' && d.window
-            ? `From the ${d.window.from} to ${d.window.to} phase.`
-            : null,
-          d.step.note ?? d.step.risk ?? null,
-        ]
-          .filter(Boolean)
-          .join(' ') || null,
-        sort_order: Math.round((d.step.order ?? index) * 10),
-        /* The layer that contributed the step: the research process, the
-           institution, or the school's own club. Tagged during resolution. */
-        source: d.step.source ?? (d.step.internal ? 'school' : 'program'),
-        phase: d.step.phase ?? null,
-        satisfied_by: d.step.id === 'club_sponsor' || d.step.id === 'sponsor' ? 'sponsor' : null,
-        deliverable_ref: deliverableRef(d.step),
-        /* Whose obligation it is, which step it came from, and for an
-           Elder's task what it waits on and what the feedback goes on. */
-        owner: d.step.owner === 'staff' ? 'staff' : 'student',
-        step_id: d.step.id ?? null,
-        requires_step: d.step.owner === 'staff' ? (d.step.requires?.[0] ?? null) : null,
-        requires_steps: d.step.requires ?? [],
-        feedback_on: d.step.owner === 'staff' ? (d.step.feedback_on ?? null) : null,
-      }));
+      .map((d, index) => milestoneRow(d, index, { programId: program.id, orgId: org.id }));
 
     if (rows.length) {
       const { error: milestoneError } = await db.from('program_milestones').insert(rows);

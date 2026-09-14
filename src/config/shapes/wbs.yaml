@@ -1,0 +1,59 @@
+# The Work Breakdown Structure, due September 15 (dev-160). Three boxes,
+# three promises: what the student will have finished by October 15,
+# November 15 and December 15. Each box becomes its own task on the
+# calendar (WBS Deliverable 1, 2, 3) with that date, so this is the step
+# where a student commits to three real things rather than a plan of a
+# plan. What each deliverable turns out to be is decided by what is
+# written here; the three tasks' shapes follow.
+#
+# **The Drive link is kept, and optional.** Until dev-160 this deliverable
+# was a link to a Drive document (drive-link: `url` and `note`); a student
+# who pasted one has it still, at the end, under the same ids.
+
+id: wbs
+name: Work Breakdown Structure
+version: 1
+guidance: >-
+  Break your project into three deliverables, one per month. In each box,
+  say concretely what will exist on that date that does not exist now: a
+  built thing, a dataset, a tested prototype, a written section. Each box
+  becomes a task on your calendar with that date.
+
+sections:
+  - id: deliverables
+    name: Three deliverables
+    fields:
+      - id: deliverable_1
+        kind: long
+        prompt: Deliverable 1, due October 15
+        tip: What will be finished by October 15, and how you will know it is done.
+        required: true
+      - id: deliverable_2
+        kind: long
+        prompt: Deliverable 2, due November 15
+        tip: What will be finished by November 15, building on the first.
+        required: true
+      - id: deliverable_3
+        kind: long
+        prompt: Deliverable 3, due December 15
+        tip: What will be finished by December 15; the project as it stands at the end of the semester.
+        required: true
+  - id: link
+    name: Drive document, if you have one
+    fields:
+      - id: url
+        kind: link
+        prompt: Google Drive address
+        tip: Optional. Only if your breakdown also lives in a Drive document.
+      - id: note
+        kind: long
+        prompt: Anything your Elder should know about it
+        tip: Optional.
+
+showcase:
+  title: Work breakdown
+  headline: deliverable_1
+  show:
+    - { field: deliverable_1, as: prose, label: By October 15 }
+    - { field: deliverable_2, as: prose, label: By November 15 }
+    - { field: deliverable_3, as: prose, label: By December 15 }
