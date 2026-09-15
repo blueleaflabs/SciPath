@@ -93,8 +93,12 @@ const HEADERS: Record<string, string> = {
   'Referrer-Policy': 'strict-origin-when-cross-origin',
   /* Which build answered (2.9): the shell compares it with its page's. */
   [BUILD_HEADER]: BUILD,
-  /* Nothing here uses any of them. */
-  'Permissions-Policy': 'camera=(), microphone=(), geolocation=(), payment=(), usb=()',
+  /* The camera is the page's own, for a file box's "Take Photo" (dev-164):
+     with `camera=()` Chrome on iOS presented the picker with no camera
+     behind it, a black sheet on every upload box, while Safari ignored the
+     header for a file input. Nothing on any page asks for the rest, and
+     nothing embedded gets any of it. */
+  'Permissions-Policy': 'camera=(self), microphone=(), geolocation=(), payment=(), usb=()',
 };
 
 /**

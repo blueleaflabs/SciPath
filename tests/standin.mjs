@@ -110,6 +110,9 @@ test('the routes: a ceiling per document, an SVG still refused, a removed file s
   assert.match(upload, /const ALLOWED = \['image\/', 'application\/pdf'\];/);
   assert.equal(detect(new TextEncoder().encode('<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>')), null, 'an SVG is not a file we show');
   assert.equal(detect(Uint8Array.from([0x4d, 0x5a, 0x90, 0x00, 0x03, 0x00, 0x00, 0x00, 0x04])), null, 'an executable is not a file we show');
+  /* The page may use the camera for its own file boxes (dev-164); iOS opened a black sheet with camera=(). */
+  const mw = fs.readFileSync('src/middleware.ts', 'utf8');
+  assert.match(mw, /'Permissions-Policy': 'camera=\(self\), microphone=\(\), geolocation=\(\), payment=\(\), usb=\(\)'/);
   const media = fs.readFileSync('src/pages/app/media/[...path].ts', 'utf8');
   assert.match(media, /const asDocumentMedia = references\[5\]\?\.data/);
   assert.match(media, /supabase\.from\('document_media'\)\.select\('id'\)\.eq\('storage_path', path\)\.maybeSingle\(\),\n  \]\);/, 'document_media is the sixth reference');
