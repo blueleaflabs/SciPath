@@ -22,6 +22,7 @@ const json = (body: unknown, status = 200) =>
   });
 
 const ALLOWED = ['image/', 'application/pdf'];
+export const MAX_FILES_PER_DOCUMENT = 100;
 
 export const POST: APIRoute = async ({ request, cookies, locals }) => {
   const runtime = (locals as any).runtime?.env;
@@ -48,6 +49,14 @@ export const POST: APIRoute = async ({ request, cookies, locals }) => {
      a document a caller cannot read is a 404 here too. */
   const { data: doc } = await supabase.from('documents').select('id, project_id').eq('id', documentId).maybeSingle();
   if (!doc) return json({ ok: false, error: 'no such document' }, 404);
+
+  /* A ceiling per document (dev-161): five upload boxes and the boxes a
+     shape has of its own, each replaceable a few times, is a few dozen
+     files; a hundred is a loop or a prank, and stops here before storage
+     is touched. Every file is at most MAX_UPLOAD_BYTES, so this is also
+     the byte ceiling per document. */
+  const { count: already } = await supabase.from('document_media').select('id', { count: 'exact', head: true }).eq('document_id', doc.id);
+  if ((already ?? 0) >= MAX_FILES_PER_DOCUMENT) return json({ ok: false, error: 'this document has all the files it can hold' }, 413);
 
   const blob = blobStore(locals);
   if (!blob.available()) return json({ ok: false, error: 'file storage is not configured here' }, 503);

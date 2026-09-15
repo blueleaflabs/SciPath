@@ -17,6 +17,7 @@ export const prerender = false;
  */
 
 import { serverClient } from '../../../../../../lib/supabase';
+import { removedMedia } from '../../../../../../lib/media-removal';
 import { activeOrg } from '../../../../../../lib/tenant';
 import { formatDate } from '../../../../../../lib/dates';
 import { signInWith } from '../../../../../../lib/next-path';
@@ -84,6 +85,11 @@ if (doc && wantVersion) {
   const { data: fields } = await supabase.from('document_fields').select('field_id, value').eq('document_id', doc.id);
   for (const f of fields ?? []) values[f.field_id] = f.value;
   stamp = docStanding({ ...doc, document_fields: (fields ?? []) as any }, shape, when).label;
+}
+/* A file a teacher took off the page (dev-161) is off the PDF too. */
+if (doc) {
+  const removed = await removedMedia(supabase, (Astro.locals as any).runtime?.env, doc.id);
+  for (const [fid, v] of Object.entries(values)) if (v && typeof v === 'object' && typeof (v as any).path === 'string' && removed.has((v as any).path)) values[fid] = null;
 }
 
 const withComments = Astro.url.searchParams.get('comments') === '1';

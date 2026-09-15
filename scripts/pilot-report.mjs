@@ -126,6 +126,33 @@ const notes = await all(() => db.from('field_notes').select('project_id, author_
 const milestones = placeIds.length
   ? await all(() => db.from('entry_milestones').select('participation_id, step_id, name, owner, kind, due_on, completed_on').in('participation_id', placeIds), 'milestones')
   : [];
+/* Uploaded or typed (dev-161): per deliverable, of the documents
+   submitted, how many carry a photo or PDF in the upload boxes, how many
+   carry typed work, and how many carry only an upload. Read from the
+   fields as they stand: an upload is a file value in `upload_N`; typed is
+   any other student field with something in it. */
+const fieldsNow = docIds.length
+  ? await all(() => db.from('document_fields').select('document_id, field_id, value').in('document_id', docIds), 'fields now')
+  : [];
+const hasValue = (v) => v != null && (typeof v === 'object' ? (Array.isArray(v) ? v.some((x) => x != null && String(x).trim()) : Object.keys(v).length > 0) : String(v).trim().length > 0);
+const uploadedDocs = new Set(), typedDocs = new Set();
+for (const f of fieldsNow) {
+  if (/^upload_\d+$/.test(f.field_id)) { if (f.value && typeof f.value === 'object' && f.value.path) uploadedDocs.add(f.document_id); }
+  else if (!/^(url|note|_doc_link|elder_|oral_feedback)/.test(f.field_id) && hasValue(f.value)) typedDocs.add(f.document_id);
+}
+const uploadsBy = {};
+for (const d of documents) {
+  if (d.status !== 'submitted') continue;
+  const row = uploadsBy[d.deliverable] ?? (uploadsBy[d.deliverable] = { submitted: 0, with_upload: 0, with_typing: 0, upload_only: 0, typed_only: 0 });
+  row.submitted += 1;
+  const up = uploadedDocs.has(d.id), ty = typedDocs.has(d.id);
+  if (up) row.with_upload += 1;
+  if (ty) row.with_typing += 1;
+  if (up && !ty) row.upload_only += 1;
+  if (ty && !up) row.typed_only += 1;
+}
+const uploadsAll = Object.values(uploadsBy).reduce((a, r) => ({ submitted: a.submitted + r.submitted, with_upload: a.with_upload + r.with_upload, with_typing: a.with_typing + r.with_typing, upload_only: a.upload_only + r.upload_only, typed_only: a.typed_only + r.typed_only }), { submitted: 0, with_upload: 0, with_typing: 0, upload_only: 0, typed_only: 0 });
+
 /* The days anybody wrote (0002, dev-157): one row per person per project
    per day, rolled up from every save — the cheap read for the week's
    actives and the quiet projects, whatever the size of the history. */
@@ -402,6 +429,7 @@ const report = {
   },
   survey: { total: surveyOf(surveyRows), today: surveyOf(surveyRows.filter((x) => onDay(x.created_at))) },
   teacher_minutes: teacherMinutes,
+  uploads: { total: uploadsAll, by_deliverable: uploadsBy },
   stale: { projects: staleProjects.length, share_of_projects: projectIds.length ? Math.round((staleProjects.length / projectIds.length) * 100) : null },
   student_response: {
     staff_lines: staffLinesTotal, answered_by_a_save: responses.length, unanswered: staffLinesUnanswered,
@@ -442,6 +470,7 @@ ${org.slug} · ${cohort.name} · ${today} at ${at}
   Today       ${report.sign_ins.today} signed in (${report.sign_ins.students_today} students); ${report.writing.people_who_saved_today} wrote, ${report.writing.saves_today} saves, ~${report.writing.words_written_today} words; ${report.writing.documents_submitted_today} submitted; ${report.questions.asked_today} asked, ${report.questions.answered_today} answered; ${report.feedback.elder_scores_today} Elder scores; ${report.health.transport_incidents_today} transport incidents; ${report.sign_ins.password_failures_today} wrong passwords
   This week   ${report.week.active_people} of ${everyone.size} active (${report.week.active_share_of_students}% of students); staff touched ${report.week.projects_with_staff_touch}/${report.week.projects} projects; feedback median ${report.feedback_loop.median_hours_to_first_feedback ?? '–'} h, ${report.feedback_loop.submissions_awaiting} awaiting; revisions after comments ${report.feedback_loop.revised_within_48h}/${report.feedback_loop.staff_lines_on_fields}
   Quiet       ${report.stale.projects} of ${projectIds.length} projects with nothing in 7 days (${report.stale.share_of_projects ?? '–'}%); students answer a staff line by a save in median ${report.student_response.median_hours_to_next_save ?? '–'} h (${report.student_response.answered_by_a_save}/${report.student_response.staff_lines}); ${report.reminders.this_week} reminders this week (${report.reminders.total} in all); teacher minutes saved: ${teacherMinutes.map((t) => `${t.week} ${t.minutes}`).join(', ') || 'none yet'}
+  Uploads     of ${uploadsAll.submitted} submitted: ${uploadsAll.with_upload} with a photo or PDF (${uploadsAll.upload_only} upload only), ${uploadsAll.with_typing} typed (${uploadsAll.typed_only} typed only)
   Survey      ${report.survey.total.shown} shown to ${report.survey.total.people_asked}, ${report.survey.total.answered} answered (${report.survey.total.response_rate ?? '–'}%), ${report.survey.total.dismissed} not now · ${Object.entries(report.survey.total.questions).map(([id, q]) => `${id} ${q.high}/${q.mid}/${q.low}`).join(' · ') || 'nothing asked yet'}
   Busiest     ${busiest || '—'}
   Due so far  ${stepsLive || '—'}
@@ -467,6 +496,7 @@ const md = [
   `**Feedback loop** ${r.feedback_loop.submissions_answered} submissions answered, median ${r.feedback_loop.median_hours_to_first_feedback ?? '–'} h to first feedback, ${r.feedback_loop.answered_within_24h} within a day; ${r.feedback_loop.submissions_awaiting} awaiting. ${r.feedback_loop.revised_within_48h} of ${r.feedback_loop.staff_lines_on_fields} field comments followed by a revision within 48 h${r.feedback_loop.revision_rate != null ? ` (${r.feedback_loop.revision_rate}%)` : ''}.`,
   `**Outside class** ${r.hours.saves_outside_class_today} of ${r.hours.saves_today} saves today. **Interviews** ${r.interviews.total_written} written on ${r.interviews.projects_with_notes} projects; ${r.interviews.at_least_3} at three or more, ${r.interviews.at_least_5} at five.`,
   `**Quiet projects** ${r.stale.projects} of ${projectIds.length} (${r.stale.share_of_projects ?? '–'}%) with nothing in seven days. **Student response** ${r.student_response.answered_by_a_save} of ${r.student_response.staff_lines} staff lines followed by a save, median ${r.student_response.median_hours_to_next_save ?? '–'} h, ${r.student_response.within_48h} within 48 h. **Reminders** ${r.reminders.today} today, ${r.reminders.this_week} this week, ${r.reminders.total} in all. **Teacher minutes saved** ${r.teacher_minutes.length ? r.teacher_minutes.map((t) => `${t.week}: ${t.minutes} (${t.by})`).join('; ') : 'none yet'}.`,
+  `**Uploaded or typed** of ${r.uploads.total.submitted} submitted documents, ${r.uploads.total.with_upload} carry a photo or PDF (${r.uploads.total.upload_only} upload only) and ${r.uploads.total.with_typing} carry typed work (${r.uploads.total.typed_only} typed only).` + (Object.keys(r.uploads.by_deliverable).length ? ' By deliverable: ' + Object.entries(r.uploads.by_deliverable).map(([k, x]) => `${k} ${x.with_upload}/${x.with_typing} of ${x.submitted}`).join('; ') + ' (upload/typed of submitted).' : ''),
   `**Survey** ${r.survey.total.shown} shown to ${r.survey.total.people_asked} people, ${r.survey.total.answered} answered (${r.survey.total.response_rate ?? '–'}% response), ${r.survey.total.dismissed} not now; today ${r.survey.today.shown} shown, ${r.survey.today.answered} answered.` + (Object.keys(r.survey.total.questions).length ? ' Per question (high/mid/low): ' + Object.entries(r.survey.total.questions).map(([id, q]) => `${id} ${q.high}/${q.mid}/${q.low} of ${q.shown} shown${q.with_a_line ? `, ${q.with_a_line} with a line` : ''}`).join('; ') + '.' : ''),
   '',
   '| Step | Due | Done | On time | Late | Of |',

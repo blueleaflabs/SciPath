@@ -139,6 +139,12 @@ export interface ShapeSection {
    * whose number is the point.
    */
   tally?: { singular: string; plural: string; min?: number; goal?: number };
+  /**
+   * A section that stands in for the rest (dev-161): when any field in it
+   * is filled, the document is complete whatever the required fields say.
+   * The uploads section is one; a shape may declare its own.
+   */
+  stands_in?: boolean;
 }
 
 export interface ShowcaseSpec {
@@ -169,6 +175,12 @@ export interface Shape {
   answers?: string[];
   /** The full form: sections of fields with kinds. */
   sections?: ShapeSection[];
+  /**
+   * Every shape takes uploads (dev-161): a section of file boxes at the
+   * top, standing in for the typed fields. `uploads: false` keeps it off
+   * a shape that must be typed.
+   */
+  uploads?: boolean;
   /** Once hid the Google Doc slot; the slot is gone (2.8) and this is kept so older shapes still parse. */
   doc_link?: boolean;
 }
@@ -180,12 +192,53 @@ export interface Shape {
  * The document page, the validator and the class board all read this and
  * never the raw file.
  */
+/**
+ * THE UPLOADS SECTION (dev-161).
+ *
+ * The class asked to photograph paper rather than type it, and the
+ * answer is the same for every deliverable: a section of file boxes at
+ * the top of every shape — a photo or a PDF, one page per box, five boxes
+ * with four on "Add more" — that stands in for the typed fields. One
+ * upload is enough to submit; typing as well is welcome; the Elder sees
+ * both. Defined once here, so every shape present and future carries it,
+ * and every document already opened shows it on its next load (a
+ * document's fields are resolved from its shape on every request).
+ *
+ * The ids are reserved: a shape must not define `upload_1`. `uploads:
+ * false` on a shape keeps the section off it.
+ */
+export const UPLOAD_SECTION_ID = 'uploads';
+export const UPLOAD_FIELD_IDS = ['upload_1', 'upload_2', 'upload_3', 'upload_4', 'upload_5'] as const;
+
+export function uploadSection(): ShapeSection {
+  return {
+    id: UPLOAD_SECTION_ID,
+    name: 'Upload it instead',
+    stands_in: true,
+    fields: [
+      { id: 'upload_note', kind: 'note', text: 'Did this on paper? Photograph each page, or attach a PDF. An upload on its own is enough to submit; you can also type below, or do both.' },
+      { id: 'upload_1', kind: 'file', accept: 'any', prompt: 'A photo or PDF of your work', tip: 'A phone photo is fine. Uploads as soon as you choose it; choose another to replace it.' },
+      { id: 'upload_2', kind: 'file', accept: 'any', prompt: 'Another page', extra: true },
+      { id: 'upload_3', kind: 'file', accept: 'any', prompt: 'Another page', extra: true },
+      { id: 'upload_4', kind: 'file', accept: 'any', prompt: 'Another page', extra: true },
+      { id: 'upload_5', kind: 'file', accept: 'any', prompt: 'Another page', extra: true },
+    ],
+  };
+}
+
+function takesUploads(shape: Shape): boolean {
+  if (shape.uploads === false) return false;
+  return !(shape.sections ?? []).some((sec) => (sec.fields ?? []).some((f) => f.id === 'upload_1'));
+}
+
 export function sectionsOf(shape: Shape): ShapeSection[] {
+  const lead = takesUploads(shape) ? [uploadSection()] : [];
   if (shape.sections && shape.sections.length > 0) {
-    return shape.sections.map((s) => ({ ...s, fields: s.fields ?? [] }));
+    return [...lead, ...shape.sections.map((s) => ({ ...s, fields: s.fields ?? [] }))];
   }
   if (shape.parts && shape.parts.length > 0) {
     return [
+      ...lead,
       {
         id: 'body',
         fields: shape.parts.map((p) => ({
@@ -201,6 +254,7 @@ export function sectionsOf(shape: Shape): ShapeSection[] {
   }
   if (shape.answers && shape.answers.length > 0) {
     return [
+      ...lead,
       {
         id: 'answers',
         fields: shape.answers.map((q, i) => ({
@@ -315,7 +369,8 @@ export function validateShape(shape: Shape): string[] {
     if (t.min != null && t.goal != null && t.min > t.goal) problems.push(`${shape.id}/${sec.id}: tally min above goal`);
     if (!sec.fields.some((f) => f.kind !== 'note')) problems.push(`${shape.id}/${sec.id}: a tally on a section with nothing to count`);
   }
-  if (askedOf(shape).length === 0) problems.push(`${shape.id}: every field is a note`);
+  /* The shape's own fields: the uploads section every shape carries (dev-161) is not a way to fill a shape that asks for nothing. */
+  if (askedOf(shape).filter((f) => !(UPLOAD_FIELD_IDS as readonly string[]).includes(f.id)).length === 0) problems.push(`${shape.id}: every field is a note`);
   return problems;
 }
 

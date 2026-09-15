@@ -12,30 +12,12 @@
 
 import { resolveProgram, deliverablesFor, sectionsOf, askedOf, type Shape, type ShapeField, type Resolved, type Deliverable } from './templates';
 
-export function wordCount(text: string | null | undefined): number {
-  if (!text) return 0;
-  const words = String(text).trim().split(/\s+/).filter(Boolean);
-  return words.length;
-}
-
-/* `textOf` and `isFilled` live in field-values.ts (2.8), where the pure
-   readers can take them; the same two functions, re-exported. */
+/* `wordCount`, `progressOf`, `textOf` and `isFilled` are pure readers and
+   live where a Node test can import them (field-values.ts, progress.ts,
+   dev-161); the same functions, re-exported here for the pages. */
 import { textOf, isFilled, tallyWords } from './field-values';
-export { textOf, isFilled, tallyWords };
-
-/** How far along a document is: filled of asked, and which required ones are missing. */
-export function progressOf(shape: Shape, values: Record<string, any>) {
-  const asked = askedOf(shape);
-  /* The count is of what is required, because that is what Submit waits
-     on. A shape's optional fields (a part filled in later, in the family
-     session) are not in it: "8 of 9" with the ninth not required read as
-     one thing still missing (2.8). */
-  const required = asked.filter((f) => f.required);
-  const filled = required.filter((f) => isFilled(f, values[f.id]));
-  const missing = required.filter((f) => !isFilled(f, values[f.id]));
-  const over = asked.filter((f) => f.max_words != null && wordCount(textOf(f, values[f.id])) > (f.max_words ?? 0));
-  return { asked: required.length, filled: filled.length, missing, over };
-}
+import { progressOf, wordCount } from './progress';
+export { textOf, isFilled, tallyWords, progressOf, wordCount };
 
 export type DocState = 'not_started' | 'in_progress' | 'submitted' | 'revising';
 

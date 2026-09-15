@@ -32,6 +32,8 @@ import { standing, isAuthorOf } from '../../../../../lib/roles';
 import { chooseQuestion, historyFrom } from '../../../../../lib/survey';
 import type { SurveyQuestion } from '../../../../../config/survey';
 import SurveyCard from '../../../../../components/SurveyCard.astro';
+import { adminClient } from '../../../../../lib/supabase-admin';
+import { removedMedia, removeMedia } from '../../../../../lib/media-removal';
 import { formatDate, todayIn, dayOf } from '../../../../../lib/dates';
 import { daysUntil } from '../../../../../lib/attention';
 import { afterPost, outcomeFrom } from '../../../../../lib/post-redirect';
@@ -207,6 +209,18 @@ if (Astro.request.method === 'POST') {
     const { error: e } = await supabase.rpc('resolve_ask', { p_feedback_id: String(form.get('feedback_id') ?? '') });
     if (e) error = e.message;
     else note = 'Ask withdrawn.';
+  } else if (action === 'remove_media' && docRow) {
+    /* The teacher takes a file off the page (dev-161): the bytes stay in
+       storage and the row stays in `document_media`, an audit row says
+       who removed what and why, and from then on the file is served to
+       nobody and the box reads as empty, so the author can put up
+       another. Advisors only; the path must be one of this document's. */
+    if (!me.isAdvisor) error = 'Only a teacher removes a file.';
+    else {
+      const out = await removeMedia(adminClient((Astro.locals as any).runtime?.env), { orgId: account.org_id, actorId: account.id, documentId: docRow.id, path: String(form.get('path') ?? ''), reason: String(form.get('reason') ?? '').slice(0, 300) });
+      if (out.error) error = out.error;
+      else note = 'The file is off the page. The author can upload another.';
+    }
   }
 
   return afterPost(Astro.url, { error, note }, { ask });
@@ -224,6 +238,13 @@ for (const r of fieldRows ?? []) {
   values[r.field_id] = r.value;
   versions[r.field_id] = r.version;
   editedBy[r.field_id] = { name: (r as any).by?.display_name ?? '', at: r.updated_at };
+}
+/* Files a teacher took off the page (dev-161): their boxes read as empty,
+   and say so. */
+const removed = docRow ? await removedMedia(supabase, (Astro.locals as any).runtime?.env, docRow.id) : new Map<string, { at: string }>();
+const removedOn: Record<string, string> = {};
+for (const [fid, v] of Object.entries(values)) {
+  if (v && typeof v === 'object' && typeof v.path === 'string' && removed.has(v.path)) { removedOn[fid] = removed.get(v.path)!.at; values[fid] = null; }
 }
 
 /* The history (2.8): every submitted version, with which fields changed
@@ -280,7 +301,7 @@ const threadOn = (fieldId: string | null) =>
 const openAsks = (comments ?? []).filter((c: any) => c.needs_revision && !c.resolved_at);
 const openAskOn = (fieldId: string) => openAsks.some((c: any) => c.field_id === fieldId);
 
-const progress = shape ? progressOf(shape, values) : { asked: 0, filled: 0, missing: [], over: [] };
+const progress = shape ? progressOf(shape, values) : { asked: 0, filled: 0, missing: [], over: [], uploaded: 0 };
 const state: DocState = !docRow
   ? 'not_started'
   : docRow.status === 'submitted'
@@ -391,6 +412,8 @@ const changedSince = (c: any) => c.field_id && c.field_version != null && (versi
           </div>
           <div class="ds-facts">
             <span><b id="ds-filled">{progress.filled}</b> of {progress.asked} required answered</span>
+            {/* An upload stands in for the typed fields (dev-161). */}
+            <span class="ds-upl" id="ds-upl" hidden={!progress.uploaded}>uploaded, so it can be submitted as is</span>
             {wanted.dueOn && <span class:list={[days !== null && days < 0 && !docRow?.submitted_at && 'late']}>due {fmt(wanted.dueOn)}{dueWord ? ` · ${dueWord}` : ''}</span>}
             {openAsks.length > 0 && <span class="late"><b>{openAsks.length}</b> {openAsks.length === 1 ? 'revision asked' : 'revisions asked'}</span>}
             <span class="ds-saved" id="ds-saved" aria-live="polite">{docRow?.updated_at ? `last saved ${when(docRow.updated_at)}` : ''}</span>
@@ -421,7 +444,7 @@ const changedSince = (c: any) => c.field_id && c.field_version != null && (versi
                 const thread = threadOn(f.id);
                 const words = f.kind === 'long' || f.kind === 'text' ? wordCount(textOf(f, v)) : null;
                 return (
-                  <div class:list={['field', `k-${f.kind}`, openAskOn(f.id) && 'has-ask', f.owner === 'staff' && 'is-staff', f.extra && 'is-extra']} id={`f-${f.id}`} data-field={f.id} data-version={ver} data-kind={f.kind} data-style={f.style ?? ''} data-writable={canWrite(f) ? '1' : '0'} data-asked={f.kind !== 'note' && (f.owner ?? 'student') === 'student' ? '1' : '0'} data-required={f.required ? '1' : '0'} hidden={f.extra && !isFilled(f, v) && threadOn(f.id).length === 0}>
+                  <div class:list={['field', `k-${f.kind}`, openAskOn(f.id) && 'has-ask', f.owner === 'staff' && 'is-staff', f.extra && 'is-extra']} id={`f-${f.id}`} data-field={f.id} data-version={ver} data-kind={f.kind} data-style={f.style ?? ''} data-writable={canWrite(f) ? '1' : '0'} data-asked={f.kind !== 'note' && (f.owner ?? 'student') === 'student' ? '1' : '0'} data-required={f.required ? '1' : '0'} data-stands-in={section.stands_in && f.kind !== 'note' ? '1' : '0'} hidden={f.extra && !isFilled(f, v) && threadOn(f.id).length === 0}>
                     {f.kind === 'note' ? (
                       <div class="fnote" set:html={renderMarkdown(f.text ?? '').replace(/<a href="http/g, '<a target="_blank" rel="noopener noreferrer" href="http')} />
                     ) : (
@@ -527,11 +550,12 @@ const changedSince = (c: any) => c.field_id && c.field_version != null && (versi
                               <div class="ffile" id={`in-${f.id}`}>
                                 {v?.path ? (
                                   <p class="fhave">
-                                    {String(v.path).match(/\.(png|jpe?g|gif|webp)$/i) ? <img src={`/app/media/${v.path}`} alt={v.name ?? ''} /> : null}
+                                    {String(v.path).match(/\.(png|jpe?g|gif|webp)$/i) ? <img src={`/app/media/${v.path}`} alt={v.name ?? ''} loading="lazy" /> : null}
                                     <a href={`/app/media/${v.path}`} target="_blank" rel="noopener noreferrer">{v.name ?? 'the file'}</a>
                                   </p>
                                 ) : null}
-                                <label class="fwrap"><span class="sr">{f.prompt}</span><input type="file" class="ffile-in" accept={f.accept === 'image' ? 'image/*' : undefined} data-field={f.id} /></label>
+                                {removedOn[f.id] && <p class="t-sm fremoved">A file here was removed by a teacher on {fmt(removedOn[f.id])}. Upload another.</p>}
+                                <label class="fwrap"><span class="sr">{f.prompt}</span><input type="file" class="ffile-in" accept={f.accept === 'image' ? 'image/*' : 'image/*,application/pdf'} data-field={f.id} /></label>
                                 <span class="t-sm">Uploads as soon as you choose it.</span>
                               </div>
                             )}
@@ -606,7 +630,20 @@ const changedSince = (c: any) => c.field_id && c.field_version != null && (versi
                             ) : f.kind === 'long' ? (
                               isFilled(f, v) ? <div class:list={['fprose', f.style === 'hanging' && 'hang']} set:html={renderMarkdown(String(v))} /> : <p class="fempty">Not written yet</p>
                             ) : (f.kind === 'file' || f.kind === 'graphic') && v?.path ? (
-                              <p>{String(v.path).match(/\.(png|jpe?g|gif|webp)$/i) ? <img src={`/app/media/${v.path}`} alt={v.name ?? ''} /> : null}<a href={`/app/media/${v.path}`} target="_blank" rel="noopener noreferrer">{v.name ?? 'the file'}</a></p>
+                              <>
+                                <p>{String(v.path).match(/\.(png|jpe?g|gif|webp)$/i) ? <img src={`/app/media/${v.path}`} alt={v.name ?? ''} loading="lazy" /> : null}<a href={`/app/media/${v.path}`} target="_blank" rel="noopener noreferrer">{v.name ?? 'the file'}</a></p>
+                                {/* The teacher's way to take a file off the page (dev-161). */}
+                                {me.isAdvisor && f.kind === 'file' && (
+                                  <form method="POST" action={`${herePath}#outcome`} class="fremove noprint">
+                                    <input type="hidden" name="action" value="remove_media" />
+                                    <input type="hidden" name="path" value={v.path} />
+                                    <label class="fremove-why"><span class="t-sm">Why, in a few words</span><input class="in" name="reason" maxlength="300" /></label>
+                                    <button class="btn btn-sm btn-2" type="submit">Remove this file</button>
+                                  </form>
+                                )}
+                              </>
+                            ) : f.kind === 'file' && removedOn[f.id] ? (
+                              <p class="fempty">A file here was removed by a teacher on {fmt(removedOn[f.id])}.</p>
                             ) : f.kind === 'graphic' ? (
                               <p class="fempty">Not generated yet</p>
                             ) : f.kind === 'link' && v ? (
@@ -832,6 +869,11 @@ const changedSince = (c: any) => c.field_id && c.field_version != null && (versi
   .fopt { display: flex; gap: 8px; align-items: center; }
   .ffile img, .fread img { display: block; max-width: 320px; max-height: 240px; margin: 6px 0; border: 1px solid var(--rule-fine); }
   .fhave { margin: 0 0 8px; }
+  .ds-upl { color: var(--stage-comp); font-weight: 600; }
+  .fremove { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 4px 0 0; }
+  .fremove-why { flex: 1 1 20ch; max-width: 40ch; }
+  .fremove-why > span { display: block; }
+  .fremoved { color: var(--alert); }
   .fmeta { display: flex; gap: 14px; margin: 6px 0 0; font-family: var(--face-ui); font-size: 0.8rem; color: var(--ink-3); }
   .fwords.over { color: var(--alert); font-weight: 600; }
   .fby { color: var(--ink-3); }
@@ -1118,9 +1160,13 @@ const changedSince = (c: any) => c.field_id && c.field_version != null && (versi
       const asked = [...form.querySelectorAll<HTMLElement>('.field[data-asked="1"][data-required="1"]')];
       const filledEl = document.getElementById('ds-filled');
       if (filledEl) filledEl.textContent = String(asked.filter(filledHere).length);
+      /* A stand-in (dev-161): one upload and nothing is missing. */
+      const standsIn = [...form.querySelectorAll<HTMLElement>('.field[data-stands-in="1"]')].some(filledHere);
+      const upl = document.getElementById('ds-upl');
+      if (upl) upl.hidden = !standsIn;
       const submit = document.getElementById('ds-submit') as HTMLButtonElement | null;
       if (submit) {
-        const missing = asked.filter((w) => !filledHere(w));
+        const missing = standsIn ? [] : asked.filter((w) => !filledHere(w));
         submit.disabled = missing.length > 0;
         submit.title = missing.length ? `Still needed: ${missing.map((w) => w.querySelector('.fprompt')?.firstChild?.textContent?.trim() || w.dataset.field).join('; ')}` : '';
       }
@@ -1214,7 +1260,31 @@ const changedSince = (c: any) => c.field_id && c.field_version != null && (versi
 
     /* Files and pasted images go up at once, and the field or the text
        gets the address back. */
-    const upload = async (file: File): Promise<{ path: string; name: string } | null> => {
+    /* A phone photo is 3 to 12 MB and 4000 px across; the page shows it
+       at 320 and the cap is 5 MB (dev-161). So a large image is redrawn in
+       the browser before it goes up: longest edge 2400 px, JPEG at 0.85,
+       which reads on paper at any zoom and is a few hundred kilobytes.
+       Small images, GIFs and anything that is not an image go up as they
+       are; if the redraw fails for any reason, so does the original. */
+    const shrink = async (file: File): Promise<File> => {
+      if (!/^image\/(jpeg|png|webp)$/.test(file.type)) return file;
+      if (file.size < 1_500_000) return file;
+      try {
+        const bmp = await createImageBitmap(file, { imageOrientation: 'from-image' } as any);
+        const longest = Math.max(bmp.width, bmp.height);
+        const scale = Math.min(1, 2400 / longest);
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.round(bmp.width * scale); canvas.height = Math.round(bmp.height * scale);
+        canvas.getContext('2d')!.drawImage(bmp, 0, 0, canvas.width, canvas.height);
+        bmp.close();
+        const blob: Blob | null = await new Promise((r) => canvas.toBlob(r, 'image/jpeg', 0.85));
+        if (!blob || blob.size >= file.size) return file;
+        return new File([blob], (file.name || 'photo').replace(/\.[^.]*$/, '') + '.jpg', { type: 'image/jpeg' });
+      } catch { return file; }
+    };
+
+    const upload = async (raw: File): Promise<{ path: string; name: string } | null> => {
+      const file = await shrink(raw);
       const fd = new FormData();
       fd.append('document_id', docId);
       fd.append('file', file, file.name || 'pasted');
@@ -1237,6 +1307,7 @@ const changedSince = (c: any) => c.field_id && c.field_version != null && (versi
           const out = await post({ document_id: docId, field_id: wrap.dataset.field, value: got, version });
           if (out.ok) {
             wrap.dataset.version = String(out.version);
+            wrap.dataset.have = '1';
             setState(wrap, 'Uploaded', 'saved');
             const have = wrap.querySelector('.fhave') ?? (() => { const p = document.createElement('p'); p.className = 'fhave'; wrap.querySelector('.ffile')?.prepend(p); return p; })();
             have.innerHTML = '';
@@ -1244,6 +1315,10 @@ const changedSince = (c: any) => c.field_id && c.field_version != null && (versi
               const img = document.createElement('img'); img.src = `/app/media/${got.path}`; img.alt = got.name; have.appendChild(img);
             }
             const a = document.createElement('a'); a.href = `/app/media/${got.path}`; a.target = '_blank'; a.rel = 'noopener noreferrer'; a.textContent = got.name; have.appendChild(a);
+            /* The upload counts at once (dev-161): Submit lights up without a
+               reload, on the journey map's required picture and on the
+               stand-in boxes alike. */
+            refreshProgress();
           } else setState(wrap, 'Uploaded, but could not save the field', 'kept');
         } catch { setState(wrap, 'Uploaded, but could not save the field', 'kept'); }
       });

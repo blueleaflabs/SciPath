@@ -41,12 +41,15 @@ for (const { file, shape } of shapes) {
 
 test('the older forms read as sections of fields', () => {
   const quad = shapes.find((s) => s.shape.id === 'quad_chart').shape;
+  /* Since dev-161 every shape's first section is the uploads; the older
+     form's own fields are the section after it. */
   const sections = sectionsOf(quad);
-  assert.equal(sections.length, 1);
-  assert.equal(sections[0].fields.length, 4);
-  assert.equal(sections[0].fields[0].kind, 'long');
+  assert.equal(sections.length, 2);
+  assert.equal(sections[0].id, 'uploads');
+  assert.equal(sections[1].fields.length, 4);
+  assert.equal(sections[1].fields[0].kind, 'long');
   const abstract = shapes.find((s) => s.shape.id === 'abstract').shape;
-  assert.equal(askedOf(abstract).length, 4);
+  assert.equal(askedOf(abstract).filter((f) => !/^upload_\d$/.test(f.id)).length, 4);
 });
 
 test('the validator refuses what a student could not fill', () => {

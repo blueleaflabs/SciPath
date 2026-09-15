@@ -1,6 +1,7 @@
 export const prerender = false;
 
 import type { APIRoute } from 'astro';
+import { isRemoved } from '../../../lib/media-removal';
 import { serverClient } from '../../../lib/supabase';
 import { blobStore } from '../../../lib/blob';
 
@@ -57,6 +58,11 @@ export const GET: APIRoute = async ({ params, request, cookies, locals }) => {
     const { data: onShowcase } = await supabase.rpc('may_see_showcase_media', { p_path: path });
     if (onShowcase !== true) return new Response('Not found', { status: 404 });
   }
+
+  /* A document's file a teacher took off the page (dev-161) is served to
+     nobody, the author included. */
+  const asDocumentMedia = references[5]?.data as { id: string } | null;
+  if (asDocumentMedia && (await isRemoved(runtime, asDocumentMedia.id))) return new Response('Not found', { status: 404 });
 
   const object = await blobStore(locals).get(path);
   if (!object) return new Response('Not found', { status: 404 });
