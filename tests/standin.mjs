@@ -80,7 +80,10 @@ test("the page: stand-in marker, the strip, the browser mirror, the shrink, the 
   assert.match(page, /id="ds-upl" hidden=\{!progress\.uploaded\}/);
   assert.match(page, /const standsIn = \[\.\.\.form\.querySelectorAll<HTMLElement>\('\.field\[data-stands-in="1"\]'\)\]\.some\(filledHere\)/);
   assert.match(page, /const missing = standsIn \? \[\] : asked\.filter/);
-  assert.match(page, /accept=\{f\.accept === 'image' \? 'image\/\*' : 'image\/\*,application\/pdf'\}/);
+  /* Two pickers, never one mixed accept list (dev-163: iOS opened it black). */
+  assert.match(page, /<input type="file" class="ffile-in" accept="image\/\*" data-field=\{f\.id\} \/>/);
+  assert.match(page, /\{f\.accept !== 'image' && <label class="fwrap fpdf">[\s\S]*accept="application\/pdf,\.pdf" data-field=\{f\.id\}/);
+  assert.doesNotMatch(page, /accept="image\/\*,application\/pdf"|'image\/\*,application\/pdf'/);
   assert.match(page, /const shrink = async \(file: File\)/);
   assert.match(page, /2400 \/ longest/);
   assert.match(page, /canvas\.toBlob\(r, 'image\/jpeg', 0\.85\)/);

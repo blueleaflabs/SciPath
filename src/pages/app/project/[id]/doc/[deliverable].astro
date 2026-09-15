@@ -555,7 +555,12 @@ const changedSince = (c: any) => c.field_id && c.field_version != null && (versi
                                   </p>
                                 ) : null}
                                 {removedOn[f.id] && <p class="t-sm fremoved">A file here was removed by a teacher on {fmt(removedOn[f.id])}. Upload another.</p>}
-                                <label class="fwrap"><span class="sr">{f.prompt}</span><input type="file" class="ffile-in" accept={f.accept === 'image' ? 'image/*' : 'image/*,application/pdf'} data-field={f.id} /></label>
+                                {/* Two pickers rather than one with a mixed accept list (dev-163):
+                                    iOS presents a photo-or-camera sheet for an image-only input
+                                    and a document browser for a PDF-only one, and the two work;
+                                    the combined list gave a sheet that opened black. */}
+                                <label class="fwrap"><span class="sr">{f.prompt}</span><input type="file" class="ffile-in" accept="image/*" data-field={f.id} /></label>
+                                {f.accept !== 'image' && <label class="fwrap fpdf"><span class="t-sm">or a PDF</span> <input type="file" class="ffile-in" accept="application/pdf,.pdf" data-field={f.id} /></label>}
                                 <span class="t-sm">Uploads as soon as you choose it.</span>
                               </div>
                             )}
@@ -869,6 +874,7 @@ const changedSince = (c: any) => c.field_id && c.field_version != null && (versi
   .fopt { display: flex; gap: 8px; align-items: center; }
   .ffile img, .fread img { display: block; max-width: 320px; max-height: 240px; margin: 6px 0; border: 1px solid var(--rule-fine); }
   .fhave { margin: 0 0 8px; }
+  .fpdf { margin-top: 4px; }
   .ds-upl { color: var(--stage-comp); font-weight: 600; }
   .fremove { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 4px 0 0; }
   .fremove-why { flex: 1 1 20ch; max-width: 40ch; }
