@@ -1,18 +1,23 @@
 export const prerender = false;
 
 /**
- * ONE FAMILY SCORE, SAVED (2.8).
+ * ONE FAMILY SCORE, SAVED (2.8, dev-166).
  *
  * The tracker's editor posts here as a cell changes: the obligation, the
  * student, the score, the comment, and the id of the assessment the cell
- * was showing when it was opened. `grade_milestone` decides everything
- * about who may write; this route adds one guard, that the cell has not
- * been rewritten by somebody else since it was opened, so two Elders on
- * one family cannot overwrite each other without seeing it.
+ * was showing when it was opened. The database decides everything about
+ * who may write: an Elder's cell goes through `grade_milestone` (the
+ * family's score, and never on an Elder), the teacher's through
+ * `score_as_family` (the family score on an Elder's own work, the one
+ * kind of cell the teacher writes on the tracker). This route adds one
+ * guard, that the cell has not been rewritten by somebody else since it
+ * was opened, so two people cannot overwrite each other without seeing
+ * it.
  */
 
 import type { APIRoute } from 'astro';
 import { serverClient } from '../../../lib/supabase';
+import { standing } from '../../../lib/roles';
 
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), {
@@ -48,15 +53,23 @@ export const POST: APIRoute = async ({ request, cookies, locals }) => {
     return json({ ok: false, conflict: true, id: now?.id ?? null, score: now?.score ?? null, comment: now?.feedback_md ?? '', by: (now as any)?.grader?.display_name ?? null, at: now?.created_at ?? null });
   }
 
-  const { data: id, error } = await supabase.rpc('grade_milestone', {
-    p_milestone_id: milestoneId,
-    p_student_id: studentId,
-    p_score: raw,
-    p_out_of: 4,
-    p_feedback_md: comment,
-    p_rubric: null,
-    p_release: false,
-  });
+  const me = standing((locals as any).roles ?? [], (locals as any).account?.population);
+  const { data: id, error } = me.isAdvisor
+    ? await supabase.rpc('score_as_family', {
+        p_milestone_id: milestoneId,
+        p_student_id: studentId,
+        p_score: raw,
+        p_feedback_md: comment,
+      })
+    : await supabase.rpc('grade_milestone', {
+        p_milestone_id: milestoneId,
+        p_student_id: studentId,
+        p_score: raw,
+        p_out_of: 4,
+        p_feedback_md: comment,
+        p_rubric: null,
+        p_release: false,
+      });
   if (error) return json({ ok: false, error: error.message }, 403);
   return json({ ok: true, id, at: new Date().toISOString() });
 };

@@ -2055,14 +2055,15 @@ test('no upload boundary trusts what the browser said a file was', () => {
   }
 });
 
-test('media is served as bytes, not as a document', () => {
-  /* A PDF opened inline runs in an origin holding somebody's notebook, and a
-     type this route did not expect should never render as a document at
-     all. */
+test('media is served as bytes: images and PDFs shown, in a sandbox; anything else handed over', () => {
+  /* A PDF opens in the tab (dev-166) because the response is sandboxed
+     into an opaque origin where nothing runs; a type this route did not
+     expect should never render as a document at all. */
   const media = fs.readFileSync('src/pages/app/media/[...path].ts', 'utf8');
 
   assert.match(media, /'X-Content-Type-Options': 'nosniff'/);
-  assert.match(media, /attachment; filename=/, 'anything not an image is handed over');
+  assert.match(media, /const inline = object\.contentType\.startsWith\('image\/'\) \|\| object\.contentType === 'application\/pdf'/);
+  assert.match(media, /attachment; filename=/, 'anything else is handed over');
   assert.match(media, /default-src 'none'; sandbox/, 'and nothing in it may run');
 });
 

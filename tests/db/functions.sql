@@ -2481,6 +2481,113 @@ exception when others then
 end $body$;
 
 \echo ''
+\echo '── An Elder scores no Elder; the teacher scores the Elders'' own work (0003, dev-166)'
+
+do $body$
+declare
+  v_org      uuid := '11111111-1111-1111-1111-111111111111';
+  v_project  uuid := 'c0000000-0000-0000-0000-000000000002';   -- Course project
+  v_author   uuid := 'a0000000-0000-0000-0000-000000000008';   -- Author two, a student
+  v_elder    uuid := 'a0000000-0000-0000-0000-000000000003';   -- the Elder on its class place
+  v_elder2   uuid := 'a0000000-0000-0000-0000-00000000000a';   -- another Elder, made an author here
+  v_advisor  uuid := 'a0000000-0000-0000-0000-000000000004';
+  v_part     uuid;
+  v_step     uuid;
+  v_row      uuid;
+  v_ok       boolean;
+begin
+  select e.id into v_part from public.participations e
+   where e.project_id = v_project and e.program_id = 'b0000000-0000-0000-0000-000000000003';
+  insert into public.entry_milestones (org_id, participation_id, name, kind, due_on, owner, step_id, completed_on)
+  values (v_org, v_part, 'Journey map', 'local', current_date - 2, 'student', 'journey_map', current_date - 2)
+  returning id into v_step;
+  -- Elder two is, for this block, also an author of the project: an Elder with work of their own.
+  insert into public.project_authors (org_id, project_id, user_id, role)
+  values (v_org, v_project, v_elder2, 'author');
+
+  if not app.is_elder_of(v_elder2, 'b0000000-0000-0000-0000-000000000003') then raise exception 'FAIL Elder two is not read as an Elder of the class'; end if;
+  if app.is_elder_of(v_author, 'b0000000-0000-0000-0000-000000000003') then raise exception 'FAIL a student is read as an Elder'; end if;
+  raise notice '  ok   is_elder_of reads the officer role of a named person';
+
+  -- The Elder on the place may not score the Elder author (themself or another).
+  perform set_config('role', 'authenticated', true);
+  perform set_config('request.jwt.claim.sub', v_elder::text, true);
+  v_ok := false;
+  begin
+    perform public.grade_milestone(v_step, v_elder2, 4, 4, 'us', null, false);
+  exception when others then v_ok := sqlerrm like '%scored by the teacher%';
+  end;
+  perform set_config('role', 'postgres', true);
+  if not v_ok then raise exception 'FAIL an Elder scored an Elder'; end if;
+  raise notice '  ok   an Elder scores no Elder';
+
+  -- The same Elder still scores the student beside them.
+  perform set_config('role', 'authenticated', true);
+  perform set_config('request.jwt.claim.sub', v_elder::text, true);
+  v_row := public.grade_milestone(v_step, v_author, 3, 4, 'fine', null, false);
+  perform set_config('role', 'postgres', true);
+  if not exists (select 1 from public.assessments a where a.id = v_row and a.kind = 'elder') then raise exception 'FAIL the Elder''s score on a student stopped working'; end if;
+  raise notice '  ok   the Elder still scores the students of the family';
+
+  -- The teacher gives the family score on the Elder's work: an elder row, released.
+  perform set_config('role', 'authenticated', true);
+  perform set_config('request.jwt.claim.sub', v_advisor::text, true);
+  v_row := public.score_as_family(v_step, v_elder2, 3.5, 'as the family would');
+  perform set_config('role', 'postgres', true);
+  if not exists (select 1 from public.assessments a where a.id = v_row and a.kind = 'elder' and a.released_at is not null and a.grader_id = v_advisor and a.out_of = 4) then
+    raise exception 'FAIL the teacher''s family score is not an elder row released at once';
+  end if;
+  raise notice '  ok   the teacher writes the family score on an Elder''s work, as an elder row';
+
+  -- Written again, it supersedes the first.
+  perform set_config('role', 'authenticated', true);
+  perform set_config('request.jwt.claim.sub', v_advisor::text, true);
+  perform public.score_as_family(v_step, v_elder2, 4, 'better');
+  perform set_config('role', 'postgres', true);
+  if (select count(*) from public.assessments a where a.milestone_id = v_step and a.student_id = v_elder2 and a.kind = 'elder' and a.superseded_by is null) <> 1 then
+    raise exception 'FAIL two live family scores on one Elder';
+  end if;
+  raise notice '  ok   a second family score supersedes the first';
+
+  -- Not on a student, and not by an Elder.
+  perform set_config('role', 'authenticated', true);
+  perform set_config('request.jwt.claim.sub', v_advisor::text, true);
+  v_ok := false;
+  begin
+    perform public.score_as_family(v_step, v_author, 4, 'x');
+  exception when others then v_ok := sqlerrm like '%not an Elder%';
+  end;
+  perform set_config('role', 'postgres', true);
+  if not v_ok then raise exception 'FAIL the teacher wrote a family score on a student'; end if;
+  perform set_config('role', 'authenticated', true);
+  perform set_config('request.jwt.claim.sub', v_elder::text, true);
+  v_ok := false;
+  begin
+    perform public.score_as_family(v_step, v_elder2, 4, 'x');
+  exception when others then v_ok := true;
+  end;
+  perform set_config('role', 'postgres', true);
+  if not v_ok then raise exception 'FAIL an Elder used the teacher''s path'; end if;
+  raise notice '  ok   score_as_family is the teacher''s, on Elders only';
+
+  -- The teacher's own grade on the Elder's work is still a teacher row beside it.
+  perform set_config('role', 'authenticated', true);
+  perform set_config('request.jwt.claim.sub', v_advisor::text, true);
+  v_row := public.grade_milestone(v_step, v_elder2, 3, 4, 'grade', null, false);
+  perform set_config('role', 'postgres', true);
+  if not exists (select 1 from public.assessments a where a.id = v_row and a.kind = 'teacher') then raise exception 'FAIL the teacher''s grade on an Elder changed kind'; end if;
+  raise notice '  ok   the teacher''s grade on an Elder''s work is still the grade';
+
+  delete from public.notifications where subject_kind = 'assessments';
+  delete from public.assessments where milestone_id = v_step;
+  delete from public.entry_milestones where id = v_step;
+  delete from public.project_authors where project_id = v_project and user_id = v_elder2 and role = 'author';
+exception when others then
+  perform set_config('role', 'postgres', true);
+  raise;
+end $body$;
+
+\echo ''
 \echo '── Asking co-authors before taking shared work'
 
 do $body$

@@ -63,7 +63,7 @@ test('the key map', () => {
 });
 
 test('the columns are the template\'s tracked steps, keyed by step id', () => {
-  assert.match(page, /\.filter\(\(st: any\) => st\.tracker\?\.column\)/);
+  assert.match(page, /\.filter\(\(st: any\) => isTrackerColumn\(st\)\)/, "every student assignment is a column (dev-166)");
   assert.match(page, /\.in\('step_id', \[\.\.\.trackedIds\]\)/, 'only tracked milestones are read');
   assert.match(page, /m\.step_id === col\.key/);
   assert.match(page, /seen by students/, 'a column open to students says so in its head');
@@ -90,10 +90,25 @@ test('a score arriving over the socket updates its cell, and never the one being
   assert.match(sql, /if new\.superseded_by is not null then return null; end if;/, 'the superseded row is not news');
 });
 
-test('the Elder and the teacher see one page; the Elder writes their family', () => {
+test('the Elder and the teacher see one page; the Elder writes their family, never an Elder; the teacher writes the Elders', () => {
+  /* dev-166: the Elders are students with work of their own, and the
+     family score on it is the teacher's, not any Elder's. The page and
+     the database (0003: grade_milestone refuses, score_as_family is the
+     teacher's) hold the same line; the API routes the teacher there. */
   assert.match(page, /if \(!\(me\.isAdvisor && runsThis\) && !elderHere\) return Astro\.redirect/);
-  assert.match(page, /const canWriteRow = \(r: Row\) => r\.mine;/);
-  assert.doesNotMatch(page, /me\.isAdvisor && r\.elders\.length === 0/, 'the teacher does not write family scores here (decision 78)');
+  assert.match(page, /const elderIds = new Set\(rows\.flatMap\(\(r\) => r\.elders\.map\(\(e\) => e\.id\)\)\)/);
+  assert.match(page, /const canWriteRow = \(r: Row\) => \(me\.isAdvisor && runsThis \? isElderRow\(r\) : r\.mine && !isElderRow\(r\)\);/);
+  assert.match(page, /data-ro=\{readOnlyWhy\(r\)\}/);
+  assert.match(page, /own work is scored by the teacher/);
+  assert.doesNotMatch(page, /me\.isAdvisor && r\.elders\.length === 0/, 'the teacher does not write ordinary family scores here (decision 78)');
+  assert.match(api, /me\.isAdvisor\s*\? await supabase\.rpc\('score_as_family'/);
+  const m3 = fs.readFileSync('supabase/migrations/0003_elders_scored_by_teacher.sql', 'utf8');
+  assert.match(m3, /if v_kind = 'elder' and app\.is_elder_of\(p_student_id, v_prog\) then\s*raise exception 'an Elder''s own work is scored by the teacher'/);
+  assert.match(m3, /create or replace function public\.score_as_family\(/);
+  assert.match(m3, /if not app\.is_advisor\(\) then\s*raise exception 'the teacher scores an Elder''s own work'/);
+  assert.match(m3, /return app\.record_score\(p_milestone_id, p_student_id, 'elder', p_score, 4, p_feedback_md, null, true\)/);
+  assert.match(m3, /and not app\.is_elder_of\(a\.user_id/, 'Give the feedback skips the Elder author');
+  assert.match(m3, /revoke all on function app\.record_score\([^)]*\) from public, anon, authenticated/);
 });
 
 console.log(`${passed} tracker assertions passed.`);

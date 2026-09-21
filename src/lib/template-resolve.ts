@@ -374,6 +374,14 @@ export function validateShape(shape: Shape): string[] {
   return problems;
 }
 
+/** A column on the class tracker (dev-166): a student's step with a
+ *  deliverable, unless the template says `tracker: { column: false }`. */
+export function isTrackerColumn(step: Step): boolean {
+  if (step.tracker?.column === false) return false;
+  if (step.tracker?.column === true) return true;
+  return (step.owner ?? 'student') === 'student' && (step.deliverables ?? []).length > 0;
+}
+
 export interface Phase {
   id: string;
   name?: string;
@@ -437,11 +445,15 @@ export interface Step {
 
   /**
    * Whether this step is a column on the class tracker, and whether its
-   * family score and comment are shown to the student (2.8). A step
-   * without `tracker` is not on the tracker at all, so the tracker is by
-   * construction a collection of scores on assignments the template
-   * names. `students` on one step opens that step's score to the student
-   * while the platform switch (`familyScoresToStudents`) is still off.
+   * family score and comment are shown to the student (2.8, dev-166).
+   * Every student step with something handed in is a column unless it
+   * says `column: false`: the class scores every assignment, and a
+   * calendar that gained steps after the tracker was written (the
+   * interview protocol, the journey map, the breakdown) had left the
+   * Elders with nothing past Lit Review v2 to score. `isTrackerColumn`
+   * is the one reading of it. `students` on one step opens that step's
+   * score to the student while the platform switch
+   * (`familyScoresToStudents`) is still off.
    */
   tracker?: { column?: boolean; students?: boolean };
 

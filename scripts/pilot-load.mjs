@@ -83,7 +83,7 @@ import yaml from 'js-yaml';
 import { createClient } from '@supabase/supabase-js';
 import { loadDevVars, loadCloudVars } from './dev-vars.mjs';
 import { loadLibrary } from './template-library.mjs';
-import { resolveProgram, deliverablesFor } from '../src/lib/template-resolve.ts';
+import { resolveProgram, deliverablesFor, isTrackerColumn } from '../src/lib/template-resolve.ts';
 
 const args = process.argv.slice(2);
 const cloud = args.includes('--cloud');
@@ -375,7 +375,7 @@ const resolvedTemplate = GRANT_THROUGH
    written. */
 {
   const tpl = resolvedTemplate ?? resolveProgram(cohort.template_id, loadLibrary(), cohort.process_id ?? null);
-  const tracked = new Set((tpl?.steps ?? []).filter((st) => st.tracker?.column).map((st) => st.id));
+  const tracked = new Set((tpl?.steps ?? []).filter((st) => isTrackerColumn(st)).map((st) => st.id));
   const stray = [...new Set(scores.map((sc) => String(sc.step)).filter((id) => !tracked.has(id)))];
   if (stray.length) {
     fail(

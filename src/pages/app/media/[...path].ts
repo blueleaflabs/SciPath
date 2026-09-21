@@ -69,14 +69,19 @@ export const GET: APIRoute = async ({ params, request, cookies, locals }) => {
 
   /* Shown, or handed over.
   
-     An image is displayed inline because that is what it is for. Anything
-     else is served as an attachment: a PDF opened inline runs in an origin
-     that holds somebody's notebook, and a type this route did not expect
-     should never be rendered as a document at all.
+     An image is displayed inline because that is what it is for, and so
+     is a PDF (dev-166): the class asked for it to open in the tab, not in
+     the downloads folder, and it can be saved from there. What kept a
+     PDF an attachment was that one opened inline runs in the origin that
+     holds somebody's notebook; the `sandbox` directive below answers
+     that, since a sandboxed response gets an opaque origin of its own and
+     may run nothing. The upload route typed the bytes, so the content
+     type is what the file is, not what it was called. A type this route
+     did not expect is still handed over, never rendered.
   
      The filename is the stored path's last segment, which was generated from
      the detected type rather than from what anybody typed. */
-  const inline = object.contentType.startsWith('image/');
+  const inline = object.contentType.startsWith('image/') || object.contentType === 'application/pdf';
   const name = path.split('/').pop() ?? 'file';
 
   return new Response(object.body, {

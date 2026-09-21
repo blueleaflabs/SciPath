@@ -14,7 +14,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import yaml from 'js-yaml';
 import { validate } from '../src/lib/validate-template.ts';
-import { resolveProgram, datesFor } from '../src/lib/template-resolve.ts';
+import { resolveProgram, datesFor, isTrackerColumn } from '../src/lib/template-resolve.ts';
 import { loadLibrary } from '../scripts/template-library.mjs';
 import { migrationSql } from './migrations.mjs';
 
@@ -540,28 +540,32 @@ test('a step asks for at most one document written in SciPath', () => {
   assert.deepEqual(problems, [], 'a step with two documents');
 });
 
-test('a tracker column is a student assignment with a deliverable, and IRPD names its columns', () => {
-  /* The tracker draws its columns from `tracker.column` (2.8), so a
-     column has to be something a student hands in: a student step with a
-     deliverable, never an Elder task or an event. IRPD's columns are the
-     class sheet's, and one of them (Lit Review v2) is the teacher's one
-     exception to scores being hidden from students. */
+test('every student assignment is a tracker column unless it opts out; IRPD scores all of them, students see one', () => {
+  /* dev-166: the tracker's columns are every student step with a
+     deliverable (`isTrackerColumn`), not only the steps that said
+     `column: true` — five did, so the Elders could score nothing past Lit
+     Review v2 once the calendar grew. A column is still never an Elder
+     task or an event, and `column: true` on one of those is a mistake. */
   const problems = [];
   for (const id of programs) {
     let program;
     try { program = resolve(id); } catch { continue; }
     for (const st of program.steps) {
-      if (!st.tracker) continue;
-      if (typeof st.tracker !== 'object') problems.push(`${id}/${st.id}: tracker is not an object`);
-      if (st.tracker.column && (st.owner ?? 'student') !== 'student') problems.push(`${id}/${st.id}: a tracker column on a ${st.owner} step`);
-      if (st.tracker.column && !(st.deliverables ?? []).length) problems.push(`${id}/${st.id}: a tracker column with nothing handed in`);
-      if (st.tracker.students && !st.tracker.column) problems.push(`${id}/${st.id}: students see a score on a step that is not a column`);
+      if (st.tracker && typeof st.tracker !== 'object') problems.push(`${id}/${st.id}: tracker is not an object`);
+      if (st.tracker?.column && (st.owner ?? 'student') !== 'student') problems.push(`${id}/${st.id}: a tracker column on a ${st.owner} step`);
+      if (st.tracker?.column && !(st.deliverables ?? []).length) problems.push(`${id}/${st.id}: a tracker column with nothing handed in`);
+      if (st.tracker?.students && !isTrackerColumn(st)) problems.push(`${id}/${st.id}: students see a score on a step that is not a column`);
+      if (isTrackerColumn(st) && ((st.owner ?? 'student') !== 'student' || !(st.deliverables ?? []).length)) problems.push(`${id}/${st.id}: a column that is not a student assignment`);
     }
   }
   assert.deepEqual(problems, []);
   const irpd = resolve('irpd-mvhs-2027');
-  const columns = irpd.steps.filter((st) => st.tracker?.column).map((st) => st.id).sort();
-  assert.deepEqual(columns, ['literature_review', 'literature_review_draft', 'project_idea', 'strengths', 'topic_narrowing']);
+  const columns = irpd.steps.filter(isTrackerColumn).map((st) => st.id);
+  for (const must of ['project_idea', 'strengths', 'topic_narrowing', 'literature_review_draft', 'literature_review', 'project_summary', 'research_question', 'interview_protocol_handout', 'proof_of_contact', 'journey_map_draft', 'journey_map', 'wbs', 'wbs_full', 'oral_pitch', 'wbs_deliverable_1']) {
+    assert.ok(columns.includes(must), `${must} is a column`);
+  }
+  for (const never of ['elder_literature_review_feedback', 'elder_journey_map_feedback', 'elder_pitch_help']) assert.ok(!columns.includes(never), `${never} is the Elder's`);
+  assert.equal(isTrackerColumn({ id: 'x', owner: 'student', deliverables: [{ ref: 'a' }], tracker: { column: false } }), false, 'a step may opt out');
   assert.deepEqual(irpd.steps.filter((st) => st.tracker?.students).map((st) => st.id), ['literature_review'], 'only Lit Review v2 is seen by students');
 });
 

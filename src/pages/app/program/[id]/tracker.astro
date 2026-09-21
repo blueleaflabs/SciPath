@@ -44,6 +44,7 @@ import { outcomeFrom } from '../../../../lib/post-redirect';
 import { signInWith } from '../../../../lib/next-path';
 import { allRows } from '../../../../lib/all-rows';
 import { resolveProgram } from '../../../../lib/templates';
+import { isTrackerColumn } from '../../../../lib/template-resolve';
 import { meanWord, scoreWord, LEVELS } from '../../../../lib/tracker-math';
 import MarkdownEditor from '../../../../components/MarkdownEditor.astro';
 import { platform } from '../../../../config/site';
@@ -81,12 +82,11 @@ if (partsError) console.error(JSON.stringify({ places_of: partsError.message, pa
 const parts = (partRows ?? []) as any[];
 const partIds = (parts ?? []).map((p: any) => p.id);
 
-/* The columns come from the template: the steps marked `tracker.column`
-   (2.8), so everything on the tracker is an assignment the class named,
-   and an assignment the class did not name (a first draft, an Elder's
-   task, an event) is not a column. */
+/* The columns come from the template (2.8, dev-166): every student step
+   with a deliverable, unless the step says `column: false`; an Elder's
+   task or an event is never a column. */
 const template = program.template_id ? (() => { try { return resolveProgram(program.template_id, program.process_id ?? null); } catch { return null; } })() : null;
-const trackedSteps = (template?.steps ?? []).filter((st: any) => st.tracker?.column);
+const trackedSteps = (template?.steps ?? []).filter((st: any) => isTrackerColumn(st));
 const trackedIds = new Set(trackedSteps.map((st: any) => st.id));
 
 const { data: milestones } = partIds.length && trackedIds.size
@@ -157,9 +157,18 @@ const families = (() => {
 const milestoneOf = (row: Row, col: Col) => (milestones ?? []).find((m: any) => m.participation_id === row.part.id && m.step_id === col.key) ?? null;
 const label = program.short_name ?? program.name;
 const fmt = (d: string | null) => (d ? formatDate(dayOf(d, org.timezone), 'short') : '');
-/* An Elder writes their own family's cells. The teacher reads (decision
-   78: the teacher's grade is a different thing, on Grade a deadline). */
-const canWriteRow = (r: Row) => r.mine;
+/* An Elder writes their own family's cells, except an Elder's (dev-166):
+   the Elders are students of the class with work of their own, and the
+   family score on that work is the teacher's to give, never an Elder's,
+   their own least of all. So the teacher writes exactly those rows, and
+   reads the rest (decision 78: the teacher's grade is a different thing,
+   on Grade a deadline). The Elders of the class are the officers on its
+   places; the database holds the same line (score_as_family). */
+const elderIds = new Set(rows.flatMap((r) => r.elders.map((e) => e.id)));
+const isElderRow = (r: Row) => elderIds.has(r.student.id);
+const canWriteRow = (r: Row) => (me.isAdvisor && runsThis ? isElderRow(r) : r.mine && !isElderRow(r));
+/* Why a cell is read only, for the panel: another family, or an Elder's own work. */
+const readOnlyWhy = (r: Row) => (canWriteRow(r) ? '' : me.isAdvisor && runsThis ? 'students' : isElderRow(r) ? 'elder' : 'family');
 const anyWritable = families.some((f) => f.rows.some(canWriteRow));
 const myFamily = families.find((f) => f.mine)?.key ?? '';
 const LEVELS_UI = LEVELS as unknown as string[];
@@ -181,7 +190,9 @@ const allAvg = meanWord(rows.flatMap((r) => cols.map((c) => cellScore(r, c))));
       <h1>{label} Tracker</h1>
       <p class="sub">
         The family's score on each assignment, out of 4, with the {staffWord(program)}'s comment.
-        {anyWritable ? ' Your family is first; click a cell, or key into it, to score.' : ' Every family, as the Elders scored it.'}
+        {me.isAdvisor && runsThis
+          ? ` Every family, as the ${staffWord(program, 'plural')} scored it; the ${staffWord(program, 'plural')}' own work is yours to score.`
+          : anyWritable ? ` Your family is first; click a cell, or key into it, to score. An ${staffWord(program)}'s own work is scored by the teacher.` : ` Every family, as the ${staffWord(program, 'plural')} scored it.`}
       </p>
     </section>
 
@@ -261,6 +272,7 @@ const allAvg = meanWord(rows.flatMap((r) => cols.map((c) => cellScore(r, c))));
                             data-sid={r.student.id}
                             data-fam={f.key}
                             data-w={w ? '1' : '0'}
+                            data-ro={readOnlyWhy(r)}
                             data-state={state}
                             data-aid={sc?.id ?? ''}
                             data-score={sc?.score == null ? '' : String(sc.score)}
@@ -611,7 +623,7 @@ const allAvg = meanWord(rows.flatMap((r) => cols.map((c) => cellScore(r, c))));
       for (const b of panel.querySelectorAll<HTMLButtonElement>('[data-p-scores] button')) { b.setAttribute('aria-pressed', b.dataset.score === (c.dataset.score ?? '') ? 'true' : 'false'); b.disabled = !writable; }
       if (pEdit && pTa) { pTa.value = c.dataset.cmt ?? ''; pEdit.innerHTML = pTa.value.trim() ? renderMarkdown(pTa.value) : ''; pEdit.contentEditable = writable ? 'true' : 'false'; }
       if (c.dataset.state === 'scored') tellPanel(`Scored ${fmtAt(c.dataset.at ?? '')}${c.dataset.by ? ` · ${c.dataset.by}` : ''}`, true);
-      else if (!writable) tellPanel(c.dataset.w === '1' ? 'Not handed in yet; the score waits for the work.' : 'Read only: another family.', true);
+      else if (!writable) tellPanel(c.dataset.w === '1' ? 'Not handed in yet; the score waits for the work.' : c.dataset.ro === 'elder' ? `Read only: an ${tk.dataset.elderWord}'s own work is scored by the teacher.` : c.dataset.ro === 'students' ? `Read only: the ${tk.dataset.elderWord} on the family scores its students.` : 'Read only: another family.', true);
       else tellPanel('In, not scored yet', true);
     };
     const openPanel = (c: HTMLTableCellElement, focusComment = false) => {
@@ -766,7 +778,8 @@ const allAvg = meanWord(rows.flatMap((r) => cols.map((c) => cellScore(r, c))));
         const rows = rowsMeta.filter((r) => r.fam === f.key);
         const fc = rows.map((r) => cellAt(r.sid, col)).filter(Boolean) as HTMLTableCellElement[];
         const scored = fc.filter((c) => c.dataset.state === 'scored').length, inn = fc.filter((c) => c.dataset.state !== 'na' && c.dataset.state !== 'notin').length;
-        parts.push(`<div class="fam-h ${f.mine ? 'mine' : ''}"><span>${esc(f.mine ? 'Your family' : f.name)}</span><span class="favg">${f.mine ? `${scored} of ${inn} scored` : 'read only'}</span></div>`);
+        const writes = fc.some((c) => c.dataset.w === '1');
+        parts.push(`<div class="fam-h ${f.mine ? 'mine' : ''}"><span>${esc(f.mine ? 'Your family' : f.name)}</span><span class="favg">${writes ? `${scored} of ${inn} scored` : 'read only'}</span></div>`);
         for (const r of rows) {
           const c = cellAt(r.sid, col); if (!c) continue;
           if (tk.classList.contains('unscored') && c.dataset.state !== 'in') continue;
