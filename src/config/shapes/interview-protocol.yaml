@@ -1,25 +1,27 @@
-# The interview protocol, due September 14, completed in class after
+# The interview protocol, due September 21, completed in class after
 # "Interview Like a Pro". The class's own handout ("Interdisciplinary
 # Research Class: Empathy User Interviews Guidelines") is read first, in
-# its own words; then the plan for actually doing the interviews, the
-# fifteen blanks for the questions, the interview itself, and the follow
-# up. Version 3 (2.8): the email draft box is gone (the email is not this
-# deliverable), no word limits (the handout sets none), consent asks
-# "How will you obtain consent" with Not Applicable, and the sections run
-# Before, Your interview questions, Conduct the interview, Follow up.
+# its own words (seven sections of notes); then, since version 4
+# (dev-165), three boxes and nothing else: the draft email to the
+# interviewees, the interview questions, and who the users are. The
+# fifteen question blanks, the consent and recording choices, the probes,
+# the closing and the write-up plan of version 3 are gone at the
+# teacher's word; the `questions` box keeps its id, so anything written
+# there under version 3 is still on the page, and the migration SQL in
+# the drop folds the old blanks into it.
 
 id: interview-protocol
 name: Interview protocol
-version: 3
+version: 4
 guidance: >-
   Everything you will do from the moment you sit down to the moment you
   say thank you, so that every interview is done the same way.
-# On the class showcase (2.8): what we will ask, and how we open.
+# On the class showcase (2.8): what we will ask, and whom.
 showcase:
   title: What we are asking
   show:
-    - { field: intro, as: prose, label: How we introduce the project }
-    - { fields: [q1, q2, q3, q4, q5, q6, q7, q8, q9, q10, q11, q12, q13, q14, q15], as: list, label: The questions }
+    - { field: questions, as: prose, label: The questions }
+    - { field: users, as: prose, label: Who we are asking }
 
 sections:
   - id: guidelines
@@ -101,135 +103,21 @@ sections:
           > Thank you for your consideration.
           >
           > Your name and Contact info.
-  - id: setup
-    name: Before the interview
+  - id: plan
+    name: Your protocol
     fields:
-      - id: intro
+      - id: email_draft
         kind: long
-        prompt: How you will introduce yourself and the project, in the words you will say
+        prompt: What is the draft email to your potential interviewees?
+        tip: Write it as you will send it; get a teacher's approval before it goes to an adult, and cc the teachers.
         required: true
-      - id: consent
-        kind: choice
-        prompt: How will you obtain consent
-        options: [Signed consent form before we start, Verbal consent recorded at the start, Guardian's signed consent before we start, Not Applicable]
-        required: true
-      - id: recording
-        kind: choice
-        prompt: How you will keep the record
-        options: [Notes by hand, Audio recording with permission, Both]
-        required: true
-  - id: blanks
-    name: Your interview questions
-    fields:
-      - id: blanks_note
-        kind: note
-        text: The class's question sheet has fifteen blanks. Five are here; Add more opens the next. The ones you leave empty are left off the printed sheet.
-      - id: q1
-        kind: text
-        prompt: Question 1
-      - id: q2
-        kind: text
-        prompt: Question 2
-      - id: q3
-        kind: text
-        prompt: Question 3
-      - id: q4
-        kind: text
-        prompt: Question 4
-      - id: q5
-        kind: text
-        prompt: Question 5
-      - id: q6
-        kind: text
-        prompt: Question 6
-        extra: true
-      - id: q7
-        kind: text
-        prompt: Question 7
-        extra: true
-      - id: q8
-        kind: text
-        prompt: Question 8
-        extra: true
-      - id: q9
-        kind: text
-        prompt: Question 9
-        extra: true
-      - id: q10
-        kind: text
-        prompt: Question 10
-        extra: true
-      - id: q11
-        kind: text
-        prompt: Question 11
-        extra: true
-      - id: q12
-        kind: text
-        prompt: Question 12
-        extra: true
-      - id: q13
-        kind: text
-        prompt: Question 13
-        extra: true
-      - id: q14
-        kind: text
-        prompt: Question 14
-        extra: true
-      - id: q15
-        kind: text
-        prompt: Question 15
-        extra: true
-  - id: conduct
-    name: VI. Conduct the interview
-    fields:
-      - id: conduct
-        kind: note
-        text: |-
-          1. Come across as professional, be on time, dress properly and show gratitude for their time.
-          2. Send an email reminder the day before with the questions.
-      - id: interview_form
-        kind: note
-        text: |-
-          **Interview Form for Interdisciplinary Research Class**
-
-          Name of the Interviewee ______________________
-
-          Name of the Interviewer ______________________
-
-          Job title/grade ______________________
-
-          Contact Information of the interviewee (email, phone ______________________
-
-          Date, Time, Place for the interview ______________________
-
-          Qualifications/Why did you choose this interviewee?
-
-          I, ______________________ certify that ______________________ (student researcher's name) has interviewed me on ______________________ (this date).
-
-          Interviewee signature ______________________
       - id: questions
         kind: long
-        prompt: The final questions, in order, after the Elder's feedback
+        prompt: What are your interview questions? (Please make sure they are open-ended and not leading.)
+        tip: One per line. No yes-or-no questions.
         required: true
-      - id: probes
+      - id: users
         kind: long
-        prompt: Follow-up probes you will use when an answer is short
-        tip: 'Can you tell me more about that? What happened next?'
-        required: true
-  - id: thank_you
-    name: VII. Follow up from the interview and write a thank you note.
-    fields:
-      - id: thank_you
-        kind: note
-        text: |-
-          1. After the interview, write a couple of lines of thank you email to the interviewee. Make sure to proofread the email.
-          2. Share your research to show how their interview impacted your research.
-      - id: closing
-        kind: text
-        prompt: How you will close, and what you will tell them happens next
-        required: true
-      - id: synthesis
-        kind: long
-        prompt: How you will write up what you heard, the same day
-        tip: What goes in the notebook, what goes in the family folder.
+        prompt: Who are your users? Name, role and why you chose them?
+        tip: One per line. Peers, experts, or both.
         required: true

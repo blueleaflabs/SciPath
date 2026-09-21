@@ -32,8 +32,12 @@ const ids = [...library.shapes.keys()];
 
 test('every shape carries the uploads section first, once, and still validates', () => {
   assert.ok(ids.length >= 18);
+  /* The one shape on file that opts out (dev-165): `photos`, whose own
+     boxes are the deliverable. Held to its own rule in tests/redate.mjs. */
+  assert.deepEqual(ids.filter((id) => shapeFrom(library, id).uploads === false), ['photos']);
   for (const id of ids) {
     const shape = shapeFrom(library, id);
+    if (shape.uploads === false) continue;
     const sections = sectionsOf(shape);
     assert.equal(sections[0].id, 'uploads', `${id}: uploads first`);
     assert.equal(sections[0].stands_in, true);

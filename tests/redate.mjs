@@ -16,6 +16,7 @@ import fs from 'node:fs';
 import { loadLibrary } from '../scripts/template-library.mjs';
 import { shapeFrom, sectionsOf, resolveProgram, datesFor, validateShape, stepApplies, deliverablesFor } from '../src/lib/template-resolve.ts';
 import { tallyWords } from '../src/lib/field-values.ts';
+import { progressOf } from '../src/lib/progress.ts';
 import { redate } from '../scripts/program-redate.mjs';
 import { milestoneRow } from '../scripts/milestone-rows.mjs';
 import { fakeDb, id } from './fake-db.mjs';
@@ -143,6 +144,43 @@ test('the work breakdown structure (dev-160): September 15, open, three promises
   assert.deepEqual(dates.get('elder_journey_map_feedback')?.step.requires, ['journey_map_draft']);
   /* The project plan still waits on the breakdown; the breakdown comes first in its phase. */
   assert.ok(dates.get('project_plan')?.step.requires?.includes('wbs'));
+});
+
+test('dev-165: proof of contact on the 22nd, the full worksheet on October 1, the journey map moved, both pictures only', () => {
+  const declared = resolveProgram('irpd-mvhs-2027', library);
+  const resolved = resolveProgram('irpd-mvhs-2027', library, declared.processId ?? 'science');
+  const dates = new Map(datesFor(resolved).map((d) => [d.step.id, d]));
+  assert.equal(dates.get('proof_of_contact')?.date, '2026-09-22');
+  assert.equal(dates.get('wbs_full')?.date, '2026-10-01');
+  assert.equal(dates.get('journey_map_draft')?.date, '2026-09-24');
+  assert.equal(dates.get('elder_journey_map_feedback')?.date, '2026-09-24', 'the Elder reads the draft the day it is due');
+  assert.equal(dates.get('journey_map')?.date, '2026-09-28');
+  for (const st of ['proof_of_contact', 'wbs_full']) {
+    assert.deepEqual(dates.get(st)?.step.requires ?? [], [], `${st} waits on nothing`);
+    assert.equal(dates.get(st)?.step.owner, 'student');
+    const d = deliverablesFor(resolved, dates.get(st).step, {});
+    assert.equal(d.length, 1);
+    assert.equal(d[0].id, st);
+    assert.equal(d[0].shape, 'photos');
+    assert.ok(d[0].guidance, `${st} says what the pictures are of`);
+  }
+  /* The shape: one picture required, four more on demand, images only, and
+     the generic uploads section stays off it (the pictures are the work). */
+  const shape = shapeFrom(library, 'photos');
+  assert.deepEqual(validateShape ? validateShape(shape) : [], []);
+  const sections = sectionsOf(shape);
+  assert.equal(sections.length, 1);
+  assert.ok(!sections.some((s) => s.stands_in), 'no uploads section on a shape that is uploads');
+  const files = sections[0].fields.filter((f) => f.kind === 'file');
+  assert.deepEqual(files.map((f) => f.id), ['photo_1', 'photo_2', 'photo_3', 'photo_4', 'photo_5']);
+  assert.ok(files.every((f) => f.accept === 'image'));
+  assert.deepEqual(files.filter((f) => f.required).map((f) => f.id), ['photo_1']);
+  assert.deepEqual(files.filter((f) => f.extra).map((f) => f.id), ['photo_2', 'photo_3', 'photo_4', 'photo_5']);
+  const none = progressOf(shape, {});
+  assert.equal(none.missing.length, 1, 'nothing uploaded: not done');
+  const one = progressOf(shape, { photo_1: { path: 'x/y.jpg', name: 'y.jpg' } });
+  assert.equal(one.missing.length, 0, 'one picture is enough');
+  assert.equal(one.asked, 1);
 });
 
 test('the interviews step applies to every project, facts or none, and hands out its deliverable', () => {

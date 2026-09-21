@@ -1,0 +1,36 @@
+# Photos: a deliverable that is pictures and nothing else (dev-165). One
+# is enough to submit; up to five, the rest offered on "Add more". Used by
+# Proof of Contact with Users (screenshots of the emails, the replies, the
+# calendar) and, for now, the full Work Breakdown Structure worksheet
+# (photographed pages, until it gets a shape of its own). What the pictures
+# should be of is the deliverable's own guidance in the program file; this
+# shape only says how to hand them in.
+#
+# The shape carries its own boxes rather than the uploads section every
+# other shape leads with (`uploads: false`): that section stands in for
+# typed fields and takes PDFs; here the pictures are the deliverable, the
+# first is required, and a PDF is not a photo.
+
+id: photos
+name: Photos
+version: 1
+uploads: false
+guidance: >-
+  Upload at least one picture. Add more if you have them.
+sections:
+  - id: photos
+    name: Your pictures
+    fields:
+      - id: about
+        kind: note
+        text: Photograph or screenshot what you have; one is enough to submit, and you can add up to five. Choose a file and it uploads at once; choose another to replace it.
+      - id: photo_1
+        kind: file
+        accept: image
+        prompt: The first picture
+        tip: A phone photo or a screenshot.
+        required: true
+      - { id: photo_2, kind: file, accept: image, prompt: Another picture, extra: true }
+      - { id: photo_3, kind: file, accept: image, prompt: Another picture, extra: true }
+      - { id: photo_4, kind: file, accept: image, prompt: Another picture, extra: true }
+      - { id: photo_5, kind: file, accept: image, prompt: Another picture, extra: true }

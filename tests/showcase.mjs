@@ -61,9 +61,10 @@ test('a lit review lists its sources from the table\'s first column, and an empt
   assert.equal(showcaseSection(shape('drive-link'), { url: 'https://x' }, { key: 'd', deliverable: 'x', at: null }), null);
 });
 
-test('the interview questions come out as a list, skipping blanks; the ratings as chips', () => {
-  const q = showcaseSection(shape('interview-protocol'), { q1: 'Why?', q2: '', q3: 'How often?' }, { key: 'ip', deliverable: 'Interview Protocol', at: null });
-  assert.deepEqual(q.blocks.find((b) => b.kind === 'list').items, ['Why?', 'How often?']);
+test('the interview questions come out as prose (dev-165: one box, not fifteen blanks); the ratings as chips', () => {
+  const q = showcaseSection(shape('interview-protocol'), { questions: 'Why?\nHow often?', users: 'Two peers' }, { key: 'ip', deliverable: 'Interview Protocol', at: null });
+  assert.equal(q.blocks.filter((b) => b.kind === 'prose').length, 2);
+  assert.equal(showcaseSection(shape('interview-protocol'), { q1: 'Why?' }, { key: 'ip', deliverable: 'Interview Protocol', at: null }), null, 'the old blanks are no longer a section');
   const g = showcaseSection(shape('impact-feasibility'), { idea: 'A fridge sensor', feasibility: 'high', impact: 'medium', because: 'Cheap parts.' }, { key: 'if', deliverable: 'Project Idea Form', at: null });
   const chips = g.blocks.find((b) => b.kind === 'chips');
   assert.equal(chips.items.length, 2);
