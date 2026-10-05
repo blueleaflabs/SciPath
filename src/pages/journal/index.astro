@@ -1,0 +1,22 @@
+---
+export const prerender = false;
+
+/**
+ * THE JOURNAL (dev-167).
+ *
+ * The archive under the name a research club gives it, at the address the
+ * club prints. It is the showcase page, rendered here as a component, so
+ * there is one page and one place its parts are maintained; the school's
+ * file (`archive: journal`) is what makes every link on the tenant say
+ * `/journal/` and what sends `/showcase/` here (src/middleware.ts). On a
+ * tenant whose archive is its showcase, this address is not found.
+ */
+
+import Showcase from '../showcase/index.astro';
+import { activeOrg } from '../../lib/tenant';
+
+const org = activeOrg(Astro);
+if (org.archivePath !== '/journal/') return new Response('Not found', { status: 404, headers: { 'content-type': 'text/plain' } });
+---
+
+<Showcase />

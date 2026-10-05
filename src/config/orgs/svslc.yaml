@@ -13,6 +13,11 @@
 
 slug: svslc
 
+# Not served (dev-167): no deployment answers for svslc.scipath.org, its
+# pages are not built, and seed-orgs skips it. The file stays because the
+# scenario fixtures name it as "another school" for a co-author case.
+served: false
+
 name: Silicon Valley Student Leadership Council
 mark: SVSLC
 theme: proceedings

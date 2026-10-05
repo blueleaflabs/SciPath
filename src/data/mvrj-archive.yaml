@@ -1,9 +1,11 @@
 # ===========================================================================
-# THE MONTA VISTA RESEARCH JOURNAL BACK CATALOGUE.
+# THE MONTA VISTA RESEARCH JOURNAL: THE BACK CATALOGUE, AND WHAT CAME AFTER.
 #
 # Twenty nine articles published between October 2020 and July 2024 on
 # sites.google.com/view/mvrj, transcribed here so they can be loaded as
-# permanent records by `scripts/seed-journal.mjs`. Section 4 of the design
+# permanent records by `scripts/seed-journal.mjs`; and, from dev-168,
+# eleven more submitted through the journal's form in 2025 and 2026,
+# appended at the end under their own heading. Section 4 of the design
 # brief is the survey this comes from; `mvrj-migration-inventory.csv` is the
 # recovery sheet that runs alongside it.
 #
@@ -1208,3 +1210,501 @@ records:
   note: >-
     No abstract on the current site. The filename says Version 2; confirm which
     version is authoritative. Oldest item in the archive.
+
+# ── Submitted through the form, 2025–2026 (dev-168) ──────────────────────
+#
+# Eleven papers from the submissions sheet of October 2026, rows 10 to 21
+# (rows 2 to 9 were the 2022–2024 papers already above; row 20 is a later
+# version of row 12 and is not a second record). Dates are the form's
+# submission dates, so `day` precision. Abstracts are copied from the
+# authors' abstract files; discipline and keywords are the journal's first
+# pass, as above.
+- seq: 30
+  slug: topobathymetric-lidar-endangered-mangroves
+  title: Using Topobathymetric LiDar and Geospatial Modeling to Identify Threats to
+    Endangered Mangroves
+  authors:
+  - name: Anirud Sainarayanan
+    school: Monta Vista High School
+  - name: Samarth Kashyap
+    school: Monta Vista High School
+  published_on: '2025-04-13'
+  date_precision: day
+  discipline: earth-climate
+  keywords:
+  - mangroves
+  - LiDAR
+  - remote sensing
+  - coastal ecosystems
+  - habitat degradation
+  abstract: Mangroves are essential to our coastal communities, offering vital habitats,
+    water filtration, and storm protection, yet traditional field methods and outdated
+    monitoring techniques leave these fragile ecosystems under-studied, especially
+    in the Florida Everglades where recent coastal erosion and wildfire events have
+    raised urgent concerns about their health. To bridge this critical gap, we developed
+    LiDarGrove (LDG), an innovative algorithm that harnesses NASA Earthdata’s LiDAR
+    technology to transform complex LAS files into accessible CSV data for thorough
+    remote analysis. LDG interprets key metrics such as canopy structure, ground elevation,
+    and return intensity to detect subtle degradation patterns that conventional methods
+    often overlook. In our recent study, LDG processed local LiDAR data quickly and
+    revealed breakthrough results, achieving over 93% accuracy in predicting mangrove
+    habitat degradation and uncovering previously hidden trends in ecosystem resilience.
+    These insights have already begun to inform proactive conservation strategies
+    around the world, enabling ecologists to make timely, data-driven decisions without
+    the need for extensive site visits. LiDarGrove offers a powerful, cost-effective
+    tool for monitoring and preserving mangrove ecosystems, promising a significant
+    advancement in how we protect these vital natural resources for future generations.
+  source_pdf: Using Topobathymetric LiDar and Geospatial Modeling to Identify Threats
+    to Endangered Mangroves - Anirud Sainarayanan, Samarth Kashyap.pdf
+  note: Submitted through the journal's form (row 10 of the 2026 submissions sheet);
+    the paper is the author's file, the abstract the author's own.
+- seq: 31
+  slug: climateinformer-ai-prediction-model-climate-awareness
+  title: 'The Solve to Climate Change: An Artificial Intelligence Prediction Model
+    to Raise Awareness about Climate Change in California'
+  authors:
+  - name: Vedant Shah
+    school: Monta Vista High School
+  - name: Rushil Sengupta
+    school: Monta Vista High School
+  - name: Ronit Kuila
+    school: Monta Vista High School
+  published_on: '2025-06-10'
+  date_precision: day
+  discipline: earth-climate
+  keywords:
+  - climate change
+  - climate education
+  - large language models
+  - support vector regression
+  - California
+  abstract: Climate change is an issue that demands immediate and informed action;
+    however, widespread misinformation continues to heavily impede public understanding.
+    In fact, a study by the University of Michigan corroborates that 15% of Americans
+    reject the existence of climate change, prompting the critical need for accessible,
+    accurate climate education to empower future generations. Current climate models
+    lack adaptability to real-time events and user-specific scenarios, hindering the
+    development of effective understanding and mitigation strategies. This research
+    introduces ClimateInformer, a web-based educational tool that integrates user-defined
+    scenarios, such as policy changes, with a Large Language Model (LLM)-driven carbon
+    emission estimator. This output is then processed by a Support Vector Regressor
+    (SVR) model (~91% accuracy), trained on 3 million data points of temperatures,
+    carbon levels, and dates, to generate predictive climate data. Visualizations
+    such as graphs and temperature maps deliver clear results depicting temperature
+    and carbon changes over simulated years. Scenario-tailored mitigation strategies
+    generated by ClimateInformer demonstrated a 32% increase in effectiveness compared
+    to existing approaches, for example, standardized carbon footprint calculators
+    or pre-set simulation models. Environmental educators have expressed strong interest
+    in adding the platform into their curricula to provide their middle and high school
+    students a unique, interactive platform for climate education. This platform will
+    give students a deeper understanding of climate change’s negative effects and
+    help them develop informed mitigation strategies. ClimateInformer’s scenario-based
+    predictions and high accuracy make it a valuable tool for combating misinformation
+    and promoting proactive climate action.
+  source_pdf: The Solve to Climate Change - An Artificial Intelligence Prediction
+    Model to Raise Awareness about Climate Change in California - Vedant Shah, Rushil
+    Sengupta et al.pdf
+  note: Submitted through the journal's form (row 11 of the 2026 submissions sheet);
+    the paper is the author's file, the abstract the author's own.
+- seq: 32
+  slug: low-cost-pdms-microfluidic-sensor-micro-blood-flow
+  title: Low-Cost PDMS Microfluidic Sensor Detects Micro Blood Flow Rates for Cardiovascular
+    Disease Monitoring
+  authors:
+  - name: Lindsey Niu
+    school: Monta Vista High School
+  published_on: '2025-08-13'
+  date_precision: day
+  discipline: engineering-robotics
+  keywords:
+  - microfluidics
+  - PDMS
+  - Lorentz force
+  - biosensor
+  - cardiovascular disease
+  abstract: 'Cardiovascular disease (CVD) is the leading cause of death worldwide,
+    responsible for 17.9 million deaths annually. Studies show that nearly 75% of
+    these deaths could be prevented with early and continuous monitoring. This research
+    aims to develop a cost-effective PDMS microfluidic sensor for real time monitoring
+    of micro blood flow rates to provide accessible cardiovascular health assessment.
+    We hypothesized that a PDMS-based microfluidic sensor leveraging Lorentz-force
+    could accurately detect physiological microflow rates under 15% of error with
+    a cost under $100 per sensor. The device is featured with a gold conducting wall
+    that serves as a capacitor inside the PDMS layer, so that both the electric field
+    and magnetic field inside can follow the Lorentz force law: F=qE + qv×B. KCl solution,
+    an ionic conductor with similar density to blood, is used to stimulate blood flow.
+    As the solution enters the magnetic field, the magnetic forces push the positive
+    ions and negative ions in opposite directions, and an electric field will develop
+    inside the sensor. Flow rate is determined by applying the Lorentz force equation.
+    Experimental validation showing an error margin within 8%. The sensor could detect
+    the flow rate as low as 0.028 mL/sec, which is less than the average blood flow
+    rate of 0.3 mL/sec in the capillaries. This invention could create a strong insight
+    to future work of micro blood measurement chips in the bioengineering field to
+    help advance monitoring of cardiovascular diseases, making the CVD diagnosis more
+    convenient.'
+  source_pdf: Low-Cost PDMS Microfluidic Sensor Detects Micro Blood Flow Rates for
+    Cardiovascular Disease Monitoring - Lindsey Niu.pdf
+  note: Submitted through the journal's form (row 12 of the 2026 submissions sheet);
+    the paper is the author's file, the abstract the author's own.
+- seq: 33
+  slug: chitosan-concentration-silkworm-silk-cross-linking
+  title: Effect of Chitosan Concentration on the Young's Modulus and Biodegradability
+    of Silkworm Silk through Cross-Linking
+  authors:
+  - name: Kevin Chen
+    school: Monta Vista High School
+  - name: Bryan Ge
+    school: Monta Vista High School
+  - name: Leo Lee
+    school: Monta Vista High School
+  published_on: '2025-08-19'
+  date_precision: day
+  discipline: chemistry-materials
+  keywords:
+  - chitosan
+  - silk
+  - biodegradable materials
+  - cross-linking
+  - tensile strength
+  abstract: Every year, over 8 million tons of crab shells are discarded, while plastic-based
+    materials in the fashion, packaging, and medical industry persist for centuries,
+    polluting ecosystems and contributing to the rise of microplastic contamination.
+    This study aims to address both issues, by repurposing chitosan extracted from
+    crab shells to cross-link with silkworm silk creating biodegradable, high-strength
+    fibers that have optimized mechanical properties and biodegradability. In the
+    testing of ionic cross-linking, raw Bombyx mori silk was degummed and treated
+    with varying concentrations of chitosan (0.8-1.8%), extracted through deacetylation
+    from 100% pure chitin, and cross-linked using sodium tripolyphosphate (STPP).
+    Undergoing multiple trials to ensure consistency, mechanical strength was measured
+    through tensile testing, while biodegradability was assessed through enzymatic
+    degradation (Proteinase K in phosphate buffer). Additionally, microscopic analysis
+    tracked structural changes, which hinted at potential explanations for observed
+    variations. The most promising results showed that at a 1.0% chitosan concentration,
+    the silk’s tensile strength increased to 6N, with a mass loss of 94% over four
+    weeks, compared to the control sample’s 2N tensile strength and 5.6% mass loss.
+    The overall findings revealed a slight tradeoff between durability and biodegradability.
+    Ultimately, our study supports the potential of silk–chitosan fiber composites
+    in biodegradable textiles, medical sutures, sustainable materials, and biological
+    membranes. By identifying an optimal chitosan-to-silk ratio, we contribute to
+    the development of eco-friendly biomaterials with enhanced performance and controlled
+    degradation.
+  source_pdf: Effect of Chitosan Concentration on the Youngs Modulus and Biodegradability
+    of Silkworm Silk through Cross-Linking - Kevin Chen, Bryan Ge et al.pdf
+  note: Submitted through the journal's form (row 13 of the 2026 submissions sheet);
+    the paper is the author's file, the abstract the author's own.
+- seq: 34
+  slug: quantummelody-quantum-enhanced-vocal-performance-grading
+  title: 'Quantum-Enhanced Analysis and Grading of Vocal Performance: A Novel Approach
+    for Musical Evaluation and Improvement'
+  authors:
+  - name: Rohan Agarwal
+    school: Monta Vista High School
+  published_on: '2025-08-24'
+  date_precision: day
+  discipline: computer-science
+  keywords:
+  - quantum computing
+  - music information retrieval
+  - vocal performance
+  - neural networks
+  - audio features
+  abstract: Vocal singing is a profoundly emotional art form possibly predating spoken
+    language, yet evaluating a vocal track remains a subjective and specialized task.
+    Meanwhile, quantum computing shows promise to bring about revolutionary breakthroughs
+    in science and art. This study introduces QuantumMelody, a quantum-enhanced algorithm
+    to evaluate vocal performances through objective metrics in near real-time. QuantumMelody
+    begins by collecting a comprehensive array of classical acoustic and musical features
+    including pitch contours, formant frequencies, Mel-spectrograms, and dynamic ranges.
+    These features are divided into three musically categorized groups, converted
+    into scaled angles based on statistical metrics, and then encoded into specific
+    quantum rotation gates. Each qubit group is entangled internally, followed by
+    intergroup entanglement, thus exploring subtle, non-linear relationships within
+    and across feature sets. The resulting quantum probability distributions and classical
+    features are used to train a neural network, combined with a spectrogram transformer
+    to holistically grade each recording on a 1--5 scale. Key difference metrics like
+    the Jensen--Shannon distance and Euclidean measures of scaled angles are used
+    to enable nuanced comparisons of different recordings. Furthermore, the algorithm
+    uses classical music-based heuristics to provide targeted suggestions to the user
+    for various aspects of vocal technique. Despite present constraints in quantum
+    hardware, which complicate truly real-time feedback, QuantumMelody achieves an
+    accuracy of 74.29% against comparative manual grading by vocal experts. Ultimately,
+    QuantumMelody offers objective and supportive feedback, utilizing quantum techniques
+    for computational speed and interpretability.
+  source_pdf: Quantum-Enhanced Analysis and Grading of Vocal Performance - A Novel
+    Approach for Musical Evaluation and Improvement - Rohan Agarwal.pdf
+  note: Submitted through the journal's form (row 14 of the 2026 submissions sheet);
+    the paper is the author's file, the abstract the author's own.
+- seq: 35
+  slug: antibiotic-resistance-proteomics-ai-virtual-screening
+  title: Countering Antibiotic Resistance with Proteomics Data and Artificial Intelligence
+    Based Virtual Screening
+  authors:
+  - name: Rishi Salvi
+    school: Monta Vista High School
+  published_on: '2025-08-31'
+  date_precision: day
+  discipline: biology-biomedicine
+  keywords:
+  - antibiotic resistance
+  - virtual screening
+  - deep learning
+  - proteomics
+  - molecular docking
+  abstract: Antibiotic resistance is a growing global healthcare crisis, with over
+    2.8 million drug-resistant infections occurring annually in the US. The rapid
+    evolution of bacterial mutations makes traditional drug development difficult,
+    costly, and time-consuming, necessitating faster AI-driven approaches. This project
+    utilizes a deep learning-powered virtual screening model to identify potential
+    drug compounds that can neutralize key compounds associated with antibiotic resistance
+    mechanisms. Using publicly available proteomic data from GenBank and CARD, over
+    100,000 E. coli resistance-associated protein sequences were analyzed and filtered
+    for high-confidence targets matching known antibiotic resistant proteins. These
+    resulting targets were processed through 18 different deep learning models, leveraging
+    a diverse array of drug and target encoding systems, including pretrained SMILES-based
+    drug screening frameworks. The models were pretrained on extensive benchmark datasets,
+    like BindingDB, which contain millions of validated drug-protein interactions
+    that were used to rapidly generate predictions of never-seen before data. A virtual
+    screening with over 100,000 drug pairs identified multiple high-affinity and stable
+    drug-protein complexes. The top drug-protein interactions were further validated
+    with AutoDock Vina, a 3D molecular docking tool that simulates the binding complex.
+    Particularly, several complexes revealed binding affinities near -5 kcal/mol,
+    indicating stable drug-target interactions. The ability to predict the binding
+    affinity for a large pool of potential drugs drastically reduces the scope of
+    candidate drugs needed to be tested in time-consuming in vitro experiments. By
+    accelerating the discovery of novel resistance inhibitors, this method offers
+    a scalable solution to combat antibiotic resistance and revolutionize modern drug
+    discovery.
+  source_pdf: Countering Antibiotic Resistance with Proteomics Data and Artificial
+    Intelligence Based Virtual Screening - Rishi Salvi.pdf
+  note: Submitted through the journal's form (row 15 of the 2026 submissions sheet);
+    the paper is the author's file, the abstract the author's own.
+- seq: 36
+  slug: neural-bridge-raspberry-pi-emg-motor-signal-restoration
+  title: 'Restoring Motor Signals Using Raspberry Pi and EMG Detection: A Model for
+    Neural Paralysis and Recovery'
+  authors:
+  - name: Tanisha Sood
+    school: Monta Vista High School
+  published_on: '2025-09-06'
+  date_precision: day
+  discipline: neuroscience
+  keywords:
+  - spinal cord injury
+  - electromyography
+  - neuroprosthetics
+  - Raspberry Pi
+  - machine learning
+  abstract: The restoration of voluntary motor control in individuals with spinal
+    cord injuries (SCI) [1] remains a critical challenge in neurorehabilitation. Motivated
+    by firsthand observation of the persistent struggles faced by a mentor living
+    with SCI, this project introduces Neural Bridge, an AI-augmented neuroprosthetic
+    interface designed to bypass damaged spinal pathways and restore motor function.
+    Leveraging electromyographic (EMG) signals, the system employs machine learning
+    algorithms to decode neuromuscular electrical activity and translate it into executable
+    motor commands. Unlike conventional approaches centered on nerve regeneration—which
+    are often protracted and clinically unpredictable— this experimental model establishes
+    an immediate and functionally reliable communication channel between cortical
+    intent and motor execution. The architecture integrates a Raspberry Pi 4B platform
+    with GPIO-based input channels and a real-time graphical module that visualizes
+    EMG spike anomalies in correspondence with motor intent. Experimental validation
+    demonstrated a signal interpretation accuracy of 85%, with latency ranging from
+    17 to 30 milliseconds, enabling near-instantaneous response. These findings suggest
+    that Neural Bridge offers a promising framework for scalable, low-latency neuroprosthetic
+    systems capable of reanimating voluntary movement.
+  source_pdf: Restoring Motor Signals Using Raspberry Pi and EMG Detection - A Model
+    for Neural Paralysis and Recovery - Tanisha Sood.pdf
+  note: Submitted through the journal's form (row 16 of the 2026 submissions sheet);
+    the paper is the author's file, the abstract the author's own.
+- seq: 37
+  slug: stirling-cryocooler-flexure-spring-fatigue-analysis
+  title: Fatigue Analysis of Stirling Cryocooler Flexure Springs for Long Space Mission
+    Lifetime
+  authors:
+  - name: Raymond Feng
+    school: Monta Vista High School
+  - name: Hannah Rana
+    school: null
+    byline_only: true
+  published_on: '2025-09-11'
+  date_precision: day
+  discipline: engineering-robotics
+  keywords:
+  - cryocoolers
+  - flexure springs
+  - fatigue analysis
+  - space instruments
+  - kirigami
+  abstract: Cryocoolers in space instruments cool detectors and superconducting devices
+    to cryogenic temperatures. Inside a cryocooler, a flexure spring ensures the cryocooler
+    piston is axially free and radially restricted to prevent off-axis forces. Given
+    that the flexure spring is mission-critical to the cryocooler operation yet prone
+    to failure, its lifetime can determine the lifetime of the space mission. By improving
+    the flexure spring design, space missions can be extended and present longer reliability.
+    This study investigated the impact of various spring design parameters on a spiral
+    flexure spring with spring arms in a characteristic spiral shape. These parameters
+    include the number of arms, spring design, and thickness. Results show that the
+    lowest maximum stress is observed at lower spring thickness values, moderate arm
+    numbers, and teardrop sizes that vary for different arm numbers. Based on these
+    results, an optimal design is proposed that maximizes flexure spring lifetime
+    while operating at a resonant frequency to reduce the input power and increase
+    lifetime. In this design, the design parameters are adjusted for optimal flexibility
+    as a proof of concept, with additional designs inspired by kirigami proposed.
+    In the latter design, a longer lifetime is demonstrated, extending to the lifespan
+    of space missions that rely on cryocooler operation.
+  source_pdf: Fatigue Analysis of Stirling Cryocooler Flexure Springs for Long Space
+    Mission Lifetime - Raymond Feng, Hannah Rana.pdf
+  note: Submitted through the journal's form (row 17 of the 2026 submissions sheet);
+    the paper is the author's file, the abstract the author's own. Co-author affiliation
+    as given in the paper.
+- seq: 38
+  slug: fusing-sight-and-sound-multimodal-species-identification
+  title: 'Fusing Sight and Sound: A Multimodal Deep Learning System for Species Identification'
+  authors:
+  - name: Advaith Anand
+    school: Monta Vista High School
+  published_on: '2025-09-15'
+  date_precision: day
+  discipline: biology-biomedicine
+  keywords:
+  - biodiversity
+  - species identification
+  - multimodal deep learning
+  - camera traps
+  - bioacoustics
+  abstract: Biodiversity is facing unprecedented pressures from habitat loss, climate
+    change, pollution, and overexploitation, leading to rapid declines in species
+    populations worldwide. Timely and accurate species identification is essential
+    for conservation biology, ecological monitoring, and biodiversity management.
+    However, conventional approaches involving manual field surveys, taxonomic expertise,
+    and visual confirmation are time intensive, resource heavy, and prone to observer
+    bias. These limitations hinder the scalability of conservation initiatives, particularly
+    in biodiversity rich yet resource limited regions. This paper presents a multimodal
+    deep learning framework that unifies two complementary sensing modalities, camera
+    trap imagery and bird call recordings, into a single classification pipeline.
+    By combining a ConvNeXt based visual branch for high resolution image analysis
+    with a Vision Transformer (ViT) based acoustic branch for mel spectrogram processing,
+    the system captures both spatial and temporal features critical for accurate identification.
+    The extracted features are fused at the representation level, enabling the model
+    to learn synergistic patterns inaccessible to unimodal models. Trained on the
+    Snapshot Serengeti and Xeno Canto datasets, the system achieves a 99% macro averaged
+    F1 score across 30 species, outperforming single modality baselines by large margins.
+    Beyond accuracy improvements, this work shows that multimodal architectures can
+    withstand real world challenges such as poor lighting, partial occlusions, and
+    environmental noise. The modular design supports future integration of additional
+    modalities such as thermal imaging, geolocation, and environmental metadata. This
+    research contributes a scalable, robust, and field deployable AI framework for
+    biodiversity monitoring, with the potential to accelerate ecological data collection
+    and conservation efforts.
+  source_pdf: Fusing Sight and Sound - A Multimodal Deep Learning System for Species
+    Identification - Advaith Anand.pdf
+  note: Submitted through the journal's form (row 18 of the 2026 submissions sheet);
+    the paper is the author's file, the abstract the author's own.
+- seq: 39
+  slug: counterfactual-loss-ft-transformer-homelessness-prediction
+  title: Counterfactual Loss Improves Feature-Token Transformer Performance in Community
+    Homelessness Prediction
+  authors:
+  - name: Tashvi Bansal
+    school: Monta Vista High School
+  published_on: '2025-10-04'
+  date_precision: day
+  discipline: social-science
+  keywords:
+  - homelessness
+  - transformers
+  - counterfactual explanations
+  - public policy
+  - tabular deep learning
+  abstract: 'Two issues persist within the homelessness domain: lack of accuracy in
+    current homelessness prediction models and the need to reduce spending because
+    of inefficiency in homelessness funding. This study has two hypotheses. First,
+    we hypothesized that the addition of a counterfactual loss configuration will
+    improve FT-Transformer’s accuracy on homelessness data because sparsity regularization
+    penalizes complex feature combinations and reduces overfitting to noise in highdimensional
+    data. Second, we hypothesized that generating post-hoc counterfactuals will identify
+    “what-if” changes to the input features that will prescribe budgeting more efficiently.
+    This study’s dataset is from the U.S. Department of Housing and Urban Development
+    (HUD), with community-level factors associated with homelessness as input features
+    and homelessness rates per Continuum of Care as the target. The study evaluated
+    the performance of FTTransformer versus FT-Transformer with a modified loss function.
+    The modified loss function integrated sparsity, a metric measuring how many feature
+    values differ between an instance and its counterfactuals. Supporting the first
+    hypothesis, FT-Transformer with counterfactual loss achieved an R2 of 0.850—higher
+    than vanilla FT-Transformer’s R2 of 0.831—and attention analysis revealed significant
+    variance reduction in attention scores for FT-Transformer with the loss configuration.
+    This variance reduction indicated attention is more concentrated on a smaller
+    set of features, demonstrating that the sparsity-based optimization successfully
+    penalized complex feature combinations and reduced overfitting to noise. The second
+    hypothesis received only partial support, as post-hoc counterfactuals successfully
+    reduced budgets but exhibited low feasibility and yield. This work lays foundations
+    for transparent and data-driven homelessness policy interventions.'
+  source_pdf: Counterfactual Loss Improves Feature-Token Transformer Performance in
+    Community Homelessness Prediction - Tashvi Bansal.pdf
+  note: Submitted through the journal's form (row 19 of the 2026 submissions sheet);
+    the paper is the author's file, the abstract the author's own.
+- seq: 40
+  slug: osmoflux-desalination-brine-financial-risk-reverse-electrodialysis
+  title: 'OsmoFlux: Modeling the Financial Risk of Desalination Brine Discharge and
+    the Viability of Reverse Electrodialysis as a Risk Mitigation Strategy'
+  authors:
+  - name: Rohan Agarwal
+    school: Monta Vista High School
+  published_on: '2026-07-09'
+  date_precision: day
+  discipline: earth-climate
+  keywords:
+  - desalination
+  - brine discharge
+  - reverse electrodialysis
+  - financial risk
+  - Monte Carlo simulation
+  abstract: 'The United Nations has declared a global water bankruptcy: freshwater
+    demand will exceed supply by 40% before 2030. Desalination already supplies drinking
+    water to roughly 300 million people across 177 countries. With over 500 plants
+    in the global permitting pipeline and a market projected to reach $35 billion
+    by 2032, that dependence is accelerating. The industry produces roughly one cubic
+    meter of hypersaline brine for every cubic meter of drinking water, 142 million
+    cubic meters per day globally, increasingly regulated and not yet priced into
+    most operators'' cost structures. The gap between current disposal costs and what
+    operators will pay when ocean outfall permits tighten could reach an extra $25
+    billion per year, and that figure excludes externalized costs like lost fisheries,
+    declining tourism, degraded marine ecosystems, an unpriced financial risk in every
+    desalination balance sheet. This report focuses on the Carlsbad Desalination Plant
+    in San Diego County, the largest in the Western Hemisphere. A peer-reviewed 2019
+    UC Santa Cruz study found that its brine discharge already exceeds permitted salinity
+    levels, with the plume extending farther offshore than California law allows (Petersen
+    et al. 2019). Carlsbad faces two direct financial exposures: regulatory noncompliance,
+    as California''s Ocean Plan moves through a formal amendment process opened in
+    2024 with no numeric salinity standard yet in place; and disposal cost escalation:
+    at 190,000 cubic meters of brine per day, each step up the disposal cost ladder
+    adds tens of millions in annual operating cost. The exposed parties are plant
+    operators facing direct compliance costs, water agencies facing ratepayer liability,
+    and the insurance industry without an actuarial framework for brine risk. Reverse
+    Electrodialysis (RED) can reduce brine concentration while simultaneously extracting
+    useful power and has been demonstrated at pilot scale. We built OsmoFlux, a physics-based
+    real-world model simulating RED performance at Carlsbad under realistic fouling
+    conditions of mineral scaling and biofilm growth. Across more than 6,300 simulations
+    and a 5,000-sample Monte Carlo financial analysis, we map the threshold between
+    negative and positive financial return. A central contribution is the modeling
+    of a fresh-dilute cascade architecture, in which each stage receives a fresh low-salinity
+    feed, rather than the depleted output of the previous one. At full Carlsbad deployment,
+    OsmoFlux projects a 99% reduction in excess brine salinity at the discharge point,
+    recovering 0.8-1.0 MW of electrical power and approximately $1.4-1.8 million in
+    annual energy revenue as a byproduct. The fresh-dilute cascade achieves this at
+    a 36% probability of positive financial return versus 11% for single-stack, a
+    3.3× improvement from architecture selection alone. Break-even membrane cost:
+    ~$40/m², within reach of current manufacturing trajectories. Our primary recommendation
+    is a field pilot at Carlsbad, co-located with the adjacent Encina wastewater treatment
+    facility as the low-salinity source. The pilot will evaluate whether RED is genuinely
+    viable as a compliance and cost management tool at commercial scale. In a $35
+    billion industry with no actuarial framework for brine risk, this paper provides
+    the analytical foundation. The pilot is the decision gate: deploy at full scale
+    when membrane cost reaches ≤$40/m² or disposal cost reaches ≥$0.10/m³, thresholds
+    our model shows are approaching on current trajectories.'
+  source_pdf: OsmoFlux - Modeling the Financial Risk of Desalination Brine Discharge
+    and the Viability of Reverse Electrodialysis as a Risk Mitigation Strategy - Rohan
+    Agarwal.pdf
+  note: Submitted through the journal's form (row 21 of the 2026 submissions sheet);
+    the paper is the author's file, the abstract the author's own. Second place, Modeling
+    the Future Challenge 2025-26 (The Actuarial Foundation); the report carries the
+    competition's disclaimer.

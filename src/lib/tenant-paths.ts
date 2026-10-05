@@ -23,7 +23,9 @@
 import { orgs } from '../config/orgs';
 import type { GetStaticPaths } from 'astro';
 
-export const tenantSlugs = Object.keys(orgs);
+/* Only the tenants a deployment answers for (dev-167): a school marked
+   `served: false` gets no pages built. */
+export const tenantSlugs = Object.keys(orgs).filter((slug) => orgs[slug].served !== false);
 
 /** For a route with no other parameters. */
 export const orgPaths: GetStaticPaths = () =>

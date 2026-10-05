@@ -23,13 +23,45 @@ test('the switch: the school file, or SIGNUPS=closed for every school at once', 
   assert.equal(signupsClosed(null, {}), false);
 });
 
-test('every school is closed or by invitation for the pilot', () => {
+test('every school is closed or by invitation for the pilot; the club and the platform are open (dev-167)', () => {
   for (const f of fs.readdirSync('src/config/orgs')) {
     const org = fs.readFileSync(`src/config/orgs/${f}`, 'utf8');
     const mode = org.match(/^signup_mode: (\w+)$/m)?.[1];
+    if (f === 'mvrj.yaml') {
+      assert.equal(mode, 'open', 'the research club makes its own accounts');
+      assert.match(org, /^sign_in: password$/m, 'with a password, not Google');
+      assert.match(org, /^requires_mentor: false$/m, 'and no club mentor between an account and the club');
+      continue;
+    }
+    if (f === 'scipath.yaml') {
+      assert.equal(mode, 'open', 'the platform takes people working on their own (dev-167)');
+      continue;
+    }
     assert.ok(mode === 'closed' || mode === 'invite', `${f} is ${mode}; nobody signs up anywhere during the pilot`);
   }
   assert.match(fs.readFileSync('src/config/orgs/montavista.yaml', 'utf8'), /^signup_mode: closed$/m);
+});
+
+test('the open door is a sign-up route, gated by the file, confirmed by token, and made on the welcome page (dev-167)', () => {
+  const route = fs.readFileSync('src/pages/auth/signup.ts', 'utf8');
+  assert.match(route, /org\.signupMode !== 'open' \|\| signupsClosed\(org, runtime\)/, 'only an open door, and never past the global switch');
+  assert.match(route, /supabase\.auth\.signUp\(/);
+  assert.match(route, /emailRedirectTo: `\$\{url\.origin\}\/auth\/confirm\/`/);
+  assert.match(route, /signin=check_mail/, 'the same sentence for a new address and a taken one');
+  const confirm = fs.readFileSync('src/pages/auth/confirm.astro', 'utf8');
+  assert.match(confirm, /verifyOtp\(\{ type, token_hash: token \}\)/, 'the token is spent on the POST, not on arrival');
+  assert.match(confirm, /Astro\.redirect\('\/app\/welcome\/'\)/);
+  const template = fs.readFileSync('supabase/templates/confirmation.html', 'utf8');
+  assert.match(template, /\{\{ \.RedirectTo \}\}\?token_hash=\{\{ \.TokenHash \}\}&type=signup/);
+  const config = fs.readFileSync('supabase/config.toml', 'utf8');
+  assert.match(config, /\[auth\.email\.template\.confirmation\][\s\S]*content_path = "\.\/supabase\/templates\/confirmation\.html"/);
+  const callback = fs.readFileSync('src/pages/auth/callback.ts', 'utf8');
+  assert.match(callback, /\(arrived\.app_metadata\?\.provider \?\? 'email'\) === 'email'/, 'a password tenant turns Google away, never its own sign-ups');
+  const signin = fs.readFileSync('src/pages/app/index.astro', 'utf8');
+  assert.match(signin, /org\.signupMode === 'open' && !signupsClosed\(org/, 'the form appears only where the door is open');
+  assert.match(signin, /action="\/auth\/signup\/"/);
+  const welcome = fs.readFileSync('src/pages/app/welcome.astro', 'utf8');
+  assert.match(welcome, /const openProgram = org\?\.signupMode === 'open' && Boolean\(org\?\.isPlatform\)/, 'a school asks no school questions');
 });
 
 test('every arrival asks the door', () => {

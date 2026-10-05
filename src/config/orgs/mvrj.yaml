@@ -1,0 +1,88 @@
+# Tenant: the Monta Vista Research Club (dev-167), at mvrj.scipath.org:
+# the address is the journal's name, since the journal is what the club
+# prints and what a reader comes for (dev-168; it was `mvrc` for a week in
+# the files and was never seeded).
+#
+# The club's own home, apart from the class. Monta Vista High School's
+# tenant (`montavista`) is the IRPD class, on a loaded roster with
+# identifiers and passwords, and everything in it is the class's. The
+# club is a different body with a different door: anybody may make an
+# account with an email address and a password of their own, no district
+# address and no Google, and the club's officers approve who joins the
+# fair cohort. A student in both the class and the club has two accounts
+# and does their work twice; the two tenants share nothing but the
+# database and the build.
+#
+# What this tenant is for, in order: the club's journal, which is the
+# public face and the front door; and the Synopsys Championship, which
+# the club prepares its members for. The journal keeps the `MVRJ` prefix
+# because that is the journal's name; the class never publishes records
+# of its own while its public surfaces are hidden (montavista.yaml,
+# `hidden_until`), so the two tenants never mint the same id.
+#
+# Two production sites on one deployment: every deploy serves this host
+# and the class's at once, so a change to either is a change to both.
+
+slug: mvrj
+
+name: Monta Vista Research Club
+short_name: Research Club
+mark: MVRC
+theme: proceedings
+record_prefix: MVRJ
+timezone: America/Los_Angeles
+
+# Open: an account is made by the person, with any email address, and
+# confirmed from the message the address receives. Password only: no
+# Google button, no district domain, and a forgotten password comes back
+# by mail. No club mentor stands between an account and the club; the
+# officers' approval is on joining the cohort, not on having an account.
+signup_mode: open
+sign_in: password
+requires_mentor: false
+verified_domains: []
+domains: []
+
+address: 21840 McClellan Road, Cupertino, CA 95014
+phone: 408.366.7600
+
+contact_email: hello@blueleaflabs.org
+editorial_review: true
+
+# The archive is the journal, by that name and at that address.
+archive: journal
+front_door: showcase
+showcase_title: Monta Vista Research Journal
+showcase_kicker: The research journal of the Monta Vista Research Club
+showcase_note: >-
+  Research by Monta Vista students, reviewed and published as a
+  permanent, citable record.
+featured: []
+
+# What the front door calls the club's cohort.
+class_name: Research Club
+
+# No class periods: the club meets when it meets, and the live strip's
+# backup pulse runs at its off-hours pace.
+live:
+  class_periods: []
+  fallback:
+    enabled: true
+    in_class_seconds: 300
+    in_class_idle_seconds: 900
+    off_hours_seconds: 3600
+
+# Everyone who signs up here is in the club (dev-167): the tenant is the
+# club, so an account is a membership, and the cohort below is joined the
+# moment the account is made (`join_cohort`, with the club's `joining:
+# open`). Entering the fair is still each project's own step.
+auto_join: [mvhs-scvsefa-2027]
+
+programs:
+  # The regional fair the club enters. A shared row: listing it says the
+  # club takes part. The state fair it advances to is not listed for now.
+  - scvsefa-2027
+  # The club's own calendar for the fair.
+  - mvhs-scvsefa-2027
+  # The journal.
+  - mvrj-2027

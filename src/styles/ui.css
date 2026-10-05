@@ -209,11 +209,14 @@
    signed-in bar's content (lockup, search, Feedback, Workbench, a name,
    Sign out) stops fitting on one line, measured, not a device; an iPad in
    portrait (768) gets the stacked bar because it does not fit there. */
-@media (min-width: 861px) {
+@media (min-width: 1024px) {
   .mast-in { flex-wrap: nowrap; }
   .mast-in .lockup { flex: 0 0 auto; }
-  .mast-in .mnav-bar { flex: 1 1 auto; justify-content: flex-end; }
+  .mast-in .mnav-bar { flex: 1 1 auto; justify-content: flex-end; min-width: 0; }
 }
+/* Whatever the width, the sections never print over the school's name
+   (dev-167): the lockup keeps its own space and its own line. */
+.mast-in .lockup { white-space: nowrap; }
 
 .lockup {
   display: flex;
@@ -1281,6 +1284,7 @@ mark {
      wrapped early and sat as a narrow column against a wide line, which
      reads as something unfinished rather than as something considered. */
 }
+.ft-base a { color: var(--masthead-ink); text-decoration-color: var(--masthead-ink-2); }
 
 
 /* ===========================================================================

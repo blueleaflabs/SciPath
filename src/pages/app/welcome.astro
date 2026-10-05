@@ -19,7 +19,10 @@ if (account) return Astro.redirect('/app/');
 /* Closed (2.9): the middleware has already sent this session away; belt and braces. */
 if (signupsClosed(org, (Astro.locals as any).runtime?.env)) return Astro.redirect('/app/?signin=closed');
 
-const openProgram = org?.signupMode === 'open';
+/* The three school questions belong to the platform's own open program,
+   where nobody knows which school the person is from. A school or club
+   with an open door (dev-167) knows; it asks nothing about that. */
+const openProgram = org?.signupMode === 'open' && Boolean(org?.isPlatform);
 
 /* The database is the enforcement; this is so a person finds out before
    filling in a form rather than after. A tenant that lists domains accepts
@@ -134,7 +137,24 @@ if (Astro.request.method === 'POST') {
     });
 
     if (rpcError) error = rpcError.message;
-    else return leaveTo('/app/');
+    else {
+      /* The club's tenant is the club (dev-167): a new account joins the
+         cohorts the school's file names, at once. A failure here is
+         logged and not shown: the account exists, and Join is on the
+         Workbench. */
+      for (const templateId of (org?.autoJoin ?? []) as string[]) {
+        try {
+          const { data: cohorts } = await supabase.from('programs').select('id').eq('template_id', templateId).eq('status', 'open');
+          for (const c of cohorts ?? []) {
+            const { error: joinError } = await supabase.rpc('join_cohort', { p_cohort_id: c.id });
+            if (joinError) console.error(JSON.stringify({ auto_join: templateId, error: joinError.message }));
+          }
+        } catch (e: any) {
+          console.error(JSON.stringify({ auto_join: templateId, error: e?.message ?? String(e) }));
+        }
+      }
+      return leaveTo('/app/');
+    }
   }
 
   /* A refresh should re-read this page, not send the form again. */

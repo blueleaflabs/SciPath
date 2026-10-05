@@ -14,7 +14,7 @@
 import { defineMiddleware } from 'astro:middleware';
 import { CONTEXT_COOKIE, clearContextCookie, mayChangeContext, openContext, sealContext, writeContextCookie } from './lib/context-cache';
 import { serverClient, isConfigured, meterFor, env } from './lib/supabase';
-import { resolveOrg, hostIsOurs, slugForHostname } from './lib/tenant';
+import { resolveOrg, hostIsOurs, slugForHostname, onFormerLabel, labelOf } from './lib/tenant';
 import { signupsClosed } from './lib/door';
 import { BUILD, BUILD_HEADER } from './lib/build';
 import { orgs } from './config/orgs';
@@ -251,6 +251,16 @@ const handle = async (context: any, next: any) => {
   locals.orgSlug = slug;
   locals.org = org;
 
+  /* A label the tenant used to answer on (`formerly`, dev-167): sent on,
+     for good, to the same path on the label it answers on now, so a
+     bookmark or a link in a sent notification survives a tenant's move.
+     The session cookie does not travel, so the person signs in once more,
+     there. No tenant names a former label today. */
+  if (onFormerLabel(url.hostname, org)) {
+    const host = url.hostname.toLowerCase().split('.').slice(1).join('.');
+    return context.redirect(`${url.protocol}//${labelOf(org)}.${host}${url.port ? `:${url.port}` : ''}${url.pathname}${url.search}`, 301);
+  }
+
   /* Cancelling at Google, or an expired state, sends the person back to the
      project's Site URL with error parameters on whatever path that is. Site
      URL is one value and cannot be per tenant, so it lands on the bare host
@@ -265,6 +275,15 @@ const handle = async (context: any, next: any) => {
      again. A password typed wrong took the browser round until it gave up.
      Nothing about that said "wrong password", which is the part that made it
      hard to see. */
+  /* The archive under the journal's name (dev-167): a tenant whose file
+     says `archive: journal` answers at /journal/ (a page of its own that
+     renders the showcase page), and its /showcase/ is the old address,
+     sent on for good. The class showcase inside the working surface is
+     under /app/ and is not this. */
+  if (org.archivePath === '/journal/' && (url.pathname === '/showcase' || url.pathname.startsWith('/showcase/'))) {
+    return context.redirect(`/journal/${url.pathname.slice('/showcase/'.length)}${url.search}`, 301);
+  }
+
   const providerError =
     url.searchParams.get('error_code') ?? url.searchParams.get('error');
 

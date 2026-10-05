@@ -41,7 +41,7 @@
 import fs from 'node:fs';
 import yaml from 'js-yaml';
 import { createClient } from '@supabase/supabase-js';
-import { loadDevVars } from './dev-vars.mjs';
+import { loadDevVars, loadCloudVars } from './dev-vars.mjs';
 import { loadOrgs } from './orgs-library.mjs';
 import { openBucket } from './notebook-bucket.mjs';
 import { assembleRecord } from '../src/lib/record-files.ts';
@@ -50,7 +50,25 @@ import { blobOver, normalize } from './record-blob.mjs';
 import { extractPdfText, worthIndexing } from '../src/lib/pdf-text.ts';
 import { pdfFor } from './mvrj-pdfs.mjs';
 
-loadDevVars();
+/* `--cloud` (dev-167): read .cloud.vars instead of .dev.vars, and refuse
+   any project but the one PILOT_PROJECT_REF names, the way the roster
+   loader does. Without it, only the local stack is written. */
+const CLOUD = process.argv.includes('--cloud');
+if (CLOUD) loadCloudVars(); else loadDevVars();
+{
+  const url = process.env.PUBLIC_SUPABASE_URL ?? '';
+  const loopback = /^https?:\/\/(127\.0\.0\.1|localhost)(:|\/|$)/.test(url);
+  const ref = url.match(/^https?:\/\/([a-z0-9]+)\.supabase\.co/i)?.[1] ?? null;
+  const pilot = (process.env.PILOT_PROJECT_REF ?? '').trim();
+  if (CLOUD && (!ref || !pilot || ref !== pilot)) {
+    console.error(`--cloud, and ${url || '(no URL)'} is not the pilot project (PILOT_PROJECT_REF=${pilot || 'unset'}). Nothing has been written.`);
+    process.exit(1);
+  }
+  if (!CLOUD && !loopback) {
+    console.error(`${url} is not the local stack. Use --cloud to write to the hosted project. Nothing has been written.`);
+    process.exit(1);
+  }
+}
 
 const ARCHIVE = 'src/data/mvrj-archive.yaml';
 
@@ -81,7 +99,7 @@ const PDF_DIR = 'local-data/mvrj-pdfs';
    Set `JOURNAL_ORG=montavista` when it has been. The loader is unchanged by
    it; the identifiers are reallocated under that school's prefix, which is
    the one moment they may be. */
-const ORG_SLUG = process.env.JOURNAL_ORG ?? 'demo';
+const ORG_SLUG = (process.argv.includes('--org') ? process.argv[process.argv.indexOf('--org') + 1] : null) ?? process.env.JOURNAL_ORG ?? 'demo';
 
 const URL_ = process.env.PUBLIC_SUPABASE_URL;
 const KEY = process.env.SUPABASE_SECRET_KEY;

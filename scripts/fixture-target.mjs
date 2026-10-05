@@ -44,6 +44,7 @@ export const FIXTURE_PREFIX = {
   svslc: 'svs',
   scipath: 'sp',
   demo: 'dm',
+  mvrj: 'rj',
 };
 
 /** `advisor` is bare and the rest carry a letter. Both become a number, so

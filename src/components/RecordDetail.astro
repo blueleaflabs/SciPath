@@ -101,11 +101,14 @@ const published =
 const html = body ? renderMarkdown(body) : '';
 ---
 
-<article class="wrap">
-  <header class="hero" data-pagefind-body data-pagefind-filter={`discipline:${disciplineLabel(d.discipline)}, year:${d.year}`}>
+<article class="wrap" data-pagefind-body data-pagefind-filter={`discipline:${disciplineLabel(d.discipline)}, year:${d.year}`}>
+  <header class="hero">
     <div class:list={['plate', hue !== null && 'toned']} style={hueStyle}>
+      {/* The eyebrow a journal puts first (dev-167): the subject, the kind
+          of record, and when. The school is the masthead's; the record's
+          number is the citation's. */}
       <p class="t-lbl">
-        {d.recordKind === 'project' ? 'Project entry' : 'Article'} · {org.name}
+        <a class="subject" href={`/topics/${d.discipline}/`}>{disciplineLabel(d.discipline)}</a> · {d.recordKind === 'project' ? 'Fair entry' : 'Paper'} · {published}
         {demonstration && <span class="chip demo">Demonstration</span>}
       </p>
       <h1 class="t-h1" data-pagefind-meta="title">{d.title}</h1>
@@ -122,9 +125,6 @@ const html = body ? renderMarkdown(body) : '';
           to be that line. */}
       {d.question && <p class="question">{d.question}</p>}
 
-      <p class="meta">
-        {published} · <a class="subject" href={`/topics/${d.discipline}/`}>{disciplineLabel(d.discipline)}</a> · {d.recordId}
-      </p>
     </div>
 
     {/* Said once, plainly, on the page a search result lands on. The people,
@@ -206,15 +206,19 @@ const html = body ? renderMarkdown(body) : '';
       </div>
     )}
 
+  </header>
+
+  {/* Two columns from here (dev-167), the way a journal sets an article:
+      the reading column, and a rail with the record's facts, the file and
+      the citation, so what a reader looks up is in one place beside the
+      text rather than at the end of it. One column on a phone. */}
+  <div class="cols">
+  <div class="main">
     {d.abstract && (
       <section class="sec">
         <div class="sec-h"><b>Abstract</b></div>
         <p class="prose lede-abs">{d.abstract}</p>
       </section>
-    )}
-
-    {d.pdf && (
-      <p class="row"><a class="btn" href={d.pdf}>Read the paper as a PDF</a></p>
     )}
 
     {d.externalUrl && (
@@ -332,16 +336,26 @@ const html = body ? renderMarkdown(body) : '';
         <ol class="refs">{d.references.map((r) => <li>{r}</li>)}</ol>
       </section>
     )}
-  </header>
+  </div>
 
-  <section class="sec" data-pagefind-ignore>
-    <div class="sec-h"><b>Cite this record</b><span>{d.recordId}</span></div>
-    <div class="card pad">
+  <aside class:list={['rail', hue !== null && 'toned']} style={hueStyle} data-pagefind-ignore>
+    {d.pdf && (
+      <p class="row"><a class="btn pdf" href={d.pdf} target="_blank" rel="noopener noreferrer">Read the paper (PDF)</a></p>
+    )}
+    <dl class="facts-dl">
+      <dt>Published</dt><dd>{published}</dd>
+      <dt>Record</dt><dd class="mono">{d.recordId}</dd>
+      <dt>Subject</dt><dd><a href={`/topics/${d.discipline}/`}>{disciplineLabel(d.discipline)}</a></dd>
+      <dt>Kind</dt><dd>{d.recordKind === 'project' ? 'Fair entry' : 'Paper'}</dd>
+      {doi && <><dt>DOI</dt><dd class="mono"><a href={doi} target="_blank" rel="noopener noreferrer">{doi.replace('https://doi.org/', '')}</a></dd></>}
+      <dt>License</dt><dd>{d.license}</dd>
+    </dl>
+    <div class="cite">
+      <p class="t-lbl">Cite this record</p>
       <p class="cite-text" id="citation-text">{citation}</p>
-      {doi && <p class="doi"><a href={doi} target="_blank" rel="noopener noreferrer">{doi}</a></p>}
-      <div class="row" style="margin-top:14px">
-        <button class="btn" type="button" data-copy="citation-text">Copy citation</button>
-        <button class="btn btn-q" type="button" data-copy="bibtex-text">Copy BibTeX</button>
+      <div class="row" style="margin-top:12px">
+        <button class="btn btn-sm" type="button" data-copy="citation-text">Copy citation</button>
+        <button class="btn btn-sm btn-q" type="button" data-copy="bibtex-text">Copy BibTeX</button>
       </div>
       <pre id="bibtex-text" hidden>{bibtex}</pre>
     </div>
@@ -351,9 +365,9 @@ const html = body ? renderMarkdown(body) : '';
         : d.source === 'migrated'
           ? 'Migrated from an earlier archive. It did not pass through the review process described here.'
           : 'Brought in from work published elsewhere.'}
-      {' '}Licensed {d.license}.
     </p>
-  </section>
+  </aside>
+  </div>
 </article>
 
 <script>
@@ -400,7 +414,7 @@ const html = body ? renderMarkdown(body) : '';
     color: var(--cover-ink);
     border-bottom: 5px solid var(--accent);
   }
-  .plate.toned { --accent: hsl(var(--hue) var(--sat) var(--lum)); }
+  .plate.toned, .rail.toned { --accent: hsl(var(--hue) var(--sat) var(--lum)); }
   .plate::after {
     content: '';
     position: absolute;
@@ -419,7 +433,23 @@ const html = body ? renderMarkdown(body) : '';
   .plate a { color: inherit; text-decoration-color: var(--accent); }
   .plate .subject { color: var(--accent); }
   .by { margin: 10px 0 0; font-size: 1.05rem; color: var(--cover-ink-2, var(--cover-ink)); }
-  .meta { margin: 6px 0 0; font-size: 0.9rem; color: var(--cover-ink-2, var(--cover-ink)); }
+  .plate .t-lbl a.subject { text-decoration: none; }
+  .plate .t-lbl a.subject:hover { text-decoration: underline; }
+
+  /* The columns (dev-167). */
+  .cols { display: grid; grid-template-columns: minmax(0, 1fr) 280px; gap: 32px 48px; align-items: start; margin-top: 8px; }
+  .rail { position: sticky; top: 16px; padding: 18px 20px 16px; background: var(--card); border: 1px solid var(--rule); border-top: 4px solid var(--accent, var(--brand)); }
+  .rail .pdf { width: 100%; text-align: center; }
+  .facts-dl { display: grid; grid-template-columns: max-content 1fr; gap: 8px 14px; margin: 16px 0 0; font-size: 0.92rem; }
+  .facts-dl dt { font-family: var(--face-ui); font-size: 0.74rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-3); padding-top: 3px; }
+  .facts-dl dd { margin: 0; overflow-wrap: anywhere; }
+  .facts-dl .mono { font-family: var(--face-num); font-size: 0.88rem; }
+  .cite { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--rule-fine); }
+  .cite .cite-text { font-size: 0.9rem; }
+  @media (max-width: 900px) {
+    .cols { grid-template-columns: minmax(0, 1fr); }
+    .rail { position: static; }
+  }
   .t-lbl .chip.demo { margin-left: 10px; vertical-align: middle; font-size: 0.72rem; padding: 2px 7px; color: var(--cover-ink); border-color: var(--cover-ink-2, var(--cover-ink)); }
   .demo-note { margin: 14px 0 0; padding: 10px 14px; border: 1px dashed var(--rule); max-width: var(--measure-text); font-size: 0.92rem; color: var(--ink-2); }
 
@@ -586,5 +616,5 @@ const html = body ? renderMarkdown(body) : '';
   .refs li { margin-bottom: 8px; line-height: 1.5; }
   .cite-text { margin: 0; line-height: 1.6; }
   .doi { margin: 10px 0 0; font-family: var(--face-num); font-size: 0.9rem; }
-  .fine { margin-top: 16px; color: var(--ink-3); font-size: 0.88rem; max-width: var(--measure-read); }
+  .fine { margin-top: 14px; color: var(--ink-3); font-size: 0.84rem; max-width: var(--measure-read); }
 </style>

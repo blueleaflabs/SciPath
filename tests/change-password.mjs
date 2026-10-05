@@ -69,8 +69,9 @@ test('a school that signs in by password alone shows no Google and links the cha
   assert.equal(shapeOrg({ sign_in: 'password' }).signIn, 'password');
   assert.equal(shapeOrg({}).signIn, 'both');
   assert.match(mv, /^sign_in: password$/m);
-  assert.match(home, /org\.signIn === 'password' \? \(\s*<p class="lede">Sign in with the email address and password you were given\.<\/p>/);
-  assert.match(home, /<a href="\/auth\/change\/">Change your password<\/a>/);
+  /* The closed class sees "you were given"; an open club (dev-167) is told it may make an account. */
+  assert.match(home, /org\.signIn === 'password' \? \(\s*<p class="lede">\{org\.signupMode === 'open' \? '[^']+' : 'Sign in with the email address and password you were given\.'\}<\/p>/);
+  assert.match(home, /org\.signIn === 'password' && org\.signupMode === 'closed' \? \([\s\S]{0,400}<a href="\/auth\/change\/">Change your password<\/a>/, 'the change page is for a class with no mailboxes; an open club gets the mailed link');
   assert.match(start, /if \(org\.signIn === 'password'\) return redirect\('\/app\/\?signin=password_only'\);/);
   assert.match(callback, /if \(org\?\.signIn === 'password'\) \{/);
   assert.match(callback, /return redirect\('\/app\/\?signin=password_only'\);/);

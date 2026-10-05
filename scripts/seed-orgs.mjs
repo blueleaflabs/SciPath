@@ -34,13 +34,31 @@ import process from 'node:process';
 import yaml from 'js-yaml';
 import { createClient } from '@supabase/supabase-js';
 
-import { loadDevVars } from './dev-vars.mjs';
+import { loadDevVars, loadCloudVars } from './dev-vars.mjs';
 import { requireApi } from './api-ready.mjs';
 
 /* The shared reader, so a shell that has just been restarted needs nothing
    sourced into it — and so this script parses the file the same way every
    other one does. A second parser is a second set of edge cases. */
-loadDevVars();
+/* `--cloud` (dev-167): read .cloud.vars instead of .dev.vars, and refuse
+   any project but the one PILOT_PROJECT_REF names, the way the roster
+   loader does. Without it, only the local stack is written. */
+const CLOUD = process.argv.includes('--cloud');
+if (CLOUD) loadCloudVars(); else loadDevVars();
+{
+  const url = process.env.PUBLIC_SUPABASE_URL ?? '';
+  const loopback = /^https?:\/\/(127\.0\.0\.1|localhost)(:|\/|$)/.test(url);
+  const ref = url.match(/^https?:\/\/([a-z0-9]+)\.supabase\.co/i)?.[1] ?? null;
+  const pilot = (process.env.PILOT_PROJECT_REF ?? '').trim();
+  if (CLOUD && (!ref || !pilot || ref !== pilot)) {
+    console.error(`--cloud, and ${url || '(no URL)'} is not the pilot project (PILOT_PROJECT_REF=${pilot || 'unset'}). Nothing has been written.`);
+    process.exit(1);
+  }
+  if (!CLOUD && !loopback) {
+    console.error(`${url} is not the local stack. Use --cloud to write to the hosted project. Nothing has been written.`);
+    process.exit(1);
+  }
+}
 
 const URL_ = process.env.PUBLIC_SUPABASE_URL;
 const KEY = process.env.SUPABASE_SECRET_KEY;
@@ -84,7 +102,7 @@ for (const file of files) {
   /* The platform and the theme sample are records without rows: they hold no
      students, nothing is ever scoped to them, and a row for each would be a
      tenant that exists only to be skipped by every query. */
-  if (doc.provisioned === false) {
+  if (doc.provisioned === false || doc.served === false) {
     skipped += 1;
     continue;
   }

@@ -9,16 +9,23 @@ import { activeOrg } from '../../../lib/tenant';
 
 const org = activeOrg(Astro);
 
+/* Who reads a submission, in the tenant's own word (dev-167): a club's
+   editors are its officers; elsewhere they are editors. The platform is
+   named by its own name. */
+const who = org.isPlatform ? 'SciPath' : org.name;
+const readers = org.archivePath === '/journal/' && !org.isPlatform ? 'officers' : 'editors';
+const journal = org.archivePath === '/journal/' ? (org.showcaseTitle ?? 'the journal') : `the ${org.archiveWord.toLowerCase()}`;
+
 const pages = [
   {
     href: '/submit/checklist/',
     title: 'Pre-submission checklist',
-    note: 'The human-readable mirror of the automated checks. If it is on this list, the system checks it.',
+    note: 'If it is on this list, the system checks it before human review.',
   },
   {
     href: '/submit/review-process/',
     title: 'How review works',
-    note: 'Every state, what it means, how long it takes, who decides, and how to withdraw.',
+    note: 'The detailed review process, how long it takes, who decides, and how to withdraw.',
   },
   {
     href: '/submit/authorship/',
@@ -40,7 +47,7 @@ const pages = [
   <PageHead
     eyebrow="Publication"
     title="Publish your work"
-    lede="Publication is the last stage of a project, not a separate thing you apply to. When the work is finished, you submit it, a named person reviews it, and what comes out is a permanent record with its own URL."
+    lede={`Publication is the last stage of a project. When the work is finished, you submit it to ${who}, one or more ${readers} will review it, and if accepted, will publish it to ${journal}.`}
   />
 
   <div class="wrap">
@@ -49,34 +56,29 @@ const pages = [
       <p class="prose">
         {
           org.editorialReview
-            ? 'Submissions are read by named reviewers with faculty oversight. That is editorial review, not double blind peer review, and we say so on every record we publish. Blinding at this scale would be theater, and signed review is both the honest option and the better teacher.'
+            ? 'Submissions are read by student reviewers with potential faculty oversight. That is only an editorial review, not double blind peer review.'
             : 'Work is published once the competition season is over, without an editorial review stage.'
         }
       </p>
       <p class="prose" style="margin-top:14px">
         What you get is a permanent, indexed, citable record: its own URL that never
         changes, a stable identifier, a formatted citation, and metadata that lets search
-        engines and scholarly indexes find it. That is worth linking from an application
-        years later, and it does not require anyone to claim it is something it is not.
+        engines and scholarly indexes find it.
       </p>
     </section>
 
     <section class="sec">
-      <div class="sec-h"><b>What happens when you submit</b><span>Seven steps</span></div>
+      <div class="sec-h"><b>What happens when you submit</b><span>Eight steps</span></div>
       <ol class="steps">
-        <li><b>Structural checks run first.</b> Anything a machine can check is checked before a person is involved. Failures are shown against the section that failed, so you fix them instead of hearing about them a week later.</li>
-        <li><b>Every co-author has to have accepted.</b> A submission listing someone who has not accepted cannot proceed.</li>
+        <li><b>Automated structural checks run first.</b> Failures are shown against the section that failed, requiring you to fix them and resubmit.</li>
+        <li><b>If you have co-authors, each of them has to accept.</b> A submission listing someone who has not accepted cannot proceed.</li>
         <li><b>The record is created</b> and you get a tracking link that works without logging in.</li>
         <li><b>All co-authors are emailed</b> the tracking link and the expected timeline.</li>
         <li><b>An editor screens it</b> for scope, ethics flags, and prior publication.</li>
         <li><b>One or two reviewers are assigned</b>, each with a due date.</li>
-        <li><b>You get one consolidated list</b> of what to change, not raw reviewer output. Two reviewers who contradict each other are the editor's problem to resolve, not yours.</li>
+        <li><b>You get one consolidated list</b> of what to change, not raw reviewer output.</li>
+        <li><b>Usually there are at most two revision rounds.</b> After the second, the editor accepts or declines. You can withdraw at any point before publication.</li>
       </ol>
-      <p class="t-sm" style="margin-top:16px">
-        There are at most two revision rounds. After the second, the editor accepts or
-        declines. Without a cap, submissions live forever and the queue becomes a
-        graveyard. You can withdraw at any point before publication.
-      </p>
     </section>
 
     <section class="sec">

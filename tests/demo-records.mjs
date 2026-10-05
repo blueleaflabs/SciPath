@@ -77,7 +77,7 @@ test('the showcase is named by the tenant, with a word under the name', () => {
   assert.match(demo, /^showcase_title: Monta Vista Research Club Journal$/m);
   assert.match(demo, /^showcase_kicker: Demo showcase$/m);
   const page = fs.readFileSync('src/pages/showcase/index.astro', 'utf8');
-  assert.match(page, /title=\{archive\.org\.showcaseTitle \?\? 'Showcase'\}/);
+  assert.match(page, /title=\{archive\.org\.showcaseTitle \?\? archive\.org\.archiveWord\}/, 'and the fallback is the word the tenant uses (dev-167)');
   assert.match(page, /sub=\{archive\.org\.showcaseKicker\}/);
 });
 
@@ -110,13 +110,16 @@ test('front_door and featured shape from the document, and only showcase is unde
   assert.deepEqual(shapeOrg(base).featured, []);
 });
 
-test('the demonstration tenant opens on its showcase; no real school does', () => {
+test('the demonstration tenant and the research club open on their journal; no school does', () => {
   const demo = fs.readFileSync('src/config/orgs/demo.yaml', 'utf8');
   assert.match(demo, /^front_door: showcase$/m);
-  for (const file of fs.readdirSync('src/config/orgs').filter((f) => f.endsWith('.yaml') && f !== 'demo.yaml')) {
+  /* The club (dev-167): its journal is its public face, by design. A
+     school's front is still the pitch. */
+  for (const file of fs.readdirSync('src/config/orgs').filter((f) => f.endsWith('.yaml') && f !== 'demo.yaml' && f !== 'mvrj.yaml')) {
     const text = fs.readFileSync(`src/config/orgs/${file}`, 'utf8');
     if (!/^demo: true$/m.test(text)) assert.doesNotMatch(text, /^front_door:/m, `${file} names a front door`);
   }
+  assert.match(fs.readFileSync('src/config/orgs/mvrj.yaml', 'utf8'), /^front_door: showcase$/m);
 });
 
 /* ── The seed and the refresh ───────────────────────────────────────────── */
@@ -175,7 +178,7 @@ test('the showcase opens with featured, then year and subject, then the list; se
 test('the home page sends a visitor through the front door and a session past it', () => {
   const home = fs.readFileSync('src/pages/index.astro', 'utf8');
   assert.match(home, /org\.frontDoor === 'showcase' && !\(Astro\.locals as any\)\.session/);
-  assert.match(home, /Astro\.redirect\('\/showcase\/', 302\)/);
+  assert.match(home, /Astro\.redirect\(org\.archivePath, 302\)/, 'to the archive under whatever name the tenant gives it (dev-167)');
 });
 
 console.log(`  ${passed} passed`);

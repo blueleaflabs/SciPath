@@ -56,11 +56,11 @@ const org = Astro.props.org ?? activeOrg(Astro);
 const nav = org.isPlatform
   ? [
       { href: '/how-it-works/', label: 'How it works' },
-      { href: '/showcase/', label: 'Showcase' },
+      { href: org.archivePath, label: org.archiveWord },
       { href: '/guides/', label: 'Guides' },
     ]
   : [
-      { href: '/showcase/', label: 'Showcase', key: 'showcase' },
+      { href: org.archivePath, label: org.archiveWord, key: 'showcase' },
       { href: '/guides/', label: 'Guides', key: 'guides' },
       { href: '/submit/', label: 'Publish', key: 'publish' },
     ].filter((n: any) => {
@@ -168,7 +168,7 @@ const isCurrent = (href: string) => here === href || (href !== '/' && here.start
               <li class="mnav-who">
                 <a href="/app/profile/" class="mnav-me" aria-current={here === '/app/profile/' ? 'page' : undefined} title="My profile">
                   <span class="mnav-ini" aria-hidden="true">{initialsOf(account.display_name)}</span>
-                  <span>{account.display_name}</span>
+                  <span class="mnav-name">{account.display_name}</span>
                 </a>
                 {consentNote && <span class="mnav-flag">{consentNote}</span>}
               </li>
@@ -344,11 +344,20 @@ const isCurrent = (href: string) => here === href || (href !== '/' && here.start
     flex-wrap: wrap;
   }
 
-  @media (min-width: 861px) {
+  /* 1024, from 861 (dev-167): at 861 the signed-in bar with a real name
+     did not fit, the search field could give no more, and the section
+     links slid under the lockup, the school's name printed over the
+     section links. Below the breakpoint the bar wraps, which is the
+     honest shape; above it the name is the one thing that gives way, cut
+     with an ellipsis at fourteen characters (the full name is the link's
+     title and the profile page's heading). */
+  @media (min-width: 1024px) {
     .mnav-bar { flex-wrap: nowrap; min-width: 0; }
     .mnav { flex-wrap: nowrap; }
     .mnav-acct { flex-wrap: nowrap; }
+    .mnav-name { display: inline-block; max-width: 14ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; }
   }
+  .mnav li a { white-space: nowrap; }
 
   .mnav-acct {
     align-items: center;
@@ -476,7 +485,7 @@ const isCurrent = (href: string) => here === href || (href !== '/' && here.start
      next, wrapping as it must, with the rule between the groups gone
      because they are no longer side by side. Everything is left-aligned,
      in the order a thumb reads it. */
-  @media (max-width: 860px) {
+  @media (max-width: 1023px) {
     .mnav-bar { flex: 1 1 auto; min-width: 0; gap: 10px 18px; }
     .mnav, .mnav-acct { flex-wrap: wrap; gap: 8px 18px; }
     .mnav-acct { padding-left: 0; border-left: 0; flex: 1 1 100%; white-space: normal; min-width: 0; }

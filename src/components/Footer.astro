@@ -18,9 +18,9 @@ const columns = [
   {
     label: 'Read',
     links: [
-      { href: '/showcase/', label: 'Showcase' },
-      { href: '/showcase/?kind=article', label: 'Papers' },
-      { href: '/showcase/?kind=project', label: 'Fair entries' },
+      { href: org.archivePath, label: org.archiveWord },
+      { href: `${org.archivePath}?kind=article`, label: 'Papers' },
+      { href: `${org.archivePath}?kind=project`, label: 'Fair entries' },
       { href: '/authors/', label: 'Authors' },
       { href: '/topics/', label: 'Topics' },
       { href: '/search/', label: 'Search' },
@@ -72,6 +72,9 @@ const columns = [
       { href: '/policies/privacy/', label: 'What we store' },
       { href: '/policies/editorial/', label: 'Editorial policy' },
       { href: '/policies/takedown/', label: 'Takedown' },
+      /* One address for anything that should not be here (dev-167): on
+         every page, signed in or not, at every tenant. */
+      { href: '/feedback/?about=report', label: 'Report a concern' },
       { href: '/policies/accessibility/', label: 'Accessibility' },
     ],
   },
@@ -125,7 +128,10 @@ const columns = [
     <p class="ft-base">
       We do not sell student data, show advertising, or build profiles. Published
       records carry the license stated on the record; authors keep copyright.<br />
-      {org.isPlatform ? platform.operatorCredit : `${org.name} runs on ${platform.name}, free and open source software.`}
+      {org.isPlatform ? platform.operatorCredit : `${org.name} runs on ${platform.name}, free and open source software.`}<br />
+      {/* One address for anything that should not be here (dev-167), on
+          every page, signed in or not, whether or not the directory shows. */}
+      Something here that should not be? <a href="/feedback/?about=report">Report a concern</a> · <a href="/policies/takedown/">Takedown</a>
     </p>
   </div>
 </footer>

@@ -44,8 +44,24 @@ export function slugForHostname(hostname: string): string | null {
   for (const [slug, record] of Object.entries(orgs)) {
     if ((record.subdomain ?? slug).toLowerCase() === label) return slug;
   }
+  /* A label the tenant used to answer on (dev-167) still names it; the
+     middleware sends the request on to the label it answers on now. */
+  for (const [slug, record] of Object.entries(orgs)) {
+    if ((record.formerly ?? []).includes(label)) return slug;
+  }
 
   return null;
+}
+
+/** The label a tenant answers on today. */
+export function labelOf(org: Org): string {
+  return (org.subdomain ?? org.slug).toLowerCase();
+}
+
+/** True where the hostname's first label is one this tenant used to answer on, not the one it answers on now. */
+export function onFormerLabel(hostname: string, org: Org): boolean {
+  const label = hostname.toLowerCase().split(':')[0].split('.')[0];
+  return label !== labelOf(org) && (org.formerly ?? []).includes(label);
 }
 
 /**
@@ -61,7 +77,12 @@ export function resolveOrg(hostname?: string): { slug: string; org: Org } {
 
 /** Whether a hostname is one this deployment answers for (2.9); see hosts.ts. */
 export function hostIsOurs(hostname: string, rootDomain: string): boolean {
-  return hostIsKnown(hostname, rootDomain, (h) => slugForHostname(h) !== null);
+  /* A tenant no deployment answers for (`served: false`, dev-167) is not
+     a known host, whatever the files say about its name. */
+  return hostIsKnown(hostname, rootDomain, (h) => {
+    const slug = slugForHostname(h);
+    return slug !== null && orgs[slug]?.served !== false;
+  });
 }
 
 /**

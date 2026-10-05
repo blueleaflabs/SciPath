@@ -16,7 +16,7 @@ cachePublicPage(Astro);
 ---
 
 <Base title="Showcase" description="Every published record, newest first, each with its full abstract.">
-  <PageHead eyebrow="Published records" title="Showcase" lede={archive.org.showcaseNote} />
+  <PageHead eyebrow="Published records" title={archive.org.showcaseTitle ?? archive.org.archiveWord} lede={archive.org.showcaseNote} />
   <div class="wrap">
     {records.length === 0 ? (
       <Empty title="Nothing published yet" body="A record appears here when an editor accepts it and an officer publishes it." />

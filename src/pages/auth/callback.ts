@@ -45,8 +45,18 @@ export const GET: APIRoute = async ({ request, cookies, url, locals, redirect })
      an identity Google created for an address with no account here is
      removed, as the closed door does. An account that exists is not
      harmed — it simply is not signed in this way. */
+  /* Not an address that signed up with a password (dev-167): the
+     sign-up mail's default link lands here with a code, and that identity
+     is the person's own, not Google's. Only a provider other than email is
+     turned away. */
+  const { data: { user: arrived } } = org?.signIn === 'password' ? await supabase.auth.getUser() : { data: { user: null } };
+  const byEmail = arrived ? (arrived.app_metadata?.provider ?? 'email') === 'email' : false;
+  if (org?.signIn === 'password' && byEmail) {
+    cookies.delete('scipath_next', { path: '/' });
+    return redirect('/app/welcome/');
+  }
   if (org?.signIn === 'password') {
-    const { data: { user: gu } } = await supabase.auth.getUser();
+    const gu = arrived;
     if (gu) {
       const { data: existing } = await supabase.from('users').select('id').eq('id', gu.id).maybeSingle();
       if (!existing) {

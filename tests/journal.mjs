@@ -48,8 +48,10 @@ const records = archive?.records ?? [];
  * during an edit, and the paper that goes missing is the one nobody notices
  * is gone.
  */
-test('twenty nine articles, and the year breakdown adds up to them', () => {
-  assert.equal(records.length, 29);
+test('forty articles, and the year breakdown adds up to them', () => {
+  /* Twenty nine from the back catalogue, and eleven submitted through
+     the form in 2025 and 2026 (dev-168). */
+  assert.equal(records.length, 40);
 
   const byYear = {};
   for (const r of records) {
@@ -57,7 +59,7 @@ test('twenty nine articles, and the year breakdown adds up to them', () => {
     byYear[year] = (byYear[year] ?? 0) + 1;
   }
 
-  assert.deepEqual(byYear, { 2020: 1, 2021: 5, 2022: 7, 2023: 6, 2024: 10 });
+  assert.deepEqual(byYear, { 2020: 1, 2021: 5, 2022: 7, 2023: 6, 2024: 10, 2025: 10, 2026: 1 });
 });
 
 test('every row carries the fields a record cannot be made without', () => {
@@ -86,7 +88,7 @@ test('slugs are unique across the archive', () => {
     assert.ok(!seen.has(r.slug), `${r.slug} is used by rows ${seen.get(r.slug)} and ${r.seq}`);
     seen.set(r.slug, r.seq);
   }
-  assert.equal(seen.size, 29);
+  assert.equal(seen.size, 40);
 });
 
 test('a slug is lowercase ASCII, hyphenated, and inside the length rule', () => {
@@ -231,15 +233,21 @@ test('the repeat authors resolve to one page each', () => {
   assert.equal(counts.get('jai-sharma'), 4);
   assert.equal(counts.get('milind-maiti'), 3);
   assert.equal(counts.get('aryan-singhal'), 2);
-  assert.equal(counts.get('raymond-feng'), 2);
-  assert.equal(counts.get('advaith-anand'), 2);
+  /* The 2025 submissions (dev-168) bring four of the 2023–2024 authors back. */
+  assert.equal(counts.get('advaith-anand'), 3);
+  assert.equal(counts.get('raymond-feng'), 3);
+  assert.equal(counts.get('tanisha-sood'), 2);
+  assert.equal(counts.get('tashvi-bansal'), 2);
+  assert.equal(counts.get('rohan-agarwal'), 2);
+  assert.equal(counts.get('lindsey-niu'), 1, 'one record for the microfluidic sensor, not one per version');
   assert.equal(counts.get('tyler-rose'), 2);
 
-  /* Seven here rather than 4.1's eight, and the missing one is Navvye Anand,
-     who is on PLAPT and WaterGate and is byline-only in both. An author from
-     outside the school having two papers does not give them a page. */
+  /* Seven in the back catalogue rather than 4.1's eight, and the missing
+     one is Navvye Anand, who is on PLAPT and WaterGate and is byline-only
+     in both. An author from outside the school having two papers does not
+     give them a page. Three more with the 2025 submissions. */
   const repeats = [...counts.values()].filter((n) => n > 1).length;
-  assert.equal(repeats, 7, `${repeats} authors appear more than once`);
+  assert.equal(repeats, 10, `${repeats} authors appear more than once`);
 });
 
 /**
@@ -254,9 +262,11 @@ test('the repeat authors resolve to one page each', () => {
  * Asserted because a byline is where a transcription slip hides: one name
  * spelled two ways splits a bibliography in half and nothing errors.
  */
-test('thirty one distinct authors across the archive', () => {
+test('forty three distinct authors across the archive', () => {
+  /* Thirty one in the back catalogue; twelve more with the 2025–2026
+     submissions (dev-168), one of them an outside co-author. */
   const names = new Set(records.flatMap((r) => r.authors.map((a) => slugName(a.name))));
-  assert.equal(names.size, 31, [...names].sort().join(', '));
+  assert.equal(names.size, 43, [...names].sort().join(', '));
 });
 
 test('a co-author from outside the school is marked, and gets no author page', () => {
@@ -488,7 +498,20 @@ const DELIVERED = [
   "Research Paper 2022 - Exoplanets.pdf",
   "Tyler_PLAPT.pdf",
   "final research paper -- tashvi bansal -- mvrj (1) - Tashvi Bansal.pdf",
-  "research_paper_Yashnil_Saha.pdf"
+  "research_paper_Yashnil_Saha.pdf",
+  /* The eleven submitted through the form (dev-168), named by title and
+     author on the way in so the folder reads as a shelf. */
+  "Counterfactual Loss Improves Feature-Token Transformer Performance in Community Homelessness Prediction - Tashvi Bansal.pdf",
+  "Countering Antibiotic Resistance with Proteomics Data and Artificial Intelligence Based Virtual Screening - Rishi Salvi.pdf",
+  "Effect of Chitosan Concentration on the Youngs Modulus and Biodegradability of Silkworm Silk through Cross-Linking - Kevin Chen, Bryan Ge et al.pdf",
+  "Fatigue Analysis of Stirling Cryocooler Flexure Springs for Long Space Mission Lifetime - Raymond Feng, Hannah Rana.pdf",
+  "Fusing Sight and Sound - A Multimodal Deep Learning System for Species Identification - Advaith Anand.pdf",
+  "Low-Cost PDMS Microfluidic Sensor Detects Micro Blood Flow Rates for Cardiovascular Disease Monitoring - Lindsey Niu.pdf",
+  "OsmoFlux - Modeling the Financial Risk of Desalination Brine Discharge and the Viability of Reverse Electrodialysis as a Risk Mitigation Strategy - Rohan Agarwal.pdf",
+  "Quantum-Enhanced Analysis and Grading of Vocal Performance - A Novel Approach for Musical Evaluation and Improvement - Rohan Agarwal.pdf",
+  "Restoring Motor Signals Using Raspberry Pi and EMG Detection - A Model for Neural Paralysis and Recovery - Tanisha Sood.pdf",
+  "The Solve to Climate Change - An Artificial Intelligence Prediction Model to Raise Awareness about Climate Change in California - Vedant Shah, Rushil Sengupta et al.pdf",
+  "Using Topobathymetric LiDar and Geospatial Modeling to Identify Threats to Endangered Mangroves - Anirud Sainarayanan, Samarth Kashyap.pdf"
 ];
 
 test('every delivered paper is claimed by exactly one record', () => {

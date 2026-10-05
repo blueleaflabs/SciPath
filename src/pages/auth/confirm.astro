@@ -1,0 +1,82 @@
+---
+export const prerender = false;
+
+/**
+ * CONFIRM AN ADDRESS (dev-167).
+ *
+ * Where the link in the sign-up message lands. The message carries the
+ * token itself (`{{ .RedirectTo }}?token_hash={{ .TokenHash }}&type=signup`,
+ * supabase/templates/confirmation.html), as the recovery mail does, so
+ * the link opens on any device and not only the one that asked. The
+ * token is not spent on arrival: a mail filter's preview or a phone's
+ * link check would spend it before the person did. One press spends it,
+ * signs them in, and sends them to the welcome page, where the account
+ * is made.
+ *
+ * A `code` link (the service's default template) is accepted too, for a
+ * project whose template was never pasted; it only works in the browser
+ * that signed up.
+ */
+
+import Base from '../../layouts/Base.astro';
+import { serverClient } from '../../lib/supabase';
+import { activeOrg } from '../../lib/tenant';
+import { afterPost, outcomeFrom } from '../../lib/post-redirect';
+
+const org = activeOrg(Astro);
+let { error } = outcomeFrom(Astro.url);
+
+const supabase = serverClient(Astro.request, Astro.cookies, (Astro.locals as any).runtime?.env);
+
+const tokenHash = Astro.url.searchParams.get('token_hash');
+const linkType = Astro.url.searchParams.get('type');
+const pending = tokenHash && (linkType === 'signup' || linkType === 'email') ? tokenHash : null;
+
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData();
+  const token = String(form.get('token_hash') ?? '');
+  const type = String(form.get('type') ?? 'signup') === 'email' ? 'email' : 'signup';
+  if (!token) return afterPost(Astro.url, { error: 'Follow the link in your email first.', note: null });
+  const { error: verifyError } = await supabase.auth.verifyOtp({ type, token_hash: token });
+  if (verifyError) return afterPost(Astro.url, { error: 'That link has expired or has already been used. Sign up again to get a new one.', note: null });
+  return Astro.redirect('/app/welcome/');
+}
+
+const code = Astro.url.searchParams.get('code');
+if (code) {
+  const { error: exchangeError } = await supabase.auth.exchangeCodeForSession(code);
+  if (exchangeError) error = 'That link has expired or has already been used. Sign up again to get a new one.';
+  else return Astro.redirect('/app/welcome/');
+}
+---
+
+<Base title="Confirm your address" noindex={true}>
+  <div class="wrap">
+    <section class="stack">
+      <p class="eyebrow">{org?.name}</p>
+      <h1>Confirm your address</h1>
+
+      <div id="outcome" tabindex="-1">
+        {error && <p class="note" role="alert">{error}</p>}
+      </div>
+
+      {pending ? (
+        <form method="POST" action="/auth/confirm/" class="stack">
+          <input type="hidden" name="token_hash" value={pending} />
+          <input type="hidden" name="type" value={linkType} />
+          <p class="lede">One press confirms this address and signs you in. Then a few questions, and your account is made.</p>
+          <p><button class="btn" type="submit">Confirm and continue</button></p>
+        </form>
+      ) : !error ? (
+        <p class="lede">Follow the link in the message we sent to your address. If it has not arrived in a few minutes, check the spam folder, then <a href="/app/#create">sign up again</a>.</p>
+      ) : (
+        <p><a class="btn" href="/app/#create">Back to sign up</a></p>
+      )}
+    </section>
+  </div>
+</Base>
+
+<style>
+  form.stack { max-width: 48ch; }
+  .lede { max-width: var(--measure-text); }
+</style>

@@ -269,9 +269,12 @@ test('every provisioned tenant is allowed back from Google on the local stack', 
   const missing = [];
   for (const file of files) {
     const doc = yaml.load(fs.readFileSync(path.join(dir, file), 'utf8'));
-    if (doc.provisioned === false) continue;
-    const want = `http://${doc.slug}.localhost:4321/**`;
-    if (!allowed.includes(want)) missing.push(want);
+    if (doc.provisioned === false || doc.served === false) continue;
+    /* On the label the tenant answers on (dev-167), and on every label it used to. */
+    for (const label of [doc.subdomain ?? doc.slug, ...(doc.formerly ?? [])]) {
+      const want = `http://${label}.localhost:4321/**`;
+      if (!allowed.includes(want)) missing.push(want);
+    }
   }
   assert.deepEqual(missing, [], 'add it to additional_redirect_urls in supabase/config.toml');
 });
@@ -309,6 +312,74 @@ test('the front door calls the class what the school file says (2.9)', () => {
   assert.match(home, /const cohortName = org\.className \?\? cohorts\[0\]\?\.name/, 'and the page reads it before falling back to the first cohort');
   const shape = fs.readFileSync('src/config/org-shape.ts', 'utf8');
   assert.match(shape, /className: typeof doc\.class_name === 'string'/, 'travels through shapeOrg');
+});
+
+test('the class stays on montavista; svslc is not served; the platform is open; a former label would be sent on (dev-167)', () => {
+  const mv = yaml.load(fs.readFileSync('src/config/orgs/montavista.yaml', 'utf8'));
+  assert.equal(mv.subdomain, undefined, 'the class keeps its host');
+  assert.equal(mv.formerly, undefined);
+  const svslc = yaml.load(fs.readFileSync('src/config/orgs/svslc.yaml', 'utf8'));
+  assert.equal(svslc.served, false);
+  const sp = yaml.load(fs.readFileSync('src/config/orgs/scipath.yaml', 'utf8'));
+  assert.equal(sp.signup_mode, 'open');
+  const tenant = fs.readFileSync('src/lib/tenant.ts', 'utf8');
+  assert.match(tenant, /if \(\(record\.formerly \?\? \[\]\)\.includes\(label\)\) return slug;/, 'a former label still resolves the tenant');
+  assert.match(tenant, /return slug !== null && orgs\[slug\]\?\.served !== false;/, 'an unserved tenant is not a known host');
+  const mw = fs.readFileSync('src/middleware.ts', 'utf8');
+  assert.match(mw, /if \(onFormerLabel\(url\.hostname, org\)\) \{[\s\S]*?, 301\);/, 'and is sent on, for good');
+  const paths = fs.readFileSync('src/lib/tenant-paths.ts', 'utf8');
+  assert.match(paths, /filter\(\(slug\) => orgs\[slug\]\.served !== false\)/, 'no pages are built for it');
+  const seed = fs.readFileSync('scripts/seed-orgs.mjs', 'utf8');
+  assert.match(seed, /doc\.provisioned === false \|\| doc\.served === false/, 'and seed-orgs skips it');
+});
+
+test('the research club is its own tenant, and its archive is its journal (dev-167)', () => {
+  const club = yaml.load(fs.readFileSync('src/config/orgs/mvrj.yaml', 'utf8'));
+  assert.equal(club.slug, 'mvrj');
+  assert.equal(club.signup_mode, 'open');
+  assert.equal(club.sign_in, 'password');
+  assert.equal(club.requires_mentor, false);
+  assert.deepEqual(club.domains, []);
+  assert.equal(club.archive, 'journal');
+  assert.equal(club.front_door, 'showcase', 'the flyer address is the journal');
+  assert.equal(club.showcase_title, 'Monta Vista Research Journal');
+  assert.equal(club.record_prefix, 'MVRJ', 'the journal keeps its prefix');
+  assert.deepEqual(club.programs, ['scvsefa-2027', 'mvhs-scvsefa-2027', 'mvrj-2027'], 'the club, the fair and the journal; nothing of the class, no state fair, no grant');
+  /* Every account at the club is a member of the club (dev-167). */
+  assert.deepEqual(club.auto_join, ['mvhs-scvsefa-2027']);
+  const clubProgram = yaml.load(fs.readFileSync('src/config/programs/mvhs-scvsefa-2027.yaml', 'utf8'));
+  assert.equal(clubProgram.joining, 'open', 'a cohort joined on the way in has to admit anybody');
+  const welcome = fs.readFileSync('src/pages/app/welcome.astro', 'utf8');
+  assert.match(welcome, /for \(const templateId of \(org\?\.autoJoin \?\? \[\]\) as string\[\]\)/);
+  assert.match(welcome, /supabase\.rpc\('join_cohort', \{ p_cohort_id: c\.id \}\)/);
+  assert.match(fs.readFileSync('src/config/org-shape.ts', 'utf8'), /autoJoin: Array\.isArray\(doc\.auto_join\)/);
+  const fair = yaml.load(fs.readFileSync('src/config/programs/scvsefa-2027.yaml', 'utf8'));
+  assert.equal(fair.name, 'Synopsys Silicon Valley Science and Technology Championship 2027 - Candidate');
+  assert.ok(!club.programs.includes('irpd-mvhs-2027'));
+  assert.equal(club.hidden_until, undefined, 'nothing hidden: the journal is the point');
+  /* The class is untouched: closed, by password, its archive still its showcase. */
+  const mv = yaml.load(fs.readFileSync('src/config/orgs/montavista.yaml', 'utf8'));
+  assert.equal(mv.signup_mode, 'closed');
+  assert.equal(mv.archive, undefined);
+  /* One word and one path, read from the record everywhere the archive is named. */
+  const shape = fs.readFileSync('src/config/org-shape.ts', 'utf8');
+  assert.match(shape, /archiveWord: doc\.archive === 'journal' \? 'Journal' : 'Showcase'/);
+  assert.match(shape, /archivePath: doc\.archive === 'journal' \? '\/journal\/' : '\/showcase\/'/);
+  for (const f of ['src/components/Masthead.astro', 'src/components/Footer.astro', 'src/pages/index.astro', 'src/pages/showcase/index.astro']) {
+    const text = fs.readFileSync(f, 'utf8');
+    assert.match(text, /archivePath/, `${f} links to the archive by the record's path`);
+    if (f !== 'src/pages/index.astro') assert.doesNotMatch(text.replace(/\/\*[\s\S]*?\*\//g, ''), /['"`]\/showcase\//, `${f} has no /showcase/ literal left`);
+  }
+  const journal = fs.readFileSync('src/pages/journal/index.astro', 'utf8');
+  assert.ok(journal.includes("import Showcase " + "from '../showcase/index.astro'"), 'one page, rendered under a second name');
+  assert.match(journal, /org\.archivePath !== '\/journal\/'\) return new Response\('Not found', \{ status: 404/);
+  const mw = fs.readFileSync('src/middleware.ts', 'utf8');
+  assert.match(mw, /org\.archivePath === '\/journal\/' && \(url\.pathname === '\/showcase' \|\| url\.pathname\.startsWith\('\/showcase\/'\)\)/);
+  assert.match(mw, /return context\.redirect\(`\/journal\/\$\{url\.pathname\.slice\('\/showcase\/'\.length\)\}\$\{url\.search\}`, 301\)/);
+  const routes = fs.readFileSync('src/config/routes.ts', 'utf8');
+  assert.match(routes, /'showcase',[\s\S]*'journal',/, 'the journal tree is not tenant-prefixed');
+  /* The class showcase inside the working surface keeps its name. */
+  assert.match(fs.readFileSync('src/components/AppShell.astro', 'utf8'), /Showcase/);
 });
 
 console.log(

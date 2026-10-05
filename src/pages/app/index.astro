@@ -25,6 +25,7 @@ import { resolveProgram, deliverablesFor, shape } from '../../lib/templates';
 import { docStanding } from '../../lib/documents';
 import { stepProgress } from '../../lib/step-progress';
 import { sponsorsFromPlaces } from '../../lib/sponsors';
+import { signupsClosed } from '../../lib/door';
 
 const { configured, session, account, roles } = Astro.locals;
 const org = activeOrg(Astro);
@@ -1881,6 +1882,19 @@ const careLayout = (group: any): 'grid' | 'wide' => {
         SciPath is by invitation at {org.name} for now: there is no account for that address, and none is made by signing in. Nothing was saved. If you are in the class, ask your teacher to check the roster.
       </p>
     )}
+    {/* The open door's own answers (dev-167). "Check your mail" is said the
+        same way for a new address and one already taken: which it was is
+        not a thing a page tells a stranger. */}
+    {signin === 'check_mail' && (
+      <p class="note" role="status">
+        Check your email. A message with a link is on its way to that address; press the button on the page it opens and your account is made. If nothing arrives in a few minutes, look in the spam folder.
+      </p>
+    )}
+    {signin === 'bad_email' && <p class="note" role="alert">That does not look like an email address. Nothing was saved.</p>}
+    {signin === 'short_password' && <p class="note" role="alert">A password needs at least 8 characters. Nothing was saved.</p>}
+    {signin === 'mismatch' && <p class="note" role="alert">Those two passwords did not match. Nothing was saved.</p>}
+    {signin === 'weak_password' && <p class="note" role="alert">That password was refused as too easy to guess. Choose a longer one. Nothing was saved.</p>}
+    {signin === 'signup_failed' && <p class="note" role="alert">Sign up did not complete. Try again in a moment.</p>}
 
     {/* **Why the address changed.**
     
@@ -1915,7 +1929,7 @@ const careLayout = (group: any): 'grid' | 'wide' => {
             `sign_in: password`): no Google button, and the words say what
             to type. */}
         {org.signIn === 'password' ? (
-          <p class="lede">Sign in with the email address and password you were given.</p>
+          <p class="lede">{org.signupMode === 'open' ? 'Sign in with your email address and password, or make an account below.' : 'Sign in with the email address and password you were given.'}</p>
         ) : (
           <>
             <p class="lede">
@@ -1986,7 +2000,7 @@ const careLayout = (group: any): 'grid' | 'wide' => {
               while typing it; somebody who does not has already failed once
               and is looking down the page. */}
           <p class="t-sm" style="margin:10px 0 0">
-            {org.signIn === 'password' ? (
+            {org.signIn === 'password' && org.signupMode === 'closed' ? (
               /* No mailbox to send a link to: the way to a new password is
                  the current one, on its own page. */
               <a href="/auth/change/">Change your password</a>
@@ -1995,6 +2009,25 @@ const careLayout = (group: any): 'grid' | 'wide' => {
             )}
           </p>
         </div>
+
+        {/* The open door (dev-167): an account made here, with any address
+            and a password of the person's own. The address is confirmed
+            from the message it receives; the questions every account
+            answers come after, on the welcome page. Only where the
+            school's file opens the door. */}
+        {org.signupMode === 'open' && !signupsClosed(org, (Astro.locals as any).runtime?.env) && (
+          <div class="fixture" id="create">
+            <p class="t-lbl">New here? Make an account</p>
+            <form method="POST" action="/auth/signup/" class="fixrow create">
+              {next !== HOME && <input type="hidden" name="next" value={next} />}
+              <label for="create-email"><span class="t-sm">Email</span><input id="create-email" name="email" type="email" autocomplete="email" required /></label>
+              <label for="create-password"><span class="t-sm">Choose a password (8 or more)</span><input id="create-password" name="password" type="password" autocomplete="new-password" minlength="8" required /></label>
+              <label for="create-again"><span class="t-sm">The password again</span><input id="create-again" name="again" type="password" autocomplete="new-password" minlength="8" required /></label>
+              <button class="btn" type="submit">Make my account</button>
+            </form>
+            <p class="t-sm" style="margin:10px 0 0">Any email address works. You will be asked to confirm it, then for your name and a few details. Under 18? A parent or guardian's address is asked for.</p>
+          </div>
+        )}
       </section>
     )}
 
@@ -3275,6 +3308,9 @@ const careLayout = (group: any): 'grid' | 'wide' => {
   .fixture { margin-top: 34px; padding: 18px 20px; border: 1px dashed var(--rule); max-width: 52ch; }
   .fixture .t-lbl { margin-bottom: 8px; }
   .fixrow { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+  .fixrow.create { align-items: flex-end; }
+  .fixrow.create label { flex: 1 1 16ch; display: flex; flex-direction: column; gap: 4px; }
+  .fixrow.create label input { width: 100%; }
   .fixrow input { flex: 1 1 14ch; padding: 8px 10px; border: 1px solid var(--rule); background: var(--card); color: var(--ink); font: inherit; font-size: 0.94rem; }
   .fixrow button { padding: 8px 14px; border: 1px solid var(--ink); background: var(--ink); color: var(--paper); font-family: var(--face-ui); font-size: 0.9rem; cursor: pointer; }
   /* A grid rather than a flex row. Sized to content, the fourth cell dropped

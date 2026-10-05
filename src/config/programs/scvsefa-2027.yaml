@@ -20,7 +20,7 @@ provenance:
   owner: Rohan Agarwal
   source_url: https://science-fair.org/students-parents/important-dates/
   rules_year: 2027
-  verified_on: 2026-08-25
+  verified_on: 2026-09-30
   changes:
     - on: 2026-08-22
       what: First reading. Inherits ISEF's forms and rulebook; the dates and the categories here are the fair's own.
@@ -33,6 +33,23 @@ provenance:
         wrong page. The fair posted a 2027 Changes from Previous Rules and
         Procedures page on 2026-08-21 which has not been read into this file
         yet; the dates are unaffected, the rules may not be.
+    - on: 2026-09-30
+      what: >-
+        Re-read against the Important Dates block (all eight anchors
+        unchanged; the awards ceremony still TBD) and the 2027 Changes from
+        Previous Rules and Procedures page, read in for the first time. What
+        changed the calendar's meaning is written on the steps below: a
+        school's project limit for 2027, with projects from a research
+        class or science club counted inside it, and a withdrawn project
+        that cannot be replaced; the subject and scope of a project fixed
+        from the SRC's first review; every returning participant on the
+        November date with Form 7, the SRC deciding what counts as a
+        continuation; the notebook required at check-in, a digital one with
+        a printed summary; and an application processed only once paid. The
+        forms the fair renamed or extended (2A Student Support Disclosure,
+        2B, 2C, 6B) are not deliverables here yet: the forms library is
+        ISEF's, and their wording has not been read from the fair's own
+        Required Forms page.
 
 family: scvsefa
 extends: isef
@@ -43,12 +60,19 @@ kind: competition
 # placement, and possibly somewhere to advance to.
 role: opportunity
 
-name: Synopsys Silicon Valley Science and Technology Championship
+# "Candidate" (dev-167): a project here has entered the fair on SciPath
+# and not yet been selected by its school under the fair's 2027 project
+# limit; the word comes off the name once the selection is announced. The
+# year is in the name so the title reads "... 2027 - Candidate" and not
+# "... - Candidate 2027". The hosted row is shared by every school that
+# lists the fair, so the rename is one UPDATE on programs.name (the seed
+# writes it for a new row only).
+name: Synopsys Silicon Valley Science and Technology Championship 2027 - Candidate
 short_name: Synopsys Championship
 authority: Santa Clara Valley Science and Engineering Fair Association
 level: regional
 season: 2027
-version: 1
+version: 2
 
 uses:
   deliverables: [deliverables-scvsefa, deliverables-isef, deliverables-common]
@@ -115,7 +139,11 @@ steps:
         - { ref: permission_hold_harmless }
       risk: >-
         **A human participants project after the final date is refused
-        outright**.
+        outright**. Every returning participant is on this date too, with
+        Form 7, whatever the project; the SRC decides whether it counts as a
+        continuation, not the student. And the project's subject and scope
+        are fixed from the SRC's first review: a refinement is fine, a
+        different project needs a new review.
 
     - id: register
       name: Register the entry
@@ -131,7 +159,11 @@ steps:
       note: >-
         The later of two deadlines and the one most students assume applies to
         them. Anything needing SRC or IRB approval, and every returning
-        participant, is on the November date instead.
+        participant, is on the November date instead. An application is
+        processed only once its last step (Pay and Submit) is done. And the
+        fair limits how many projects a school may enter in 2027, counting
+        the ones from a research class or a science club: the school decides
+        which go in, before this date.
 
     - id: lock_details
       name: Last day to change the title, category, or field of study
@@ -141,7 +173,9 @@ steps:
       consequence: none
       due: { anchor: changes_close, days: 0 }
       deliverables: []
-      note: Also the last day to withdraw. After it, a withdrawal is a no-show.
+      note: >-
+        Also the last day to withdraw. After it, a withdrawal is a no-show;
+        and a withdrawn project's place cannot be given to another project.
 
     - id: upload_abstract
       name: Upload the abstract to the judging folder
@@ -164,7 +198,12 @@ steps:
       due: { anchor: check_in, days: 0 }
       deliverables:
         - { ref: board }
-      note: Noon to 6pm.
+      note: >-
+        Noon to 6pm. Bring the notebook: a project without one at check-in
+        is marked not in compliance, and without one on judging day it is
+        out of the awards. A digital notebook needs a printed summary of the
+        process, data and results, and a copy that opens on a tablet or a
+        laptop, not a phone.
 
     - id: judging
       name: Judging day

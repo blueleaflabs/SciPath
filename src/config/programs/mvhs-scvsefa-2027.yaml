@@ -18,10 +18,21 @@ provenance:
   owner: Rohan Agarwal
   source_url: https://scvsefa.org/
   rules_year: 2027
-  verified_on: 2026-08-22
+  verified_on: 2026-09-30
   changes:
     - on: 2026-08-22
       what: First reading, against the club's own calendar.
+    - on: 2026-09-30
+      what: >-
+        The school's own selection added (dev-167): the fair limits how
+        many projects Monta Vista may enter in 2027 and counts the class's
+        and the club's projects inside that limit, so the school selects,
+        from everything submitted by October 23, the projects that go in.
+        The step's guidance says only what is known; the school's published
+        criteria are to be written onto it, verbatim, once they are in hand.
+        Then, the same day: the selection announced on October 27 as a step
+        of its own; the sponsor ask moved to October 31, after it; joining
+        opened, since every account at the club's tenant is a member.
 
 
 # The research club. A teacher advisor and student officers, and
@@ -44,9 +55,11 @@ season: 2027
 # The club has a signup. Not a selection: an officer is confirming that
 # somebody turned up and means it, which is a smaller thing than a class with
 # thirty places and still worth having a name against.
-joining: approval
+# Open (dev-167): the club's tenant is the club, and every account made
+# there joins on the way in (mvrj.yaml, `auto_join`). Was `approval`.
+joining: open
 
-version: 1
+version: 2
 
 uses:
   deliverables: [deliverables-common]
@@ -58,6 +71,46 @@ roles:
 
 steps:
   add:
+    # The school's selection (dev-167). The fair's 2027 rules give each
+    # school a limit on the projects it may enter and count a research
+    # class's and a science club's projects inside it; more projects want
+    # in than the limit allows, so the school chooses. An absolute date,
+    # the school's own, not an offset from the fair's.
+    - id: school_selection
+      name: Project submitted to MVRC for consideration
+      phase: design
+      order: 33
+      internal: true
+      owner: student
+      due: { on: 2026-10-23 }
+      consequence: blocks_registration
+      deliverables:
+        - { ref: research_plan }
+      note: >-
+        Monta Vista may enter a limited number of projects in the 2027
+        Championship, and every project from the class and the club counts
+        against that limit. Everything in by this date is read against the
+        club's published selection criteria; only the projects selected go
+        on to register. Not a rule of the fair: the school's own.
+      risk: >-
+        A plan that is still a topic on this date is not read as a plan.
+        Be concrete about the question, the method and what will be
+        measured; that is what the selection reads.
+
+    - id: selection_announced
+      name: Selected projects announced
+      phase: design
+      order: 34
+      internal: true
+      owner: program
+      consequence: none
+      due: { on: 2026-10-27 }
+      deliverables: []
+      note: >-
+        The projects going to the 2027 Championship under Monta Vista's
+        limit are named. A project not selected keeps its work and its
+        journal path; it does not register for the fair.
+
     - id: club_topic
       name: Settle the question with an officer
       phase: topic
@@ -84,10 +137,13 @@ steps:
     - id: club_sponsor
       name: Ask a teacher to sponsor
       phase: forms
-      order: 42
+      order: 55
       internal: true
       owner: student
-      due: { anchor: src_early, days: -21 }
+      # October 31 (dev-167), an absolute date, from three weeks before the
+      # fair's early SRC date (which was October 12): after the selection,
+      # not before it.
+      due: { on: 2026-10-31 }
       risk: >-
         A week of silence is normal and not a refusal. Two weeks means ask
         somebody else. Start before the plan is finished: the sponsor has to
@@ -112,7 +168,7 @@ steps:
       # numbered after it: the name said one thing and the order said another,
       # and a student reading the list in order would have seen the check
       # after the thing it checks.
-      order: 55
+      order: 54
       internal: true
       owner: staff
       requires: [approvals_before_work]

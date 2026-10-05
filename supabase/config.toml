@@ -164,7 +164,7 @@ site_url = "http://localhost:4321"
 # back. A redirect_to that is not on this list is silently discarded and
 # the user lands on site_url with an unexchanged ?code= in the address
 # bar, which looks like nothing happened at all.
-additional_redirect_urls = ["http://localhost:4321", "http://localhost:4321/**", "http://127.0.0.1:4321/**", "http://montavista.localhost:4321/**", "http://svslc.localhost:4321/**", "http://demo.localhost:4321/**", "http://scipath.localhost:4321/**"]
+additional_redirect_urls = ["http://localhost:4321", "http://localhost:4321/**", "http://127.0.0.1:4321/**", "http://montavista.localhost:4321/**", "http://demo.localhost:4321/**", "http://scipath.localhost:4321/**", "http://mvrj.localhost:4321/**"]
 # How long tokens are valid for, in seconds. Defaults to 3600 (1 hour), maximum 604,800 (1 week).
 jwt_expiry = 3600
 # JWT issuer URL. If not set, defaults to auth.external_url.
@@ -268,6 +268,16 @@ otp_expiry = 3600
 [auth.email.template.recovery]
 subject = "Set a new SciPath password"
 content_path = "./supabase/templates/recovery.html"
+
+# The sign-up mail, the same way (dev-167): the token itself, verified by
+# the press of a button on /auth/confirm/, so the link opens on any
+# device and a mail filter's preview cannot spend it. Pasted into the
+# hosted project's template (Authentication -> Emails -> Confirm signup)
+# from this file; the hosted project also needs its own SMTP, since the
+# service's built-in sender is rate-limited to a few messages an hour.
+[auth.email.template.confirmation]
+subject = "Confirm your SciPath address"
+content_path = "./supabase/templates/confirmation.html"
 
 # Uncomment to customize email template
 # [auth.email.template.invite]

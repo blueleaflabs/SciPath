@@ -14,7 +14,7 @@ const records = archive.articles.filter((r) => r.year === year);
 cachePublicPage(Astro);
 ---
 
-<Base title={`Showcase ${year}`} description={`Every published record, newest first, each with its full abstract. ${year}.`}>
+<Base title={`${archive.org.archiveWord} ${year}`} description={`Every published record, newest first, each with its full abstract. ${year}.`}>
   <PageHead eyebrow="Year archive" title={String(year)} lede={`${records.length} ${records.length === 1 ? 'record' : 'records'}`} />
   <div class="wrap">
     <section class="sec" style="padding-top:0">

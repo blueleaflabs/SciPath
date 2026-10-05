@@ -7,7 +7,7 @@
  * figures are inside its PDF. So every record gets a cover, and the rule
  * for what it is lives here and nowhere else: the first showcase picture,
  * else the first figure, else the video's still, else a typographic panel
- * in the discipline's tint with the record's number set large. A grid with
+ * in the discipline's tint with the subject's name set large (dev-167). A grid with
  * holes in it says the archive is thin; a grid of covers says it is full,
  * which is the truth.
  *
@@ -27,7 +27,6 @@ const { record: d, wide = false } = Astro.props;
 
 const picture = d.shots[0]?.src ?? d.figures[0]?.src ?? d.videoPoster ?? null;
 const alt = d.shots[0]?.alt ?? d.figures[0]?.alt ?? '';
-const seq = d.recordId.split('-').pop();
 
 const hue = disciplineHue(d.discipline);
 const style = toneStyle(d.discipline);
@@ -38,8 +37,8 @@ const style = toneStyle(d.discipline);
     <img src={picture} alt={alt} loading="lazy" decoding="async" />
   ) : (
     <div class="panel" aria-hidden="true">
-      <span class="no">{seq}</span>
       <span class="disc">{disciplineLabel(d.discipline)}</span>
+      <span class="kind">{d.recordKind === 'project' ? 'Fair entry' : 'Paper'} · {d.year}</span>
     </div>
   )}
 </div>
@@ -71,16 +70,21 @@ const style = toneStyle(d.discipline);
     padding: 14px 16px;
     color: hsl(var(--hue) var(--sat) 16%);
   }
-  .no {
-    font-family: var(--face-num);
-    font-size: 2.6rem;
-    line-height: 1;
-    letter-spacing: -0.02em;
-  }
+  /* The subject fills the cover (dev-167): a typographic cover says what
+     shelf the record is on, not what number it was given. */
   .disc {
-    font-family: var(--face-ui);
-    font-size: 0.8rem;
+    font-family: var(--face-ed);
+    font-size: clamp(1.35rem, 2.6vw, 2rem);
+    line-height: 1.1;
+    letter-spacing: 0.02em;
     text-transform: uppercase;
-    letter-spacing: 0.08em;
+    max-width: 12ch;
+  }
+  .kind {
+    font-family: var(--face-num);
+    font-size: 0.8rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    opacity: 0.8;
   }
 </style>

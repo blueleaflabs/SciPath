@@ -33,6 +33,11 @@ const me = standing(roles ?? [], account?.population);
 /* Where they came from, carried in the link rather than trusted from the
    referrer alone: a masthead link on the failed page knows the address. */
 const from = Astro.url.searchParams.get('from') ?? '';
+/* "Report a concern" (dev-167): the same form, opened on `other`, with
+   the words a report needs. Anything published that should not be is
+   read by the people who run the site and taken down under the takedown
+   policy; the report is the fastest way to reach them. */
+const report = Astro.url.searchParams.get('about') === 'report';
 
 const supabase = serverClient(Astro.request, Astro.cookies, runtime);
 
@@ -47,7 +52,7 @@ const KINDS: [string, string][] = [
 let sent = false;
 let mailNote: string | null = null;
 let error: string | null = null;
-let kept = { kind: 'bug', doing: '', happened: '', reply_to: '' };
+let kept = { kind: report ? 'other' : 'bug', doing: report ? 'Reporting something on the site' : '', happened: '', reply_to: '' };
 
 if (Astro.request.method === 'POST') {
   const form = await Astro.request.formData();
@@ -185,13 +190,19 @@ Astro.response.headers.set('X-Robots-Tag', 'noindex, nofollow');
 <Base title="Feedback" noindex={true}>
   <div class="wrap">
     <section class="cover">
-      <p class="kick">{org.name} · the pilot</p>
-      <h1>Tell us what happened</h1>
-      <p class="sub">
-        Anything at all: something broken, something confusing, something you
-        wish it did. It goes straight to the people running the pilot, with
-        enough detail about this page and this browser for them to find it.
-      </p>
+      <p class="kick">{org.name}{report ? '' : ' · the pilot'}</p>
+      <h1>{report ? 'Report a concern' : 'Tell us what happened'}</h1>
+      {report ? (
+        <p class="sub">
+          Something on this site that should not be here: a picture, a file, a page, a name. Say where it is (paste the address) and what is wrong with it. It goes straight to the people who run the site, who read every report and act under the <a href="/policies/takedown/">takedown policy</a>. Leave an address if you want to hear back.
+        </p>
+      ) : (
+        <p class="sub">
+          Anything at all: something broken, something confusing, something you
+          wish it did. It goes straight to the people running the pilot, with
+          enough detail about this page and this browser for them to find it.
+        </p>
+      )}
     </section>
 
     <div id="outcome" tabindex="-1">

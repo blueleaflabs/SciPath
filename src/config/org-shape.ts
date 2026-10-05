@@ -46,6 +46,19 @@ export interface Org {
    */
   subdomain?: string;
   /**
+   * Labels this tenant used to answer on (dev-167). A request on one of
+   * them resolves to this tenant and is sent, for good, to the same path
+   * on the label it answers on now, so a tenant can move host without
+   * losing the bookmarks in the wild.
+   */
+  formerly: string[];
+  /**
+   * False for a tenant no deployment answers for (dev-167): its pages are
+   * not built, its host is refused, `seed-orgs` skips it, and it stays in
+   * the files for the scenario fixtures that name it as another school.
+   */
+  served: boolean;
+  /**
    * domain : only an address on a listed domain may sign up
    * open   : anyone may sign up. No domain, no district, no club mentor
    * invite : signup requires a pending grant
@@ -64,6 +77,13 @@ export interface Org {
   signIn?: 'both' | 'password';
   /** False for an open program with no school behind it. */
   requiresMentor?: boolean;
+  /**
+   * Cohorts (by template id) every new account joins as it is made
+   * (dev-167): a club whose tenant is the club. Each must be `joining:
+   * open`; the welcome page calls `join_cohort` for each open program of
+   * that template at this school once `complete_signup` has returned.
+   */
+  autoJoin: string[];
   /** Full name, on every page title and record. */
   name: string;
   /**
@@ -125,6 +145,19 @@ export interface Org {
    */
   showcaseTitle?: string;
   showcaseKicker?: string;
+  /**
+   * What the school calls its public archive, and where it answers
+   * (dev-167). A research club whose archive is its journal calls the page
+   * "Journal" and prints `/journal/` on the flyer; a class calls the same
+   * page its showcase. One word for the masthead, the footer, the page's
+   * eyebrow and the front-door redirect, and one path for every link to it:
+   * `/journal/` renders the same page as `/showcase/`, and on a journal
+   * tenant `/showcase/` sends the reader to `/journal/`. The class showcase
+   * inside the working surface (a private program's page of its own
+   * projects) is a different thing and keeps its name everywhere.
+   */
+  archiveWord: 'Showcase' | 'Journal';
+  archivePath: '/showcase/' | '/journal/';
   /**
    * What the front door calls the class (2.9): "Build, track, and showcase
    * your Monta Vista IRPD Class project", "your IRPD Class Elder". Unset,
@@ -221,9 +254,12 @@ export function shapeOrg(doc: any): Org {
   return {
     slug: doc.slug,
     subdomain: doc.subdomain,
+    formerly: Array.isArray(doc.formerly) ? doc.formerly.map((x: unknown) => String(x).toLowerCase()) : [],
+    served: doc.served !== false,
     signupMode: doc.signup_mode,
     signIn: doc.sign_in === 'password' ? 'password' : 'both',
     requiresMentor: doc.requires_mentor,
+    autoJoin: Array.isArray(doc.auto_join) ? doc.auto_join.map(String) : [],
     name: doc.name,
     shortName: doc.short_name,
     mark: doc.mark,
@@ -238,6 +274,8 @@ export function shapeOrg(doc: any): Org {
     showcaseNote: doc.showcase_note,
     showcaseTitle: typeof doc.showcase_title === 'string' && doc.showcase_title.trim() ? doc.showcase_title.trim() : undefined,
     showcaseKicker: typeof doc.showcase_kicker === 'string' && doc.showcase_kicker.trim() ? doc.showcase_kicker.trim() : undefined,
+    archiveWord: doc.archive === 'journal' ? 'Journal' : 'Showcase',
+    archivePath: doc.archive === 'journal' ? '/journal/' : '/showcase/',
     className: typeof doc.class_name === 'string' && doc.class_name.trim() ? doc.class_name.trim() : undefined,
     demo: Boolean(doc.demo),
     frontDoor: doc.front_door === 'showcase' ? 'showcase' : undefined,

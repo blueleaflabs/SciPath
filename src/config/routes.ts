@@ -28,6 +28,10 @@ export const NON_TENANT_TREES = [
      at. `articles` and `projects` survive as its filtered views and as the
      separate crawl paths 10.2 depends on. */
   'showcase',
+  /* The same page under the journal's name (dev-167): a tenant whose
+     archive is its journal links to `/journal/`, and the middleware sends
+     its `/showcase/` there. */
+  'journal',
   'articles',
   'projects',
   'authors',

@@ -30,7 +30,11 @@ is_platform: true
 # Closed for the pilot (2.9): the platform's own address made an account for
 # anybody who signed in, which is the one door the school's setting cannot
 # shut. `open` is the setting to return to when SciPath opens.
-signup_mode: closed
+# Open (dev-167): anybody may make an account with an email address and a
+# password, or with Google, to run a project on their own. Nothing a member
+# writes is public until an editor publishes it; the door can be shut for
+# everyone at once with SIGNUPS=closed in the deployment.
+signup_mode: open
 requires_mentor: false
 verified_domains: []
 domains: []

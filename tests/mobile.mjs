@@ -37,9 +37,12 @@ test('the type scale steps down on a phone and never below 17px', () => {
 });
 
 test('the masthead stacks below the width its content fits on one line', () => {
-  assert.match(ui, /@media \(min-width: 861px\) \{\s*\.mast-in \{ flex-wrap: nowrap; \}/, 'one line only above 860');
-  assert.match(mast, /@media \(min-width: 861px\) \{\s*\.mnav-bar \{ flex-wrap: nowrap; min-width: 0; \}/);
-  assert.match(mast, /@media \(max-width: 860px\) \{[\s\S]*?\.mnav-acct \{[^}]*white-space: normal;[^}]*\}/, 'the account cluster may wrap on a narrow screen');
+  /* 1024, from 861 (dev-167): the signed-in bar with a real name did not
+     fit at 861 and the sections printed over the lockup. */
+  assert.match(ui, /@media \(min-width: 1024px\) \{\s*\.mast-in \{ flex-wrap: nowrap; \}/, 'one line only above 1023');
+  assert.match(mast, /@media \(min-width: 1024px\) \{\s*\.mnav-bar \{ flex-wrap: nowrap; min-width: 0; \}/);
+  assert.match(mast, /\.mnav-name \{ display: inline-block; max-width: 14ch; overflow: hidden; text-overflow: ellipsis;/, 'a long name gives way before the sections do');
+  assert.match(mast, /@media \(max-width: 1023px\) \{[\s\S]*?\.mnav-acct \{[^}]*white-space: normal;[^}]*\}/, 'the account cluster may wrap on a narrow screen');
   assert.match(mast, /@media \(max-width: 600px\) \{[\s\S]*?\.mnav-find \{ flex: 1 1 100%; \}/, 'the search takes its own row on a phone');
 });
 

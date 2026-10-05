@@ -40,7 +40,7 @@ const org = archive.org;
    A redirect rather than a second front page, so there is one front page
    and one place its parts are maintained. */
 if (org.frontDoor === 'showcase' && !(Astro.locals as any).session) {
-  return Astro.redirect('/showcase/', 302);
+  return Astro.redirect(org.archivePath, 302);
 }
 
 /**
@@ -68,6 +68,7 @@ const season = (org.programs ?? [])
         id,
         name: p.name,
         kind: p.kind,
+        family: p.family ?? null,
         role: p.role ?? 'opportunity',
         /* The same anchor the seed writes into `programs.fair_date`, so the
            day shown here is the day the working surface shows. A class ends
@@ -86,6 +87,11 @@ const season = (org.programs ?? [])
    the first before you enter most of the second. */
 const cohorts = season.filter((p) => p.role === 'cohort');
 const venues = season.filter((p) => p.role !== 'cohort');
+/* A design class (the IRPD family) has its own three cards and the
+   d.school arc below; a research club (dev-167) has the fair and the
+   journal, and none of that. */
+const isDesignClass = cohorts.some((p) => p.family === 'irpd');
+const publishes = org.archivePath === '/journal/';
 
 cachePublicPage(Astro);
 
@@ -119,7 +125,9 @@ const dayWord = (n: { days: number | null; late: boolean } | null) =>
       <p class="lede">
         {org.isPlatform
           ? 'Plan, track, and document your high school research project.'
-          : `Build, track, and showcase your ${org.name} ${cohortName} project`}
+          : publishes
+            ? `Build, track, and publish your ${cohortName} projects.`
+            : `Build, track, and showcase your ${org.name} ${cohortName} project`}
       </p>
       {/* **No buttons here.**
       
@@ -195,7 +203,33 @@ const dayWord = (n: { days: number | null; late: boolean } | null) =>
       </section>
     )}
 
-    {!org.isPlatform && (
+    {!org.isPlatform && !isDesignClass && (
+      <section class="sec">
+        <div class="sec-h"><b>What the club does here</b><span>From a question to a published record</span></div>
+        <div class="grid-3">
+          <div class="card pad">
+            <p class="t-lbl">The fair, on a calendar</p>
+            <p class="t-sm" style="margin-top:9px">
+              Every deadline of the fair the club enters and the club's own steps before each one, with the forms each project needs worked out for it.
+            </p>
+          </div>
+          <div class="card pad">
+            <p class="t-lbl">Officer review</p>
+            <p class="t-sm" style="margin-top:9px">
+              Turn in your question, your literature review and your plan to a club officer and get feedback on the page, before anything goes to the fair.
+            </p>
+          </div>
+          <div class="card pad">
+            <p class="t-lbl">The journal</p>
+            <p class="t-sm" style="margin-top:9px">
+              Finished work is submitted to the {org.showcaseTitle ?? 'journal'}, reviewed, and published as a permanent, citable record.
+            </p>
+          </div>
+        </div>
+      </section>
+    )}
+
+    {!org.isPlatform && isDesignClass && (
       <section class="sec">
         <div class="sec-h"><b>Key Functionalities</b><span>What the site does for a project</span></div>
         <div class="grid-3">
@@ -221,7 +255,7 @@ const dayWord = (n: { days: number | null; late: boolean } | null) =>
       </section>
     )}
 
-    {!org.isPlatform && (
+    {!org.isPlatform && isDesignClass && (
       <section aria-labelledby="dschool" class="lifecycle framework">
         <div class="lc-head">
           <h2 class="t-h2" id="dschool">The d.school Framework</h2>

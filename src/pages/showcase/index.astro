@@ -95,10 +95,10 @@ cachePublicPage(Astro);
 ---
 
 <Base
-  title={archive.org.showcaseTitle ?? 'Showcase'}
+  title={archive.org.showcaseTitle ?? archive.org.archiveWord}
   description="Every published record, newest first, each with its full abstract."
 >
-  <PageHead eyebrow="Published records" title={archive.org.showcaseTitle ?? 'Showcase'} sub={archive.org.showcaseKicker} lede={archive.org.showcaseNote} />
+  <PageHead eyebrow="Published records" title={archive.org.showcaseTitle ?? archive.org.archiveWord} sub={archive.org.showcaseKicker} lede={archive.org.showcaseNote} />
 
   <div class="wrap">
     {archive.all.length === 0 ? (
@@ -142,7 +142,7 @@ cachePublicPage(Astro);
                 <div class="sec-h"><b>By year</b><span>{years.length}</span></div>
                 <ul class="index">
                   {years.map(([y, list]) => (
-                    <li><a href={`/showcase/?year=${y}`}>{y}</a><span>{list.length}</span></li>
+                    <li><a href={`${archive.org.archivePath}?year=${y}`}>{y}</a><span>{list.length}</span></li>
                   ))}
                 </ul>
               </div>
@@ -167,7 +167,7 @@ cachePublicPage(Astro);
           <nav class="chips" aria-label="Filter">
             {counts.article > 0 && counts.project > 0 && chips.map((c) => (
               <a
-                href={withYear(c.kind ? `/showcase/?kind=${c.kind}` : '/showcase/')}
+                href={withYear(c.kind ? `${archive.org.archivePath}?kind=${c.kind}` : archive.org.archivePath)}
                 aria-current={kind === c.kind ? 'page' : undefined}
               >
                 {c.label}
@@ -175,7 +175,7 @@ cachePublicPage(Astro);
               </a>
             ))}
             {year && (
-              <a href={kind ? `/showcase/?kind=${kind}` : '/showcase/'} class="clear" aria-label={`Showing ${year}; show every year`}>
+              <a href={kind ? `${archive.org.archivePath}?kind=${kind}` : archive.org.archivePath} class="clear" aria-label={`Showing ${year}; show every year`}>
                 {year} <span class="n">×</span>
               </a>
             )}

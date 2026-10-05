@@ -14,87 +14,100 @@ const href = `/${space}/${d.year}/${d.slug}/`;
    no "read more": a visitor is reading science within three seconds, and the
    page makes no claim about quality it cannot support. */
 const awards = d.entries.flatMap((e) => e.awards);
-const seq = d.recordId.split('-').pop();
 const hue = disciplineHue(d.discipline);
+const when = new Date(`${d.publishedOn.slice(0, 7)}-01T00:00:00`).toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
 ---
 
 <article class="record s-pub">
-  <div class="record-top">
-    <div class="record-no">{seq}<small>Record</small></div>
-    <div class="record-main">
-      <h3><a href={href}>{d.title}</a></h3>
-      <p class="by">
-        {d.authors.map((a, i) => (
-          <>
-            {i > 0 && ', '}
-            {a.authorSlug ? <a href={`/authors/${a.authorSlug}/`}>{a.displayName}</a> : a.displayName}
-          </>
-        ))}
-      </p>
-    </div>
-    <span class="chip pub">
-      <span class="dot"></span>
-      {d.recordKind === 'project' ? 'Project' : 'Published'}
-    </span>
+  {/* The line a journal puts first (dev-167): the subject, the kind of
+      record, when; then the title and the authors. The record's number is
+      on the record's own page, in the citation, where it is used. */}
+  <p class="eyebrow">
+    <a class="subject" href={`/topics/${d.discipline}/`} style={toneStyle(d.discipline)}>{hue !== null && <span class="swatch" aria-hidden="true"></span>}{disciplineLabel(d.discipline)}</a>
+    <span class="sep">·</span>
+    <span>{d.recordKind === 'project' ? 'Fair entry' : 'Paper'}</span>
+    <span class="sep">·</span>
+    <span>{when}</span>
     {d.demonstration && <span class="chip demo" title="An invented record that shows what the platform does">Demonstration</span>}
-  </div>
+  </p>
+  <h3><a href={href}>{d.title}</a></h3>
+  <p class="by">
+    {d.authors.map((a, i) => (
+      <>
+        {i > 0 && ', '}
+        {a.authorSlug ? <a href={`/authors/${a.authorSlug}/`}>{a.displayName}</a> : a.displayName}
+      </>
+    ))}
+  </p>
 
   {d.abstract && <p class="abs">{d.abstract}</p>}
 
-  <p class="meta">
-    <a class="subject" href={`/topics/${d.discipline}/`} style={toneStyle(d.discipline)}>{hue !== null && <span class="swatch" aria-hidden="true"></span>}{disciplineLabel(d.discipline)}</a>
-    <span>·</span>
-    <span>{d.publishedOn.slice(0, 7)}</span>
-    {d.entries.map((e) => (
-      <>
-        <span>·</span>
-        <span>{e.program}{e.season ? ` ${e.season}` : ''}{e.placement ? `, ${e.placement}` : ''}</span>
-      </>
-    ))}
-    {awards.map((a) => (<><span>·</span><span>{a}</span></>))}
-  </p>
+  {(d.entries.length > 0 || awards.length > 0) && (
+    <p class="meta">
+      {d.entries.map((e, i) => (
+        <>
+          {i > 0 && <span>·</span>}
+          <span>{e.program}{e.season ? ` ${e.season}` : ''}{e.placement ? `, ${e.placement}` : ''}</span>
+        </>
+      ))}
+      {awards.map((a) => (<><span>·</span><b>{a}</b></>))}
+    </p>
+  )}
 </article>
 
 <style>
-  /* A record is the thing this whole product exists to produce, and it was
-     rendered as a run of text between hairlines — indistinguishable from the
-     paragraph above it on a page where the background was the same white.
-     On the deeper paper it becomes what it is: a sheet, lifted, with the
-     published stage on its edge and its number set like a folio. */
+  /* A record is the thing this whole product exists to produce. On the
+     deeper paper it is a sheet, lifted; the subject's colour is its edge
+     (dev-167), the way a journal colours its sections. */
   .record {
-    padding: 22px 24px;
+    padding: 22px 26px 20px;
     background: var(--card);
     border: 1px solid var(--rule);
     border-left: var(--edge) solid var(--stage-pub);
     box-shadow: var(--lift);
   }
-  .record-top { display: flex; gap: 18px; align-items: baseline; }
+  .eyebrow {
+    margin: 0;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 8px;
+    font-family: var(--face-ui);
+    font-size: 0.78rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+  }
+  .eyebrow .subject { color: var(--ink-2); text-decoration: none; }
+  .eyebrow .subject:hover { text-decoration: underline; }
+  .eyebrow .sep { color: var(--rule); }
   /* The subject's colour, as a swatch before its name (dev-149): the same
      hue as its cover and its topic page. */
   .swatch { display: inline-block; width: 9px; height: 9px; margin-right: 6px; vertical-align: 0; background: hsl(var(--hue) var(--sat) var(--lum)); border: 1px solid hsl(var(--hue) var(--sat) calc(var(--lum) - 22%)); }
-  .record-no {
-    font-family: var(--face-num);
-    font-size: 1.3rem;
-    /* See the folio on the participation page: the mark does not clear the
-       contrast floor as text. */
-    color: var(--brand);
-    min-width: 4.5rem;
+  h3 { margin: 10px 0 0; font-size: 1.4rem; line-height: 1.22; max-width: var(--measure-lede); }
+  h3 a { text-decoration: none; }
+  h3 a:hover { text-decoration: underline; }
+  .by { margin: 6px 0 0; color: var(--ink-2); }
+  /* The abstract, at reading size, to five lines in a listing (dev-167):
+     a listing is for choosing, and the whole abstract is one click away
+     on the record's own page. */
+  .abs {
+    margin: 12px 0 0;
+    max-width: var(--measure-read);
+    line-height: 1.55;
+    color: var(--ink-2);
+    display: -webkit-box;
+    -webkit-line-clamp: 5;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
   }
-  .record-no small { display: block; font-size: 0.68rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-3); }
-  .record-main { flex: 1; }
-  .record-main h3 { margin: 0; font-size: 1.35rem; line-height: 1.25; }
-  .by { margin: 5px 0 0; color: var(--ink-2); }
-  .abs { margin: 14px 0 0 5.9rem; max-width: var(--measure-read); line-height: 1.6; }
   .meta {
-    margin: 12px 0 0 5.9rem;
+    margin: 12px 0 0;
     display: flex;
     flex-wrap: wrap;
     gap: 8px;
     font-size: 0.88rem;
     color: var(--ink-3);
   }
-  @media (max-width: 640px) {
-    .record-top { flex-wrap: wrap; }
-    .abs, .meta { margin-left: 0; }
-  }
+  .meta b { color: var(--brand); font-weight: 600; }
 </style>
