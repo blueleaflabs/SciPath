@@ -60,14 +60,7 @@ kind: competition
 # placement, and possibly somewhere to advance to.
 role: opportunity
 
-# "Candidate" (dev-167): a project here has entered the fair on SciPath
-# and not yet been selected by its school under the fair's 2027 project
-# limit; the word comes off the name once the selection is announced. The
-# year is in the name so the title reads "... 2027 - Candidate" and not
-# "... - Candidate 2027". The hosted row is shared by every school that
-# lists the fair, so the rename is one UPDATE on programs.name (the seed
-# writes it for a new row only).
-name: Synopsys Silicon Valley Science and Technology Championship 2027 - Candidate
+name: Synopsys Silicon Valley Science and Technology Championship
 short_name: Synopsys Championship
 authority: Santa Clara Valley Science and Engineering Fair Association
 level: regional

@@ -22,12 +22,16 @@
  */
 
 import * as pagefind from 'pagefind';
-import { loadDevVars } from './dev-vars.mjs';
+import { loadDevVars, loadCloudVars } from './dev-vars.mjs';
 import { openBucket } from './notebook-bucket.mjs';
 
-loadDevVars();
+/* --cloud (dev-169): the four R2 variables and the project's URL from
+   .cloud.vars, as seed:journal reads them, so the index can be rebuilt on
+   the hosted bucket without pasting keys on the command line. --remote
+   alone still reads .dev.vars, as before. */
+if (process.argv.includes('--cloud')) loadCloudVars(); else loadDevVars();
 
-const REMOTE = process.argv.includes('--remote');
+const REMOTE = process.argv.includes('--remote') || process.argv.includes('--cloud');
 
 /* ── Reaching the store ──────────────────────────────────────────────────── */
 

@@ -443,9 +443,12 @@ const html = body ? renderMarkdown(body) : '';
   .facts-dl { display: grid; grid-template-columns: max-content 1fr; gap: 8px 14px; margin: 16px 0 0; font-size: 0.92rem; }
   .facts-dl dt { font-family: var(--face-ui); font-size: 0.74rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-3); padding-top: 3px; }
   .facts-dl dd { margin: 0; overflow-wrap: anywhere; }
-  .facts-dl .mono { font-family: var(--face-num); font-size: 0.88rem; }
+  .facts-dl .mono { font-family: var(--face-num); font-size: 0.88rem; white-space: nowrap; overflow-wrap: normal; }
   .cite { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--rule-fine); }
-  .cite .cite-text { font-size: 0.9rem; }
+  /* A URL has no spaces to break at; without this the citation's address
+     ran past the rail's edge (dev-169). */
+  .cite .cite-text { font-size: 0.9rem; overflow-wrap: anywhere; }
+  .rail { min-width: 0; overflow-wrap: anywhere; }
   @media (max-width: 900px) {
     .cols { grid-template-columns: minmax(0, 1fr); }
     .rail { position: static; }

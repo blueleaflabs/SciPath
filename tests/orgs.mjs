@@ -353,8 +353,16 @@ test('the research club is its own tenant, and its archive is its journal (dev-1
   assert.match(welcome, /for \(const templateId of \(org\?\.autoJoin \?\? \[\]\) as string\[\]\)/);
   assert.match(welcome, /supabase\.rpc\('join_cohort', \{ p_cohort_id: c\.id \}\)/);
   assert.match(fs.readFileSync('src/config/org-shape.ts', 'utf8'), /autoJoin: Array\.isArray\(doc\.auto_join\)/);
+  /* The fair keeps its own name (dev-169): who is selected is a dated step
+     on the club's calendar, not a word on the fair's title. */
   const fair = yaml.load(fs.readFileSync('src/config/programs/scvsefa-2027.yaml', 'utf8'));
-  assert.equal(fair.name, 'Synopsys Silicon Valley Science and Technology Championship 2027 - Candidate');
+  assert.equal(fair.name, 'Synopsys Silicon Valley Science and Technology Championship');
+  /* And the class lists neither the club's calendar nor the journal. */
+  const mvPrograms = yaml.load(fs.readFileSync('src/config/orgs/montavista.yaml', 'utf8')).programs;
+  assert.ok(!mvPrograms.includes('mvrj-2027') && !mvPrograms.includes('mvhs-scvsefa-2027'), 'the club and the journal are the club tenant\'s');
+  /* The front of the journal is chosen, and the newest author's own paper is not on it by default. */
+  assert.equal(club.featured.length, 6);
+  assert.deepEqual(club.featured.slice(0, 2), ['MVRJ-2025-0008', 'MVRJ-2024-0008']);
   assert.ok(!club.programs.includes('irpd-mvhs-2027'));
   assert.equal(club.hidden_until, undefined, 'nothing hidden: the journal is the point');
   /* The class is untouched: closed, by password, its archive still its showcase. */

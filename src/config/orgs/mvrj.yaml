@@ -57,7 +57,18 @@ showcase_kicker: The research journal of the Monta Vista Research Club
 showcase_note: >-
   Research by Monta Vista students, reviewed and published as a
   permanent, citable record.
-featured: []
+# The front of the journal (dev-169), by record id, in this order: six
+# of the 2025 papers, one per subject where the archive allows, chosen by
+# the editors. Absent or short, the page would fill from the newest
+# records, which put the newest author's own paper first. Change the list
+# whenever the editors want a different front; it is six lines.
+featured:
+  - MVRJ-2025-0008   # Raymond Feng: Stirling cryocooler flexure springs (engineering)
+  - MVRJ-2024-0008   # Aryan Singhal: QViSTA, quantum vision transformer (neuroscience)
+  - MVRJ-2025-0010   # Tashvi Bansal: counterfactual loss, homelessness (social science)
+  - MVRJ-2025-0009   # Advaith Anand: fusing sight and sound (biology)
+  - MVRJ-2025-0004   # Chen, Ge, Lee: chitosan and silkworm silk (chemistry and materials)
+  - MVRJ-2025-0001   # Sainarayanan, Kashyap: LiDAR and mangroves (earth and climate)
 
 # What the front door calls the club's cohort.
 class_name: Research Club

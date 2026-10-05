@@ -49,6 +49,10 @@ const style = toneStyle(d.discipline);
     overflow: hidden;
     background: var(--wash, var(--paper));
     border: 1px solid var(--rule);
+    /* The cover is its own container (dev-169), so the subject's type is
+       sized from the tile's width, not the window's: a four-across grid
+       and a two-across one get type that fits each. */
+    container-type: inline-size;
   }
   .rcover.wide { aspect-ratio: 2 / 1; }
   /* Cropped from the bottom, never the top: a drawn figure carries its
@@ -74,12 +78,18 @@ const style = toneStyle(d.discipline);
      shelf the record is on, not what number it was given. */
   .disc {
     font-family: var(--face-ed);
-    font-size: clamp(1.35rem, 2.6vw, 2rem);
+    /* 9% of the tile's width, between bounds: "ENGINEERING" and
+       "NEUROSCIENCE" fit a 230px tile at 1.2rem and a 700px one at
+       2rem; before this the size came from the window and the long
+       words ran off the small tiles. */
+    font-size: clamp(1.05rem, 9cqw, 2rem);
     line-height: 1.1;
     letter-spacing: 0.02em;
     text-transform: uppercase;
-    max-width: 12ch;
+    max-width: 100%;
+    overflow-wrap: anywhere;
   }
+  .kind { margin-top: 10px; }
   .kind {
     font-family: var(--face-num);
     font-size: 0.8rem;

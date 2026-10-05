@@ -63,7 +63,7 @@ hidden_until:
   # Programs and Past seasons sections, off for the pilot and back for the
   # club (2.8).
   surfaces: [editorial, publish, roles, assign, showcase, guides, programs, past]
-  programs: [scvsefa-2027, csef-2027, mvhs-scvsefa-2027, grant-mvhs-micro-2027, mvrj-2027]
+  programs: [scvsefa-2027, csef-2027, grant-mvhs-micro-2027]
 # **When the class meets, and how the backup pulse is paced (2.8).**
 # Live updates arrive over a socket and cost the edge nothing. A browser
 # whose socket a network will not carry falls back to polling, and the
@@ -103,7 +103,9 @@ programs:
   # The state fair the regional advances to. Shared like the regional, and
   # listed because Monta Vista has students who advance.
   - csef-2027
-  - mvhs-scvsefa-2027
   - irpd-mvhs-2027
   - grant-mvhs-micro-2027
-  - mvrj-2027
+  # The research club's calendar and the journal are the club's own tenant
+  # (mvrj.yaml, dev-169) and are not listed here any more. Their draft rows
+  # under this school, seeded in September, stay as inert drafts; nothing
+  # opens a draft but a deliberate programs:status.
